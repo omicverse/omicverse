@@ -1,121 +1,260 @@
-import argparse, os, sys
-from os import listdir
-from os.path import isfile, join
-from ipywidgets import widgets
+import os
+from typing import Optional, Sequence
 
-import pickle
-import math
-import collections
-import time
-
+import anndata
 import numpy as np
 import pandas as pd
 import scanpy as sc
-import warnings
-from .._registry import register_function
-warnings.filterwarnings('ignore')
-from sklearn.metrics import silhouette_score
-import multiprocess as mp
-from functools import partial
 import seaborn as sns
-from matplotlib import pyplot as plt
-from .._settings import add_reference
+from ipywidgets import widgets
+
+from .._registry import register_function
+from .._settings import Colors, EMOJI, add_reference
+from ..report._provenance import tracked, note
 
 
-import time
 @register_function(
     aliases=['自动分辨率选择', 'autoResolution', 'optimal leiden resolution'],
     category="single",
-    description="Search clustering resolutions and select a stable/optimal Leiden resolution for biologically coherent cluster granularity.",
+    description=(
+        "Pick the most stable Leiden resolution by subsample-ARI "
+        "stability: for each candidate resolution, recluster N "
+        "subsamples and score the mean Adjusted Rand Index against the "
+        "reference (full-data) labels. The resolution with the highest "
+        "mean ARI subject to a minimum cluster count is selected."
+    ),
     prerequisites={'functions': ['pp.neighbors']},
     requires={'obsp': ['connectivities'], 'uns': ['neighbors']},
-    produces={'obs': ['leiden'], 'uns': ['resolution_search']},
+    produces={'obs': ['leiden'], 'uns': ['autoResolution']},
     auto_fix='auto',
-    examples=['ov.single.autoResolution(adata, cpus=8)'],
-    related=['pp.leiden', 'utils.cluster']
+    examples=[
+        'res, df = ov.single.autoResolution(adata)',
+        'ov.single.autoResolution(adata, resolutions=np.arange(0.2, 2.0, 0.1))',
+    ],
+    related=['pp.leiden'],
 )
-def autoResolution(adata,cpus=4):
-    r"""Automatically determine clustering resolution.
+@tracked('autoResolution', 'ov.single.autoResolution')
+def autoResolution(
+    adata: anndata.AnnData,
+    resolutions: Optional[Sequence[float]] = None,
+    *,
+    n_subsamples: int = 5,
+    subsample_frac: float = 0.8,
+    min_clusters: int = 3,
+    key_added: str = 'leiden',
+    random_state: int = 0,
+    verbose: bool = True,
+):
+    r"""Pick the most stable Leiden resolution via subsample-bootstrap ARI.
+
+    Algorithm
+    ---------
+    For each candidate resolution :math:`r`:
+
+    1. Run Leiden on the **full** AnnData → reference labels at ``r``.
+       These will be the labels the user actually keeps if ``r`` wins.
+    2. Take :paramref:`n_subsamples` random subsamples without
+       replacement, each of size ``subsample_frac × n_obs``.
+    3. For each subsample, run Leiden on the induced subgraph
+       (``adata.obsp['connectivities']`` is sliced automatically).
+    4. Compute Adjusted Rand Index (ARI) between the reference labels
+       restricted to the subsample and the bootstrap's labels.
+    5. The stability score for ``r`` is the **mean ARI** across the
+       :paramref:`n_subsamples` bootstraps.
+
+    The resolution with the highest mean ARI is chosen, **subject to**
+    producing at least :paramref:`min_clusters` clusters on the full
+    data — otherwise a degenerate "everything in one cluster" trivially
+    wins on stability.
+
+    Why mean-ARI bootstrap instead of silhouette on a co-clustering
+    distance matrix:
+
+    - Silhouette on a precomputed :math:`n \times n` co-clustering
+      distance is :math:`O(n^2)` memory and conceptually double-dips —
+      the labels you score and the distance you score against are both
+      derived from the same clustering procedure on the same data.
+    - Mean ARI to a reference clustering is :math:`O(n)` per bootstrap,
+      well-defined for any partition pair, and directly answers the
+      question we actually care about: *would small perturbations of
+      the data produce roughly the same clusters?*
 
     Parameters
     ----------
-    adata:anndata.AnnData
-        Input single-cell AnnData for louvain resolution search.
-    cpus:int
-        Number of worker processes used for subsampling evaluations.
-    
+    adata
+        AnnData with a precomputed neighbor graph
+        (``adata.obsp['connectivities']``).
+    resolutions
+        Candidate resolutions to test. Defaults to
+        ``np.round(np.arange(0.2, 1.6, 0.1), 2)``.
+    n_subsamples
+        Number of bootstrap subsamples per resolution. 5 is usually
+        enough; 10–20 trades runtime for tighter ARI estimates.
+    subsample_frac
+        Fraction of cells in each bootstrap (``0 < f < 1``). Default 0.8.
+    min_clusters
+        Lower bound on the number of clusters the chosen resolution
+        must produce on the full data. Resolutions producing fewer
+        clusters are excluded from the argmax to avoid the
+        "trivially-stable single cluster" pitfall.
+    key_added
+        ``adata.obs`` column to write the chosen resolution's labels to.
+    random_state
+        Seed for both subsample selection and Leiden RNG.
+    verbose
+        Print per-resolution scores as the search progresses.
+
     Returns
     -------
-    Tuple[anndata.AnnData,float,pd.DataFrame]
-        Updated AnnData, selected resolution, and silhouette-score table.
+    Tuple[anndata.AnnData, float, pandas.DataFrame]
+        ``(adata, best_resolution, scores_df)`` where ``scores_df`` is
+        indexed by resolution with columns ``mean_ari``, ``std_ari``,
+        ``n_clusters``. Also writes ``adata.obs[key_added]`` and
+        ``adata.uns['autoResolution']``.
+
+    Raises
+    ------
+    ValueError
+        If the AnnData has fewer than ~50 cells (subsampling becomes
+        meaningless), or no neighbor graph is present.
+    RuntimeError
+        If no resolution produced ``≥ min_clusters`` clusters.
     """
-    print("Automatically determine clustering resolution...")
-    start = time.time()
-    def subsample_clustering(adata, sample_n, subsample_n, resolution, subsample):
-        subadata = adata[subsample]
-        sc.tl.louvain(subadata, resolution=resolution)
-        cluster = subadata.obs['louvain'].tolist()
-        
-        subsampling_n = np.zeros((sample_n, sample_n), dtype=bool)
-        coclustering_n = np.zeros((sample_n, sample_n), dtype=bool)
-        
-        for i in range(subsample_n):
-            for j in range(subsample_n):
-                x = subsample[i]
-                y = subsample[j]
-                subsampling_n[x][y] = True
-                if cluster[i] == cluster[j]:
-                    coclustering_n[x][y] = True
-        return (subsampling_n, coclustering_n)
-    rep_n = 5
-    subset = 0.8
-    sample_n = len(adata.obs)
-    subsample_n = int(sample_n * subset)
-    resolutions = np.linspace(0.4, 1.4, 6)
-    silhouette_avg = {}
-    np.random.seed(1)
-    best_resolution = 0
-    highest_sil = 0
+    from sklearn.metrics import adjusted_rand_score
+    from ..pp import leiden as _leiden  # tracked; nesting guard silences it
+
+    n_obs = adata.n_obs
+    if n_obs < 50:
+        raise ValueError(
+            f"autoResolution needs at least 50 cells; got {n_obs}."
+        )
+    if 'connectivities' not in adata.obsp:
+        raise ValueError(
+            "autoResolution requires a precomputed neighbor graph "
+            "(adata.obsp['connectivities']); run ov.pp.neighbors first."
+        )
+    if not (0.0 < subsample_frac < 1.0):
+        raise ValueError(
+            f"subsample_frac must be in (0, 1); got {subsample_frac}."
+        )
+
+    if resolutions is None:
+        resolutions = list(np.round(np.arange(0.2, 1.6, 0.1), 2))
+    resolutions = [float(np.round(r, 3)) for r in resolutions]
+
+    rng = np.random.default_rng(random_state)
+    sub_n = max(int(round(n_obs * subsample_frac)), 30)
+    subsamples = [
+        np.sort(rng.choice(n_obs, size=sub_n, replace=False))
+        for _ in range(n_subsamples)
+    ]
+
+    if verbose:
+        print(
+            f"{EMOJI['start']} autoResolution: testing "
+            f"{len(resolutions)} resolutions × {n_subsamples} subsamples "
+            f"(subsample_frac={subsample_frac}, n_cells={n_obs})"
+        )
+
+    # Reference labels at each r (kept so we can write the winner back
+    # to adata.obs at the end without re-clustering). Stored as a
+    # categorical-friendly string array.
+    ref_labels: dict[float, np.ndarray] = {}
+    rows = []
+
+    REF_KEY = '_autores_ref'
+    SUB_KEY = '_autores_sub'
+
     for r in resolutions:
-        r = np.round(r, 1)
-        print("Clustering test: resolution = ", r)
-        sub_start = time.time()
-        subsamples = [np.random.choice(sample_n, subsample_n, replace=False) for t in range(rep_n)]
-        p = mp.Pool(cpus)
-        func = partial(subsample_clustering, adata, sample_n, subsample_n, r)
-        resultList = p.map(func, subsamples)
-        p.close()
-        p.join()
-        
-        subsampling_n = sum([result[0] for result in resultList])
-        coclustering_n = sum([result[1] for result in resultList])
-        
-        subsampling_n[np.where(subsampling_n == 0)] = 1e6
-        distance = 1.0 - coclustering_n / subsampling_n
-        np.fill_diagonal(distance, 0.0)
-        
-        sc.tl.louvain(adata, resolution=r, key_added = 'louvain_r' + str(r))
-        silhouette_avg[str(r)] = silhouette_score(distance, adata.obs['louvain_r' + str(r)], metric="precomputed")
-        if silhouette_avg[str(r)] > highest_sil:
-            highest_sil = silhouette_avg[str(r)]
-            best_resolution = r
-        print("robustness score = ", silhouette_avg[str(r)])
-        sub_end = time.time()
-        print('time: {}', sub_end - sub_start)
-        print()
-    adata.obs['louvain'] = adata.obs['louvain_r' + str(best_resolution)]
-    print("resolution with highest score: ", best_resolution)
-    res = best_resolution
-    # write silhouette record to uns and remove the clustering results except for the one with the best resolution
-    adata.uns['sihouette score'] = silhouette_avg
-    # draw lineplot
-    df_sil = pd.DataFrame(silhouette_avg.values(), columns=['silhouette score'], index=[float(x) for x in silhouette_avg.keys()])
-    df_sil.plot.line(style='.-', color='green', title='Auto Resolution', xticks=resolutions, xlabel='resolution', ylabel='silhouette score', legend=False)
-    #pp.savefig()
-    #plt.close()
-    end = time.time()
-    print('time: {}', end-start)
-    return adata, res, df_sil
+        _leiden(adata, resolution=r, key_added=REF_KEY,
+                random_state=random_state)
+        ref = adata.obs[REF_KEY].astype(str).values.copy()
+        n_clusters = int(pd.Series(ref).nunique())
+        ref_labels[r] = ref
+
+        if n_clusters < min_clusters:
+            rows.append({
+                'resolution': r,
+                'mean_ari': np.nan,
+                'std_ari':  np.nan,
+                'n_clusters': n_clusters,
+            })
+            if verbose:
+                print(f"  r={r:.2f}: clusters={n_clusters} "
+                       f"(below min_clusters={min_clusters}, skipped)")
+            continue
+
+        aris = []
+        for idx in subsamples:
+            sub = adata[idx].copy()
+            _leiden(sub, resolution=r, key_added=SUB_KEY,
+                    random_state=random_state)
+            ari = adjusted_rand_score(
+                ref[idx],
+                sub.obs[SUB_KEY].astype(str).values,
+            )
+            aris.append(ari)
+
+        mean_ari = float(np.mean(aris))
+        std_ari = float(np.std(aris))
+        rows.append({
+            'resolution': r,
+            'mean_ari': mean_ari,
+            'std_ari':  std_ari,
+            'n_clusters': n_clusters,
+        })
+        if verbose:
+            print(f"  r={r:.2f}: clusters={n_clusters:3d}  "
+                   f"mean ARI={mean_ari:.3f} ± {std_ari:.3f}")
+
+    # Drop temporary obs columns we leaked while testing.
+    for col in (REF_KEY, SUB_KEY):
+        if col in adata.obs.columns:
+            del adata.obs[col]
+
+    df = pd.DataFrame(rows).set_index('resolution').sort_index()
+    eligible = df[df['n_clusters'] >= min_clusters]
+    if eligible.empty:
+        raise RuntimeError(
+            f"No resolution produced >= {min_clusters} clusters; consider "
+            "lowering `min_clusters` or extending `resolutions`."
+        )
+    best = float(eligible['mean_ari'].idxmax())
+    best_n_clusters = int(df.loc[best, 'n_clusters'])
+    best_ari = float(df.loc[best, 'mean_ari'])
+
+    adata.obs[key_added] = pd.Categorical(ref_labels[best])
+    adata.uns['autoResolution'] = {
+        'best_resolution': best,
+        'scores': df.reset_index().to_dict('list'),
+        'n_subsamples': int(n_subsamples),
+        'subsample_frac': float(subsample_frac),
+        'method': 'bootstrap-ARI',
+    }
+    add_reference(
+        adata, 'autoResolution',
+        f'auto-selected leiden resolution={best} via subsample-ARI stability',
+    )
+
+    if verbose:
+        print(
+            f"{EMOJI['done']} chosen resolution: {best} "
+            f"({best_n_clusters} clusters, mean ARI {best_ari:.3f})"
+        )
+
+    note(
+        backend=f'omicverse · ARI-stability · {n_subsamples} subsamples',
+        viz=[
+            {'function': 'ov.pl.cluster_sizes_bar',
+              'kwargs': {'groupby': key_added}},
+            *([{'function': 'ov.pl.embedding',
+                 'kwargs': {'basis': 'X_umap', 'color': key_added,
+                            'frameon': 'small'}}]
+               if 'X_umap' in adata.obsm else []),
+        ],
+    )
+
+    return adata, best, df
 
 def writeGEP(adata_GEP,path):
     r"""Write the gene expression profile to a file.
