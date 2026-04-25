@@ -211,42 +211,35 @@ def cluster(adata:anndata.AnnData,method:str='leiden',
         schist.inference.nested_model(adata, **kwargs)
         add_reference(adata,'schist','clustering with schist')
     elif method=='pymclustR':
-        # Pure-Python re-implementation of CRAN mclust — same 14
-        # covariance parameterisations, same EM, same BIC. Replaces
-        # the legacy ``method='mclust_R'`` (rpy2 bridge) so omicverse
-        # no longer needs an R install.
+        # Uses pytscan's GaussianMixture-based clustering (BIC-optimal K).
+        # Replaces the legacy mclust_R (rpy2 bridge) — no R dependency.
         try:
-            from mclust_py import Mclust as _PyMclust
+            from pytscan import exprmclust
         except ImportError as e:
             raise ImportError(
-                "pymclustR is required for method='pymclustR'. "
-                "Install with: pip install pymclustR"
+                "pytscan is required for method='pymclustR'. "
+                "Install with: pip install pytscan"
             ) from e
         if n_components is None:
             raise ValueError("n_components must be provided for method='pymclustR'")
-        np.random.seed(random_state)
-        modelNames = kwargs.pop('modelNames', 'EEE')
-        if isinstance(modelNames, str):
-            modelNames = [modelNames]
-        fit = _PyMclust(
-            adata.obsm[use_rep],
-            G=[int(n_components)],
-            model_names=list(modelNames),
-            **kwargs,
+        data = adata.obsm[use_rep]
+        mobj = exprmclust(
+            data,
+            clusternum=[int(n_components)],
+            reduce=False,
+            random_state=random_state,
         )
-        adata.obs[method] = fit.classification.astype(int)
+        adata.obs[method] = mobj['clusterid'].values.astype(int)
         adata.obs[method] = adata.obs[method].astype('category')
         adata.uns.setdefault('pymclustR', {})[use_rep] = {
-            'modelName': fit.model_name,
-            'G': fit.G,
-            'loglik': fit.loglik,
-            'bic': fit.bic,
+            'best_k': mobj['best_k'],
+            'bic': mobj['bic_scores'][mobj['best_k']],
         }
         print(f"""finished: found {n_components} clusters and added
     'pymclustR', the cluster labels (adata.obs, categorical)
-    [model={fit.model_name}, loglik={fit.loglik:.4f}, BIC={fit.bic:.4f}]""")
+    [backend=pytscan, K={mobj['best_k']}, BIC={mobj['bic_scores'][mobj['best_k']]:.4f}]""")
         add_reference(adata, 'pymclustR',
-                      'clustering with pymclustR (Python re-implementation of CRAN mclust)')
+                      'clustering with pytscan (Python reimplementation of TSCAN/mclust)')
     elif method=='scICE':
         from ._scice import scICE
         scice = scICE(n_jobs=-1,use_gpu=False)
