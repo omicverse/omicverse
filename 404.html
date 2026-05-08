@@ -1,0 +1,28 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>Redirecting to omicverse documentation</title>
+    <script>
+      (function () {
+        var oldBase = "/omicverse";
+        var newBase = "https://omicverse.github.io/omicverse-pages";
+        var path = window.location.pathname;
+
+        if (path.indexOf(oldBase) === 0) {
+          path = path.slice(oldBase.length);
+        }
+
+        if (!path || path === "/") {
+          path = "/";
+        }
+
+        window.location.replace(newBase + path + window.location.search + window.location.hash);
+      }());
+    </script>
+  </head>
+  <body>
+    <p>Redirecting to <a href="https://omicverse.github.io/omicverse-pages/">omicverse documentation</a>.</p>
+  </body>
+</html>
