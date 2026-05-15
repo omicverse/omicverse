@@ -202,6 +202,9 @@ def auto_resolution(
     key_added: str = 'leiden',
     random_state: int = 0,
     verbose: bool = True,
+    program_merge: bool = False,
+    program_merge_cosine_threshold: float = 0.95,
+    program_merge_max_rounds: int = 5,
 ):
     r"""Pick the most reproducible Leiden resolution via null-adjusted
     bootstrap-ARI (Lange, Roth, Braun & Buhmann, *Neural Computation*
@@ -284,6 +287,27 @@ def auto_resolution(
         Seed for subsample selection and Leiden on the real data.
     verbose
         Stream per-resolution scores during the search.
+    program_merge
+        After picking the best resolution, run an iterative NMF-based
+        program-aware merge to collapse same-lineage state
+        sub-clusters into one. The bootstrap-ARI selector is biased
+        toward fine resolutions where state-defined subdivisions
+        (proliferating-Ductal vs resting-Ductal, cycling-T vs
+        naive-T, etc.) are reproducible — see
+        :func:`omicverse.single.program_aware_merge` for the full
+        rationale. The merged labels are written to
+        ``adata.obs[f'{key_added}_clean']``; the original chosen-
+        resolution labels stay at ``adata.obs[key_added]`` so users
+        can compare. Off by default for back-compatibility; the
+        recommended pipeline for any downstream cell-type annotation
+        workflow is to turn this on.
+    program_merge_cosine_threshold
+        Cosine similarity (lineage-program space) above which two
+        clusters merge. 0.95 = collapse only highly aligned pairs;
+        lower (e.g. 0.9) is more aggressive.
+    program_merge_max_rounds
+        Maximum merge rounds. Each round runs one NMF + classify +
+        merge pass; typically converges in 2-4 rounds.
 
     Returns
     -------
@@ -292,7 +316,9 @@ def auto_resolution(
         indexed by resolution with columns ``stability_real``,
         ``stability_null``, ``excess_stability``, ``std_real``,
         ``n_clusters``. Also writes ``adata.obs[key_added]`` and
-        ``adata.uns['autoResolution']``.
+        ``adata.uns['autoResolution']``. When ``program_merge=True``
+        additionally writes ``adata.obs[f'{key_added}_clean']`` and
+        ``adata.uns['program_aware_merge']``.
 
     References
     ----------
@@ -483,6 +509,22 @@ def auto_resolution(
                if 'X_umap' in adata.obsm else []),
         ],
     )
+
+    # ── Optional post-step: program-aware lineage merge ────────────
+    if program_merge:
+        from ._program_merge import program_aware_merge
+        if verbose:
+            print(f"{EMOJI['start']} program_aware_merge: collapsing "
+                   f"same-lineage state sub-clusters via NMF + state library")
+        program_aware_merge(
+            adata,
+            cluster_key=key_added,
+            cosine_threshold=program_merge_cosine_threshold,
+            max_rounds=program_merge_max_rounds,
+            min_clusters=min_clusters,
+            random_state=random_state,
+            verbose=verbose,
+        )
 
     return adata, best, df
 

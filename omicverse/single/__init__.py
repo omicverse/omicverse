@@ -61,6 +61,7 @@ from ._mofa import (
 )
 from ._scdrug import writeGEP, Drug_Response
 from ._autoresolution import auto_resolution, autoResolution
+from ._program_merge import program_aware_merge, STATE_LIBRARY
 from ._cpdb import (
     cpdb_network_cal,cpdb_plot_network,
     cpdb_plot_interaction,
@@ -332,6 +333,8 @@ __all__ = [
     # Drug response analysis
     'auto_resolution',
     'autoResolution',  # backward-compatible camelCase alias
+    'program_aware_merge',
+    'STATE_LIBRARY',
     'writeGEP',
     'Drug_Response',
     'scDiffusion',

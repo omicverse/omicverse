@@ -26,6 +26,52 @@ from .._monitor import monitor
 from ..report._provenance import tracked, note, pick_color_key
 
 
+# ── Cell-cycle gene lists (Tirosh et al. 2016, *Science*) ─────────────
+#
+# Module-level constants so downstream modules (single/_program_merge.py,
+# user code, etc.) can reuse the same lists without re-running
+# score_genes_cell_cycle. The mouse symbols are the published Tirosh
+# orthologs already used inside score_genes_cell_cycle below.
+
+S_PHASE_GENES_HUMAN: Tuple[str, ...] = (
+    'MCM5', 'PCNA', 'TYMS', 'FEN1', 'MCM2', 'MCM4',
+    'RRM1', 'UNG', 'GINS2', 'MCM6', 'CDCA7', 'DTL', 'PRIM1',
+    'UHRF1', 'MLF1IP', 'HELLS', 'RFC2', 'RPA2', 'NASP', 'RAD51AP1',
+    'GMNN', 'WDR76', 'SLBP', 'CCNE2', 'UBR7', 'POLD3', 'MSH2', 'ATAD2',
+    'RAD51', 'RRM2', 'CDC45', 'CDC6', 'EXO1', 'TIPIN', 'DSCC1', 'BLM',
+    'CASP8AP2', 'USP1', 'CLSPN', 'POLA1', 'CHAF1B', 'BRIP1', 'E2F8',
+)
+S_PHASE_GENES_MOUSE: Tuple[str, ...] = (
+    'Cdca7', 'Mcm4', 'Mcm7', 'Rfc2', 'Ung', 'Mcm6',
+    'Rrm1', 'Slbp', 'Pcna', 'Atad2', 'Tipin', 'Mcm5', 'Uhrf1',
+    'Polr1b', 'Dtl', 'Prim1', 'Fen1', 'Hells', 'Gmnn', 'Pold3',
+    'Nasp', 'Chaf1b', 'Gins2', 'Pola1', 'Msh2', 'Casp8ap2', 'Cdc6',
+    'Ubr7', 'Ccne2', 'Wdr76', 'Tyms', 'Cdc45', 'Clspn', 'Rrm2',
+    'Dscc1', 'Rad51', 'Usp1', 'Exo1', 'Blm', 'Rad51ap1', 'Cenpu',
+    'E2f8', 'Mrpl36',
+)
+G2M_PHASE_GENES_HUMAN: Tuple[str, ...] = (
+    'HMGB2', 'CDK1', 'NUSAP1', 'UBE2C', 'BIRC5',
+    'TPX2', 'TOP2A', 'NDC80', 'CKS2', 'NUF2', 'CKS1B', 'MKI67',
+    'TMPO', 'CENPF', 'TACC3', 'FAM64A', 'SMC4', 'CCNB2', 'CKAP2L',
+    'CKAP2', 'AURKB', 'BUB1', 'KIF11', 'ANP32E', 'TUBB4B', 'GTSE1',
+    'KIF20B', 'HJURP', 'CDCA3', 'HN1', 'CDC20', 'TTK', 'CDC25C', 'KIF2C',
+    'RANGAP1', 'NCAPD2', 'DLGAP5', 'CDCA2', 'CDCA8', 'ECT2', 'KIF23', 'HMMR',
+    'AURKA', 'PSRC1', 'ANLN', 'LBR', 'CKAP5', 'CENPE', 'CTCF', 'NEK2',
+    'G2E3', 'GAS2L3', 'CBX5', 'CENPA',
+)
+G2M_PHASE_GENES_MOUSE: Tuple[str, ...] = (
+    'Cbx5', 'Aurkb', 'Cks1b', 'Cks2', 'Jpt1', 'Hmgb2',
+    'Anp32e', 'Lbr', 'Tmpo', 'Top2a', 'Tacc3', 'Tubb4b', 'Ncapd2',
+    'Rangap1', 'Cdk1', 'Smc4', 'Kif20b', 'Cdca8', 'Ckap2', 'Ndc80',
+    'Dlgap5', 'Hjurp', 'Ckap5', 'Bub1', 'Ckap2l', 'Ect2', 'Kif11',
+    'Birc5', 'Cdca2', 'Nuf2', 'Cdca3', 'Nusap1', 'Ttk', 'Aurka',
+    'Mki67', 'Pimreg', 'Ccnb2', 'Tpx2', 'Hjurp', 'Anln', 'Kif2c',
+    'Cenpe', 'Gtse1', 'Kif23', 'Cdc20', 'Ube2c', 'Cenpf', 'Cenpa',
+    'Hmmr', 'Ctcf', 'Psrc1', 'Cdc25c', 'Nek2', 'Gas2l3', 'G2e3',
+)
+
+
 # Helper functions for Rust anndata compatibility
 def _safe_copy(arr):
     """Safely copy array data, compatible with both numpy and Rust backends."""
@@ -1985,39 +2031,11 @@ def score_genes_cell_cycle(adata,species='human',s_genes=None, g2m_genes=None):
         >>> print(adata.obs[['S_score', 'G2M_score', 'phase']].head())
     """
     if s_genes is None:
-        if species=='human':
-            s_genes=['MCM5', 'PCNA', 'TYMS', 'FEN1', 'MCM2', 'MCM4', 
-            'RRM1', 'UNG', 'GINS2', 'MCM6', 'CDCA7', 'DTL', 'PRIM1', 
-            'UHRF1', 'MLF1IP', 'HELLS', 'RFC2', 'RPA2', 'NASP', 'RAD51AP1', 
-            'GMNN', 'WDR76', 'SLBP', 'CCNE2', 'UBR7', 'POLD3', 'MSH2', 'ATAD2', 
-            'RAD51', 'RRM2', 'CDC45', 'CDC6', 'EXO1', 'TIPIN', 'DSCC1', 'BLM',
-             'CASP8AP2', 'USP1', 'CLSPN', 'POLA1', 'CHAF1B', 'BRIP1', 'E2F8']
-        elif species=='mouse':
-            s_genes=['Cdca7', 'Mcm4', 'Mcm7', 'Rfc2', 'Ung', 'Mcm6', 
-            'Rrm1', 'Slbp', 'Pcna', 'Atad2', 'Tipin', 'Mcm5', 'Uhrf1', 
-            'Polr1b', 'Dtl', 'Prim1', 'Fen1', 'Hells', 'Gmnn', 'Pold3', 
-            'Nasp', 'Chaf1b', 'Gins2', 'Pola1', 'Msh2', 'Casp8ap2', 'Cdc6',
-             'Ubr7', 'Ccne2', 'Wdr76', 'Tyms', 'Cdc45', 'Clspn', 'Rrm2', 
-             'Dscc1', 'Rad51', 'Usp1', 'Exo1', 'Blm', 'Rad51ap1', 'Cenpu', 'E2f8', 'Mrpl36']       
+        s_genes = list(S_PHASE_GENES_HUMAN if species == 'human'
+                       else S_PHASE_GENES_MOUSE)
     if g2m_genes is None:
-        if species=='human':
-            g2m_genes=['HMGB2', 'CDK1', 'NUSAP1', 'UBE2C', 'BIRC5', 
-            'TPX2', 'TOP2A', 'NDC80', 'CKS2', 'NUF2', 'CKS1B', 'MKI67', 
-            'TMPO', 'CENPF', 'TACC3', 'FAM64A', 'SMC4', 'CCNB2', 'CKAP2L', 
-            'CKAP2', 'AURKB', 'BUB1', 'KIF11', 'ANP32E', 'TUBB4B', 'GTSE1',
-             'KIF20B', 'HJURP', 'CDCA3', 'HN1', 'CDC20', 'TTK', 'CDC25C', 'KIF2C',
-              'RANGAP1', 'NCAPD2', 'DLGAP5', 'CDCA2', 'CDCA8', 'ECT2', 'KIF23', 'HMMR',
-               'AURKA', 'PSRC1', 'ANLN', 'LBR', 'CKAP5', 'CENPE', 'CTCF', 'NEK2', 
-               'G2E3', 'GAS2L3', 'CBX5', 'CENPA']
-        elif species=='mouse':
-            g2m_genes=['Cbx5', 'Aurkb', 'Cks1b', 'Cks2', 'Jpt1', 'Hmgb2', 
-            'Anp32e', 'Lbr', 'Tmpo', 'Top2a', 'Tacc3', 'Tubb4b', 'Ncapd2', 
-            'Rangap1', 'Cdk1', 'Smc4', 'Kif20b', 'Cdca8', 'Ckap2', 'Ndc80',
-             'Dlgap5', 'Hjurp', 'Ckap5', 'Bub1', 'Ckap2l', 'Ect2', 'Kif11',
-              'Birc5', 'Cdca2', 'Nuf2', 'Cdca3', 'Nusap1', 'Ttk', 'Aurka', 
-              'Mki67', 'Pimreg', 'Ccnb2', 'Tpx2', 'Hjurp', 'Anln', 'Kif2c',
-               'Cenpe', 'Gtse1', 'Kif23', 'Cdc20', 'Ube2c', 'Cenpf', 'Cenpa',
-                'Hmmr', 'Ctcf', 'Psrc1', 'Cdc25c', 'Nek2', 'Gas2l3', 'G2e3']
+        g2m_genes = list(G2M_PHASE_GENES_HUMAN if species == 'human'
+                         else G2M_PHASE_GENES_MOUSE)
     sc.tl.score_genes_cell_cycle(adata, s_genes=s_genes, g2m_genes=g2m_genes)
     if 'status' not in adata.uns.keys():
         adata.uns['status'] = {}
