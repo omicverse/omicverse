@@ -259,6 +259,7 @@ def program_aware_merge(
     adata: anndata.AnnData,
     cluster_key: str,
     *,
+    layer: Optional[str] = None,
     hvg_mask: Optional[np.ndarray] = None,
     state_library: Optional[Dict[str, FrozenSet[str]]] = None,
     cosine_threshold: float = 0.95,
@@ -292,6 +293,24 @@ def program_aware_merge(
     cluster_key
         Column in ``adata.obs`` carrying the initial Leiden partition.
         Typically the output of ``auto_resolution``.
+    layer
+        Name of a non-negative ``adata.layers`` entry to use as NMF
+        input (e.g. ``'counts'`` for raw counts, or a stored
+        ``'log1p'`` layer). NMF strictly requires non-negative input,
+        and the input must also have stable variance per gene. If
+        ``None``, the function auto-detects:
+
+        - If ``adata.X`` is non-negative (no zero-centering), use
+          ``adata.X`` directly.
+        - Else (``.X`` has been ``sc.pp.scale``-d → has negative
+          values), fall back to ``adata.layers['counts']`` and
+          re-apply ``log1p`` on the fly.
+        - If neither is available, raise an informative error.
+
+        Inside the function we always re-apply unit-variance scaling
+        with ``zero_center=False`` per gene (cNMF / Kotliar 2019
+        convention), which preserves non-negativity while
+        equalising NMF's per-gene sensitivity to dominant genes.
     hvg_mask
         Optional boolean mask over ``adata.var`` selecting the genes
         to use for NMF. If ``None``, uses ``adata.var['highly_variable_genes']``
@@ -395,6 +414,72 @@ def program_aware_merge(
     if rps_rpl:
         state_lib['translation'] = state_lib.get('translation', frozenset()) | rps_rpl
 
+    # ── Resolve non-negative input matrix once ──────────────────────
+    # NMF requires X >= 0. Auto-detect what state .X is in:
+    #   - log1p-normalised .X (non-negative, post normalize_total+log1p):
+    #     use as-is
+    #   - scaled .X (has negatives, post sc.pp.scale with zero_center=True):
+    #     fall back to layers['counts'] and re-apply log1p on the fly
+    #
+    # Whatever we end up with, then apply per-gene unit-variance
+    # scaling WITHOUT zero-centring (cNMF / Kotliar 2019 convention)
+    # so NMF doesn't get dominated by genes with large absolute counts.
+    def _resolve_input_matrix() -> np.ndarray:
+        if layer is not None:
+            if layer not in adata.layers:
+                raise KeyError(
+                    f"layer={layer!r} not in adata.layers; available: "
+                    f"{list(adata.layers.keys())}"
+                )
+            mat = adata.layers[layer]
+            src = f"layer {layer!r}"
+        else:
+            x = adata.X
+            x_sample = (x[:200, :200].toarray() if hasattr(x, 'toarray')
+                        else np.asarray(x[:200, :200]))
+            if (x_sample < -1e-6).any():
+                # .X has been zero-centred; fall back to raw counts
+                if 'counts' not in adata.layers:
+                    raise ValueError(
+                        "adata.X has negative values (likely after "
+                        "sc.pp.scale) and no 'counts' layer is "
+                        "available to fall back to. Pass layer="
+                        "'<name_of_non_negative_layer>' explicitly, "
+                        "or restore the log1p .X."
+                    )
+                mat = adata.layers['counts']
+                # log1p of CPM-normalised counts — matches cNMF input shape
+                if hasattr(mat, 'toarray'):
+                    mat = mat.toarray()
+                mat = np.asarray(mat, dtype=np.float64)
+                row_sum = mat.sum(axis=1, keepdims=True)
+                row_sum[row_sum == 0] = 1.0
+                mat = np.log1p(mat / row_sum * 1e4)
+                src = "layers['counts'] → normalize_total(1e4) → log1p"
+            else:
+                mat = x
+                src = "adata.X (auto-detected non-negative)"
+        if hasattr(mat, 'toarray'):
+            mat = mat.toarray()
+        mat = np.asarray(mat, dtype=np.float64)
+        mat = mat[:, hvg_idx]
+        # Log1p input is already roughly variance-stabilised. cNMF's
+        # extra per-gene unit-variance scaling (zero_center=False) is
+        # designed for cNMF's specific multi-K stability analysis;
+        # empirically, applying it here causes NMF programs to lose
+        # the lineage-specific concentration that lets state library
+        # matching work — high-abundance genes get penalised, and
+        # rare-but-defining lineage markers (GHRL → Epsilon,
+        # SST → Delta) get diluted by shared endocrine programs.
+        # We feed log1p directly. NMF still handles per-gene scale
+        # variation through its non-negative least-squares loss.
+        if verbose:
+            print(f"  NMF input: {src}, shape={mat.shape}, "
+                  f"min={mat.min():.3f}, max={mat.max():.3f}")
+        return mat
+
+    nmf_input = _resolve_input_matrix()
+
     output_key = output_cluster_key or f'{cluster_key}_clean'
     current_key = cluster_key
     rounds: list = []
@@ -415,14 +500,10 @@ def program_aware_merge(
                       f"K={N} ≤ min_clusters={min_clusters}, stop")
             break
 
-        # 1. NMF
-        X = adata.X[:, hvg_idx]
-        if hasattr(X, 'toarray'):
-            X = X.toarray()
-        X = np.clip(np.asarray(X), 0.0, None)
+        # 1. NMF on the cached non-negative HVG matrix
         nmf = NMF(n_components=N, init='nndsvda', max_iter=nmf_max_iter,
                   tol=1e-3, random_state=random_state)
-        W = nmf.fit_transform(X)
+        W = nmf.fit_transform(nmf_input)
         H = nmf.components_
 
         # 2. Classify programs
