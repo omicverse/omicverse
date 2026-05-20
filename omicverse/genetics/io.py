@@ -1,10 +1,14 @@
 """I/O for ``ov.genetics`` — GWAS summary statistics, PLINK and VCF.
 
-Flexible readers for the heterogeneous file formats of statistical
-genetics: :func:`read_sumstats` parses a GWAS summary-statistics table
-with column-name auto-detection, :func:`read_plink` loads a PLINK
-``.bed`` / ``.bim`` / ``.fam`` triple into a samples x SNPs AnnData,
-and :func:`read_vcf` extracts a genotype dosage matrix from a VCF.
+Flexible readers (and writers) for the heterogeneous file formats of
+statistical genetics: :func:`read_sumstats` parses a GWAS
+summary-statistics table with column-name auto-detection,
+:func:`read_plink` loads a PLINK ``.bed`` / ``.bim`` / ``.fam`` triple
+into a samples x SNPs AnnData, :func:`read_vcf` extracts a genotype
+dosage matrix from a VCF, and :func:`write_plink` / :func:`write_sumstats`
+serialise a genotype AnnData / a GWAS results table back out in the
+PLINK and GWAS-summary formats that downstream tools (and these readers)
+consume.
 """
 from __future__ import annotations
 
@@ -319,3 +323,183 @@ def read_vcf(path: str, *, max_variants: Optional[int] = None):
     adata = anndata.AnnData(X=X, obs=obs, var=var)
     adata.uns["genetics_source"] = "vcf"
     return adata
+
+
+@register_function(
+    aliases=[
+        "write_plink", "save_plink", "to_plink", "plink_writer",
+        "写入PLINK", "保存PLINK", "导出PLINK",
+    ],
+    category="genetics",
+    description=(
+        "Write a genotype AnnData out as a PLINK binary fileset "
+        "(``.bed`` / ``.bim`` / ``.fam``) — the round-trip partner of "
+        ":func:`read_plink`. Packs ``.X`` (0/1/2 A1-allele dosages) into "
+        "the SNP-major 2-bit ``.bed`` bitstream and writes the SNP table "
+        "(``.bim``) and sample table (``.fam``). This is the format "
+        "downstream tools such as LDSC and PLINK consume. Pure numpy."
+    ),
+    examples=[
+        "ov.genetics.write_plink(geno_qc, './cohort')",
+        "ov.genetics.write_plink(geno_qc, prefix, a1='A', a2='G')",
+    ],
+    related=["ov.genetics.read_plink", "ov.genetics.heritability",
+             "ov.genetics.write_sumstats"],
+)
+def write_plink(
+    adata,
+    prefix: str,
+    *,
+    chrom: str = "chrom",
+    pos: str = "pos",
+    a1: Union[str, "pd.Series"] = "A",
+    a2: Union[str, "pd.Series"] = "G",
+) -> str:
+    """Write a genotype AnnData as a PLINK ``.bed`` / ``.bim`` / ``.fam``.
+
+    Parameters
+    ----------
+    adata
+        Genotype AnnData of ``samples x SNPs`` — ``.X`` holds 0/1/2
+        A1-allele dosages.
+    prefix
+        Output fileset prefix; ``prefix.bed``, ``.bim``, ``.fam`` are
+        written.
+    chrom, pos
+        ``.var`` columns carrying the SNP chromosome / position.
+    a1, a2
+        A1 (effect) and A2 (other) alleles — a constant string applied to
+        every SNP, or a per-SNP Series aligned to ``.var``.
+
+    Returns
+    -------
+    str
+        The fileset ``prefix``.
+    """
+    parent = os.path.dirname(prefix)
+    if parent:
+        os.makedirs(parent, exist_ok=True)
+
+    X = np.asarray(adata.X, dtype=float)
+    if hasattr(adata.X, "toarray"):
+        X = adata.X.toarray().astype(float)
+    n, m = X.shape
+
+    # .fam — sample table.
+    pd.DataFrame({
+        "fid": adata.obs_names, "iid": adata.obs_names,
+        "pat": 0, "mat": 0, "sex": 0, "phen": -9,
+    }).to_csv(prefix + ".fam", sep=" ", header=False, index=False)
+
+    # .bim — SNP table.
+    a1_col = (adata.var[a1] if isinstance(a1, str) and a1 in adata.var.columns
+              else a1)
+    a2_col = (adata.var[a2] if isinstance(a2, str) and a2 in adata.var.columns
+              else a2)
+    pd.DataFrame({
+        "chr": adata.var[chrom].to_numpy(),
+        "snp": adata.var_names,
+        "cm": 0,
+        "bp": adata.var[pos].to_numpy(),
+        "a1": a1_col,
+        "a2": a2_col,
+    }).to_csv(prefix + ".bim", sep="\t", header=False, index=False)
+
+    # .bed — SNP-major 2-bit bitstream. Dosage->code is the inverse of
+    # _read_bed: 2 (hom A1) -> 00, 1 (het) -> 10, 0 (hom A2) -> 11,
+    # NaN (missing) -> 01.
+    geno = np.rint(X)
+    code = np.full((n, m), 1, dtype=np.uint8)            # default = missing
+    code[geno == 2] = 0
+    code[geno == 1] = 2
+    code[geno == 0] = 3
+    with open(prefix + ".bed", "wb") as fh:
+        fh.write(bytes([0x6c, 0x1b, 0x01]))              # magic + SNP-major
+        for j in range(m):
+            col = code[:, j]
+            buf = bytearray((n + 3) // 4)
+            for i in range(n):
+                buf[i // 4] |= int(col[i]) << (2 * (i % 4))
+            fh.write(bytes(buf))
+    return prefix
+
+
+@register_function(
+    aliases=[
+        "write_sumstats", "save_sumstats", "to_sumstats", "sumstats_writer",
+        "写入GWAS汇总统计", "保存汇总统计", "导出汇总统计",
+    ],
+    category="genetics",
+    description=(
+        "Write a GWAS association results table to disk in the standard "
+        "GWAS-summary format — one row per SNP with canonical column "
+        "names (SNP / CHR / BP / A1 / A2 / BETA / SE / Z / P / N), sorted "
+        "by genomic position. This is the format a study shares publicly "
+        "and the format :func:`read_sumstats` reads back. Pure pandas."
+    ),
+    examples=[
+        "ov.genetics.write_sumstats(res_adj, './gwas_sumstats.tsv')",
+        "ov.genetics.write_sumstats(res, path, chrom='chrom', pos='pos')",
+    ],
+    related=["ov.genetics.read_sumstats", "ov.genetics.gwas_association",
+             "ov.genetics.munge_sumstats"],
+)
+def write_sumstats(
+    results: pd.DataFrame,
+    path: str,
+    *,
+    snp: str = "snp",
+    chrom: str = "chrom",
+    pos: str = "pos",
+    beta: str = "beta",
+    se: str = "se",
+    stat: Optional[str] = "stat",
+    pvalue: str = "pvalue",
+    n: Optional[str] = "n",
+    a1: str = "A",
+    a2: str = "G",
+    sep: str = "\t",
+) -> pd.DataFrame:
+    """Write GWAS summary statistics in the standard sumstats format.
+
+    Parameters
+    ----------
+    results
+        A GWAS association results table (e.g. from
+        :func:`ov.genetics.gwas_association`, merged with SNP annotation).
+    path
+        Output file path (``.tsv`` / ``.txt``; ``.gz`` is gzip-compressed).
+    snp, chrom, pos, beta, se, stat, pvalue, n
+        Source column names; ``stat`` and ``n`` are optional (pass
+        ``None`` to omit).
+    a1, a2
+        Effect (A1) and other (A2) alleles written for every SNP.
+    sep
+        Field delimiter (default tab).
+
+    Returns
+    -------
+    pandas.DataFrame
+        The written sumstats table (canonical columns, position-sorted).
+    """
+    parent = os.path.dirname(path)
+    if parent:
+        os.makedirs(parent, exist_ok=True)
+
+    cols = {snp: "SNP", chrom: "CHR", pos: "BP", beta: "BETA",
+            se: "SE", pvalue: "P"}
+    if stat is not None and stat in results.columns:
+        cols[stat] = "STAT"
+    if n is not None and n in results.columns:
+        cols[n] = "N"
+    out = results[list(cols)].rename(columns=cols).copy()
+    out["A1"] = a1
+    out["A2"] = a2
+    out["Z"] = out["BETA"] / out["SE"]
+    order = [c for c in ["SNP", "CHR", "BP", "A1", "A2", "BETA", "SE",
+                         "STAT", "Z", "P", "N"] if c in out.columns]
+    out = (out[order]
+           .sort_values(["CHR", "BP"])
+           .reset_index(drop=True))
+    out.to_csv(path, sep=sep, index=False)
+    return out

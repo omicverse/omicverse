@@ -8,6 +8,16 @@ the Mendelian-randomization scatter / forest plots
 (:func:`mr_scatter`, :func:`mr_forest`) and the SuSiE fine-mapping plot
 (:func:`finemap_plot`). The MR and fine-mapping plots delegate to the
 backends' own plotting routines.
+
+Pipeline composites — multi-panel figures assembled for the GWAS
+follow-up workflow — live here too so that tutorials stay one-liners:
+the sample-QC distributions (:func:`sample_qc_plot`), the genotype-PCA
+structure view (:func:`pca_structure_plot`), the fine-mapping locus view
+(:func:`finemap_locus_plot`), the gene-level TWAS Manhattan
+(:func:`twas_manhattan`) and the scDRS score-by-cell-type panels
+(:func:`scdrs_celltype_plot`), plus the MR exposure-vs-outcome scatter
+(:func:`mr_effect_plot`) for callers who have raw effect arrays rather
+than a backend MRInput.
 """
 from __future__ import annotations
 
@@ -559,3 +569,488 @@ def finemap_plot(fit, *, y: str = "PIP", **kwargs):
             "`pip install pysusie`."
         ) from exc
     return pysusie.susie_plot(fit, y=y, **kwargs)
+
+
+@register_function(
+    aliases=[
+        "sample_qc_plot", "qc_plot", "individual_qc_plot",
+        "样本质控图", "个体质控图",
+    ],
+    category="genetics",
+    description=(
+        "Two-panel sample (per-individual) quality-control figure — a "
+        "histogram of the per-sample call rate with the call-rate "
+        "threshold marked, and a histogram of the per-sample "
+        "heterozygosity with the mean +/- 3 SD outlier bounds marked. "
+        "Accepts the DataFrame from :func:`ov.genetics.sample_qc_metrics`. "
+        "matplotlib."
+    ),
+    examples=[
+        "ov.genetics.sample_qc_plot(qc)",
+        "ov.genetics.sample_qc_plot(qc, call_rate=0.98)",
+    ],
+    related=["ov.genetics.sample_qc_metrics", "ov.genetics.gwas_qc"],
+)
+def sample_qc_plot(
+    qc: pd.DataFrame,
+    *,
+    call_rate: float = 0.98,
+    het_bounds: Optional[tuple] = None,
+    axes=None,
+    title: Optional[str] = "Sample QC distributions",
+):
+    """Two-panel sample-QC distribution plot.
+
+    Parameters
+    ----------
+    qc
+        Per-sample QC table (from :func:`ov.genetics.sample_qc_metrics`) —
+        needs ``call_rate`` and ``heterozygosity`` columns.
+    call_rate
+        Call-rate threshold drawn on the call-rate panel.
+    het_bounds
+        ``(low, high)`` heterozygosity outlier bounds; taken from
+        ``qc.attrs['het_bounds']`` when ``None``.
+    axes
+        Optional pair of existing Axes; a 1x2 grid is created otherwise.
+    title
+        Optional figure suptitle.
+
+    Returns
+    -------
+    numpy.ndarray of matplotlib.axes.Axes
+        The two panel axes.
+    """
+    import matplotlib.pyplot as plt
+
+    if het_bounds is None:
+        het_bounds = qc.attrs.get("het_bounds")
+        if het_bounds is None:
+            mu, sd = qc["heterozygosity"].mean(), qc["heterozygosity"].std()
+            het_bounds = (mu - 3 * sd, mu + 3 * sd)
+    het_lo, het_hi = het_bounds
+
+    if axes is None:
+        _, axes = plt.subplots(1, 2, figsize=(10, 3.6))
+    axes[0].hist(qc["call_rate"], bins=40, color="#3b6fb6")
+    axes[0].axvline(call_rate, color="#d62728", ls="--",
+                    label=f"call-rate {call_rate:g}")
+    axes[0].set(xlabel="per-sample call rate", ylabel="samples")
+    axes[1].hist(qc["heterozygosity"], bins=40, color="#3b6fb6")
+    axes[1].axvline(het_lo, color="#d62728", ls="--")
+    axes[1].axvline(het_hi, color="#d62728", ls="--", label="mean +/- 3 SD")
+    axes[1].set(xlabel="per-sample heterozygosity", ylabel="samples")
+    for ax in axes:
+        ax.legend(fontsize=8)
+    if title:
+        axes[0].figure.suptitle(title)
+    return axes
+
+
+@register_function(
+    aliases=[
+        "pca_structure_plot", "genotype_pca_plot", "structure_plot",
+        "群体结构图", "基因型PCA图",
+    ],
+    category="genetics",
+    description=(
+        "Two-panel genotype-PCA population-structure figure — a scree "
+        "plot of the variance explained by each principal component (to "
+        "choose how many PCs to carry) and a PC1-vs-PC2 scatter, "
+        "optionally coloured by a (sub)population label so that real "
+        "ancestry structure is visible. matplotlib."
+    ),
+    examples=[
+        "ov.genetics.pca_structure_plot(pcs, var_ratio)",
+        "ov.genetics.pca_structure_plot(pcs, var_ratio, labels=pop)",
+    ],
+    related=["ov.genetics.genotype_pca", "ov.genetics.gwas_association"],
+)
+def pca_structure_plot(
+    pcs: np.ndarray,
+    variance_ratio: np.ndarray,
+    *,
+    labels=None,
+    axes=None,
+    title: Optional[str] = None,
+):
+    """Two-panel genotype-PCA structure plot (scree + PC1/PC2 scatter).
+
+    Parameters
+    ----------
+    pcs
+        ``samples x n_comps`` PC-score matrix (from
+        :func:`ov.genetics.genotype_pca`).
+    variance_ratio
+        Per-component variance-explained vector.
+    labels
+        Optional per-sample (sub)population labels colouring the scatter.
+    axes
+        Optional pair of existing Axes; a 1x2 grid is created otherwise.
+    title
+        Optional figure suptitle.
+
+    Returns
+    -------
+    numpy.ndarray of matplotlib.axes.Axes
+        The two panel axes.
+    """
+    import matplotlib.pyplot as plt
+
+    pcs = np.asarray(pcs)
+    vr = np.asarray(variance_ratio)
+    if axes is None:
+        _, axes = plt.subplots(1, 2, figsize=(10, 4))
+
+    axes[0].plot(np.arange(1, len(vr) + 1), vr, "o-", color="#3b6fb6")
+    axes[0].set_xlabel("principal component")
+    axes[0].set_ylabel("variance ratio")
+    axes[0].set_title("Scree plot — choosing the number of PCs")
+
+    if labels is not None:
+        labels = np.asarray(labels).astype(str)
+        for p in sorted(np.unique(labels)):
+            m = labels == p
+            axes[1].scatter(pcs[m, 0], pcs[m, 1], s=8, label=p, alpha=0.6)
+        axes[1].legend(fontsize=8)
+    else:
+        axes[1].scatter(pcs[:, 0], pcs[:, 1], s=8, color="#3b6fb6", alpha=0.6)
+    axes[1].set_xlabel("PC1")
+    axes[1].set_ylabel("PC2")
+    axes[1].set_title("Genotype PCA — PC1 / PC2")
+    for ax in axes:
+        ax.spines[["top", "right"]].set_visible(False)
+    if title:
+        axes[0].figure.suptitle(title)
+    return axes
+
+
+@register_function(
+    aliases=[
+        "finemap_locus_plot", "susie_locus_plot", "finemapping_locus_plot",
+        "精细定位位点图", "SuSiE位点图",
+    ],
+    category="genetics",
+    description=(
+        "Two-panel fine-mapping locus view — the top panel is the regional "
+        "association plot (-log10 p vs position, lead SNP marked) and the "
+        "bottom panel is the SuSiE posterior-inclusion-probability (PIP) "
+        "track, with the 95% credible-set SNPs highlighted. Ties the "
+        "association peak to the fine-mapped credible set in one figure. "
+        "matplotlib."
+    ),
+    examples=[
+        "ov.genetics.finemap_locus_plot(locus, pip, credible)",
+        "ov.genetics.finemap_locus_plot(locus, pip, credible, lead_snp='rs1')",
+    ],
+    related=["ov.genetics.finemap", "ov.genetics.regional_plot",
+             "ov.genetics.get_credible_sets"],
+)
+def finemap_locus_plot(
+    locus: pd.DataFrame,
+    pip: np.ndarray,
+    credible: dict,
+    *,
+    chrom: str = "chrom",
+    pos: str = "pos",
+    pvalue: str = "pvalue",
+    snp: str = "snp",
+    lead_snp: Optional[str] = None,
+    axes=None,
+    title: Optional[str] = None,
+):
+    """Two-panel fine-mapping locus view (regional p-values + SuSiE PIP).
+
+    Parameters
+    ----------
+    locus
+        Per-SNP association table for one locus — needs position and
+        p-value columns; row order must match ``pip``.
+    pip
+        Per-SNP posterior inclusion probabilities (from
+        :func:`ov.genetics.get_pip`), aligned to ``locus``.
+    credible
+        The credible-set object from
+        :func:`ov.genetics.get_credible_sets` — its ``'cs'`` entry lists
+        the within-locus index sets.
+    chrom, pos, pvalue, snp
+        ``locus`` column names.
+    lead_snp
+        Optional lead-SNP id, highlighted on the regional panel.
+    axes
+        Optional pair of existing Axes; a stacked 2x1 grid otherwise.
+    title
+        Optional title for the regional (top) panel.
+
+    Returns
+    -------
+    numpy.ndarray of matplotlib.axes.Axes
+        The two panel axes.
+    """
+    import matplotlib.pyplot as plt
+
+    pip = np.asarray(pip, dtype=float)
+    if axes is None:
+        _, axes = plt.subplots(2, 1, figsize=(9, 6.5), sharex=True)
+
+    regional_plot(
+        locus, chrom=chrom, pos=pos, pvalue=pvalue, snp=snp,
+        lead_snp=lead_snp, ax=axes[0],
+        title=title or "Regional association",
+    )
+
+    bp = pd.to_numeric(locus[pos], errors="coerce").to_numpy()
+    in_cs = np.zeros(len(pip), dtype=bool)
+    for idx in (credible.get("cs") or []):
+        in_cs[list(idx)] = True
+    axes[1].scatter(bp[~in_cs], pip[~in_cs], s=18, c="#bdbdbd",
+                    label="not in credible set")
+    axes[1].scatter(bp[in_cs], pip[in_cs], s=45, c="#d62728",
+                    edgecolors="black", label="95% credible set")
+    axes[1].set_xlabel("position (bp)")
+    axes[1].set_ylabel("PIP")
+    axes[1].set_title("SuSiE fine-mapping — posterior inclusion probability")
+    axes[1].legend(fontsize=8)
+    axes[1].spines[["top", "right"]].set_visible(False)
+    return axes
+
+
+@register_function(
+    aliases=[
+        "twas_manhattan", "twas_plot", "gene_manhattan",
+        "TWAS曼哈顿图", "基因关联图",
+    ],
+    category="genetics",
+    description=(
+        "Gene-level TWAS Manhattan / bar plot — one bar per gene of "
+        "-log10(p) from a transcriptome-wide association study, with the "
+        "gene-level Bonferroni line drawn and an optional gene of "
+        "interest highlighted. Summarises which predicted-expression "
+        "profiles track the trait. matplotlib."
+    ),
+    examples=[
+        "ov.genetics.twas_manhattan(twas_res)",
+        "ov.genetics.twas_manhattan(twas_res, highlight='GENE0007')",
+    ],
+    related=["ov.genetics.twas", "ov.genetics.manhattan"],
+)
+def twas_manhattan(
+    twas_res: pd.DataFrame,
+    *,
+    gene: str = "gene",
+    pvalue: str = "pvalue",
+    highlight: Optional[str] = None,
+    ax=None,
+    title: Optional[str] = "Gene-level TWAS",
+):
+    """Gene-level TWAS Manhattan (bar) plot.
+
+    Parameters
+    ----------
+    twas_res
+        Per-gene TWAS results table (from :func:`ov.genetics.twas`).
+    gene, pvalue
+        Gene-id and p-value column names.
+    highlight
+        Optional gene id drawn in red (e.g. the candidate causal gene).
+    ax
+        Existing matplotlib Axes.
+    title
+        Optional plot title.
+
+    Returns
+    -------
+    tuple of (matplotlib.axes.Axes, float)
+        The plot axes and the Bonferroni threshold used.
+    """
+    import matplotlib.pyplot as plt
+
+    order = (twas_res.sort_values(pvalue, na_position="last")
+                     .reset_index(drop=True))
+    n_tested = int(twas_res[pvalue].notna().sum())
+    threshold = 0.05 / max(n_tested, 1)
+    logp = -np.log10(order[pvalue].clip(lower=1e-300))
+    colors = ["#d62728" if g == highlight else "#3b6fb6"
+              for g in order[gene]]
+
+    if ax is None:
+        _, ax = plt.subplots(figsize=(8, 4))
+    ax.bar(np.arange(len(order)), logp, color=colors, edgecolor="black",
+           linewidth=0.4)
+    ax.axhline(-np.log10(threshold), color="#d62728", ls="--",
+               label=f"Bonferroni (p = {threshold:.1e})")
+    ax.set_xticks(np.arange(len(order)))
+    ax.set_xticklabels(order[gene], rotation=60, ha="right", fontsize=7)
+    ax.set_ylabel(r"$-\log_{10}(p)$")
+    if title:
+        ax.set_title(title)
+    ax.legend(fontsize=8)
+    ax.spines[["top", "right"]].set_visible(False)
+    return ax, threshold
+
+
+@register_function(
+    aliases=[
+        "scdrs_celltype_plot", "scdrs_plot", "disease_score_celltype_plot",
+        "scDRS细胞类型图", "疾病评分细胞类型图",
+    ],
+    category="genetics",
+    description=(
+        "Two-panel single-cell disease-relevance (scDRS) summary by cell "
+        "type — a violin plot of the per-cell disease-relevance score "
+        "across cell types and a bar plot of the fraction of "
+        "significantly disease-associated cells per type. Highlights the "
+        "cell type carrying the trait's genetic signal. matplotlib."
+    ),
+    examples=[
+        "ov.genetics.scdrs_celltype_plot(adata)",
+        "ov.genetics.scdrs_celltype_plot(adata, score='scdrs_score', "
+        "pval='scdrs_pval', cell_type='cell_type')",
+    ],
+    related=["ov.genetics.disease_relevance_score",
+             "ov.genetics.score_downstream"],
+)
+def scdrs_celltype_plot(
+    adata,
+    *,
+    cell_type: str = "cell_type",
+    score: str = "scdrs_score",
+    pval: str = "scdrs_pval",
+    sig: float = 0.05,
+    axes=None,
+    title: Optional[str] = None,
+):
+    """Two-panel scDRS score-by-cell-type figure.
+
+    Parameters
+    ----------
+    adata
+        scRNA-seq AnnData scored by
+        :func:`ov.genetics.disease_relevance_score` — ``.obs`` must carry
+        the cell-type, score and p-value columns.
+    cell_type, score, pval
+        ``.obs`` column names.
+    sig
+        Significance threshold for the per-cell-type significant-fraction
+        panel.
+    axes
+        Optional pair of existing Axes; a 1x2 grid is created otherwise.
+    title
+        Optional figure suptitle.
+
+    Returns
+    -------
+    numpy.ndarray of matplotlib.axes.Axes
+        The two panel axes.
+    """
+    import matplotlib.pyplot as plt
+
+    obs = adata.obs
+    ct = obs[cell_type].astype("category")
+    cats = list(ct.cat.categories)
+    by_ct_mean = (obs.groupby(cell_type, observed=True)[score].mean())
+    top_ct = by_ct_mean.idxmax()
+    ct_colors = ["#d62728" if c == top_ct else "#3b6fb6" for c in cats]
+    score_by_ct = [obs.loc[ct == c, score].to_numpy() for c in cats]
+    sig_frac = (obs.assign(_sig=obs[pval] < sig)
+                   .groupby(cell_type, observed=True)["_sig"].mean()
+                   .reindex(cats))
+
+    if axes is None:
+        _, axes = plt.subplots(1, 2, figsize=(11, 4))
+    parts = axes[0].violinplot(score_by_ct, showmeans=True)
+    for pc, col in zip(parts["bodies"], ct_colors):
+        pc.set_facecolor(col)
+        pc.set_alpha(0.7)
+    axes[0].set_xticks(np.arange(1, len(cats) + 1))
+    axes[0].set_xticklabels(cats, rotation=20)
+    axes[0].set(ylabel="scDRS disease-relevance score",
+                title="Disease-relevance score by cell type")
+
+    axes[1].bar([str(c) for c in cats], sig_frac.to_numpy(),
+                color=ct_colors, edgecolor="black", linewidth=0.4)
+    axes[1].set(ylabel=f"fraction of cells with scDRS p < {sig:g}",
+                title="Significantly disease-associated cells")
+    axes[1].tick_params(axis="x", rotation=20)
+    for ax in axes:
+        ax.spines[["top", "right"]].set_visible(False)
+    if title:
+        axes[0].figure.suptitle(title)
+    return axes
+
+
+@register_function(
+    aliases=[
+        "mr_effect_plot", "mr_effect_scatter", "mr_ivw_scatter",
+        "MR效应散点图", "孟德尔随机化效应图",
+    ],
+    category="genetics",
+    description=(
+        "Mendelian-randomization effect scatter from raw instrument "
+        "arrays — plots each instrument's SNP-outcome effect against its "
+        "SNP-exposure effect (with error bars) and overlays the IVW "
+        "causal-effect slope through the origin. Use this when you have "
+        "the four effect / SE arrays directly; :func:`mr_scatter` is the "
+        "MRInput-based equivalent. matplotlib."
+    ),
+    examples=[
+        "ov.genetics.mr_effect_plot(bx, bxse, by, byse, slope=ivw.estimate)",
+    ],
+    related=["ov.genetics.mendelian_randomization", "ov.genetics.mr_scatter",
+             "ov.genetics.mr_forest"],
+)
+def mr_effect_plot(
+    bx: np.ndarray,
+    bxse: np.ndarray,
+    by: np.ndarray,
+    byse: np.ndarray,
+    *,
+    slope: float,
+    exposure_label: str = "SNP effect on exposure",
+    outcome_label: str = "SNP effect on outcome",
+    ax=None,
+    title: Optional[str] = "Mendelian randomization — exposure vs outcome",
+):
+    """MR exposure-vs-outcome effect scatter with the IVW slope.
+
+    Parameters
+    ----------
+    bx, bxse
+        Per-instrument SNP-exposure effect sizes and standard errors.
+    by, byse
+        Per-instrument SNP-outcome effect sizes and standard errors.
+    slope
+        The IVW causal-effect estimate, drawn as a line through the origin.
+    exposure_label, outcome_label
+        Axis labels for the exposure (x) and outcome (y).
+    ax
+        Existing matplotlib Axes.
+    title
+        Optional plot title.
+
+    Returns
+    -------
+    matplotlib.axes.Axes
+        The plot axes.
+    """
+    import matplotlib.pyplot as plt
+
+    bx = np.asarray(bx, dtype=float)
+    by = np.asarray(by, dtype=float)
+    if ax is None:
+        _, ax = plt.subplots(figsize=(6, 5))
+    ax.errorbar(bx, by, xerr=np.asarray(bxse, dtype=float),
+                yerr=np.asarray(byse, dtype=float), fmt="o", color="#3b6fb6",
+                ecolor="#bdbdbd", capsize=2, label="instruments")
+    xx = np.linspace(min(bx.min(), 0.0), bx.max() * 1.05, 50)
+    ax.plot(xx, slope * xx, color="#d62728", lw=2,
+            label=f"IVW slope = {slope:.3f}")
+    ax.axhline(0, color="grey", lw=0.6)
+    ax.axvline(0, color="grey", lw=0.6)
+    ax.set_xlabel(exposure_label)
+    ax.set_ylabel(outcome_label)
+    if title:
+        ax.set_title(title)
+    ax.legend(fontsize=8)
+    ax.spines[["top", "right"]].set_visible(False)
+    return ax

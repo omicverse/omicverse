@@ -51,12 +51,17 @@ Quick-start
 
 Pipeline stages
 ---------------
-I/O                       ``read_sumstats``, ``read_plink``, ``read_vcf``
+I/O                       ``read_sumstats``, ``read_plink``, ``read_vcf``,
+                          ``write_plink``, ``write_sumstats``
 Synthetic data            ``simulate_gwas_study`` — one coherent cohort
                           (genotype + trait + expression + scRNA) with
                           known ground truth, for tutorials / tests
 GWAS core (no backend)    ``gwas_qc``, ``gwas_association``,
                           ``genomic_inflation``
+Pipeline helpers          ``sample_qc_metrics``, ``genotype_pca``,
+                          ``clump_loci``, ``grade_loci``,
+                          ``make_coloc_dataset``, ``make_eqtl_matrices``,
+                          ``build_twas_model``
 eQTL mapping              ``eqtl_map`` (linear / anova / linear_cross)
 Fine-mapping              ``finemap`` (susie / susie_rss),
                           ``get_credible_sets``, ``get_pip``
@@ -75,7 +80,10 @@ TWAS                      ``twas`` (spredixcan / smultixcan / predixcan),
                           ``load_twas_model``
 Plotting                  ``manhattan``, ``qqplot``, ``regional_plot``,
                           ``coloc_plot``, ``mr_scatter``, ``mr_forest``,
-                          ``finemap_plot``
+                          ``finemap_plot``, ``sample_qc_plot``,
+                          ``pca_structure_plot``, ``finemap_locus_plot``,
+                          ``twas_manhattan``, ``scdrs_celltype_plot``,
+                          ``mr_effect_plot``
 
 All backend imports (``pymatrixeqtl``, ``pysusie`` …) are deferred to
 call-time — ``import omicverse.genetics`` does no heavy work and succeeds
@@ -92,9 +100,19 @@ _LAZY_ATTRS: dict[str, tuple[str, str]] = {
     "read_sumstats":             (".io", "read_sumstats"),
     "read_plink":                (".io", "read_plink"),
     "read_vcf":                  (".io", "read_vcf"),
+    "write_plink":               (".io", "write_plink"),
+    "write_sumstats":            (".io", "write_sumstats"),
     # Synthetic data (tutorials / tests)
     "simulate_gwas_study":       ("._simulate", "simulate_gwas_study"),
     "GWASStudy":                 ("._simulate", "GWASStudy"),
+    # Pipeline data-prep helpers
+    "sample_qc_metrics":         ("._utils", "sample_qc_metrics"),
+    "genotype_pca":              ("._utils", "genotype_pca"),
+    "clump_loci":                ("._utils", "clump_loci"),
+    "grade_loci":                ("._utils", "grade_loci"),
+    "make_coloc_dataset":        ("._utils", "make_coloc_dataset"),
+    "make_eqtl_matrices":        ("._utils", "make_eqtl_matrices"),
+    "build_twas_model":          ("._utils", "build_twas_model"),
     # GWAS core (backend-free)
     "gwas_qc":                   ("._gwas", "gwas_qc"),
     "gwas_association":          ("._gwas", "gwas_association"),
@@ -135,6 +153,12 @@ _LAZY_ATTRS: dict[str, tuple[str, str]] = {
     "mr_scatter":                (".plotting", "mr_scatter"),
     "mr_forest":                 (".plotting", "mr_forest"),
     "finemap_plot":              (".plotting", "finemap_plot"),
+    "sample_qc_plot":            (".plotting", "sample_qc_plot"),
+    "pca_structure_plot":        (".plotting", "pca_structure_plot"),
+    "finemap_locus_plot":        (".plotting", "finemap_locus_plot"),
+    "twas_manhattan":            (".plotting", "twas_manhattan"),
+    "scdrs_celltype_plot":       (".plotting", "scdrs_celltype_plot"),
+    "mr_effect_plot":            (".plotting", "mr_effect_plot"),
 }
 
 _LAZY_SUBMODULES = {"io", "plotting"}
@@ -142,6 +166,7 @@ _LAZY_SUBMODULES = {"io", "plotting"}
 _REGISTRY_SUBMODULES = (
     ".io",
     "._simulate",
+    "._utils",
     "._gwas",
     "._eqtl",
     "._finemap",
