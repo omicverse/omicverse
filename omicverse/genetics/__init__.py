@@ -52,6 +52,9 @@ Quick-start
 Pipeline stages
 ---------------
 I/O                       ``read_sumstats``, ``read_plink``, ``read_vcf``
+Synthetic data            ``simulate_gwas_study`` — one coherent cohort
+                          (genotype + trait + expression + scRNA) with
+                          known ground truth, for tutorials / tests
 GWAS core (no backend)    ``gwas_qc``, ``gwas_association``,
                           ``genomic_inflation``
 eQTL mapping              ``eqtl_map`` (linear / anova / linear_cross)
@@ -89,6 +92,9 @@ _LAZY_ATTRS: dict[str, tuple[str, str]] = {
     "read_sumstats":             (".io", "read_sumstats"),
     "read_plink":                (".io", "read_plink"),
     "read_vcf":                  (".io", "read_vcf"),
+    # Synthetic data (tutorials / tests)
+    "simulate_gwas_study":       ("._simulate", "simulate_gwas_study"),
+    "GWASStudy":                 ("._simulate", "GWASStudy"),
     # GWAS core (backend-free)
     "gwas_qc":                   ("._gwas", "gwas_qc"),
     "gwas_association":          ("._gwas", "gwas_association"),
@@ -135,6 +141,7 @@ _LAZY_SUBMODULES = {"io", "plotting"}
 
 _REGISTRY_SUBMODULES = (
     ".io",
+    "._simulate",
     "._gwas",
     "._eqtl",
     "._finemap",
