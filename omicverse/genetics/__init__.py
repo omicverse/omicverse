@@ -62,7 +62,8 @@ Pipeline helpers          ``sample_qc_metrics``, ``scan_cis_genes``,
                           ``genotype_pca``, ``clump_loci``, ``grade_loci``,
                           ``prune_by_distance``, ``make_coloc_dataset``,
                           ``coloc_scan``, ``make_eqtl_matrices``,
-                          ``build_twas_model``, ``make_twas_covariance``
+                          ``build_twas_model``, ``compute_ld_to_lead``,
+                          ``make_twas_covariance``
 eQTL mapping              ``eqtl_map`` (linear / anova / linear_cross)
 Fine-mapping              ``finemap`` (susie / susie_rss),
                           ``get_credible_sets``, ``get_pip``
@@ -84,7 +85,7 @@ Plotting                  ``manhattan``, ``qqplot``, ``regional_plot``,
                           ``finemap_plot``, ``sample_qc_plot``,
                           ``pca_structure_plot``, ``finemap_locus_plot``,
                           ``twas_manhattan``, ``scdrs_celltype_plot``,
-                          ``mr_effect_plot``
+                          ``gene_celltype_expression``, ``mr_effect_plot``
 
 All backend imports (``pymatrixeqtl``, ``pysusie`` …) are deferred to
 call-time — ``import omicverse.genetics`` does no heavy work and succeeds
@@ -117,6 +118,7 @@ _LAZY_ATTRS: dict[str, tuple[str, str]] = {
     "coloc_scan":                ("._utils", "coloc_scan"),
     "make_eqtl_matrices":        ("._utils", "make_eqtl_matrices"),
     "build_twas_model":          ("._utils", "build_twas_model"),
+    "compute_ld_to_lead":        ("._utils", "compute_ld_to_lead"),
     # GWAS core (backend-free)
     "gwas_qc":                   ("._gwas", "gwas_qc"),
     "gwas_association":          ("._gwas", "gwas_association"),
@@ -163,6 +165,7 @@ _LAZY_ATTRS: dict[str, tuple[str, str]] = {
     "finemap_locus_plot":        (".plotting", "finemap_locus_plot"),
     "twas_manhattan":            (".plotting", "twas_manhattan"),
     "scdrs_celltype_plot":       (".plotting", "scdrs_celltype_plot"),
+    "gene_celltype_expression":  (".plotting", "gene_celltype_expression"),
     "mr_effect_plot":            (".plotting", "mr_effect_plot"),
 }
 

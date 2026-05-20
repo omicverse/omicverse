@@ -258,6 +258,84 @@ def qqplot(
     return ax
 
 
+# --------------------------------------------------------------------------- #
+# LocusZoom helpers — the classic discrete r^2 bins and the gene track.        #
+# --------------------------------------------------------------------------- #
+# The canonical LocusZoom LD-bin colour scheme (lead = purple diamond).
+_LD_BINS = [0.0, 0.2, 0.4, 0.6, 0.8, 1.0]
+_LD_COLORS = ["#1f2f86", "#6fc2ec", "#5cba5c", "#f4a23b", "#e23b30"]
+_LD_LABELS = ["0.0 – 0.2", "0.2 – 0.4", "0.4 – 0.6", "0.6 – 0.8", "0.8 – 1.0"]
+_LD_NA_COLOR = "#9b9b9b"
+
+
+def _ld_bin_color(r2_val):
+    """Map an r^2 value onto its LocusZoom discrete-bin colour."""
+    if r2_val is None or not np.isfinite(r2_val):
+        return _LD_NA_COLOR
+    for i in range(len(_LD_COLORS)):
+        if r2_val <= _LD_BINS[i + 1] or i == len(_LD_COLORS) - 1:
+            return _LD_COLORS[i]
+    return _LD_COLORS[-1]
+
+
+def _draw_gene_track(ax, genes, start, end, *, chrom=None,
+                     gene_col="gene", chrom_col="chrom",
+                     start_col="start", end_col="end", strand_col="strand"):
+    """Draw a LocusZoom gene-model track (arrowed boxes + symbols)."""
+    g = genes.copy()
+    if chrom is not None and chrom_col in g.columns:
+        g = g[g[chrom_col].astype(str) == str(chrom)]
+    gs = pd.to_numeric(g[start_col], errors="coerce")
+    ge = pd.to_numeric(g[end_col], errors="coerce")
+    # Keep any gene overlapping the plotted window.
+    g = g[(ge >= start) & (gs <= end)].copy()
+    g = g.assign(_s=gs[g.index].clip(lower=start),
+                 _e=ge[g.index].clip(upper=end))
+    g = g.sort_values("_s").reset_index(drop=True)
+
+    span = max(end - start, 1.0)
+    rows_end: list = []  # right-edge bp of the last gene placed on each row
+    row_of = []
+    for _, row in g.iterrows():
+        placed = False
+        for ri, redge in enumerate(rows_end):
+            if row["_s"] > redge + 0.04 * span:
+                rows_end[ri] = row["_e"]
+                row_of.append(ri)
+                placed = True
+                break
+        if not placed:
+            rows_end.append(row["_e"])
+            row_of.append(len(rows_end) - 1)
+    n_rows = max(len(rows_end), 1)
+
+    for (_, row), ri in zip(g.iterrows(), row_of):
+        y = n_rows - 1 - ri
+        strand = str(row.get(strand_col, "+"))
+        ax.add_patch(plt_rect((row["_s"], y - 0.18),
+                              row["_e"] - row["_s"], 0.36,
+                              facecolor="#2f6db4", edgecolor="#1b3f6e",
+                              linewidth=0.5))
+        # Strand arrow at the gene's transcription-start side.
+        amark = ">" if strand == "+" else "<"
+        ax_x = row["_e"] if strand == "+" else row["_s"]
+        ax.plot([ax_x], [y], marker=amark, ms=5, color="#1b3f6e")
+        mid = 0.5 * (row["_s"] + row["_e"])
+        ax.text(mid, y + 0.30, str(row[gene_col]), ha="center",
+                va="bottom", fontsize=6.5, style="italic")
+    ax.set_xlim(start, end)
+    ax.set_ylim(-0.7, n_rows - 0.1)
+    ax.set_yticks([])
+    ax.set_ylabel("Genes", fontsize=9)
+    ax.spines[["top", "right", "left"]].set_visible(False)
+
+
+def plt_rect(xy, width, height, **kw):
+    """Thin wrapper around matplotlib's Rectangle (keeps imports local)."""
+    from matplotlib.patches import Rectangle
+    return Rectangle(xy, width, height, **kw)
+
+
 @register_function(
     aliases=[
         "regional_plot", "locuszoom", "regional_association_plot",
@@ -265,16 +343,25 @@ def qqplot(
     ],
     category="genetics",
     description=(
-        "LocusZoom-style regional association plot — zooms into a single "
-        "locus and plots -log10(p) against base-pair position, optionally "
-        "colouring SNPs by their LD (r^2) with a lead variant. Useful for "
-        "inspecting a GWAS / eQTL peak before fine-mapping. matplotlib."
+        "Publication-grade LocusZoom regional-association plot. Zooms into "
+        "a single locus and plots -log10(p) against base-pair position. "
+        "Given an LD vector it colours SNPs by their r^2 to the lead "
+        "variant in the classic five discrete bins (navy -> cyan -> green "
+        "-> orange -> red) with an r^2 legend box and draws the lead SNP "
+        "as a labelled purple diamond. Given a recombination map it "
+        "overlays the recombination-rate (cM/Mb) line on a right-hand "
+        "axis; given a gene table it draws an arrowed gene-model track "
+        "beneath the scatter. All of those inputs are optional — with "
+        "just summary statistics it still draws a plain regional plot. "
+        "matplotlib."
     ),
     examples=[
         "ov.genetics.regional_plot(gwas_res, chrom='1', start=1e6, end=2e6)",
-        "ov.genetics.regional_plot(gwas_res, lead_snp='rs123', r2=ld_to_lead)",
+        "ov.genetics.regional_plot(gwas_res, lead_snp='rs123', r2=ld, "
+        "recomb_map=rmap, genes=gene_models)",
     ],
-    related=["ov.genetics.manhattan", "ov.genetics.finemap_plot"],
+    related=["ov.genetics.manhattan", "ov.genetics.finemap_plot",
+             "ov.genetics.compute_ld_to_lead", "ov.genetics.finemap_locus_plot"],
 )
 def regional_plot(
     data: pd.DataFrame,
@@ -288,10 +375,13 @@ def regional_plot(
     end: Optional[float] = None,
     lead_snp: Optional[str] = None,
     r2: Optional[Union[pd.Series, np.ndarray, dict]] = None,
+    ld: Optional[Union[pd.Series, np.ndarray, dict]] = None,
+    recomb_map: Optional[pd.DataFrame] = None,
+    genes: Optional[pd.DataFrame] = None,
     ax=None,
     title: Optional[str] = None,
 ):
-    """Draw a regional (LocusZoom-style) association plot.
+    """Draw a publication LocusZoom regional-association plot.
 
     Parameters
     ----------
@@ -302,21 +392,37 @@ def regional_plot(
     region_chrom, start, end
         Optional region filter (chromosome + base-pair window).
     lead_snp
-        Optional lead-variant SNP id (highlighted as a diamond).
-    r2
+        Optional lead-variant SNP id (highlighted as a purple diamond
+        labelled with its rsID).
+    r2, ld
         Optional per-SNP LD (r^2) to the lead variant — a Series / array
-        aligned to ``data``, or a ``{snp: r2}`` dict.
+        aligned to ``data``, or a ``{snp: r2}`` dict (e.g. from
+        :func:`ov.genetics.compute_ld_to_lead`). SNPs are then coloured
+        by the classic five discrete r^2 bins. ``ld`` is an alias of
+        ``r2``.
+    recomb_map
+        Optional recombination map — a DataFrame with ``position`` and a
+        rate column (``rate_cM_per_Mb`` / ``rate`` / ``recomb_rate``);
+        drawn as a line on a twin right axis labelled "Recombination
+        rate (cM/Mb)".
+    genes
+        Optional gene-model table (``gene`` / ``chrom`` / ``start`` /
+        ``end`` / ``strand``); drawn as an arrowed gene-track panel
+        beneath the scatter (a 2-row gridspec is created).
     ax
-        Existing matplotlib Axes.
+        Existing matplotlib Axes for the scatter panel. Ignored when
+        ``genes`` is given (a fresh 2-panel figure is built).
     title
         Optional plot title.
 
     Returns
     -------
     matplotlib.axes.Axes
-        The plot axes.
+        The scatter (association) axes.
     """
     import matplotlib.pyplot as plt
+    from matplotlib.lines import Line2D
+    from matplotlib.patches import Patch
 
     snp_col, chr_col, pos_col, p_col = _coerce_assoc(
         data, snp, chrom, pos, pvalue
@@ -338,39 +444,110 @@ def regional_plot(
     pvals = np.clip(pvals, np.finfo(float).tiny, 1.0)
     logp = -np.log10(pvals)
     bp = bp.to_numpy()
+    if bp.size == 0:
+        raise ValueError("regional_plot: no variants in the requested region.")
+    win_lo = float(start) if start is not None else float(np.nanmin(bp))
+    win_hi = float(end) if end is not None else float(np.nanmax(bp))
+    if win_hi <= win_lo:
+        win_hi = win_lo + 1.0
 
-    if ax is None:
-        _, ax = plt.subplots(figsize=(8, 4))
+    r2 = r2 if r2 is not None else ld
+    gene_chrom = region_chrom
+    if gene_chrom is None and chr_col is not None and len(df):
+        gene_chrom = str(df[chr_col].astype(str).iloc[0])
 
+    # Build the figure: a 2-row gridspec when a gene track is requested.
+    gene_ax = None
+    if genes is not None:
+        fig = plt.figure(figsize=(9, 6.2))
+        gs = fig.add_gridspec(2, 1, height_ratios=[3.2, 1.0], hspace=0.12)
+        ax = fig.add_subplot(gs[0])
+        gene_ax = fig.add_subplot(gs[1], sharex=ax)
+    elif ax is None:
+        _, ax = plt.subplots(figsize=(9, 4.4))
+
+    # Recombination-rate line on a twin right axis (drawn first, behind).
+    if recomb_map is not None and len(recomb_map):
+        rate_col = next(
+            (c for c in ("rate_cM_per_Mb", "rate", "recomb_rate",
+                         "cM_per_Mb")
+             if c in recomb_map.columns), None)
+        pos_rc = next(
+            (c for c in ("position", "pos", "bp") if c in recomb_map.columns),
+            None)
+        if rate_col is not None and pos_rc is not None:
+            rm = recomb_map[(recomb_map[pos_rc] >= win_lo)
+                            & (recomb_map[pos_rc] <= win_hi)]
+            rm = rm.sort_values(pos_rc)
+            ax_r = ax.twinx()
+            ax_r.fill_between(rm[pos_rc].to_numpy(),
+                              rm[rate_col].to_numpy(),
+                              color="#9ecae1", alpha=0.35, zorder=0)
+            ax_r.plot(rm[pos_rc].to_numpy(), rm[rate_col].to_numpy(),
+                      color="#4a90d9", lw=0.9, zorder=1)
+            ax_r.set_ylabel("Recombination rate (cM/Mb)", color="#4a90d9")
+            ax_r.tick_params(axis="y", colors="#4a90d9")
+            ax_r.set_ylim(bottom=0)
+            ax_r.spines[["top"]].set_visible(False)
+
+    # Association scatter — discrete LD bins or a flat colour.
     if r2 is not None and snp_col is not None:
-        if isinstance(r2, dict):
-            r2_vals = df[snp_col].astype(str).map(r2).to_numpy(dtype=float)
+        if isinstance(r2, dict) or isinstance(r2, pd.Series):
+            r2_vals = df[snp_col].astype(str).map(dict(r2)).to_numpy(
+                dtype=float)
         else:
             r2_vals = np.asarray(r2, dtype=float)
-        sc = ax.scatter(bp, logp, c=r2_vals, cmap="YlOrRd", vmin=0, vmax=1,
-                        s=22, edgecolors="grey", linewidths=0.3)
-        cbar = ax.figure.colorbar(sc, ax=ax, fraction=0.04, pad=0.02)
-        cbar.set_label(r"$r^2$ to lead")
+        colors = [_ld_bin_color(v) for v in r2_vals]
+        ax.scatter(bp, logp, c=colors, s=34, edgecolors="black",
+                   linewidths=0.35, zorder=3)
+        handles = [Patch(facecolor=c, edgecolor="black", label=l)
+                   for c, l in zip(reversed(_LD_COLORS),
+                                   reversed(_LD_LABELS))]
+        ld_legend = ax.legend(handles=handles, title=r"$r^2$",
+                              fontsize=7, title_fontsize=8,
+                              loc="upper left", framealpha=0.95,
+                              borderpad=0.5, labelspacing=0.25)
+        ax.add_artist(ld_legend)
     else:
-        ax.scatter(bp, logp, s=20, c="#3b6fb6", edgecolors="grey",
-                   linewidths=0.3)
+        ax.scatter(bp, logp, s=24, c="#3b6fb6", edgecolors="grey",
+                   linewidths=0.3, zorder=3)
 
+    # Lead SNP — the classic purple diamond with the rsID label.
     if lead_snp is not None and snp_col is not None:
         lead = df[df[snp_col].astype(str) == str(lead_snp)]
         if len(lead):
-            lx = pd.to_numeric(lead[pos_col], errors="coerce").to_numpy()
-            lp = -np.log10(np.clip(
-                pd.to_numeric(lead[p_col], errors="coerce").to_numpy(),
-                np.finfo(float).tiny, 1.0))
-            ax.scatter(lx, lp, marker="D", s=70, c="#8c2d04",
-                       edgecolors="black", zorder=5, label=f"lead: {lead_snp}")
-            ax.legend(fontsize=8)
+            lx = float(pd.to_numeric(lead[pos_col], errors="coerce").iloc[0])
+            lp = float(-np.log10(np.clip(
+                pd.to_numeric(lead[p_col], errors="coerce").iloc[0],
+                np.finfo(float).tiny, 1.0)))
+            ax.scatter([lx], [lp], marker="D", s=95, c="#7b3fa0",
+                       edgecolors="black", linewidths=0.6, zorder=6)
+            ax.annotate(str(lead_snp), (lx, lp),
+                        textcoords="offset points", xytext=(8, 6),
+                        fontsize=8, fontweight="bold", color="#4a2069")
 
-    ax.set_xlabel("Position (bp)")
+    ax.set_xlim(win_lo, win_hi)
     ax.set_ylabel(r"$-\log_{10}(p)$")
+    ax.set_ylim(bottom=0)
     if title:
         ax.set_title(title)
-    ax.spines[["top", "right"]].set_visible(False)
+    ax.spines[["top"]].set_visible(False)
+
+    if gene_ax is not None:
+        ax.tick_params(labelbottom=False)
+        ax.spines[["bottom"]].set_visible(True)
+        _draw_gene_track(gene_ax, genes, win_lo, win_hi, chrom=gene_chrom)
+        gene_ax.set_xlabel(
+            f"Chromosome {gene_chrom} position (Mb)" if gene_chrom
+            else "Position (Mb)")
+        gene_ax.xaxis.set_major_formatter(
+            plt.FuncFormatter(lambda v, _: f"{v / 1e6:.2f}"))
+    else:
+        ax.set_xlabel(
+            f"Chromosome {gene_chrom} position (Mb)" if gene_chrom
+            else "Position (Mb)")
+        ax.xaxis.set_major_formatter(
+            plt.FuncFormatter(lambda v, _: f"{v / 1e6:.2f}"))
     return ax
 
 
@@ -732,19 +909,23 @@ def pca_structure_plot(
     ],
     category="genetics",
     description=(
-        "Two-panel fine-mapping locus view — the top panel is the regional "
-        "association plot (-log10 p vs position, lead SNP marked) and the "
-        "bottom panel is the SuSiE posterior-inclusion-probability (PIP) "
-        "track, with the 95% credible-set SNPs highlighted. Ties the "
+        "Fine-mapping locus view — the top panel is the publication "
+        "LocusZoom regional association plot (-log10 p vs position, lead "
+        "SNP as a purple diamond, optional LD-binned colouring and "
+        "recombination-rate line) and the bottom panel is the SuSiE "
+        "posterior-inclusion-probability (PIP) track with the 95% "
+        "credible-set SNPs highlighted. When a gene table is supplied a "
+        "gene-model track is inserted between the two. Ties the "
         "association peak to the fine-mapped credible set in one figure. "
         "matplotlib."
     ),
     examples=[
         "ov.genetics.finemap_locus_plot(locus, pip, credible)",
-        "ov.genetics.finemap_locus_plot(locus, pip, credible, lead_snp='rs1')",
+        "ov.genetics.finemap_locus_plot(locus, pip, credible, lead_snp='rs1', "
+        "r2=ld, recomb_map=rmap, genes=gene_models)",
     ],
     related=["ov.genetics.finemap", "ov.genetics.regional_plot",
-             "ov.genetics.get_credible_sets"],
+             "ov.genetics.get_credible_sets", "ov.genetics.compute_ld_to_lead"],
 )
 def finemap_locus_plot(
     locus: pd.DataFrame,
@@ -756,10 +937,14 @@ def finemap_locus_plot(
     pvalue: str = "pvalue",
     snp: str = "snp",
     lead_snp: Optional[str] = None,
+    r2: Optional[Union[pd.Series, np.ndarray, dict]] = None,
+    ld: Optional[Union[pd.Series, np.ndarray, dict]] = None,
+    recomb_map: Optional[pd.DataFrame] = None,
+    genes: Optional[pd.DataFrame] = None,
     axes=None,
     title: Optional[str] = None,
 ):
-    """Two-panel fine-mapping locus view (regional p-values + SuSiE PIP).
+    """Fine-mapping locus view (LocusZoom regional p-values + SuSiE PIP).
 
     Parameters
     ----------
@@ -776,42 +961,92 @@ def finemap_locus_plot(
     chrom, pos, pvalue, snp
         ``locus`` column names.
     lead_snp
-        Optional lead-SNP id, highlighted on the regional panel.
+        Optional lead-SNP id, drawn as a purple diamond on the regional
+        panel.
+    r2, ld
+        Optional per-SNP LD (r^2) to the lead variant, for the LocusZoom
+        discrete-bin colouring (see :func:`regional_plot`).
+    recomb_map
+        Optional recombination map drawn as the cM/Mb track on the
+        regional panel.
+    genes
+        Optional gene-model table; when given an arrowed gene-model track
+        is inserted between the regional and PIP panels.
     axes
-        Optional pair of existing Axes; a stacked 2x1 grid otherwise.
+        Optional pair of existing Axes (regional + PIP); ignored when
+        ``genes`` is supplied (a fresh multi-panel figure is built).
     title
         Optional title for the regional (top) panel.
 
     Returns
     -------
     numpy.ndarray of matplotlib.axes.Axes
-        The two panel axes.
+        The panel axes (regional, PIP — and the gene track when drawn).
+
+    Notes
+    -----
+    Reading a LocusZoom: SNPs near the lead variant share its LD (warm
+    colours, top of the r^2 legend) and cluster at the association peak;
+    a recombination hotspot (a tall cM/Mb spike) marks the boundary of
+    the LD block; the gene track shows which genes the credible set
+    physically falls on.
     """
     import matplotlib.pyplot as plt
 
     pip = np.asarray(pip, dtype=float)
-    if axes is None:
-        _, axes = plt.subplots(2, 1, figsize=(9, 6.5), sharex=True)
-
-    regional_plot(
-        locus, chrom=chrom, pos=pos, pvalue=pvalue, snp=snp,
-        lead_snp=lead_snp, ax=axes[0],
-        title=title or "Regional association",
-    )
-
+    r2 = r2 if r2 is not None else ld
     bp = pd.to_numeric(locus[pos], errors="coerce").to_numpy()
+
+    if genes is not None:
+        # Three-panel layout: LocusZoom scatter / gene track / PIP track.
+        fig = plt.figure(figsize=(9, 9))
+        gs = fig.add_gridspec(3, 1, height_ratios=[3.0, 1.7, 1.6],
+                              hspace=0.28)
+        ax_reg = fig.add_subplot(gs[0])
+        ax_gene = fig.add_subplot(gs[1], sharex=ax_reg)
+        ax_pip = fig.add_subplot(gs[2], sharex=ax_reg)
+        regional_plot(
+            locus, chrom=chrom, pos=pos, pvalue=pvalue, snp=snp,
+            lead_snp=lead_snp, r2=r2, recomb_map=recomb_map, ax=ax_reg,
+            title=title or "Regional association",
+        )
+        ax_reg.tick_params(labelbottom=False)
+        ax_reg.set_xlabel("")
+        win_lo, win_hi = ax_reg.get_xlim()
+        chrom_val = (str(locus[chrom].astype(str).iloc[0])
+                     if chrom in locus.columns and len(locus) else None)
+        _draw_gene_track(ax_gene, genes, win_lo, win_hi, chrom=chrom_val)
+        ax_gene.tick_params(labelbottom=False)
+        ax_gene.set_xlabel("")
+        axes = np.array([ax_reg, ax_pip])
+        gene_track = ax_gene
+    else:
+        if axes is None:
+            _, axes = plt.subplots(2, 1, figsize=(9, 6.8), sharex=True)
+        regional_plot(
+            locus, chrom=chrom, pos=pos, pvalue=pvalue, snp=snp,
+            lead_snp=lead_snp, r2=r2, recomb_map=recomb_map, ax=axes[0],
+            title=title or "Regional association",
+        )
+        gene_track = None
+
     in_cs = np.zeros(len(pip), dtype=bool)
     for idx in (credible.get("cs") or []):
         in_cs[list(idx)] = True
-    axes[1].scatter(bp[~in_cs], pip[~in_cs], s=18, c="#bdbdbd",
-                    label="not in credible set")
-    axes[1].scatter(bp[in_cs], pip[in_cs], s=45, c="#d62728",
-                    edgecolors="black", label="95% credible set")
-    axes[1].set_xlabel("position (bp)")
-    axes[1].set_ylabel("PIP")
-    axes[1].set_title("SuSiE fine-mapping — posterior inclusion probability")
-    axes[1].legend(fontsize=8)
-    axes[1].spines[["top", "right"]].set_visible(False)
+    ax_pip = axes[1]
+    ax_pip.scatter(bp[~in_cs], pip[~in_cs], s=18, c="#bdbdbd",
+                   label="not in credible set")
+    ax_pip.scatter(bp[in_cs], pip[in_cs], s=45, c="#d62728",
+                   edgecolors="black", label="95% credible set")
+    ax_pip.set_xlabel("position (Mb)")
+    ax_pip.set_ylabel("PIP")
+    ax_pip.set_title("SuSiE fine-mapping — posterior inclusion probability")
+    ax_pip.legend(fontsize=8)
+    ax_pip.spines[["top", "right"]].set_visible(False)
+    ax_pip.xaxis.set_major_formatter(
+        plt.FuncFormatter(lambda v, _: f"{v / 1e6:.2f}"))
+    if gene_track is not None:
+        return np.array([axes[0], gene_track, ax_pip], dtype=object)
     return axes
 
 
@@ -977,6 +1212,93 @@ def scdrs_celltype_plot(
     if title:
         axes[0].figure.suptitle(title)
     return axes
+
+
+@register_function(
+    aliases=[
+        "gene_celltype_expression", "gene_celltype_barplot",
+        "gene_expression_by_celltype", "基因细胞类型表达图",
+        "细胞类型基因表达图",
+    ],
+    category="genetics",
+    description=(
+        "Barplot of one gene's mean expression across cell types — the "
+        "panel-c style figure used to show which cell type expresses a "
+        "candidate disease gene (e.g. the top scDRS gene). Given an "
+        "scRNA-seq AnnData, a gene name and a cell-type ``.obs`` column, "
+        "it averages the gene's expression within each cell type and "
+        "draws one bar per type, highlighting the highest-expressing "
+        "cell type. matplotlib."
+    ),
+    examples=[
+        "ov.genetics.gene_celltype_expression(adata, 'CD3D')",
+        "ov.genetics.gene_celltype_expression(adata, gene, "
+        "cell_type='cell_type')",
+    ],
+    related=["ov.genetics.scdrs_celltype_plot",
+             "ov.genetics.disease_relevance_score"],
+)
+def gene_celltype_expression(
+    adata,
+    gene: str,
+    *,
+    cell_type: str = "cell_type",
+    layer: Optional[str] = None,
+    ax=None,
+    title: Optional[str] = None,
+):
+    """Barplot of a gene's mean expression across cell types.
+
+    Parameters
+    ----------
+    adata
+        scRNA-seq AnnData — ``.obs`` must carry the cell-type column and
+        ``gene`` must be one of ``.var_names``.
+    gene
+        Gene name (a ``var_names`` entry) to summarise.
+    cell_type
+        ``.obs`` column holding the cell-type labels.
+    layer
+        Optional ``.layers`` key to read expression from; ``.X`` is used
+        when ``None``.
+    ax
+        Existing matplotlib Axes.
+    title
+        Optional plot title.
+
+    Returns
+    -------
+    matplotlib.axes.Axes
+        The plot axes.
+    """
+    import matplotlib.pyplot as plt
+
+    if gene not in adata.var_names:
+        raise KeyError(f"gene {gene!r} is not in adata.var_names.")
+    if cell_type not in adata.obs.columns:
+        raise KeyError(f"{cell_type!r} is not an .obs column.")
+    sub = adata[:, gene]
+    expr = sub.layers[layer] if layer is not None else sub.X
+    expr = expr.toarray() if hasattr(expr, "toarray") else np.asarray(expr)
+    expr = np.asarray(expr, dtype=float).ravel()
+
+    by_ct = (pd.Series(expr, index=adata.obs[cell_type].to_numpy())
+               .groupby(level=0).mean().sort_values(ascending=False))
+    cats = [str(c) for c in by_ct.index]
+    top = cats[0] if cats else None
+    colors = ["#d62728" if c == top else "#3b6fb6" for c in cats]
+
+    if ax is None:
+        _, ax = plt.subplots(figsize=(max(5, 0.7 * len(cats)), 4))
+    ax.bar(cats, by_ct.to_numpy(), color=colors, edgecolor="black",
+           linewidth=0.4)
+    ax.set_ylabel(f"mean {gene} expression")
+    ax.set_title(title or f"{gene} expression by cell type")
+    ax.tick_params(axis="x", rotation=35)
+    for lbl in ax.get_xticklabels():
+        lbl.set_ha("right")
+    ax.spines[["top", "right"]].set_visible(False)
+    return ax
 
 
 @register_function(

@@ -76,6 +76,89 @@ def sample_qc_metrics(adata, *, het_sd: float = 3.0) -> pd.DataFrame:
 
 
 # --------------------------------------------------------------------------- #
+# LD to a lead SNP (LocusZoom colouring)                                       #
+# --------------------------------------------------------------------------- #
+@register_function(
+    aliases=[
+        "compute_ld_to_lead", "ld_to_lead", "lead_snp_ld", "locuszoom_ld",
+        "计算LD", "前导SNP连锁不平衡",
+    ],
+    category="genetics",
+    description=(
+        "Compute the LD (r^2) between a lead SNP and every other SNP from "
+        "an individual-level genotype AnnData — the colouring track of a "
+        "publication LocusZoom regional-association plot. r^2 is the "
+        "squared Pearson correlation of the 0/1/2 allele dosages across "
+        "individuals; missing genotypes are mean-imputed per SNP. Pass "
+        "the result straight to :func:`ov.genetics.regional_plot` as its "
+        "``r2=`` argument. Pure numpy."
+    ),
+    examples=[
+        "ld = ov.genetics.compute_ld_to_lead(geno, 'chr22:23456789')",
+        "ld = ov.genetics.compute_ld_to_lead(geno, lead, snps=locus_snps)",
+    ],
+    related=["ov.genetics.regional_plot", "ov.genetics.finemap_locus_plot"],
+)
+def compute_ld_to_lead(genotype, lead_snp, *, snps=None) -> pd.Series:
+    """Compute r^2 between a lead SNP and other SNPs from a genotype AnnData.
+
+    Parameters
+    ----------
+    genotype
+        Genotype AnnData of ``individuals x SNPs`` (0/1/2 allele dosages
+        in ``.X``); ``.var_names`` are the SNP ids.
+    lead_snp
+        SNP id of the lead variant — must be present in
+        ``genotype.var_names``.
+    snps
+        Optional subset / order of SNP ids to score; defaults to every SNP
+        in ``genotype``. SNP ids absent from the genotype are returned as
+        ``NaN``.
+
+    Returns
+    -------
+    pandas.Series
+        Per-SNP LD ``r^2`` to the lead SNP, indexed by SNP id (the lead
+        SNP itself is ``1.0``).
+    """
+    var_names = list(map(str, genotype.var_names))
+    pos = {s: i for i, s in enumerate(var_names)}
+    lead_snp = str(lead_snp)
+    if lead_snp not in pos:
+        raise KeyError(
+            f"lead SNP {lead_snp!r} is not in the genotype's var_names."
+        )
+    X = genotype.X
+    X = X.toarray() if hasattr(X, "toarray") else np.asarray(X)
+    X = X.astype(float)
+    # Mean-impute missing genotypes per SNP.
+    col_mean = np.nanmean(X, axis=0)
+    inds = np.where(np.isnan(X))
+    X[inds] = np.take(col_mean, inds[1])
+
+    target = [lead_snp] if snps is None else list(map(str, snps))
+    lead_vec = X[:, pos[lead_snp]]
+    lead_c = lead_vec - lead_vec.mean()
+    lead_ss = float(np.sqrt(np.sum(lead_c ** 2)))
+
+    out = {}
+    for s in (var_names if snps is None else target):
+        j = pos.get(s)
+        if j is None:
+            out[s] = np.nan
+            continue
+        v = X[:, j]
+        vc = v - v.mean()
+        denom = lead_ss * float(np.sqrt(np.sum(vc ** 2)))
+        if denom == 0.0:
+            out[s] = np.nan
+        else:
+            r = float(np.sum(lead_c * vc) / denom)
+            out[s] = r * r
+    return pd.Series(out, name="r2")
+
+
+# --------------------------------------------------------------------------- #
 # cis-eQTL gene screen                                                         #
 # --------------------------------------------------------------------------- #
 @register_function(

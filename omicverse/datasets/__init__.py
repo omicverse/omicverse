@@ -114,5 +114,7 @@ from ._genetics import (
     gwas_sumstats,
     gtex_eqtl,
     genetics_scrna,
+    recombination_map,
+    gene_annotation,
 )
 from ._signatures import load_signatures_from_file, predefined_signatures

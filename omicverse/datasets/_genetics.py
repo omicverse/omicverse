@@ -11,6 +11,8 @@ returns it ready for the ``ov.genetics`` post-GWAS workflow.
 | :func:`gwas_sumstats` | DataFrame (GWAS summary stats) | NHGRI-EBI GWAS Catalog GCST004627 |
 | :func:`gtex_eqtl` | DataFrame (cis-eQTL) | GTEx v8 whole blood |
 | :func:`genetics_scrna` | AnnData (cells × genes) | 10x Genomics PBMC 3k |
+| :func:`recombination_map` | DataFrame (cM/Mb track) | SHAPEIT4 b37 / 1000 Genomes genetic map |
+| :func:`gene_annotation` | DataFrame (gene models) | GENCODE v19 (GRCh37/hg19) |
 
 All datasets are real, published human-genetics data redistributed at
 tutorial scale (one chromosome / a thinned genome-wide set) from the
@@ -154,3 +156,58 @@ def genetics_scrna(dir: str = "./data") -> "AnnData":
     """Load the real PBMC 3k immune atlas (raw counts) for scDRS."""
     import anndata as ad
     return ad.read_h5ad(_fetch("pbmc3k_immune_atlas.h5ad", dir))
+
+
+@register_function(
+    aliases=["recombination_map", "recomb_map", "genetic_map", "重组图谱"],
+    category="datasets",
+    description=(
+        "Real fine-scale recombination map for the LocusZoom "
+        "recombination-rate track. Source: the SHAPEIT4 b37 genetic map "
+        "(derived from the 1000 Genomes / HapMap recombination maps, "
+        "GRCh37/hg19) — the recombination rate (cM/Mb) is the position "
+        "derivative of the cumulative genetic map. Returned as a "
+        "DataFrame with columns ``position`` (base pairs) and "
+        "``rate_cM_per_Mb``; ``chrom='22'`` (default) covers the whole "
+        "tutorial chromosome (16.05–51.23 Mb). Overlay it on a regional "
+        "association plot with :func:`ov.genetics.regional_plot`."
+    ),
+    examples=[
+        "rmap = ov.datasets.recombination_map()",
+        "rmap = ov.datasets.recombination_map(chrom='22')",
+    ],
+)
+def recombination_map(chrom: str = "22", dir: str = "./data") -> pd.DataFrame:
+    """Load the real chr22 recombination map (cM/Mb) for the LocusZoom track."""
+    if str(chrom) not in ("22",):
+        raise ValueError("recombination_map currently ships chrom='22' only.")
+    df = pd.read_csv(_fetch("recomb_map_chr22.tsv.gz", dir), sep="\t")
+    df["chrom"] = str(chrom)
+    return df
+
+
+@register_function(
+    aliases=["gene_annotation", "gene_models", "gene_track", "基因注释"],
+    category="datasets",
+    description=(
+        "Real chr22 gene models for the LocusZoom gene-track panel. "
+        "Source: GENCODE v19 (GRCh37/hg19) — the canonical hg19 "
+        "annotation, restricted to protein-coding and lincRNA genes "
+        "(579 genes on chr22). Returned as a DataFrame with columns "
+        "``gene`` (symbol), ``chrom``, ``start``, ``end``, ``strand`` "
+        "and ``gene_type``. Pass it to :func:`ov.genetics.regional_plot` "
+        "or :func:`ov.genetics.finemap_locus_plot` to draw the arrowed "
+        "gene boxes beneath a regional association plot."
+    ),
+    examples=[
+        "genes = ov.datasets.gene_annotation()",
+        "genes = ov.datasets.gene_annotation(chrom='22')",
+    ],
+)
+def gene_annotation(chrom: str = "22", dir: str = "./data") -> pd.DataFrame:
+    """Load real GENCODE v19 chr22 gene models for the LocusZoom gene track."""
+    if str(chrom) not in ("22",):
+        raise ValueError("gene_annotation currently ships chrom='22' only.")
+    df = pd.read_csv(_fetch("genes_chr22.tsv.gz", dir), sep="\t",
+                     dtype={"chrom": str})
+    return df
