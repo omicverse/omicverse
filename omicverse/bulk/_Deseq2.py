@@ -1073,7 +1073,7 @@ class pyDEG(object):
 
     def timecourse_deg(self, time, group=None, block=None, covariates=None,
                        time_basis: str = 'auto', spline_df: int = 3,
-                       alpha: float = 0.05,
+                       data_type: str = 'auto', alpha: float = 0.05,
                        multipletests_method: str = 'fdr_bh') -> pd.DataFrame:
         r"""Time-course / longitudinal differential-expression analysis.
 
@@ -1083,11 +1083,22 @@ class pyDEG(object):
         a *moderated F-test over a whole block of design columns* — the
         statistically correct way to ask "does expression change over
         time" without committing to a single shape. It is built on the
-        vendored pure-Python limma-voom (``omicverse.external.pylimma``)
+        vendored pure-Python limma (``omicverse.external.pylimma``)
         and is isomorphic to :meth:`continuous_deg`: same design-matrix
-        construction, same ``voom → lmFit → eBayes`` call, same
+        construction, same ``lmFit → eBayes`` core, same
         ``deg_analysis``-shaped return so ``foldchange_set`` /
         ``plot_volcano`` keep working.
+
+        The method (a port of splineTimeR's design) accepts **two kinds
+        of input**, switched by ``data_type``:
+
+        * RNA-seq **counts** — the mean-variance trend is removed with
+          ``voom``, which feeds precision weights into ``lmFit``.
+        * **continuous** expression — microarray log-ratios, log-CPM, or
+          any already-normalized / log-scaled matrix. splineTimeR was
+          originally a *microarray* time-course method, so this path
+          runs ``lmFit`` directly on the expression matrix with no
+          ``voom`` and no weights.
 
         Three first-class paths, selected by the arguments:
 
@@ -1131,6 +1142,16 @@ class pyDEG(object):
                 ``factor`` if ≤4 unique time values, else ``spline``).
             spline_df: Degrees of freedom of the natural cubic spline
                 when ``time_basis`` resolves to ``'spline'`` (default 3).
+            data_type: Nature of the expression matrix —
+                ``'counts'`` (RNA-seq raw counts: ``voom`` removes the
+                mean-variance trend, then ``lmFit`` with precision
+                weights); ``'continuous'`` (microarray log-ratios,
+                log-CPM, or any already-normalized / log-scaled matrix:
+                ``lmFit`` is run directly, no ``voom``, no weights);
+                ``'auto'`` (default — inspect the matrix: an all
+                non-negative, near-integer matrix is treated as
+                ``'counts'``, anything with negative or non-integer
+                values as ``'continuous'``).
             alpha: FDR threshold for the ``sig`` column (default 0.05).
             multipletests_method: ``statsmodels`` multiple-testing
                 method for the q-value (default ``'fdr_bh'``).
@@ -1152,7 +1173,27 @@ class pyDEG(object):
         """
         from ..external import pylimma as _limma
         from statsmodels.stats.multitest import multipletests
-        print("⏰ Start time-course limma-voom pipeline (pylimma)...")
+
+        # --- resolve counts vs continuous input ------------------------
+        if data_type not in ('auto', 'counts', 'continuous'):
+            raise ValueError(
+                f"data_type must be 'auto', 'counts' or 'continuous', "
+                f"got {data_type!r}.")
+        dt = data_type
+        if dt == 'auto':
+            vals = np.asarray(self.data.values, dtype=float)
+            finite = vals[np.isfinite(vals)]
+            near_int = (finite.size > 0
+                        and np.allclose(finite, np.round(finite)))
+            all_nonneg = finite.size > 0 and (finite >= 0).all()
+            dt = 'counts' if (near_int and all_nonneg) else 'continuous'
+            print(f"   data_type='auto' resolved to {dt!r} "
+                  f"({'non-negative integers' if dt == 'counts' else 'has negative / non-integer values'}).")
+        if dt == 'counts':
+            print("⏰ Start time-course limma-voom pipeline (pylimma)...")
+        else:
+            print("⏰ Start time-course limma pipeline "
+                  "(continuous input, no voom)...")
 
         samples = list(self.data.columns)
 
@@ -1310,35 +1351,56 @@ class pyDEG(object):
         counts = self.data[use_samples]
         test_idx = [list(design.columns).index(c) for c in test_cols]
 
-        # --- limma-voom (+ duplicateCorrelation for repeated measures) -
-        if block_s is not None:
-            block_arr = block_s.values
-            print("⏰ Repeated-measures design — estimating within-subject "
-                  "correlation (duplicateCorrelation)...")
-            # Round 1: voom without weights-aware correlation, estimate corr.
-            v = _limma.voom(counts, design.values)
-            dc = _limma.duplicateCorrelation(v.E, design.values,
-                                             block=block_arr,
-                                             weights=v.weights)
-            corr = float(dc.consensus_correlation)
-            # Round 2: voom with the block correlation, re-estimate, fit.
-            try:
-                v = _limma.voom(counts, design.values,
-                                block=block_arr, correlation=corr)
+        # --- fit the linear model -------------------------------------
+        # 'counts'     : voom removes the mean-variance trend, then lmFit
+        #                runs with the voom precision weights.
+        # 'continuous' : the matrix is already log-scaled / normalized —
+        #                lmFit runs directly on it, no voom, no weights.
+        if dt == 'counts':
+            if block_s is not None:
+                block_arr = block_s.values
+                print("⏰ Repeated-measures design — estimating "
+                      "within-subject correlation (duplicateCorrelation)...")
+                # Round 1: voom without weights-aware corr, estimate corr.
+                v = _limma.voom(counts, design.values)
                 dc = _limma.duplicateCorrelation(v.E, design.values,
                                                  block=block_arr,
                                                  weights=v.weights)
                 corr = float(dc.consensus_correlation)
-            except Exception as exc:  # pragma: no cover - defensive
-                print(f"   voom(block=...) round 2 skipped ({exc}); "
-                      f"using round-1 correlation.")
-            print(f"   consensus within-subject correlation = {corr:.4f}")
-            fit = _limma.lmFit(v.E, design.values, weights=v.weights,
-                               block=block_arr, correlation=corr)
-            self.timecourse_correlation = corr
+                # Round 2: voom with the block correlation, re-estimate.
+                try:
+                    v = _limma.voom(counts, design.values,
+                                    block=block_arr, correlation=corr)
+                    dc = _limma.duplicateCorrelation(v.E, design.values,
+                                                     block=block_arr,
+                                                     weights=v.weights)
+                    corr = float(dc.consensus_correlation)
+                except Exception as exc:  # pragma: no cover - defensive
+                    print(f"   voom(block=...) round 2 skipped ({exc}); "
+                          f"using round-1 correlation.")
+                print(f"   consensus within-subject correlation = {corr:.4f}")
+                fit = _limma.lmFit(v.E, design.values, weights=v.weights,
+                                   block=block_arr, correlation=corr)
+                self.timecourse_correlation = corr
+            else:
+                v = _limma.voom(counts, design.values)
+                fit = _limma.lmFit(v.E, design.values, weights=v.weights)
         else:
-            v = _limma.voom(counts, design.values)
-            fit = _limma.lmFit(v.E, design.values, weights=v.weights)
+            # continuous expression — lmFit directly on the matrix.
+            expr = counts.astype(float)
+            if block_s is not None:
+                block_arr = block_s.values
+                print("⏰ Repeated-measures design — estimating "
+                      "within-subject correlation (duplicateCorrelation)...")
+                dc = _limma.duplicateCorrelation(expr.values, design.values,
+                                                 block=block_arr)
+                corr = float(dc.consensus_correlation)
+                print(f"   consensus within-subject correlation = {corr:.4f}")
+                fit = _limma.lmFit(expr.values, design.values,
+                                   block=block_arr, correlation=corr)
+                self.timecourse_correlation = corr
+            else:
+                fit = _limma.lmFit(expr.values, design.values)
 
         print("⏰ Start to adjust pvalue (eBayes)...")
         fit = _limma.eBayes(fit)

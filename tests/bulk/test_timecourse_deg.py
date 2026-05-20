@@ -49,6 +49,30 @@ def _temporal_counts(seed=0):
     return counts, pd.Series(samp_t, index=samples)
 
 
+def _temporal_continuous(seed=0):
+    """Continuous log-expression (genes × samples) — microarray-style.
+
+    Genes 0..39 follow a smooth cell-cycle-like wave over time; the rest
+    are flat plus noise. The matrix is already log-scaled (it carries
+    negative values), so it must NOT be voom-transformed.
+    """
+    rng = np.random.default_rng(seed)
+    times = np.array([0, 1, 2, 4, 8, 12])
+    reps = 4
+    samp_t = np.repeat(times, reps).astype(float)
+    n = len(samp_t)
+    samples = [f"s{i}" for i in range(n)]
+    genes = [f"g{i:04d}" for i in range(N_GENES)]
+    # log-expression centred at 8 with small biological noise.
+    expr = rng.normal(8.0, 0.4, size=(N_GENES, n))
+    for i in range(N_TRUE):                       # planted: smooth wave
+        expr[i] += 2.0 * np.sin(samp_t / 12.0 * np.pi)
+    # a couple of genes carry log-ratios straddling zero (negative values)
+    expr[0] -= 8.0
+    df = pd.DataFrame(expr, index=genes, columns=samples)
+    return df, pd.Series(samp_t, index=samples)
+
+
 def _interaction_counts(seed=2):
     """Counts where genes 0..39 rise over time ONLY in group B."""
     rng = np.random.default_rng(seed)
@@ -163,6 +187,84 @@ def test_null_pvalues_are_calibrated():
     # under the null, ~5% of genes should fall below p<0.05 and FDR ~ 0.
     assert (res["pvalue"] < 0.05).mean() < 0.12
     assert (res["qvalue"] < 0.05).mean() < 0.02
+
+
+# ---------------------------------------------------------------------------
+# continuous (microarray / pre-normalized) input — data_type
+# ---------------------------------------------------------------------------
+def test_continuous_data_type_recovers_temporal_genes():
+    """data_type='continuous' skips voom and runs lmFit directly on an
+    already-log-scaled expression matrix (microarray-style)."""
+    expr, time = _temporal_continuous()
+    dds = ov.bulk.pyDEG(expr.copy())
+    dds.drop_duplicates_index()
+    res = dds.timecourse_deg(time=time, data_type="continuous",
+                             time_basis="spline")
+
+    assert _SCHEMA.issubset(res.columns)
+    assert res.shape[0] == N_GENES
+    assert set(res["sig"]).issubset({"temporal", "normal"})
+
+    # high power on the planted smooth-wave genes.
+    planted = [f"g{i:04d}" for i in range(N_TRUE)]
+    hit = set(res.index[res["sig"] == "temporal"])
+    recovered = sum(g in hit for g in planted)
+    assert recovered >= int(0.9 * N_TRUE), \
+        f"only {recovered}/{N_TRUE} continuous temporal genes recovered"
+
+    # controlled false-discovery on the flat null genes.
+    null_genes = res.index[N_TRUE:]
+    fdr = (res.loc[null_genes, "sig"] == "temporal").mean()
+    assert fdr < 0.10, f"continuous null FDR too high ({fdr:.3f})"
+
+
+def test_data_type_auto_detection():
+    """auto => 'continuous' for a matrix with negative / non-integer
+    values, 'counts' for a non-negative near-integer matrix."""
+    # continuous matrix (has negatives + non-integers) -> resolves to
+    # the no-voom path; recovers the planted wave genes.
+    expr, time = _temporal_continuous()
+    dds = ov.bulk.pyDEG(expr.copy())
+    dds.drop_duplicates_index()
+    res_auto = dds.timecourse_deg(time=time, data_type="auto",
+                                  time_basis="spline")
+    res_cont = dds.timecourse_deg(time=time, data_type="continuous",
+                                  time_basis="spline")
+    # 'auto' on this matrix must behave exactly like 'continuous'.
+    np.testing.assert_allclose(res_auto["F"].values, res_cont["F"].values)
+    planted = [f"g{i:04d}" for i in range(N_TRUE)]
+    hit = set(res_auto.index[res_auto["sig"] == "temporal"])
+    assert sum(g in hit for g in planted) >= int(0.9 * N_TRUE)
+
+    # a non-negative *integer* count matrix -> resolves to 'counts'
+    # and matches an explicit data_type='counts' run.
+    rng = np.random.default_rng(5)
+    times = np.array([0, 1, 2, 4, 8])
+    samp_t = np.repeat(times, 4).astype(float)
+    csamples = [f"s{i}" for i in range(len(samp_t))]
+    int_counts = pd.DataFrame(
+        rng.negative_binomial(50, 0.4, size=(N_GENES, len(samp_t))),
+        index=[f"g{i:04d}" for i in range(N_GENES)], columns=csamples,
+    ).astype(float)
+    for i in range(N_TRUE):                       # planted, kept integer
+        int_counts.iloc[i] = np.round(
+            int_counts.iloc[i].values * (1.0 + 0.3 * samp_t))
+    ctime = pd.Series(samp_t, index=csamples)
+    dc = ov.bulk.pyDEG(int_counts.copy())
+    dc.drop_duplicates_index()
+    r_auto = dc.timecourse_deg(time=ctime, data_type="auto",
+                               time_basis="factor")
+    r_counts = dc.timecourse_deg(time=ctime, data_type="counts",
+                                 time_basis="factor")
+    np.testing.assert_allclose(r_auto["F"].values, r_counts["F"].values)
+
+
+def test_bad_data_type_raises():
+    expr, time = _temporal_continuous()
+    dds = ov.bulk.pyDEG(expr.copy())
+    dds.drop_duplicates_index()
+    with pytest.raises(ValueError):
+        dds.timecourse_deg(time=time, data_type="not_a_type")
 
 
 # ---------------------------------------------------------------------------
