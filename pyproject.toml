@@ -238,6 +238,15 @@ lipidomics = [
   "pygoslin>=2.2",         # Goslin — LIPID MAPS shorthand parser
 ]
 
+# Time-course / longitudinal bulk RNA-seq. Install via:
+#   pip install omicverse[timecourse]
+# pyDEG.timecourse_deg (limma-voom + moderated F over a spline/factor
+# time basis) needs no extra package; temporal_clusters soft-clusters the
+# trajectories via pymfuzz, a pure-Python port of Bioconductor Mfuzz.
+timecourse = [
+  "pymfuzz>=0.1.0",        # Bioconductor Mfuzz — fuzzy c-means time-series clustering
+]
+
 
 [project.urls]
 Github = 'https://github.com/Starlitnightly/omicverse'

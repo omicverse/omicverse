@@ -1015,3 +1015,543 @@ class pyDEG(object):
         print(f"✅ Continuous-trait DE complete: {len(use_samples)} samples, "
               f"{int((result['sig'] != 'normal').sum())} genes at q<{alpha}.")
         return result
+
+    @staticmethod
+    def _moderated_f_subset(fit, cols, df_total):
+        r"""Moderated F-test over a SUBSET of design coefficients.
+
+        pylimma's ``topTable`` only returns a per-coefficient moderated
+        *t*-test; it does not expose a multi-column F-test. limma's
+        ``classifyTestsF`` / ``topTableF`` build the F by *whitening* the
+        moderated t-statistics with the eigen-decomposition of the
+        coefficient *correlation* matrix and summing the squares. This
+        helper replicates that procedure, but restricted to the columns
+        in ``cols`` — i.e. the moderated F for "any of these coefficients
+        is non-zero", which is exactly the time-course question (a block
+        of spline / factor columns, or a block of interaction columns).
+
+        It mirrors :func:`omicverse.external.pylimma.fit._classify_tests_f_stat`
+        but slices ``fit.t`` and ``fit.cov_coefficients`` to ``cols``.
+
+        Arguments:
+            fit: An ``MArrayLM`` after ``eBayes`` (needs ``t`` and
+                ``cov_coefficients``).
+            cols: Integer column indices of the coefficient block to test.
+            df_total: Per-gene total (moderated) residual d.f.
+                (``fit.df_total``).
+
+        Returns:
+            ``(F, pvalue, df1)`` — per-gene moderated F statistic, its
+            F-distribution survival p-value, and the numerator d.f.
+        """
+        from scipy import stats as _stats
+        cols = list(cols)
+        tsub = np.asarray(fit.t, dtype=float)[:, cols]      # genes × |cols|
+        ntests = tsub.shape[1]
+        if ntests == 1:
+            f_stat = np.squeeze(tsub * tsub)
+            df1 = 1
+        else:
+            cov = np.asarray(fit.cov_coefficients, dtype=float)
+            cov = cov[np.ix_(cols, cols)].copy()
+            diag = np.diag(cov)
+            diag = np.where(diag == 0, 1.0, diag)
+            cor = cov / np.sqrt(np.outer(diag, diag))
+            vals, vecs = np.linalg.eigh(cor)
+            order = np.argsort(vals)[::-1]
+            vals = vals[order]
+            vecs = vecs[:, order]
+            r = int(np.sum(vals / vals[0] > 1e-8)) if vals[0] > 0 else 1
+            # q already carries the 1/sqrt(r) factor, so sum(z**2) == F.
+            q = (vecs[:, :r] / np.sqrt(vals[:r])[None, :]) / np.sqrt(r)
+            z = tsub @ q
+            f_stat = np.sum(z * z, axis=1)
+            df1 = r
+        f_stat = np.asarray(f_stat, dtype=float)
+        pvalue = _stats.f.sf(f_stat, df1, np.asarray(df_total, dtype=float))
+        return f_stat, pvalue, df1
+
+    def timecourse_deg(self, time, group=None, block=None, covariates=None,
+                       time_basis: str = 'auto', spline_df: int = 3,
+                       alpha: float = 0.05,
+                       multipletests_method: str = 'fdr_bh') -> pd.DataFrame:
+        r"""Time-course / longitudinal differential-expression analysis.
+
+        Where :meth:`deg_analysis` compares two groups and
+        :meth:`continuous_deg` regresses on a single continuous slope,
+        this method answers the three classic time-course questions with
+        a *moderated F-test over a whole block of design columns* — the
+        statistically correct way to ask "does expression change over
+        time" without committing to a single shape. It is built on the
+        vendored pure-Python limma-voom (``omicverse.external.pylimma``)
+        and is isomorphic to :meth:`continuous_deg`: same design-matrix
+        construction, same ``voom → lmFit → eBayes`` call, same
+        ``deg_analysis``-shaped return so ``foldchange_set`` /
+        ``plot_volcano`` keep working.
+
+        Three first-class paths, selected by the arguments:
+
+        1. **Temporal regulation** (``group=None``). Fit
+           ``~ 1 + covariates + time_basis`` and report a moderated
+           F-test over the *whole block* of time-basis columns — "which
+           genes are temporally regulated", regardless of trajectory
+           shape.
+        2. **Group × time interaction** (``group=`` given). Fit
+           ``~ group * time_basis`` and report the moderated F-test over
+           the *interaction columns only* — "do the trajectories differ
+           between groups" (e.g. treated vs control time courses).
+        3. **Repeated measures** (``block=`` given). When the same
+           subject is sampled at several time points, the within-subject
+           correlation is estimated with ``duplicateCorrelation`` and
+           passed as ``block`` / ``correlation`` to ``lmFit`` (limma's
+           two-round longitudinal workflow). Combines with paths 1 or 2.
+
+        Arguments:
+            time: Per-sample time value — a ``pandas.Series`` indexed by
+                sample, a ``dict`` ``{sample: time}``, or an array
+                aligned to the count columns. Samples with a missing
+                (NaN) time are dropped.
+            group: Optional per-sample categorical group label (Series /
+                dict / aligned array). When given, the analysis tests the
+                group×time interaction (path 2). When ``None``, the
+                single-group temporal test (path 1).
+            block: Optional per-sample subject ID (Series / dict /
+                aligned array) for repeated-measures designs — the same
+                subject sampled at multiple times. Triggers the
+                ``duplicateCorrelation`` workflow (path 3).
+            covariates: Optional ``pandas.DataFrame`` (samples × columns)
+                of nuisance variables to hold fixed. Numeric columns
+                enter the design directly; non-numeric columns are
+                one-hot encoded. Same handling as :meth:`continuous_deg`.
+            time_basis: How to encode time —
+                ``'spline'`` (natural cubic / restricted spline of
+                ``spline_df`` degrees of freedom, ``patsy``'s
+                ``cr(time, df=...)``); ``'factor'`` (one-hot of the
+                discrete time points, drop-first); ``'auto'`` (default —
+                ``factor`` if ≤4 unique time values, else ``spline``).
+            spline_df: Degrees of freedom of the natural cubic spline
+                when ``time_basis`` resolves to ``'spline'`` (default 3).
+            alpha: FDR threshold for the ``sig`` column (default 0.05).
+            multipletests_method: ``statsmodels`` multiple-testing
+                method for the q-value (default ``'fdr_bh'``).
+
+        Returns:
+            A genes × stats DataFrame (also stored on ``self.result``):
+            ``F``, ``pvalue``, ``qvalue`` (the moderated F-test over the
+            time block, or the interaction block); ``AveExpr``,
+            ``BaseMean``, ``log2(BaseMean)``; ``-log(pvalue)`` /
+            ``-log(qvalue)``; ``sig`` ∈ {``temporal``, ``normal``} by
+            ``qvalue < alpha`` (an F-test has no direction, so the
+            ``up`` / ``down`` of :meth:`deg_analysis` is replaced by
+            ``temporal`` / ``normal``); plus the per-time-point (factor)
+            or per-spline-term ``log2FC_<term>`` coefficient columns so
+            the *shape* of the trajectory is recoverable. A plain
+            ``log2FC`` column (the largest-magnitude time-block
+            coefficient) is also added so ``plot_volcano`` works.
+            Rows with a missing p-value are dropped.
+        """
+        from ..external import pylimma as _limma
+        from statsmodels.stats.multitest import multipletests
+        print("⏰ Start time-course limma-voom pipeline (pylimma)...")
+
+        samples = list(self.data.columns)
+
+        def _align(x, name, dtype=None):
+            """Align a per-sample variable to the count-matrix columns."""
+            if x is None:
+                return None
+            if isinstance(x, dict):
+                x = pd.Series(x)
+            if isinstance(x, pd.Series):
+                s = x.reindex(samples)
+            else:
+                arr = np.asarray(x).ravel()
+                if len(arr) != len(samples):
+                    raise ValueError(
+                        f"{name} has {len(arr)} values but the count matrix "
+                        f"has {len(samples)} samples; pass a Series indexed "
+                        f"by sample to align unambiguously.")
+                s = pd.Series(arr, index=samples)
+            if dtype is not None:
+                s = s.astype(dtype)
+            return s
+
+        time_s = _align(time, 'time', dtype=float)
+        group_s = _align(group, 'group')
+        block_s = _align(block, 'block')
+
+        # --- keep samples with a non-missing time (and group/block) ----
+        use_samples = [s for s in samples if pd.notna(time_s.get(s))]
+        if group_s is not None:
+            use_samples = [s for s in use_samples if pd.notna(group_s.get(s))]
+        if block_s is not None:
+            use_samples = [s for s in use_samples if pd.notna(block_s.get(s))]
+        if len(use_samples) < 4:
+            raise ValueError(
+                f"Only {len(use_samples)} samples usable — too few for a "
+                f"time-course model.")
+        time_s = time_s.loc[use_samples]
+        if group_s is not None:
+            group_s = group_s.loc[use_samples].astype('category')
+        if block_s is not None:
+            block_s = block_s.loc[use_samples]
+
+        # --- resolve the time basis -----------------------------------
+        n_time = int(time_s.nunique())
+        basis = time_basis
+        if basis == 'auto':
+            basis = 'factor' if n_time <= 4 else 'spline'
+        if basis not in ('factor', 'spline'):
+            raise ValueError(
+                f"time_basis must be 'auto', 'factor' or 'spline', "
+                f"got {time_basis!r}.")
+        if n_time < 2:
+            raise ValueError("Need at least 2 distinct time points.")
+
+        if basis == 'factor':
+            time_dum = pd.get_dummies(
+                pd.Categorical(time_s, categories=sorted(time_s.unique())),
+                prefix='time', drop_first=True)
+            time_dum.index = use_samples
+            time_block = time_dum.astype(float)
+        else:  # natural cubic / restricted spline
+            import patsy
+            sdf = int(spline_df)
+            if sdf >= n_time:
+                sdf = max(1, n_time - 1)
+                print(f"   spline_df reduced to {sdf} (only {n_time} "
+                      f"distinct time points).")
+            # patsy's cr() restricted-cubic-spline span *includes* the
+            # constant: cr(t, df=k) has k effective df total, one of which
+            # is the intercept. Request df=sdf+1 and drop patsy's
+            # intercept so the remaining columns carry exactly `sdf`
+            # shape degrees of freedom on top of our own Intercept.
+            dm = patsy.dmatrix(f"cr(_t, df={sdf + 1})",
+                               {'_t': time_s.values},
+                               return_type='dataframe')
+            if 'Intercept' in dm.columns:
+                dm = dm.drop(columns='Intercept')
+            dm.columns = [f"time_s{i}" for i in range(dm.shape[1])]
+            dm.index = use_samples
+            time_block = dm.astype(float)
+        time_cols = list(time_block.columns)
+
+        # Drop any time-basis column that is collinear with the constant
+        # plus the columns already kept (a restricted-cubic-spline basis
+        # can carry a hidden constant component). This keeps exactly the
+        # independent time degrees of freedom for the F-test.
+        kept, kmat = [], np.ones((len(use_samples), 1))
+        for c in time_cols:
+            cand = np.hstack([kmat, time_block[[c]].values])
+            if np.linalg.matrix_rank(cand) > kmat.shape[1]:
+                kept.append(c)
+                kmat = cand
+        if len(kept) < len(time_cols):
+            dropped = [c for c in time_cols if c not in kept]
+            print(f"   dropped {len(dropped)} collinear time-basis "
+                  f"column(s): {dropped}")
+        time_block = time_block[kept]
+        time_cols = kept
+        if not time_cols:
+            raise ValueError("time basis has no independent columns.")
+
+        # --- assemble the design matrix -------------------------------
+        design = pd.DataFrame({'Intercept': 1.0}, index=use_samples)
+
+        # covariates: numeric in directly, categorical one-hot.
+        if covariates is not None:
+            cov = covariates.reindex(use_samples)
+            for col in cov.columns:
+                series = cov[col]
+                if pd.api.types.is_numeric_dtype(series):
+                    design[col] = series.astype(float)
+                else:
+                    dummies = pd.get_dummies(series.astype('category'),
+                                             prefix=str(col), drop_first=True)
+                    for d in dummies.columns:
+                        design[d] = dummies[d].astype(float)
+
+        if group_s is None:
+            # path 1 — single-group temporal test.
+            for c in time_cols:
+                design[c] = time_block[c]
+            test_cols = list(time_cols)
+            mode = 'temporal'
+        else:
+            # path 2 — group × time interaction test.
+            grp_dum = pd.get_dummies(group_s, prefix='group', drop_first=True)
+            grp_dum.index = use_samples
+            grp_cols = list(grp_dum.columns)
+            for c in grp_cols:
+                design[c] = grp_dum[c].astype(float)
+            for c in time_cols:
+                design[c] = time_block[c]
+            # interaction columns: each group dummy × each time-basis col.
+            inter_cols = []
+            for gc in grp_cols:
+                for tc in time_cols:
+                    name = f"{gc}:{tc}"
+                    design[name] = (design[gc] * design[tc]).astype(float)
+                    inter_cols.append(name)
+            test_cols = inter_cols
+            mode = 'interaction'
+
+        if bool(design.isnull().any().any()):
+            bad = design.columns[design.isnull().any()].tolist()
+            raise ValueError(
+                f"design matrix has missing values in {bad} — covariate / "
+                f"group / time values must be present for every used sample.")
+        # guard against a rank-deficient design (e.g. confounded covariate).
+        if np.linalg.matrix_rank(design.values) < design.shape[1]:
+            raise ValueError(
+                "design matrix is rank-deficient — a covariate or group is "
+                "confounded with time; drop the offending term.")
+
+        counts = self.data[use_samples]
+        test_idx = [list(design.columns).index(c) for c in test_cols]
+
+        # --- limma-voom (+ duplicateCorrelation for repeated measures) -
+        if block_s is not None:
+            block_arr = block_s.values
+            print("⏰ Repeated-measures design — estimating within-subject "
+                  "correlation (duplicateCorrelation)...")
+            # Round 1: voom without weights-aware correlation, estimate corr.
+            v = _limma.voom(counts, design.values)
+            dc = _limma.duplicateCorrelation(v.E, design.values,
+                                             block=block_arr,
+                                             weights=v.weights)
+            corr = float(dc.consensus_correlation)
+            # Round 2: voom with the block correlation, re-estimate, fit.
+            try:
+                v = _limma.voom(counts, design.values,
+                                block=block_arr, correlation=corr)
+                dc = _limma.duplicateCorrelation(v.E, design.values,
+                                                 block=block_arr,
+                                                 weights=v.weights)
+                corr = float(dc.consensus_correlation)
+            except Exception as exc:  # pragma: no cover - defensive
+                print(f"   voom(block=...) round 2 skipped ({exc}); "
+                      f"using round-1 correlation.")
+            print(f"   consensus within-subject correlation = {corr:.4f}")
+            fit = _limma.lmFit(v.E, design.values, weights=v.weights,
+                               block=block_arr, correlation=corr)
+            self.timecourse_correlation = corr
+        else:
+            v = _limma.voom(counts, design.values)
+            fit = _limma.lmFit(v.E, design.values, weights=v.weights)
+
+        print("⏰ Start to adjust pvalue (eBayes)...")
+        fit = _limma.eBayes(fit)
+
+        # --- moderated F-test over the tested coefficient block --------
+        f_stat, pvalue, df1 = self._moderated_f_subset(
+            fit, test_idx, fit.df_total)
+        f_stat = np.asarray(f_stat, dtype=float)
+        pvalue = np.asarray(pvalue, dtype=float)
+
+        print("⏰ Start to calculate qvalue...")
+        qvalue = multipletests(np.nan_to_num(pvalue, nan=1.0),
+                               alpha=alpha, method=multipletests_method,
+                               is_sorted=False, returnsorted=False)[1]
+
+        base_mean = self.data[use_samples].mean(axis=1)
+        result = pd.DataFrame({'F': f_stat, 'pvalue': pvalue, 'qvalue': qvalue},
+                              index=self.data.index)
+        result['AveExpr'] = np.asarray(fit.Amean)
+        result['BaseMean'] = base_mean
+        result['MaxBaseMean'] = base_mean      # kept for column parity
+        result['log2(BaseMean)'] = np.log2(base_mean + 1)
+
+        # per-term coefficients of the tested block — the trajectory shape.
+        coefs = np.asarray(fit.coefficients)
+        for c, idx in zip(test_cols, test_idx):
+            result[f"log2FC_{c}"] = coefs[:, idx]
+        # a single log2FC (largest-magnitude tested coefficient) so the
+        # existing volcano plotting still has something to draw.
+        block_coefs = coefs[:, test_idx]
+        amax = np.argmax(np.abs(block_coefs), axis=1)
+        result['log2FC'] = block_coefs[np.arange(block_coefs.shape[0]), amax]
+        result['abs(log2FC)'] = result['log2FC'].abs()
+        result['size'] = result['abs(log2FC)'] / 10
+
+        result = result.loc[~result['pvalue'].isnull()]
+        result['-log(pvalue)'] = -np.log10(result['pvalue'])
+        result['-log(qvalue)'] = -np.log10(result['qvalue'])
+        result['sig'] = 'normal'
+        result.loc[result['qvalue'] < alpha, 'sig'] = 'temporal'
+
+        self.result = result
+        n_hit = int((result['sig'] == 'temporal').sum())
+        if mode == 'interaction':
+            print(f"✅ Time-course DE (group×time interaction) complete: "
+                  f"{len(use_samples)} samples, {basis} basis ({len(test_cols)} "
+                  f"interaction df), {n_hit} genes with differing trajectories "
+                  f"at q<{alpha}.")
+        else:
+            print(f"✅ Time-course DE (temporal regulation) complete: "
+                  f"{len(use_samples)} samples, {basis} basis ({len(test_cols)} "
+                  f"time df), {n_hit} temporally-regulated genes at q<{alpha}.")
+        return result
+
+
+def _temporal_knee(xs, ys):
+    """Knee of a curve — the point farthest from the chord joining its
+    first and last points (orientation-agnostic elbow detection)."""
+    xs = np.asarray(xs, dtype=float)
+    ys = np.asarray(ys, dtype=float)
+    if len(xs) <= 2:
+        return int(xs[0])
+    x = (xs - xs.min()) / (np.ptp(xs) or 1.0)
+    y = (ys - ys.min()) / (np.ptp(ys) or 1.0)
+    dist = np.abs((y[-1] - y[0]) * x - (x[-1] - x[0]) * y
+                  + x[-1] * y[0] - y[-1] * x[0])
+    return int(xs[int(np.argmax(dist))])
+
+
+@register_function(
+    aliases=["temporal_clusters", "时序聚类", "temporal_clustering",
+             "soft_temporal_clusters"],
+    category="bulk",
+    description=(
+        "Soft-cluster the temporal expression trajectories of time-course "
+        "genes by fuzzy c-means (Mfuzz). Pairs with pyDEG.timecourse_deg — "
+        "after finding which genes are temporally regulated, this groups "
+        "them by trajectory shape (monotone rise / fall, transient). "
+        "Backed by the pure-Python pymfuzz port of Bioconductor Mfuzz."
+    ),
+    examples=[
+        "ov.bulk.temporal_clusters(data, time, genes=deg.index[deg['sig']=='temporal'])",
+        "ov.bulk.temporal_clusters(data, time, n_clusters=9, plot=True)",
+    ],
+    related=["bulk.pyDEG"],
+)
+def temporal_clusters(data, time, *, genes=None, n_clusters="auto",
+                      m="auto", agg="mean", crange=None, seed=0,
+                      plot=False):
+    r"""Soft-cluster temporal expression trajectories by fuzzy c-means.
+
+    Companion to :meth:`pyDEG.timecourse_deg`. ``timecourse_deg`` answers
+    *which* genes change over time; ``temporal_clusters`` answers *what
+    shape* those changes take — grouping the temporally regulated genes
+    into soft clusters of co-trending trajectories (monotone rise / fall,
+    transient up-then-down, ...) via Mfuzz fuzzy c-means on the
+    z-standardised, replicate-averaged time profiles.
+
+    Arguments:
+        data: Expression matrix — a genes x samples ``pandas.DataFrame``
+            (normalised expression is recommended), or an ``AnnData``
+            (samples x genes, transposed internally).
+        time: Per-sample time value — a ``pandas.Series`` indexed by
+            sample, a ``dict`` ``{sample: time}``, or an array aligned to
+            the sample columns.
+        genes: Optional subset of genes to cluster — typically the
+            temporally regulated genes from ``timecourse_deg``
+            (``deg.index[deg['sig'] == 'temporal']``). Default: all genes.
+        n_clusters: Number of soft clusters — an int, or ``'auto'`` to
+            pick the knee of the Mfuzz ``Dmin`` curve.
+        m: Fuzzifier — a float, or ``'auto'`` for Mfuzz ``mestimate``.
+        agg: How to collapse replicate samples sharing a time point —
+            ``'mean'`` (default) or ``'median'``.
+        crange: Candidate cluster counts scanned when ``n_clusters='auto'``
+            (default ``range(2, 13)``).
+        seed: RNG seed for the fuzzy c-means initialisation.
+        plot: If True, draw the Mfuzz soft-cluster trajectory grid.
+
+    Returns:
+        A genes x stats ``pandas.DataFrame`` indexed by gene: ``cluster``
+        (1-based hard assignment) and ``membership`` (the gene's
+        membership in its assigned cluster). ``.attrs`` carries
+        ``centers`` (clusters x time points — the trajectory templates),
+        ``membership_matrix`` (genes x clusters), ``m`` and ``n_clusters``.
+    """
+    try:
+        import pymfuzz
+    except ImportError as exc:
+        raise ImportError(
+            "temporal_clusters needs the 'pymfuzz' package — "
+            "install it with:  pip install pymfuzz"
+        ) from exc
+
+    # --- coerce expression to a genes x samples DataFrame --------------
+    if isinstance(data, ad.AnnData):
+        expr = data.to_df().T          # AnnData is samples x genes
+    else:
+        expr = pd.DataFrame(data).copy()
+    samples = list(expr.columns)
+
+    # --- align the time vector to the sample columns -------------------
+    if isinstance(time, dict):
+        time = pd.Series(time)
+    if isinstance(time, pd.Series):
+        time_s = time.reindex(samples).astype(float)
+    else:
+        arr = np.asarray(time, dtype=float).ravel()
+        if len(arr) != len(samples):
+            raise ValueError(
+                f"time has {len(arr)} values but data has {len(samples)} "
+                f"samples; pass a Series indexed by sample to align.")
+        time_s = pd.Series(arr, index=samples)
+    keep = list(time_s.dropna().index)
+    expr, time_s, samples = expr[keep], time_s.loc[keep], keep
+
+    # --- restrict to the genes of interest ----------------------------
+    if genes is not None:
+        genes = [g for g in pd.Index(genes) if g in expr.index]
+        if len(genes) < 2:
+            raise ValueError("Need at least 2 of the requested genes "
+                             "present in data.")
+        expr = expr.loc[genes]
+
+    # --- collapse replicates -> one mean profile per time point -------
+    times = sorted(time_s.unique())
+    if len(times) < 3:
+        raise ValueError("Temporal clustering needs >=3 distinct time points.")
+    reducer = np.nanmedian if agg == "median" else np.nanmean
+    traj = pd.DataFrame(
+        {t: reducer(expr[[s for s in samples if time_s[s] == t]]
+                    .to_numpy(dtype=float), axis=1)
+         for t in times},
+        index=expr.index,
+    )
+    traj = traj.loc[traj.notna().all(axis=1) & (traj.std(axis=1) > 0)]
+    if traj.shape[0] < 2:
+        raise ValueError("Too few genes with a usable (non-flat) trajectory.")
+
+    # --- standardise (z-score each gene), estimate the fuzzifier ------
+    z = pymfuzz.standardise(traj)
+    m_val = pymfuzz.mestimate(z) if m == "auto" else float(m)
+
+    # --- choose the cluster count -------------------------------------
+    if isinstance(n_clusters, str) and n_clusters == "auto":
+        cr = list(crange) if crange is not None else list(range(2, 13))
+        cr = [c for c in cr if 2 <= c < traj.shape[0]]
+        dmin = np.asarray(
+            pymfuzz.Dmin(z, m=m_val, crange=cr, repeats=3, visu=False,
+                         random_state=seed), dtype=float)
+        c_val = _temporal_knee(cr, dmin)
+    else:
+        c_val = int(n_clusters)
+    print(f"⏰ Mfuzz fuzzy c-means: {traj.shape[0]} genes, "
+          f"{len(times)} time points, c={c_val}, m={m_val:.3f}")
+
+    # --- fuzzy c-means soft clustering --------------------------------
+    fc = pymfuzz.mfuzz(z, c=c_val, m=m_val, random_state=seed)
+    membership = np.asarray(fc.membership, dtype=float)   # genes x clusters
+    hard = membership.argmax(axis=1) + 1                  # 1-based
+    cl_cols = [f"cluster_{i}" for i in fc.cluster_names]
+
+    out = pd.DataFrame(
+        {"cluster": hard, "membership": membership.max(axis=1)},
+        index=list(fc.gene_names),
+    )
+    out.attrs["centers"] = pd.DataFrame(
+        np.asarray(fc.centers, dtype=float),
+        index=cl_cols, columns=list(fc.time_names))
+    out.attrs["membership_matrix"] = pd.DataFrame(
+        membership, index=list(fc.gene_names), columns=cl_cols)
+    out.attrs["m"] = m_val
+    out.attrs["n_clusters"] = c_val
+
+    if plot:
+        pymfuzz.mfuzz_plot(z, fc)
+    return out
