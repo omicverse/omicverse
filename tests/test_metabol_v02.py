@@ -196,9 +196,14 @@ def test_lipidomics_parse_lipid_names():
 
     pc = parse_lipid("PC 34:1")
     assert pc and pc.lipid_class == "PC" and pc.total_carbons == 34 and pc.total_db == 1
-    assert parse_lipid("TAG 54:3").lipid_class == "TAG"
+    # Goslin standardises triacylglycerol to the canonical "TG" abbreviation
+    assert parse_lipid("TAG 54:3").lipid_class == "TG"
+    assert parse_lipid("TG 54:3").lipid_class == "TG"
+    # Goslin resolves the whole ceramide: 18 (sphingoid base) + 24 (N-acyl)
+    # = 42 carbons, 1 double bond from the d18:1 base, per-chain in fa_chains
     cer = parse_lipid("Cer d18:1/24:0")
-    assert cer.lipid_class == "CER" and cer.backbone == "d18:1" and cer.total_db == 0
+    assert cer.lipid_class == "CER" and cer.total_carbons == 42 and cer.total_db == 1
+    assert cer.fa_chains == ((18, 1), (24, 0))
     assert parse_lipid("Glucose") is None
     assert parse_lipid("Isoleucine") is None
 
@@ -214,7 +219,7 @@ def test_lipidomics_annotate_and_aggregate():
                        obs=pd.DataFrame(index=[f"s{i}" for i in range(20)]),
                        var=pd.DataFrame(index=names))
     adata = annotate_lipids(adata)
-    assert set(adata.var["lipid_class"]) == {"PC", "PE", "TAG", "LPC", "SM"}
+    assert set(adata.var["lipid_class"]) == {"PC", "PE", "TG", "LPC", "SM"}
     agg = aggregate_by_class(adata, agg="sum")
     assert agg.n_vars == 5 and agg.n_obs == 20
     pc_cols = [i for i, c in enumerate(adata.var["lipid_class"]) if c == "PC"]
