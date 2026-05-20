@@ -1075,6 +1075,7 @@ def _hydrate_registry_for_export() -> None:
         "omicverse.space",
         "omicverse.metabol",
         "omicverse.protein",
+        "omicverse.genetics",
     )
     for module_name in module_names:
         try:
@@ -1097,6 +1098,13 @@ def _hydrate_registry_for_export() -> None:
         import omicverse.protein as _protein  # noqa: F401
 
         _protein._hydrate_registry()
+    except Exception:
+        pass
+    # And ov.genetics — its __init__ is lazy too.
+    try:
+        import omicverse.genetics as _genetics  # noqa: F401
+
+        _genetics._hydrate_registry()
     except Exception:
         pass
 

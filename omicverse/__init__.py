@@ -87,6 +87,7 @@ _LAZY_MODULES = {
     'metabol',
     'micro',
     'protein',
+    'genetics',
     'report',
 }
 
@@ -369,6 +370,7 @@ __all__ = [
     "pl",
     "metabol",
     "protein",
+    "genetics",
     "datasets",
     "external",
     "llm",
