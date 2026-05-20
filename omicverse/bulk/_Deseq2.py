@@ -888,3 +888,130 @@ class pyDEG(object):
 
         else:  # This is where the "method" check (not pydeseq2 version check) ends
             raise ValueError('The method is not supported.')
+
+    def continuous_deg(self, trait, covariates=None, alpha: float = 0.05,
+                       multipletests_method: str = 'fdr_bh') -> pd.DataFrame:
+        r"""Differential expression against a CONTINUOUS sample-level trait.
+
+        Where :meth:`deg_analysis` compares two groups, this models each
+        gene's expression as a linear function of a **continuous**
+        predictor — disease duration, age, dose, a severity score — via
+        limma-voom + eBayes (the vendored pure-Python
+        ``omicverse.external.pylimma``). It is the first-class tool for
+        "which genes are associated with / track / correlate with a
+        continuous variable": ``eBayes`` moderation borrows variance
+        across genes (a per-gene Spearman/Pearson scan has none, and is
+        noisiest in the tails that hold the top hits), and ``voom``
+        models the count mean-variance trend.
+
+        Arguments:
+            trait: Per-sample value of the continuous trait — a
+                ``pandas.Series`` indexed by sample, a ``dict``
+                ``{sample: value}``, or an array aligned to the count
+                columns. Samples with a missing (NaN) trait are dropped.
+            covariates: Optional ``pandas.DataFrame`` (samples × columns)
+                of nuisance variables to hold fixed — RIN, age, sex,
+                batch, sequencing platform. Numeric columns enter the
+                design directly; non-numeric columns are one-hot encoded.
+            alpha: FDR threshold for the ``sig`` column (default 0.05).
+            multipletests_method: ``statsmodels`` multiple-testing
+                method for the q-value (default ``'fdr_bh'``).
+
+        Returns:
+            A genes × stats DataFrame (also stored on ``self.result``):
+            ``log2FC`` here is the **slope** — log2 expression change
+            per unit of the trait, covariates held fixed — plus
+            ``pvalue``, ``qvalue``, ``t``, ``AveExpr`` and ``sig``
+            (``up`` / ``down`` / ``normal`` by ``qvalue < alpha`` and
+            slope sign). Column names match :meth:`deg_analysis` so
+            ``foldchange_set`` / ``plot_volcano`` work unchanged.
+        """
+        from ..external import pylimma as _limma
+        from statsmodels.stats.multitest import multipletests
+        print("⏰ Start continuous-trait limma-voom pipeline (pylimma)...")
+
+        samples = list(self.data.columns)
+
+        # --- align the trait to the count-matrix columns --------------
+        if isinstance(trait, dict):
+            trait = pd.Series(trait)
+        if isinstance(trait, pd.Series):
+            trait_s = trait.reindex(samples).astype(float)
+        else:
+            trait_arr = np.asarray(trait, dtype=float).ravel()
+            if len(trait_arr) != len(samples):
+                raise ValueError(
+                    f"trait has {len(trait_arr)} values but the count "
+                    f"matrix has {len(samples)} samples; pass a Series "
+                    f"indexed by sample to align unambiguously.")
+            trait_s = pd.Series(trait_arr, index=samples)
+
+        use_samples = [s for s in samples if pd.notna(trait_s.get(s))]
+        if len(use_samples) < 3:
+            raise ValueError(
+                f"Only {len(use_samples)} samples have a non-missing trait "
+                f"value — too few for a linear model.")
+        trait_s = trait_s.loc[use_samples]
+
+        # --- design matrix: Intercept + covariates + trait (trait last) -
+        design = pd.DataFrame({'Intercept': 1.0}, index=use_samples)
+        if covariates is not None:
+            cov = covariates.reindex(use_samples)
+            for col in cov.columns:
+                series = cov[col]
+                if pd.api.types.is_numeric_dtype(series):
+                    design[col] = series.astype(float)
+                else:  # one-hot encode a categorical covariate
+                    dummies = pd.get_dummies(series.astype('category'),
+                                             prefix=str(col), drop_first=True)
+                    for d in dummies.columns:
+                        design[d] = dummies[d].astype(float)
+        trait_col = 'trait'
+        while trait_col in design.columns:
+            trait_col += '_'
+        design[trait_col] = trait_s.astype(float)
+
+        if bool(design.isnull().any().any()):
+            bad = design.columns[design.isnull().any()].tolist()
+            raise ValueError(
+                f"design matrix has missing values in {bad} — covariate "
+                f"values must be present for every used sample.")
+
+        counts = self.data[use_samples]
+
+        # --- limma-voom + eBayes --------------------------------------
+        v = _limma.voom(counts, design.values)
+        fit = _limma.lmFit(v.E, design.values, weights=v.weights)
+        print("⏰ Start to adjust pvalue...")
+        fit = _limma.eBayes(fit)
+
+        trait_idx = list(design.columns).index(trait_col)
+        log2FC = np.asarray(fit.coefficients)[:, trait_idx]
+        pvalue = np.asarray(fit.p_value)[:, trait_idx]
+        tstat = np.asarray(fit.t)[:, trait_idx]
+        print("⏰ Start to calculate qvalue...")
+        qvalue = multipletests(np.nan_to_num(np.asarray(pvalue, dtype=float), nan=1.0),
+                               alpha=alpha, method=multipletests_method,
+                               is_sorted=False, returnsorted=False)[1]
+
+        base_mean = self.data[use_samples].mean(axis=1)
+        result = pd.DataFrame({'pvalue': pvalue, 'qvalue': qvalue},
+                              index=self.data.index)
+        result['log2FC'] = log2FC          # slope: log2 change per unit trait
+        result['abs(log2FC)'] = result['log2FC'].abs()
+        result['BaseMean'] = base_mean
+        result['MaxBaseMean'] = base_mean  # no two groups; kept for column parity
+        result['log2(BaseMean)'] = np.log2(base_mean + 1)
+        result['AveExpr'] = np.asarray(fit.Amean)
+        result['t'] = tstat
+        result['size'] = result['abs(log2FC)'] / 10
+        result = result.loc[~result['pvalue'].isnull()]
+        result['-log(pvalue)'] = -np.log10(result['pvalue'])
+        result['-log(qvalue)'] = -np.log10(result['qvalue'])
+        result['sig'] = 'normal'
+        result.loc[(result['qvalue'] < alpha) & (result['log2FC'] > 0), 'sig'] = 'up'
+        result.loc[(result['qvalue'] < alpha) & (result['log2FC'] < 0), 'sig'] = 'down'
+        self.result = result
+        print(f"✅ Continuous-trait DE complete: {len(use_samples)} samples, "
+              f"{int((result['sig'] != 'normal').sum())} genes at q<{alpha}.")
+        return result
