@@ -208,6 +208,24 @@ protein = [
   "statsmodels>=0.14",     # LMM / ANOVA / ordinal regression backends
 ]
 
+# Statistical-genetics backends for ``ov.genetics`` — pure-Python ports
+# of the canonical post-GWAS analysis tools. Install via:
+#   pip install omicverse[genetics]
+# Enables the full post-GWAS workflow: eQTL mapping (Matrix eQTL),
+# fine-mapping (SuSiE), colocalization (coloc), Mendelian randomization
+# (TwoSampleMR), single-cell disease-relevance scoring (scDRS), LD score
+# regression / SEG (LDSC), and TWAS (S-PrediXcan / S-MultiXcan).
+genetics = [
+  "pymatrixeqtl>=0.1.0",   # Matrix eQTL — cis/trans eQTL mapping
+  "pysusie>=0.1.0",        # SuSiE — Bayesian statistical fine-mapping
+  "pycoloc>=0.1.0",        # coloc — Bayesian colocalization
+  "pytwosamplemr>=0.1.0",  # TwoSampleMR — two-sample Mendelian randomization
+  "pyscdrs>=0.1.0",        # scDRS — single-cell disease-relevance scoring
+  "pyldsc>=0.1.0",         # LDSC — LD score regression / partitioned h2 / SEG
+  "pytwas>=0.1.0",         # S-PrediXcan / S-MultiXcan — TWAS
+  "statsmodels>=0.14",     # logistic GWAS association / mixed-model backends
+]
+
 # Lipidomics backend for the lipidomics path of ``ov.metabol`` — a
 # pure-Python port of the Bioconductor lipidr workflow. Install via:
 #   pip install omicverse[lipidomics]
