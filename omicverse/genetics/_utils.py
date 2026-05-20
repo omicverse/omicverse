@@ -683,6 +683,247 @@ def coloc_scan(
 
 
 # --------------------------------------------------------------------------- #
+# Cross-trait colocalization (shared genetic factors / pleiotropy)             #
+# --------------------------------------------------------------------------- #
+@register_function(
+    aliases=[
+        "cross_trait_coloc", "multi_trait_coloc", "pleiotropy_coloc",
+        "跨性状共定位", "多性状共定位",
+    ],
+    category="genetics",
+    description=(
+        "Find shared genetic factors across many traits by colocalization. "
+        "Given GWAS summary statistics for multiple traits, scans every "
+        "locus carrying a genome-wide-significant signal in two or more "
+        "traits and runs pairwise coloc.abf (Giambartolomei 2014) between "
+        "those traits at the locus, reporting the posterior probability of "
+        "one shared causal variant (PP.H4) versus two distinct ones "
+        "(PP.H3). This is the rigorous test for pleiotropy / a shared "
+        "genetic factor between traits: two traits being independently "
+        "genome-wide-significant at the same locus is NOT a shared factor "
+        "— that is exactly the H3-vs-H4 question colocalization resolves. "
+        "Summary-statistics-only — coloc.abf needs no LD reference and no "
+        "genotypes. Returns one row per (locus, trait pair) ranked by "
+        "PP.H4, with a colocalized flag. The trait-vs-trait analogue of "
+        "ov.genetics.coloc_scan (GWAS-vs-eQTL)."
+    ),
+    examples=[
+        "ov.genetics.cross_trait_coloc(sumstats, trait_col='trait', n=10000)",
+        "ov.genetics.cross_trait_coloc(sumstats, n=n_by_trait, sdY=sd_by_trait, "
+        "maf_col='EAF')",
+    ],
+    related=["ov.genetics.colocalize", "ov.genetics.coloc_scan",
+             "ov.genetics.make_coloc_dataset", "ov.genetics.clump_loci"],
+)
+def cross_trait_coloc(
+    stats,
+    *,
+    trait_col: str = "trait",
+    variant_col: str = "variant",
+    beta_col: str = "beta",
+    se_col: str = "se",
+    chrom_col: Optional[str] = None,
+    position_col: Optional[str] = None,
+    maf_col: Optional[str] = None,
+    n=None,
+    trait_type="quant",
+    sdY=None,
+    p_col: Optional[str] = None,
+    p_threshold: float = 5e-8,
+    locus_window: float = 1_000_000,
+    min_shared: int = 20,
+    h4_threshold: float = 0.8,
+    p1: float = 1e-4,
+    p2: float = 1e-4,
+    p12: float = 1e-5,
+) -> pd.DataFrame:
+    """Find shared genetic factors across traits by pairwise colocalization.
+
+    A "shared genetic factor" between two traits is a locus where both
+    traits are driven by the **same causal variant** — pleiotropy. Two
+    traits being independently genome-wide-significant at one locus does
+    not establish that: they may have distinct causal variants in the
+    same LD block. This function settles it the rigorous way — pairwise
+    Bayesian colocalization (coloc.abf) of every trait pair at every
+    multi-trait locus.
+
+    Parameters
+    ----------
+    stats
+        Long-format summary statistics — one row per (variant, trait) —
+        or a ``dict`` ``{trait: per-variant DataFrame}``. Needs a
+        variant id, a trait label, an effect size and its standard
+        error; a chromosome + position (or a ``chrom:pos:...`` variant
+        id); and, optionally, an allele-frequency column.
+    trait_col, variant_col, beta_col, se_col
+        Column names for the trait label, variant id, effect size and
+        standard error.
+    chrom_col, position_col
+        Chromosome and base-position columns. If omitted, both are
+        parsed from a ``chrom:pos:...`` style ``variant_col``.
+    maf_col
+        Optional allele-frequency column (effect-allele frequency is
+        accepted; it is folded to MAF). If omitted, ``sdY`` carries the
+        quantitative-trait scale instead.
+    n
+        Per-trait sample size — an ``int`` (same for all traits) or a
+        ``dict`` ``{trait: n}``. Required.
+    trait_type
+        ``'quant'`` / ``'cc'`` — a string, or a ``dict`` ``{trait: type}``.
+    sdY
+        Trait standard deviation for a quantitative trait — a ``float``
+        or a ``dict`` ``{trait: sdY}``. Supplying it (e.g. the SD of the
+        measured phenotype) sharpens the quantitative-trait coloc.
+    p_col
+        Optional p-value column; if omitted, p is computed from
+        ``beta / se`` via a two-sided z-test.
+    p_threshold
+        Genome-wide-significance threshold used to find the loci that
+        carry a signal (default ``5e-8``).
+    locus_window
+        Base-pair window — significant variants within this distance
+        are merged into one locus.
+    min_shared
+        Minimum variants shared by a trait pair at a locus to attempt
+        colocalization.
+    h4_threshold
+        PP.H4 cutoff for the ``colocalized`` flag (default ``0.8``).
+    p1, p2, p12
+        coloc prior probabilities (trait 1, trait 2, both).
+
+    Returns
+    -------
+    pandas.DataFrame
+        One row per (locus, trait pair) — ``locus``, ``chrom``,
+        ``start``, ``end``, ``trait_a``, ``trait_b``, ``n_shared``,
+        ``PP_H3``, ``PP_H4``, ``colocalized`` — sorted by descending
+        ``PP_H4``. The colocalized pairs are the shared genetic factors.
+    """
+    import itertools
+
+    from scipy.stats import norm
+
+    from ._coloc import colocalize
+
+    if n is None:
+        raise ValueError(
+            "cross_trait_coloc requires per-trait sample size(s) — pass "
+            "n=<int> or n={trait: n}.")
+
+    # --- coerce input to a long DataFrame ------------------------------
+    if isinstance(stats, dict):
+        frames = []
+        for tr, sub in stats.items():
+            s = sub.copy()
+            s[trait_col] = tr
+            frames.append(s)
+        df = pd.concat(frames, ignore_index=True)
+    else:
+        df = stats.copy()
+
+    df = df.dropna(subset=[variant_col, trait_col, beta_col, se_col])
+    df = df[df[se_col].astype(float) > 0].copy()
+
+    # --- chromosome / position -----------------------------------------
+    if chrom_col is not None and position_col is not None:
+        df["_chrom"] = df[chrom_col].astype(str)
+        df["_pos"] = pd.to_numeric(df[position_col], errors="coerce")
+    else:
+        parts = df[variant_col].astype(str).str.split(":", expand=True)
+        df["_chrom"] = parts[0].astype(str)
+        df["_pos"] = pd.to_numeric(parts[1], errors="coerce")
+    if df["_pos"].isna().any():
+        raise ValueError(
+            "cross_trait_coloc could not resolve variant positions — pass "
+            "chrom_col and position_col explicitly.")
+
+    # --- p-value -------------------------------------------------------
+    if p_col is not None:
+        df["_p"] = pd.to_numeric(df[p_col], errors="coerce")
+    else:
+        z = df[beta_col].astype(float) / df[se_col].astype(float)
+        df["_p"] = 2.0 * norm.sf(np.abs(z))
+
+    # --- define loci from genome-wide-significant variants -------------
+    sig = df[df["_p"] < p_threshold]
+    cols = ["locus", "chrom", "start", "end", "trait_a", "trait_b",
+            "n_shared", "PP_H3", "PP_H4", "colocalized"]
+    if sig.empty:
+        return pd.DataFrame(columns=cols)
+    loci = []
+    for chrom, csig in sig.groupby("_chrom"):
+        pos = np.sort(csig["_pos"].unique())
+        start = prev = pos[0]
+        for p in pos[1:]:
+            if p - prev > locus_window:
+                loci.append((chrom, start, prev))
+                start = p
+            prev = p
+        loci.append((chrom, start, prev))
+
+    def _resolve(spec, tr, default):
+        if spec is None:
+            return default
+        if isinstance(spec, dict):
+            return spec.get(tr, default)
+        return spec
+
+    pad = locus_window / 2.0
+    rows = []
+    for chrom, start, end in loci:
+        region = df[(df["_chrom"] == chrom)
+                    & (df["_pos"] >= start - pad)
+                    & (df["_pos"] <= end + pad)]
+        sig_traits = sorted(
+            region.loc[region["_p"] < p_threshold, trait_col].unique())
+        if len(sig_traits) < 2:
+            continue
+        per_trait = {
+            tr: g.drop_duplicates(variant_col).set_index(variant_col)
+            for tr, g in region[region[trait_col].isin(sig_traits)]
+            .groupby(trait_col)
+        }
+        for ta, tb in itertools.combinations(sig_traits, 2):
+            A, B = per_trait[ta], per_trait[tb]
+            shared = sorted(set(A.index) & set(B.index))
+            if len(shared) < min_shared:
+                continue
+
+            def _dataset(tbl, tr):
+                if maf_col is not None:
+                    eaf = tbl.loc[shared, maf_col].to_numpy(dtype=float)
+                    maf = np.minimum(eaf, 1.0 - eaf)
+                else:
+                    maf = np.full(len(shared), 0.5)
+                return make_coloc_dataset(
+                    tbl, snps=shared, n=int(_resolve(n, tr, 0)),
+                    maf=maf, beta=beta_col, se=se_col,
+                    trait_type=_resolve(trait_type, tr, "quant"),
+                    sdY=float(_resolve(sdY, tr, 1.0)),
+                )
+
+            try:
+                co = colocalize(_dataset(A, ta), _dataset(B, tb),
+                                method="abf", p1=p1, p2=p2, p12=p12)
+                summ = co["summary"]
+                h3 = float(summ["PP.H3.abf"])
+                h4 = float(summ["PP.H4.abf"])
+            except Exception:
+                continue
+            rows.append({
+                "locus": f"{chrom}:{int(start)}-{int(end)}",
+                "chrom": chrom, "start": float(start), "end": float(end),
+                "trait_a": ta, "trait_b": tb, "n_shared": int(len(shared)),
+                "PP_H3": h3, "PP_H4": h4,
+                "colocalized": bool(h4 >= h4_threshold),
+            })
+    out = pd.DataFrame(rows, columns=cols)
+    if not out.empty:
+        out = out.sort_values("PP_H4", ascending=False).reset_index(drop=True)
+    return out
+
+
+# --------------------------------------------------------------------------- #
 # eQTL input reshaping                                                         #
 # --------------------------------------------------------------------------- #
 @register_function(

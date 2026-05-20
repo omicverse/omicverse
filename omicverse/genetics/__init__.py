@@ -61,7 +61,8 @@ GWAS core (no backend)    ``gwas_qc``, ``gwas_association``,
 Pipeline helpers          ``sample_qc_metrics``, ``scan_cis_genes``,
                           ``genotype_pca``, ``clump_loci``, ``grade_loci``,
                           ``prune_by_distance``, ``make_coloc_dataset``,
-                          ``coloc_scan``, ``make_eqtl_matrices``,
+                          ``coloc_scan``, ``cross_trait_coloc``,
+                          ``make_eqtl_matrices``,
                           ``build_twas_model``, ``compute_ld_to_lead``,
                           ``make_twas_covariance``
 eQTL mapping              ``eqtl_map`` (linear / anova / linear_cross)
@@ -116,6 +117,7 @@ _LAZY_ATTRS: dict[str, tuple[str, str]] = {
     "prune_by_distance":         ("._utils", "prune_by_distance"),
     "make_coloc_dataset":        ("._utils", "make_coloc_dataset"),
     "coloc_scan":                ("._utils", "coloc_scan"),
+    "cross_trait_coloc":         ("._utils", "cross_trait_coloc"),
     "make_eqtl_matrices":        ("._utils", "make_eqtl_matrices"),
     "build_twas_model":          ("._utils", "build_twas_model"),
     "compute_ld_to_lead":        ("._utils", "compute_ld_to_lead"),
