@@ -3,7 +3,7 @@ import pandas as pd
 from scipy.sparse import csr_matrix
 from scipy.sparse import coo_matrix, issparse
 
-from scanpy.tools._paga import PAGA
+from ._compat import PAGA
 from .._registry import register_function
 
 # TODO: Add docstrings

@@ -8,23 +8,16 @@ import numpy as np
 from anndata import AnnData
 from scipy.sparse import issparse
 
-from scanpy import logging as logg
 from ..._settings import EMOJI, Colors
-from scanpy._utils import (
-    _empty,
-    check_nonnegative_integers,
-    view_to_actual,
-)
-
-from scanpy.get import _get_obs_rep, _set_obs_rep
-from scanpy.preprocessing._docs import doc_mask_var_hvg
-from scanpy.preprocessing._pca import _handle_mask_var, pca
+from .._highly_variable_genes import check_nonnegative_integers
+from .._scale import _get_obs_rep, _set_obs_rep, view_to_actual
+from .._pca import _empty, _handle_mask_var, pca
 
 if TYPE_CHECKING:
     from collections.abc import Mapping
     from typing import Any
 
-    from ..._utils import Empty
+    from .._pca import Empty
 
 
 def _pearson_residuals(X, theta, clip, check_values, *, copy: bool = False):
@@ -132,9 +125,6 @@ def normalize_pearson_residuals(
     else:
         print(f"   {Colors.CYAN}Clipping: {Colors.BOLD}sqrt(n_obs){Colors.ENDC}")
     
-    msg = f"computing analytic Pearson residuals on {computed_on}"
-    start = logg.info(msg)
-
     residuals = _pearson_residuals(X, theta, clip, check_values, copy=not inplace)
     settings_dict = dict(theta=theta, clip=clip, computed_on=computed_on)
 
@@ -148,8 +138,6 @@ def normalize_pearson_residuals(
     print(f"   {Colors.GREEN}✓ Processed: {Colors.BOLD}{residuals.shape[0]:,}{Colors.ENDC}{Colors.GREEN} cells × {Colors.BOLD}{residuals.shape[1]:,}{Colors.ENDC}{Colors.GREEN} genes{Colors.ENDC}")
     if inplace:
         print(f"   {Colors.CYAN}• Added normalization settings to adata.uns['pearson_residuals_normalization']{Colors.ENDC}")
-    
-    logg.info("    finished ({time_passed})", time=start)
 
     if copy:
         return adata

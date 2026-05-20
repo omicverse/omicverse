@@ -21,9 +21,11 @@ __all__ = [
     "DaskArray",
     "SpBase",
     "ZappyArray",
+    "_choose_graph",
     "_numba_threading_layer",
     "deprecated",
     "fullname",
+    "get_init_pos_from_paga",
     "njit",
     "old_positionals",
     "pkg_metadata",
@@ -168,6 +170,68 @@ def _is_in_unsafe_thread_pool() -> bool:
         current_thread.name.startswith("ThreadPoolExecutor")
         and _numba_threading_layer() not in LAYERS["threadsafe"]
     )
+
+
+def _choose_graph(adata, obsp: str | None, neighbors_key: str | None):
+    """Choose connectivities from neighbors or another obsp entry.
+
+    Vendored from ``scanpy.tools._utils._choose_graph`` so omicverse does not
+    depend on scanpy's private API.
+    """
+    if obsp is not None and neighbors_key is not None:
+        msg = "You can't specify both obsp, neighbors_key. Please select only one."
+        raise ValueError(msg)
+
+    if obsp is not None:
+        return adata.obsp[obsp]
+
+    from ._neighbors import NeighborsView
+
+    neighbors = NeighborsView(adata, neighbors_key)
+    if "connectivities" not in neighbors:
+        msg = "You need to run `pp.neighbors` first to compute a neighborhood graph."
+        raise ValueError(msg)
+    return neighbors["connectivities"]
+
+
+def get_init_pos_from_paga(
+    adata,
+    adjacency=None,
+    random_state=0,
+    neighbors_key: str | None = None,
+    obsp: str | None = None,
+):
+    """Compute UMAP init positions from a precomputed PAGA layout.
+
+    Vendored from ``scanpy.tools._utils.get_init_pos_from_paga`` so omicverse
+    does not depend on scanpy's private API.
+    """
+    import numpy as np
+
+    np.random.seed(random_state)
+    if adjacency is None:
+        adjacency = _choose_graph(adata, obsp, neighbors_key)
+    if "pos" not in adata.uns.get("paga", {}):
+        msg = "Plot PAGA first, so that `adata.uns['paga']['pos']` exists."
+        raise ValueError(msg)
+
+    groups = adata.obs[adata.uns["paga"]["groups"]]
+    pos = adata.uns["paga"]["pos"]
+    connectivities_coarse = adata.uns["paga"]["connectivities"]
+    init_pos = np.ones((adjacency.shape[0], 2))
+    for i, group_pos in enumerate(pos):
+        subset = (groups == groups.cat.categories[i]).values
+        neighbors = connectivities_coarse[i].nonzero()
+        if len(neighbors[1]) > 0:
+            connectivities = connectivities_coarse[i][neighbors]
+            nearest_neighbor = neighbors[1][np.argmax(connectivities)]
+            noise = np.random.random((len(subset[subset]), 2))
+            dist = group_pos - pos[nearest_neighbor]
+            noise = noise * dist
+            init_pos[subset] = group_pos - 0.5 * dist + noise
+        else:
+            init_pos[subset] = group_pos
+    return init_pos
 
 
 @cache

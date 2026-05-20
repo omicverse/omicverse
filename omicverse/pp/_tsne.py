@@ -6,18 +6,16 @@ from datetime import datetime
 
 from packaging.version import Version
 
-from scanpy import logging as logg
+from scanpy import settings
 from ._compat import old_positionals
-from scanpy._settings import settings
-from scanpy._utils import _doc_params, raise_not_implemented_error_if_backed_type
-from scanpy.neighbors._doc import doc_n_pcs, doc_use_rep
-from scanpy.tools._utils import _choose_representation
+from ._scale import raise_not_implemented_error_if_backed_type
+from ._neighbors import _choose_representation, _doc_params, doc_n_pcs, doc_use_rep
 from .._settings import EMOJI, Colors, settings as ov_settings
 
 if TYPE_CHECKING:
     from anndata import AnnData
 
-    from scanpy._utils.random import _LegacyRandom
+    from ._neighbors import _LegacyRandom
 
 
 @old_positionals(

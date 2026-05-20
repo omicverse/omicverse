@@ -7,11 +7,9 @@ from datetime import datetime
 import numpy as np
 from sklearn.utils import check_array, check_random_state
 
-from scanpy import logging as logg
-from ._compat import old_positionals
-from scanpy._settings import settings
-from scanpy._utils import NeighborsView
-from scanpy.tools._utils import _choose_representation, get_init_pos_from_paga
+from scanpy import settings
+from ._compat import old_positionals, get_init_pos_from_paga
+from ._neighbors import NeighborsView, _choose_representation
 from .._settings import EMOJI, Colors, settings as ov_settings
 
 if TYPE_CHECKING:
@@ -19,7 +17,7 @@ if TYPE_CHECKING:
 
     from anndata import AnnData
 
-    from scanpy._utils.random import _LegacyRandom
+    from ._neighbors import _LegacyRandom
 
     _InitPos = Literal["paga", "spectral", "random"]
 
@@ -143,7 +141,6 @@ def umap(  # noqa: PLR0913, PLR0915
         adata,
         use_rep=neigh_params.get("use_rep", None),
         n_pcs=neigh_params.get("n_pcs", None),
-        silent=True,
     )
     if method == "umap":
         print(f"   {Colors.GREEN}{EMOJI['start']} Computing UMAP embedding (classic method)...{Colors.ENDC}")

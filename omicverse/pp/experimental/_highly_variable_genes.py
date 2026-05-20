@@ -11,16 +11,14 @@ import pandas as pd
 import scipy.sparse as sp_sparse
 from anndata import AnnData
 
-from scanpy import logging as logg
-from scanpy._compat import njit
-from scanpy._settings import Verbosity, settings
-from scanpy._utils import check_nonnegative_integers, view_to_actual
+from numba import njit
 
 from ..._settings import EMOJI, Colors
 
-from scanpy.get import _get_obs_rep
-from scanpy.preprocessing._distributed import materialize_as_ndarray
-from scanpy.preprocessing._utils import _get_mean_var
+from .._highly_variable_genes import check_nonnegative_integers
+from .._scale import _get_obs_rep, view_to_actual
+from .._distributed import materialize_as_ndarray
+from .._utils import _get_mean_var
 
 from .._qc import _is_rust_backend
 
@@ -181,8 +179,7 @@ def _highly_variable_pearson_residuals(
         if is_rust:
             X_batch_prefilter = X_batch_prefilter[:]
         # Filter out zero genes
-        with settings.verbosity.override(Verbosity.error):
-            nonzero_genes = np.ravel(X_batch_prefilter.sum(axis=0)) != 0
+        nonzero_genes = np.ravel(X_batch_prefilter.sum(axis=0)) != 0
         adata_subset = adata_subset_prefilter[:, nonzero_genes]
         X_batch = _get_obs_rep(adata_subset, layer=layer)
         if is_rust:

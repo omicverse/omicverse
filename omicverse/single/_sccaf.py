@@ -30,7 +30,32 @@ import seaborn as sns
 #import patsy
 
 from scanpy import settings as sett
-from scanpy import logging as logg
+
+import logging as _logging
+
+
+class _SccafLogger:
+    """Lightweight logger replacing scanpy's private logging API."""
+
+    _logger = _logging.getLogger("omicverse.sccaf")
+
+    def info(self, msg, *args, **kwargs):
+        self._logger.info(msg)
+
+    def warning(self, msg, *args, **kwargs):
+        self._logger.warning(msg)
+
+    def hint(self, msg, *args, **kwargs):
+        self._logger.info(msg)
+
+    def debug(self, msg, *args, **kwargs):
+        self._logger.debug(msg)
+
+    def error(self, msg, *args, **kwargs):
+        self._logger.error(msg)
+
+
+logg = _SccafLogger()
 
 import scanpy as sc
 # for color

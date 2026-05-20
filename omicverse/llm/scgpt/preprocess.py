@@ -4,7 +4,7 @@ import numpy as np
 import torch
 from scipy.sparse import issparse
 import scanpy as sc
-from scanpy.get import _get_obs_rep, _set_obs_rep
+from ...pp._scale import _get_obs_rep, _set_obs_rep
 from anndata import AnnData
 
 #from scgpt import logger
