@@ -494,6 +494,56 @@ def download_tosica_gmt():
     ],
     related=["bulk.geneset_enrichment", "utils.download_tosica_gmt", "single.pathway_enrichment"]
 )
+def _download_enrichr_library(name, dir='./genesets'):
+    r"""Fetch a gene-set library from Enrichr by name, cache it, return its path.
+
+    Enrichr hosts ~200 curated gene-set libraries — MSigDB Hallmark, KEGG,
+    GO, Reactome, WikiPathways, cell-type and TF/kinase sets — listed at
+    https://maayanlab.cloud/Enrichr/#libraries . This lets
+    :func:`geneset_prepare` resolve any of them on demand instead of
+    failing when the local file is absent.
+
+    Parameters
+    ----------
+    name : str
+        Enrichr library name, e.g. ``"MSigDB_Hallmark_2020"``,
+        ``"KEGG_2021_Human"``, ``"GO_Biological_Process_2021"``.
+    dir : str, default='./genesets'
+        Directory to cache the downloaded ``.gmt`` into.
+
+    Returns
+    -------
+    str or None
+        Local path to the cached library, or ``None`` if the name is
+        unknown to Enrichr or the download fails (e.g. offline).
+    """
+    import requests
+    os.makedirs(dir, exist_ok=True)
+    out = os.path.join(dir, f'{name}.gmt')
+    if os.path.exists(out):
+        return out
+    url = ('https://maayanlab.cloud/Enrichr/geneSetLibrary'
+           f'?mode=text&libraryName={name}')
+    try:
+        print(f"   - Geneset '{name}' missing locally; fetching from Enrichr ...")
+        resp = requests.get(url, timeout=120)
+        resp.raise_for_status()
+        text = resp.text
+        # Enrichr returns an empty body / an HTML page for an unknown name.
+        if (not text.strip()) or text.lstrip()[:1] == '<' or '\t' not in text:
+            print(f"   - Enrichr has no library named '{name}'.")
+            return None
+        with open(out, 'w', encoding='utf-8') as fh:
+            fh.write(text)
+        n_terms = sum(1 for ln in text.splitlines() if ln.strip())
+        print(f"   - Downloaded Enrichr library '{name}' "
+              f"({n_terms} gene sets) -> {out}")
+        return out
+    except Exception as exc:  # network error, bad name, etc.
+        print(f"   - Enrichr download failed for '{name}': {exc}")
+        return None
+
+
 def geneset_prepare(geneset_path,organism='Human',auto_download=True):
     r"""Load and prepare gene sets from GMT/TXT files for enrichment analysis.
 
@@ -524,6 +574,7 @@ def geneset_prepare(geneset_path,organism='Human',auto_download=True):
             'WikiPathways_2019_Mouse', 'Reactome_2022',
         }
         stem = os.path.splitext(os.path.basename(file_path))[0]
+        resolved = None
         if stem in known:
             print(f"   - Geneset '{stem}' missing locally; auto-downloading "
                   f"via ov.utils.download_pathway_database()...")
@@ -531,7 +582,25 @@ def geneset_prepare(geneset_path,organism='Human',auto_download=True):
             # download_pathway_database writes to ./genesets/
             cand = os.path.join('./genesets', f'{stem}.txt')
             if os.path.exists(cand):
-                file_path = cand
+                resolved = cand
+        if resolved is None:
+            # Any other name is treated as an Enrichr gene-set library and
+            # fetched on demand — MSigDB_Hallmark_2020, KEGG_2021_Human,
+            # Reactome_2022, and ~200 more. The caller never has to
+            # pre-stage a database file or have internet arranged manually.
+            resolved = _download_enrichr_library(stem)
+        if resolved is not None and os.path.exists(resolved):
+            file_path = resolved
+
+    if not os.path.exists(file_path):
+        raise FileNotFoundError(
+            f"geneset_prepare: '{geneset_path}' not found locally and could "
+            f"not be auto-downloaded. Pass a path to a .gmt/.txt file, or an "
+            f"Enrichr library name such as 'MSigDB_Hallmark_2020' or "
+            f"'KEGG_2021_Human' — browse names at "
+            f"https://maayanlab.cloud/Enrichr/#libraries"
+        )
+
     with open(file_path, 'r', encoding='utf-8') as file:
         for idx,line in enumerate(file):
             line = line.strip()
