@@ -58,10 +58,11 @@ Synthetic data            ``simulate_gwas_study`` — one coherent cohort
                           known ground truth, for tutorials / tests
 GWAS core (no backend)    ``gwas_qc``, ``gwas_association``,
                           ``genomic_inflation``
-Pipeline helpers          ``sample_qc_metrics``, ``genotype_pca``,
-                          ``clump_loci``, ``grade_loci``,
-                          ``make_coloc_dataset``, ``make_eqtl_matrices``,
-                          ``build_twas_model``
+Pipeline helpers          ``sample_qc_metrics``, ``scan_cis_genes``,
+                          ``genotype_pca``, ``clump_loci``, ``grade_loci``,
+                          ``prune_by_distance``, ``make_coloc_dataset``,
+                          ``coloc_scan``, ``make_eqtl_matrices``,
+                          ``build_twas_model``, ``make_twas_covariance``
 eQTL mapping              ``eqtl_map`` (linear / anova / linear_cross)
 Fine-mapping              ``finemap`` (susie / susie_rss),
                           ``get_credible_sets``, ``get_pip``
@@ -77,7 +78,7 @@ Heritability / LDSC       ``heritability``, ``genetic_correlation``,
                           ``partitioned_heritability``, ``ldsc_cell_type``,
                           ``munge_sumstats``
 TWAS                      ``twas`` (spredixcan / smultixcan / predixcan),
-                          ``load_twas_model``
+                          ``load_twas_model``, ``make_twas_covariance``
 Plotting                  ``manhattan``, ``qqplot``, ``regional_plot``,
                           ``coloc_plot``, ``mr_scatter``, ``mr_forest``,
                           ``finemap_plot``, ``sample_qc_plot``,
@@ -107,10 +108,13 @@ _LAZY_ATTRS: dict[str, tuple[str, str]] = {
     "GWASStudy":                 ("._simulate", "GWASStudy"),
     # Pipeline data-prep helpers
     "sample_qc_metrics":         ("._utils", "sample_qc_metrics"),
+    "scan_cis_genes":            ("._utils", "scan_cis_genes"),
     "genotype_pca":              ("._utils", "genotype_pca"),
     "clump_loci":                ("._utils", "clump_loci"),
     "grade_loci":                ("._utils", "grade_loci"),
+    "prune_by_distance":         ("._utils", "prune_by_distance"),
     "make_coloc_dataset":        ("._utils", "make_coloc_dataset"),
+    "coloc_scan":                ("._utils", "coloc_scan"),
     "make_eqtl_matrices":        ("._utils", "make_eqtl_matrices"),
     "build_twas_model":          ("._utils", "build_twas_model"),
     # GWAS core (backend-free)
@@ -145,6 +149,7 @@ _LAZY_ATTRS: dict[str, tuple[str, str]] = {
     # TWAS
     "twas":                      ("._twas", "twas"),
     "load_twas_model":           ("._twas", "load_twas_model"),
+    "make_twas_covariance":      ("._twas", "make_twas_covariance"),
     # Plotting
     "manhattan":                 (".plotting", "manhattan"),
     "qqplot":                    (".plotting", "qqplot"),

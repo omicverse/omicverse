@@ -107,4 +107,12 @@ from ._protein import (
     protein_dia,
     protein_olink,
 )
+from ._genetics import (
+    # Real genetics datasets for the ov.genetics tutorials
+    geuvadis_genotype,
+    geuvadis_expression,
+    gwas_sumstats,
+    gtex_eqtl,
+    genetics_scrna,
+)
 from ._signatures import load_signatures_from_file, predefined_signatures

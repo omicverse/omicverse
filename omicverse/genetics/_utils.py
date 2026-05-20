@@ -76,6 +76,106 @@ def sample_qc_metrics(adata, *, het_sd: float = 3.0) -> pd.DataFrame:
 
 
 # --------------------------------------------------------------------------- #
+# cis-eQTL gene screen                                                         #
+# --------------------------------------------------------------------------- #
+@register_function(
+    aliases=[
+        "scan_cis_genes", "cis_gene_screen", "screen_cis_eqtl",
+        "cis基因筛选", "cis-eQTL筛选",
+    ],
+    category="genetics",
+    description=(
+        "Fast cis-eQTL screen across an expression panel — for every gene, "
+        "find the single most strongly associated SNP within a cis window "
+        "of its transcription start site and rank the genes by that best "
+        "p-value. A quick way to pick a gene with a strong regulatory "
+        "signal before a full association scan / fine-mapping. The genotype "
+        "and expression AnnData must share the same individuals; the "
+        "expression ``.var`` must carry a TSS column. Pure numpy / scipy."
+    ),
+    examples=[
+        "screen = ov.genetics.scan_cis_genes(geno_qc, expr)",
+        "screen = ov.genetics.scan_cis_genes(geno_qc, expr, cis_dist=5e5)",
+    ],
+    related=["ov.genetics.gwas_association", "ov.genetics.eqtl_map"],
+)
+def scan_cis_genes(
+    geno,
+    expr,
+    *,
+    cis_dist: float = 1e6,
+    tss_col: str = "tss",
+    pos_col: str = "pos",
+    symbol_col: str = "gene_symbol",
+    min_cis_snps: int = 5,
+):
+    """Screen an expression panel for genes with a strong cis-eQTL.
+
+    Parameters
+    ----------
+    geno
+        Genotype AnnData of ``individuals x SNPs`` (0/1/2 dosages).
+        ``.var`` must carry the SNP base-pair position (``pos_col``).
+    expr
+        Expression AnnData of the **same** individuals x genes. ``.var``
+        must carry the transcription start site (``tss_col``).
+    cis_dist
+        cis window half-width in base pairs (default 1 Mb).
+    tss_col, pos_col
+        Column names of the gene TSS and the SNP position.
+    symbol_col
+        Optional gene-symbol column in ``expr.var`` (used if present).
+    min_cis_snps
+        Skip a gene with fewer than this many SNPs in its cis window.
+
+    Returns
+    -------
+    pandas.DataFrame
+        One row per screened gene — ``gene``, ``symbol``, ``n_cis``,
+        ``best_snp``, ``r`` (the best Pearson r) and ``p`` — sorted by
+        ascending best p-value.
+    """
+    from scipy import stats as _stats
+
+    if not (geno.obs_names == expr.obs_names).all():
+        raise ValueError(
+            "scan_cis_genes: geno and expr must share the same individuals "
+            "in the same order."
+        )
+    X = np.asarray(geno.X, dtype=float)
+    if hasattr(geno.X, "toarray"):
+        X = geno.X.toarray().astype(float)
+    snp_pos = geno.var[pos_col].to_numpy()
+    has_symbol = symbol_col in expr.var.columns
+
+    rows = []
+    for gi, gene in enumerate(expr.var_names):
+        tss = float(expr.var[tss_col].iloc[gi])
+        y = np.asarray(expr[:, gene].X).ravel().astype(float)
+        if y.std() == 0:
+            continue
+        cis = np.where(np.abs(snp_pos - tss) < cis_dist)[0]
+        if len(cis) < min_cis_snps:
+            continue
+        best_p, best_snp, best_r = 1.0, None, 0.0
+        for si in cis:
+            x = X[:, si]
+            if x.std() == 0:
+                continue
+            r, p = _stats.pearsonr(x, y)
+            if p < best_p:
+                best_p, best_snp, best_r = p, geno.var_names[si], r
+        if best_snp is None:
+            continue
+        sym = expr.var[symbol_col].iloc[gi] if has_symbol else gene
+        rows.append((gene, sym, int(len(cis)), best_snp, best_r, best_p))
+    out = pd.DataFrame(
+        rows, columns=["gene", "symbol", "n_cis", "best_snp", "r", "p"],
+    )
+    return out.sort_values("p").reset_index(drop=True)
+
+
+# --------------------------------------------------------------------------- #
 # Genotype PCA (population structure)                                          #
 # --------------------------------------------------------------------------- #
 @register_function(
@@ -329,6 +429,177 @@ def make_coloc_dataset(
 
 
 # --------------------------------------------------------------------------- #
+# Distance-based LD pruning (instrument selection)                             #
+# --------------------------------------------------------------------------- #
+@register_function(
+    aliases=[
+        "prune_by_distance", "distance_prune", "ld_prune_distance",
+        "select_instruments", "距离剪枝", "工具变量筛选",
+    ],
+    category="genetics",
+    description=(
+        "Distance-prune a ranked variant table to an approximately "
+        "independent subset — the standard quick way to choose Mendelian-"
+        "randomization instruments when a full LD matrix is not at hand. "
+        "Walks the table in priority order (e.g. ascending p-value) and "
+        "keeps a variant only if it is at least ``min_dist`` base pairs "
+        "from every variant already kept. Pure pandas."
+    ),
+    examples=[
+        "inst = ov.genetics.prune_by_distance(sig_eqtl, min_dist=1e4)",
+        "inst = ov.genetics.prune_by_distance(hits, pos='BP', min_dist=5e5)",
+    ],
+    related=["ov.genetics.mendelian_randomization", "ov.genetics.clump_loci"],
+)
+def prune_by_distance(
+    variants: pd.DataFrame,
+    *,
+    pos: str = "BP",
+    min_dist: float = 1e4,
+    rank_by: Optional[str] = None,
+    ascending: bool = True,
+) -> pd.DataFrame:
+    """Distance-prune a variant table to a near-independent subset.
+
+    Parameters
+    ----------
+    variants
+        Variant table — one row per variant, with a base-pair position.
+    pos
+        Base-pair position column.
+    min_dist
+        Minimum base-pair separation between any two kept variants.
+    rank_by
+        Optional column to sort by before pruning (e.g. ``'pvalue'``);
+        if ``None`` the table's existing order is used as the priority.
+    ascending
+        Sort direction for ``rank_by``.
+
+    Returns
+    -------
+    pandas.DataFrame
+        The pruned subset, in priority order.
+    """
+    table = variants if rank_by is None else variants.sort_values(
+        rank_by, ascending=ascending)
+    kept, used = [], []
+    for _, row in table.iterrows():
+        bp = float(row[pos])
+        if all(abs(bp - u) > min_dist for u in used):
+            kept.append(row)
+            used.append(bp)
+    return pd.DataFrame(kept).reset_index(drop=True)
+
+
+# --------------------------------------------------------------------------- #
+# Colocalization scan over many genes                                          #
+# --------------------------------------------------------------------------- #
+@register_function(
+    aliases=[
+        "coloc_scan", "scan_colocalization", "colocalize_genes",
+        "共定位扫描", "多基因共定位",
+    ],
+    category="genetics",
+    description=(
+        "Scan a GWAS locus against the cis-eQTLs of many genes and rank "
+        "the genes by colocalization evidence (posterior PP.H4). For every "
+        "eGene with enough variants shared with the GWAS, it builds the two "
+        "coloc datasets and runs ``ov.genetics.colocalize`` — the right way "
+        "to pick the gene a locus acts through (highest PP.H4), instead of "
+        "guessing from proximity. Returns one row per gene with PP.H3 / "
+        "PP.H4 and the shared-variant count, sorted by PP.H4."
+    ),
+    examples=[
+        "tab = ov.genetics.coloc_scan(gwas_locus, eqtl_locus, n_gwas=173000, "
+        "n_eqtl=670)",
+    ],
+    related=["ov.genetics.colocalize", "ov.genetics.make_coloc_dataset",
+             "ov.genetics.coloc_plot"],
+)
+def coloc_scan(
+    gwas: pd.DataFrame,
+    eqtl: pd.DataFrame,
+    *,
+    n_gwas: int,
+    n_eqtl: int,
+    gene_col: str = "gene",
+    variant_col: str = "variant",
+    gwas_beta: str = "BETA",
+    gwas_se: str = "SE",
+    eqtl_beta: str = "beta",
+    eqtl_se: str = "se",
+    gwas_maf: str = "EAF",
+    eqtl_maf: str = "maf",
+    min_shared: int = 20,
+) -> pd.DataFrame:
+    """Scan a GWAS locus against many genes' eQTLs and rank by PP.H4.
+
+    Parameters
+    ----------
+    gwas
+        GWAS summary statistics at the locus — needs the variant id,
+        effect size, standard error and (optionally) allele frequency.
+    eqtl
+        cis-eQTL summary statistics for several genes — needs the gene id,
+        variant id, effect size, standard error and MAF.
+    n_gwas, n_eqtl
+        Sample sizes of the GWAS and the eQTL study.
+    gene_col, variant_col
+        Gene-id and variant-id column names.
+    gwas_beta, gwas_se, eqtl_beta, eqtl_se
+        Effect-size / standard-error column names in each table.
+    gwas_maf, eqtl_maf
+        Allele-frequency columns; the eQTL MAF is used, falling back to
+        ``min(EAF, 1-EAF)`` from the GWAS.
+    min_shared
+        Skip a gene with fewer than this many variants shared with the
+        GWAS.
+
+    Returns
+    -------
+    pandas.DataFrame
+        One row per gene — ``gene``, ``n_shared``, ``PP_H3``, ``PP_H4`` —
+        sorted by descending ``PP_H4``.
+    """
+    from ._coloc import colocalize
+
+    gwas_vars = set(gwas[variant_col])
+    rows = []
+    for gene, sub in eqtl.groupby(gene_col):
+        shared = sorted(set(sub[variant_col]) & gwas_vars)
+        if len(shared) < min_shared:
+            continue
+        merged = gwas.merge(
+            sub, on=variant_col, suffixes=("_gwas", "_eqtl"),
+        ).set_index(variant_col)
+        snps = [s for s in shared if s in merged.index]
+        if len(snps) < min_shared:
+            continue
+        emaf = merged.loc[snps, eqtl_maf].to_numpy(dtype=float)
+        gmaf = np.minimum(merged.loc[snps, gwas_maf],
+                          1.0 - merged.loc[snps, gwas_maf]).to_numpy()
+        maf = np.where(np.isfinite(emaf), emaf, gmaf)
+        d_gwas = make_coloc_dataset(
+            merged, snps=snps, n=int(n_gwas), maf=maf,
+            beta=gwas_beta, se=gwas_se,
+        )
+        d_eqtl = make_coloc_dataset(
+            merged, snps=snps, n=int(n_eqtl), maf=maf,
+            beta=eqtl_beta, se=eqtl_se,
+        )
+        co = colocalize(d_gwas, d_eqtl, method="abf")
+        rows.append({
+            "gene": gene, "n_shared": len(snps),
+            "PP_H3": float(co["summary"]["PP.H3.abf"]),
+            "PP_H4": float(co["summary"]["PP.H4.abf"]),
+        })
+    out = pd.DataFrame(rows)
+    if not out.empty:
+        out = out.sort_values("PP_H4", ascending=False).reset_index(drop=True)
+    return out
+
+
+# --------------------------------------------------------------------------- #
 # eQTL input reshaping                                                         #
 # --------------------------------------------------------------------------- #
 @register_function(
@@ -433,7 +704,10 @@ def build_twas_model(
     gene_col
         Optional explicit gene-id column (otherwise the index is used).
     effect_allele, non_effect_allele
-        Effect / non-effect alleles for every weight.
+        Effect / non-effect alleles for every weight. Each may be a fixed
+        string (one allele for the whole model) **or** the name of a
+        column in ``lead_eqtl`` carrying per-SNP alleles — the latter is
+        what real eQTL tables (GTEx, eQTL Catalogue) provide.
 
     Returns
     -------
@@ -451,12 +725,19 @@ def build_twas_model(
 
     genes = (lead_eqtl[gene_col] if gene_col is not None
              else lead_eqtl.index).astype(str)
+
+    def _allele(spec):
+        # A column name -> per-SNP alleles; otherwise a fixed string.
+        if spec in lead_eqtl.columns:
+            return lead_eqtl[spec].astype(str).to_numpy()
+        return spec
+
     weights = pd.DataFrame({
         "rsid": lead_eqtl[snp_col].astype(str).to_numpy(),
         "gene": genes.to_numpy(),
         "weight": lead_eqtl[weight_col].astype(float).to_numpy(),
-        "non_effect_allele": non_effect_allele,
-        "effect_allele": effect_allele,
+        "non_effect_allele": _allele(non_effect_allele),
+        "effect_allele": _allele(effect_allele),
     })
     extra = pd.DataFrame({"gene": weights["gene"].unique()})
     extra["gene_name"] = extra["gene"]
