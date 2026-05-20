@@ -117,4 +117,9 @@ from ._genetics import (
     recombination_map,
     gene_annotation,
 )
+from ._timecourse import (
+    # Real bulk RNA-seq time-course datasets for the ov.bulk tutorials
+    fission_timecourse,
+    pombe_genesets,
+)
 from ._signatures import load_signatures_from_file, predefined_signatures

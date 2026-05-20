@@ -138,6 +138,7 @@ def _install_bulk_dependency_stubs():
             "estimateDispersions": object(),
             "Matrix_ID_mapping": object(),
             "data_drop_duplicates_index": object(),
+            "temporal_clusters": object(),
         },
         "omicverse.bulk._tcga": {"pyTCGA": object()},
         "omicverse.bulk._combat": {"batch_correction": object()},
