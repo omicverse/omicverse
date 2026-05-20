@@ -80,6 +80,8 @@ class LipidIdentity:
     total_db: int            # total double bonds
     backbone: Optional[str] = None   # "d18:1" for Cer, None otherwise
     raw: str = ""            # original string
+    category: Optional[str] = None   # LIPID MAPS category: GP/GL/SP/ST/FA/...
+    fa_chains: tuple = ()    # per-chain (carbons, db) tuples when species-resolved
 
     def is_saturated(self) -> bool:
         """True if no double bonds — typical SFA-rich species."""
@@ -107,26 +109,10 @@ _PATTERN = re.compile(
 )
 
 
-@register_function(
-    aliases=[
-        'parse_lipid',
-        '脂质解析',
-        'LIPID_MAPS',
-    ],
-    category='metabolomics',
-    description="Parse LIPID MAPS shorthand (e.g. 'PC 34:1', 'Cer d18:1/24:0') into a LipidIdentity dataclass with class / total_carbons / total_db.",
-    examples=[
-        "ov.metabol.parse_lipid('PC 34:1')",
-    ],
-    related=[
-        'metabol.annotate_lipids',
-    ],
-)
-def parse_lipid(name: str) -> Optional[LipidIdentity]:
-    """Parse a LIPID MAPS-shorthand lipid name.
+def _parse_lipid_regex(name: str) -> Optional[LipidIdentity]:
+    """Fallback parser — the built-in regex over ``LIPID_CLASSES``.
 
-    Returns ``None`` if the name doesn't match any recognized pattern
-    (so the caller can filter or annotate as "not a lipid").
+    Used when ``pygoslin`` is not installed or cannot parse the name.
     """
     match = _PATTERN.match(str(name).strip())
     if not match:
@@ -140,13 +126,97 @@ def parse_lipid(name: str) -> Optional[LipidIdentity]:
     )
 
 
+def _db_count(double_bonds) -> int:
+    """pygoslin ``double_bonds`` is an int on older builds and a
+    ``DoubleBonds`` object on newer ones — normalise to a plain int."""
+    if isinstance(double_bonds, int):
+        return double_bonds
+    return int(getattr(double_bonds, "num_double_bonds", 0) or 0)
+
+
+def _parse_lipid_goslin(name: str) -> Optional[LipidIdentity]:
+    """Parse via Goslin (``pygoslin``) — the LIPID MAPS reference engine.
+
+    Goslin normalises dialects (MS-DIAL, LipidXplorer, SwissLipids, the
+    Liebisch 2020 shorthand) and resolves class, category, sum
+    composition and per-chain fatty-acyl details — far more robust than
+    the built-in regex.
+    """
+    try:
+        from pygoslin.parser.Parser import LipidParser
+    except Exception:
+        return None
+    try:
+        adduct = LipidParser().parse(str(name).strip())
+        lip = adduct.lipid
+        info = lip.info
+        klass = lip.get_extended_class()
+        if not klass:
+            return None
+        cat = getattr(lip.headgroup, "lipid_category", None)
+        category = getattr(cat, "name", None) if cat is not None else None
+        fa_chains = tuple(
+            (int(fa.num_carbon), _db_count(fa.double_bonds))
+            for fa in getattr(lip, "fa_list", []) or []
+            if getattr(fa, "num_carbon", 0)
+        )
+        return LipidIdentity(
+            lipid_class=str(klass).upper(),
+            total_carbons=int(getattr(info, "num_carbon", 0) or 0),
+            total_db=_db_count(getattr(info, "double_bonds", 0)),
+            backbone=None,
+            raw=name,
+            category=category,
+            fa_chains=fa_chains,
+        )
+    except Exception:
+        return None
+
+
+@register_function(
+    aliases=[
+        'parse_lipid',
+        '脂质解析',
+        'LIPID_MAPS',
+    ],
+    category='metabolomics',
+    description=(
+        "Parse a lipid name (LIPID MAPS shorthand or a vendor dialect — "
+        "MS-DIAL / LipidXplorer / SwissLipids) into a LipidIdentity with "
+        "class / category / total_carbons / total_db / per-chain FA. Uses "
+        "the Goslin engine (``pygoslin``) when available, falling back to "
+        "an in-house regex."
+    ),
+    examples=[
+        "ov.metabol.parse_lipid('PC 34:1')",
+        "ov.metabol.parse_lipid('PC(16:0/18:1)')",
+    ],
+    related=[
+        'metabol.annotate_lipids',
+    ],
+)
+def parse_lipid(name: str) -> Optional[LipidIdentity]:
+    """Parse a lipid name into a :class:`LipidIdentity`.
+
+    Tries the Goslin reference parser (``pygoslin``) first — it handles
+    the LIPID MAPS shorthand *and* the common vendor dialects and gives
+    class, category and per-chain detail. Falls back to the built-in
+    regex when ``pygoslin`` is unavailable or the name is unrecognised.
+    Returns ``None`` if neither parser recognises the name.
+    """
+    result = _parse_lipid_goslin(name)
+    if result is not None:
+        return result
+    return _parse_lipid_regex(name)
+
+
 @register_function(
     aliases=[
         'annotate_lipids',
         '脂质注释',
     ],
     category='metabolomics',
-    description='Apply parse_lipid to every var_name and write lipid_class / total_carbons / total_db / lipid_backbone to adata.var.',
+    description='Apply parse_lipid to every var_name and write lipid_class / lipid_category / total_carbons / total_db / lipid_backbone to adata.var.',
     examples=[
         'ov.metabol.annotate_lipids(adata)',
     ],
@@ -164,16 +234,18 @@ def annotate_lipids(adata: AnnData, *, feature_names: Optional[Iterable[str]] = 
     """
     out = adata.copy()
     names = list(feature_names) if feature_names is not None else list(out.var_names)
-    classes, carbons, dbs, bbones = [], [], [], []
+    classes, carbons, dbs, bbones, cats = [], [], [], [], []
     for n in names:
         lid = parse_lipid(n)
         if lid is None:
             classes.append(None); carbons.append(np.nan)
-            dbs.append(np.nan); bbones.append(None)
+            dbs.append(np.nan); bbones.append(None); cats.append(None)
         else:
             classes.append(lid.lipid_class); carbons.append(lid.total_carbons)
             dbs.append(lid.total_db); bbones.append(lid.backbone)
+            cats.append(lid.category)
     out.var["lipid_class"] = classes
+    out.var["lipid_category"] = cats
     out.var["total_carbons"] = carbons
     out.var["total_db"] = dbs
     out.var["lipid_backbone"] = bbones

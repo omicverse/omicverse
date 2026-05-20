@@ -183,6 +183,8 @@ tests = [
   "pymsstats>=0.3.0",
   "pyolinkanalyze>=0.2.1",
   "scikit-misc>=0.3",
+  # ov.metabol lipidomics — Goslin lipid-name parser.
+  "pygoslin>=2.2",
 ]
 
 mcp = [

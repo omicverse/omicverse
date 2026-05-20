@@ -131,6 +131,7 @@ _LAZY_ATTRS: dict[str, tuple[str, str]] = {
     "dgca_class_bar":         (".plotting", "dgca_class_bar"),
     "corr_network_plot":      (".plotting", "corr_network_plot"),
     "asca_variance_bar":      (".plotting", "asca_variance_bar"),
+    "acyl_chain_map":         (".plotting", "acyl_chain_map"),
     # Lifecycle class
     "pyMetabo":               (".pymetabo", "pyMetabo"),
 }
@@ -275,4 +276,5 @@ __all__ = [
     "dgca_class_bar",
     "corr_network_plot",
     "asca_variance_bar",
+    "acyl_chain_map",
 ]

@@ -700,3 +700,113 @@ def asca_variance_bar(
         ax.text(f + 0.005, i, f"{f*100:.1f}%",
                 va="center", ha="left", fontsize=8)
     return fig, ax
+
+
+@register_function(
+    aliases=['acyl_chain_map', 'lipid_map', 'lipidomeR_map', '酰基链图'],
+    category='metabolomics',
+    description=(
+        "lipidomeR-style acyl-chain map — per lipid class, a heatmap of "
+        "total chain length (x) vs total double bonds (y) coloured by a "
+        "per-lipid statistic (e.g. log2 fold-change). Reveals which "
+        "chain-length / unsaturation regions shift between conditions."
+    ),
+    examples=[
+        "ov.metabol.acyl_chain_map(de_table, value_col='log2FC')",
+    ],
+    related=['metabol.parse_lipid', 'metabol.annotate_lipids'],
+)
+def acyl_chain_map(
+    data,
+    *,
+    value_col: str = "log2FC",
+    name_col: Optional[str] = None,
+    classes: Optional[list] = None,
+    n_cols: int = 4,
+    cmap: str = "RdBu_r",
+    vmax: Optional[float] = None,
+    figsize: Optional[tuple] = None,
+):
+    """lipidomeR-style total-carbon × double-bond map, faceted by lipid class.
+
+    Parameters
+    ----------
+    data
+        A DataFrame with one row per lipid. It must carry a lipid-name
+        column (the index, or ``name_col``) and a ``value_col`` numeric
+        statistic. Lipid names are parsed with :func:`parse_lipid`.
+    value_col
+        Column to colour each (carbon, double-bond) cell by — typically
+        ``log2FC`` from a differential test, but any per-lipid number
+        works.
+    name_col
+        Column holding the lipid name. ``None`` (default) uses the
+        DataFrame index.
+    classes
+        Restrict to these lipid classes; ``None`` plots every class
+        present.
+    n_cols
+        Facet-grid column count.
+    cmap, vmax
+        Colour map and symmetric colour limit (auto if ``None``).
+
+    Returns
+    -------
+    (fig, axes)
+    """
+    import pandas as pd
+    from ._lipidomics import parse_lipid
+
+    df = data.copy()
+    names = df[name_col].astype(str) if name_col else df.index.astype(str)
+    parsed = [parse_lipid(n) for n in names]
+    rows = []
+    for n, p, v in zip(names, parsed, df[value_col].to_numpy()):
+        if p is None:
+            continue
+        rows.append((p.lipid_class, p.total_carbons, p.total_db, float(v)))
+    if not rows:
+        raise ValueError("no lipid names could be parsed from the input")
+    lipdf = pd.DataFrame(rows, columns=["lipid_class", "C", "DB", "value"])
+
+    present = (classes if classes is not None
+               else sorted(lipdf["lipid_class"].unique()))
+    present = [c for c in present if (lipdf["lipid_class"] == c).any()]
+    n = len(present)
+    ncol = min(n_cols, n)
+    nrow = int(np.ceil(n / ncol))
+    if figsize is None:
+        figsize = (3.2 * ncol, 2.8 * nrow)
+    fig, axes = plt.subplots(nrow, ncol, figsize=figsize, squeeze=False)
+
+    if vmax is None:
+        vmax = float(np.nanpercentile(np.abs(lipdf["value"]), 98)) or 1.0
+
+    im = None
+    for idx, cls in enumerate(present):
+        ax = axes[idx // ncol][idx % ncol]
+        sub = lipdf[lipdf["lipid_class"] == cls]
+        # mean value per (C, DB) cell
+        grid = sub.groupby(["DB", "C"])["value"].mean().reset_index()
+        c_vals = sorted(sub["C"].unique())
+        db_vals = sorted(sub["DB"].unique())
+        M = np.full((len(db_vals), len(c_vals)), np.nan)
+        ci = {c: i for i, c in enumerate(c_vals)}
+        di = {d: i for i, d in enumerate(db_vals)}
+        for _, r in grid.iterrows():
+            M[di[r["DB"]], ci[r["C"]]] = r["value"]
+        im = ax.imshow(M, aspect="auto", cmap=cmap, vmin=-vmax, vmax=vmax,
+                       origin="lower", interpolation="nearest")
+        ax.set_xticks(range(len(c_vals)))
+        ax.set_xticklabels(c_vals, fontsize=6, rotation=90)
+        ax.set_yticks(range(len(db_vals)))
+        ax.set_yticklabels(db_vals, fontsize=6)
+        ax.set_title(f"{cls}  (n={len(sub)})", fontsize=9)
+        ax.set_xlabel("total carbons", fontsize=7)
+        ax.set_ylabel("double bonds", fontsize=7)
+    # blank unused facets
+    for idx in range(n, nrow * ncol):
+        axes[idx // ncol][idx % ncol].axis("off")
+    if im is not None:
+        fig.colorbar(im, ax=axes, label=value_col, fraction=0.025, pad=0.02)
+    return fig, axes
