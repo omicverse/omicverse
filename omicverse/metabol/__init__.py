@@ -39,6 +39,9 @@ Correlation              ``dgca`` (differential), ``corr_network`` (static withi
 Multi-omics integration  ``run_mofa`` (bridge to mofapy2 for metabol + RNA joint factors)
 Multivariate             ``plsda``, ``opls_da`` (with VIP scores + Q²)
 Pathway enrichment       ``msea_ora``, ``msea_gsea``, ``lion_enrichment``
+Lipidomics (lipidr)      ``read_skyline``, ``summarize_transitions``,
+                         ``normalize_pqn`` / ``normalize_istd``, ``de_lipids``,
+                         ``lsea``, ``lipid_mva`` (pylipidr bridge)
 Mass-based annotation    ``annotate_peaks``, ``mummichog_basic``
 ID mapping               ``map_ids``
 Database fetchers        ``fetch_kegg_pathways``, ``fetch_chebi_compounds``,
@@ -121,6 +124,15 @@ _LAZY_ATTRS: dict[str, tuple[str, str]] = {
     "annotate_lipids":        ("._lipidomics", "annotate_lipids"),
     "aggregate_by_class":     ("._lipidomics", "aggregate_by_class"),
     "lion_enrichment":        ("._lipidomics", "lion_enrichment"),
+    # Lipidomics — pylipidr bridge (Bioconductor lipidr workflow)
+    "read_skyline":           ("._lipidomics", "read_skyline"),
+    "add_sample_annotation":  ("._lipidomics", "add_sample_annotation"),
+    "summarize_transitions":  ("._lipidomics", "summarize_transitions"),
+    "normalize_pqn":          ("._lipidomics", "normalize_pqn"),
+    "normalize_istd":         ("._lipidomics", "normalize_istd"),
+    "de_lipids":              ("._lipidomics", "de_lipids"),
+    "lsea":                   ("._lipidomics", "lsea"),
+    "lipid_mva":              ("._lipidomics", "lipid_mva"),
     # Plotting (matplotlib)
     "volcano":                (".plotting", "volcano"),
     "s_plot":                 (".plotting", "s_plot"),
@@ -265,6 +277,15 @@ __all__ = [
     "annotate_lipids",
     "aggregate_by_class",
     "lion_enrichment",
+    # lipidomics — pylipidr bridge (Bioconductor lipidr workflow)
+    "read_skyline",
+    "add_sample_annotation",
+    "summarize_transitions",
+    "normalize_pqn",
+    "normalize_istd",
+    "de_lipids",
+    "lsea",
+    "lipid_mva",
     # plotting
     "plotting",
     "volcano",

@@ -208,6 +208,18 @@ protein = [
   "statsmodels>=0.14",     # LMM / ANOVA / ordinal regression backends
 ]
 
+# Lipidomics backend for the lipidomics path of ``ov.metabol`` — a
+# pure-Python port of the Bioconductor lipidr workflow. Install via:
+#   pip install omicverse[lipidomics]
+# Enables ov.metabol.read_skyline / summarize_transitions /
+# normalize_pqn / normalize_istd / de_lipids / lsea / lipid_mva
+# (Skyline I/O, ISTD & PQN normalization, limma moderated-t DE,
+# Lipid Set Enrichment Analysis, and PCA / OPLS-DA multivariate analysis).
+lipidomics = [
+  "pylipidr>=0.1.0",       # Bioconductor lipidr — lipidomics analysis
+  "pygoslin>=2.2",         # Goslin — LIPID MAPS shorthand parser
+]
+
 
 [project.urls]
 Github = 'https://github.com/Starlitnightly/omicverse'
