@@ -173,7 +173,7 @@ class pyWGCNA(GeneExp):
 
     def __init__(self, name='WGCNA',
                  TPMcutoff=1,
-                 powers=None, RsquaredCut=0.9, MeanCut=100,
+                 powers=None, RsquaredCut=0.85, MeanCut=100,
                  networkType="signed hybrid", TOMType="signed",
                  minModuleSize=50, naColor="grey", cut=float('inf'),
                  MEDissThres=0.2,
@@ -1396,7 +1396,7 @@ class pyWGCNA(GeneExp):
 
     # Call the network topology analysis function
     @staticmethod
-    def pickSoftThreshold(data, dataIsExpr=True, weights=None, RsquaredCut=0.9, MeanCut=100, powerVector=None,
+    def pickSoftThreshold(data, dataIsExpr=True, weights=None, RsquaredCut=0.85, MeanCut=100, powerVector=None,
                           nBreaks=10,
                           blockSize=None, corOptions=None, networkType="unsigned", moreNetworkConcepts=False,
                           gcInterval=None):
@@ -1564,16 +1564,46 @@ class pyWGCNA(GeneExp):
 
         print(datout)
 
-        # detect threshold more than 0.9 by default
-        ind = np.logical_and(datout['SFT.R.sq'] > RsquaredCut, datout['mean(k)'] <= MeanCut)
+        # Scale-free topology selection must use the SIGNED fit index,
+        # -sign(slope) * R^2 — not the raw R^2. A scale-free degree
+        # distribution has a NEGATIVE slope; at power 1-2 the fit often
+        # has a POSITIVE slope (not scale-free at all) yet a high raw
+        # R^2. Selecting on raw R^2 therefore collapses to power 1, a
+        # degenerate network where most genes fall into one giant
+        # 'hairball' module.
+        sft_r2 = datout['SFT.R.sq'].astype(float).to_numpy()
+        slope = datout['slope'].astype(float).to_numpy()
+        meanK = datout['mean(k)'].astype(float).to_numpy()
+        signedR2 = -np.sign(slope) * sft_r2
+        powerArr = np.asarray(powerVector)
+
+        ind = np.logical_and(signedR2 >= RsquaredCut, meanK <= MeanCut)
         if np.sum(ind) > 0:
-            powerEstimate = np.min(powerVector[ind])
+            powerEstimate = int(np.min(powerArr[ind]))
             print(f"{OKGREEN}Selected power to have scale free network is {str(powerEstimate)}.{ENDC}")
         else:
-            ind = np.argsort(datout['SFT.R.sq']).tolist()
-            powerEstimate = powerVector[ind[-1]]
-            print(f"{OKGREEN}No power detected to have scale free network!\nFound the best given power which is "
-                  f"{str(powerEstimate)}.{ENDC}")
+            # No power reaches the scale-free fit cut. Do NOT fall back
+            # to the raw-R^2 argmax — that routinely returns power 1-2
+            # and a degenerate hairball. Use the Langfelder sample-size
+            # default (WGCNA FAQ "Choosing the soft-thresholding
+            # power"), the recommended power when the fit cut is unmet.
+            nSamples = data.shape[0]
+            signed = str(networkType).lower() in ("signed", "signed hybrid")
+            if signed:
+                _default = 18 if nSamples < 20 else 16 if nSamples < 30 else 14 if nSamples < 40 else 12
+            else:
+                _default = 9 if nSamples < 20 else 8 if nSamples < 30 else 7 if nSamples < 40 else 6
+            powerEstimate = int(min(max(_default, int(powerArr.min())), int(powerArr.max())))
+            try:
+                _best = float(np.nanmax(signedR2))
+            except ValueError:
+                _best = float('nan')
+            print(f"{WARNING}No soft-threshold power reached the scale-free "
+                  f"fit cut (best signed R^2 = {_best:.2f} < {RsquaredCut}). "
+                  f"Falling back to the sample-size default power = "
+                  f"{powerEstimate} ({networkType}, n={nSamples}). A weak "
+                  f"scale-free fit usually means residual batch effect or "
+                  f"heterogeneous samples in the expression matrix.{ENDC}")
 
         return powerEstimate, datout
 

@@ -197,7 +197,7 @@ class pyWGCNA:
         name="WGCNA",
         TPMcutoff=1,
         powers=None,
-        RsquaredCut=0.9,
+        RsquaredCut=0.85,
         MeanCut=100,
         networkType="signed hybrid",
         TOMType="signed",
