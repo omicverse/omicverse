@@ -1495,7 +1495,10 @@ def _get_color_source_vector(
         # 对于数值型数据（基因表达），保持原样不转为分类
             
     if groups and isinstance(values.dtype, pd.CategoricalDtype):
-        values = values.remove_categories(values.categories.difference(groups))
+        # `values` may be a categorical-dtyped Series (needs the `.cat`
+        # accessor) or a bare pd.Categorical (methods live on the object).
+        cat = values.cat if isinstance(values, pd.Series) else values
+        values = cat.remove_categories(cat.categories.difference(groups))
     return values
 
 

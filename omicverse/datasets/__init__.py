@@ -126,5 +126,7 @@ from ._airr import (
     # Real immune-repertoire (AIRR) datasets for the ov.airr tutorials
     airr_singlecell,
     airr_bcr,
+    airr_tcr_antigen,
+    vdjdb_reference,
 )
 from ._signatures import load_signatures_from_file, predefined_signatures

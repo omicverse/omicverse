@@ -576,3 +576,78 @@ def clonotype_imbalance(
     adj = np.minimum.accumulate(adj[::-1])[::-1]
     res["pvalue_adj"] = np.clip(adj, 0, 1)
     return res
+
+
+@register_function(
+    aliases=[
+        "clonal_expansion_composition", "airr_clonal_expansion_composition",
+        "克隆扩增组成", "扩增状态组成",
+    ],
+    category="airr",
+    description=(
+        "Cross-tabulate clonal-expansion bins against a transcriptomic "
+        "state: the fraction of each cell-type in every clonal-expansion "
+        "category, the basis of the stacked 'expansion across states' bar."
+    ),
+    requires={"obs": ["clonal_expansion"]},
+    examples=[
+        "df = ov.airr.clonal_expansion_composition(adata)",
+        "df = ov.airr.clonal_expansion_composition(adata, groupby='leiden')",
+    ],
+    related=["airr.clonal_expansion", "airr.group_abundance"],
+)
+def clonal_expansion_composition(
+    adata,
+    *,
+    groupby: str = "cell_type",
+    expansion_col: str = "clonal_expansion",
+    normalize: str = "index",
+    sort_by: Optional[str] = ">= 4",
+    drop_na_label: bool = True,
+):
+    """Composition of transcriptomic states across clonal-expansion bins.
+
+    For every transcriptomic state (``groupby``), the fraction of its cells
+    falling in each clonal-expansion category — the table behind the stacked
+    "clonal expansion across cell states" bar plot.
+
+    Parameters
+    ----------
+    adata
+        AnnData with a clonal-expansion column from
+        :func:`omicverse.airr.clonal_expansion`.
+    groupby
+        ``obs`` column with the transcriptomic state (rows of the output;
+        default ``'cell_type'``).
+    expansion_col
+        ``obs`` column with the clonal-expansion category (columns of the
+        output; default ``'clonal_expansion'``).
+    normalize
+        ``'index'`` (default, per-state fractions), ``'columns'``,
+        ``'all'`` or ``False`` (raw counts) — passed to
+        :func:`pandas.crosstab`.
+    sort_by
+        Sort rows descending by this expansion column (default ``'>= 4'``);
+        ``None`` keeps the natural order.
+    drop_na_label
+        Drop the ``'nan'`` / missing-label row from ``groupby``.
+
+    Returns
+    -------
+    :class:`pandas.DataFrame`
+        ``state x clonal_expansion`` fraction (or count) table.
+    """
+    if expansion_col not in adata.obs:
+        raise KeyError(
+            f"obs[{expansion_col!r}] not found — run clonal_expansion first."
+        )
+    if groupby not in adata.obs:
+        raise KeyError(f"obs[{groupby!r}] not found.")
+    tab = pd.crosstab(
+        adata.obs[groupby], adata.obs[expansion_col], normalize=normalize
+    )
+    if drop_na_label:
+        tab = tab.loc[[i for i in tab.index if str(i) != "nan"]]
+    if sort_by is not None and sort_by in tab.columns:
+        tab = tab.sort_values(sort_by, ascending=False)
+    return tab

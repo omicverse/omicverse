@@ -77,7 +77,10 @@ Bulk repertoire           ``repertoire_diversity``,
                           ``repertoire_overlap_bulk``, ``gene_usage_bulk``,
                           ``clonality``, ``public_clonotypes``,
                           ``track_clonotypes``, ``simulate_immdata``,
-                          ``load_example_immdata``
+                          ``load_example_immdata``, ``kmer_analysis``,
+                          ``kmer_motif``, ``cdr3_aa_properties``,
+                          ``gene_usage_analysis``, ``annotate_antigen_bulk``,
+                          ``overlap_analysis``, ``public_repertoire``
 B-cell / Ig analysis      ``clonal_clustering`` (identical / hierarchical /
                           spectral), ``distance_threshold``,
                           ``mutation_analysis``, ``shm_targeting``,
@@ -85,7 +88,16 @@ B-cell / Ig analysis      ``clonal_clustering`` (identical / hierarchical /
                           ``infer_genotype`` (frequency / bayesian),
                           ``lineage_trees``, ``lineage_tests``
                           (switches / correlation), ``hill_diversity``,
-                          ``aa_properties``
+                          ``aa_properties``, ``reconstruct_germlines``,
+                          ``clonal_abundance``, ``bcr_gene_usage``
+TCR specificity           ``tcrdist``, ``tcr_neighbors``, ``tcr_cluster``,
+                          ``giana_cluster``, ``clustcr_cluster``,
+                          ``meta_clonotypes``, ``specificity_groups``
+                          (GLIPH2), ``annotate_antigen`` (VDJdb / McPAS /
+                          IEDB), ``cdr3_logo``, ``cdr3_logo_background``,
+                          ``detect_invariant`` (MAIT / iNKT)
+TCR + GEX (CoNGA-style)   ``conga_score``, ``conga_clusters``,
+                          ``tcr_clumping``, ``hotspot_features``
 """
 from __future__ import annotations
 
@@ -108,6 +120,7 @@ _LAZY_ATTRS: dict[str, tuple[str, str]] = {
     "define_clonotypes":         ("._clonotype", "define_clonotypes"),
     "define_clonotype_clusters": ("._clonotype", "define_clonotype_clusters"),
     "clonal_expansion":          ("._clonotype", "clonal_expansion"),
+    "clonal_expansion_composition": ("._clonotype", "clonal_expansion_composition"),
     "clonotype_network":         ("._clonotype", "clonotype_network"),
     "clonotype_imbalance":       ("._clonotype", "clonotype_imbalance"),
     # --- repertoire metrics (single-cell) ---
@@ -117,6 +130,10 @@ _LAZY_ATTRS: dict[str, tuple[str, str]] = {
     "spectratype":               ("._metrics", "spectratype"),
     "vdj_usage":                 ("._metrics", "vdj_usage"),
     "clonotype_modularity":      ("._metrics", "clonotype_modularity"),
+    "summarize_by_group":        ("._metrics", "summarize_by_group"),
+    "cluster_purity":            ("._metrics", "cluster_purity"),
+    "label_agreement":           ("._metrics", "label_agreement"),
+    "benchmark_clustering":      ("._metrics", "benchmark_clustering"),
     # --- plotting ---
     "clonotype_network_plot":    (".plotting", "clonotype_network_plot"),
     "clonal_expansion_plot":     (".plotting", "clonal_expansion_plot"),
@@ -124,6 +141,11 @@ _LAZY_ATTRS: dict[str, tuple[str, str]] = {
     "vdj_usage_plot":            (".plotting", "vdj_usage_plot"),
     "repertoire_overlap_plot":   (".plotting", "repertoire_overlap_plot"),
     "group_abundance_plot":      (".plotting", "group_abundance_plot"),
+    "kmer_motif_plot":           (".plotting", "kmer_motif_plot"),
+    "cdr3_aa_profile_plot":      (".plotting", "cdr3_aa_profile_plot"),
+    "gene_usage_analysis_plot":  (".plotting", "gene_usage_analysis_plot"),
+    "clonal_abundance_plot":     (".plotting", "clonal_abundance_plot"),
+    "group_box_plot":            (".plotting", "group_box_plot"),
     # --- bulk repertoire (pyimmunarch) ---
     "repertoire_diversity":      ("._bulk", "repertoire_diversity"),
     "repertoire_overlap_bulk":   ("._bulk", "repertoire_overlap_bulk"),
@@ -133,6 +155,19 @@ _LAZY_ATTRS: dict[str, tuple[str, str]] = {
     "track_clonotypes":          ("._bulk", "track_clonotypes"),
     "simulate_immdata":          ("._bulk", "simulate_immdata"),
     "load_example_immdata":      ("._bulk", "load_example_immdata"),
+    "kmer_analysis":             ("._bulk", "kmer_analysis"),
+    "kmer_motif":                ("._bulk", "kmer_motif"),
+    "cdr3_aa_properties":        ("._bulk", "cdr3_aa_properties"),
+    "gene_usage_analysis":       ("._bulk", "gene_usage_analysis"),
+    "annotate_antigen_bulk":     ("._bulk", "annotate_antigen_bulk"),
+    "overlap_analysis":          ("._bulk", "overlap_analysis"),
+    "public_repertoire":         ("._bulk", "public_repertoire"),
+    "cohort_groups":             ("._bulk", "cohort_groups"),
+    "repertoire_summary":        ("._bulk", "repertoire_summary"),
+    "spectratype_bulk":          ("._bulk", "spectratype_bulk"),
+    "differential_gene_usage":   ("._bulk", "differential_gene_usage"),
+    "cdr3_aa_properties_by_group": ("._bulk", "cdr3_aa_properties_by_group"),
+    "antigen_load_summary":      ("._bulk", "antigen_load_summary"),
     # --- B-cell / Ig analysis (Immcantation backends) ---
     "clonal_clustering":         ("._bcr", "clonal_clustering"),
     "distance_threshold":        ("._bcr", "distance_threshold"),
@@ -145,6 +180,42 @@ _LAZY_ATTRS: dict[str, tuple[str, str]] = {
     "lineage_tests":             ("._bcr", "lineage_tests"),
     "hill_diversity":            ("._bcr", "hill_diversity"),
     "aa_properties":             ("._bcr", "aa_properties"),
+    "reconstruct_germlines":     ("._bcr", "reconstruct_germlines"),
+    "clonal_abundance":          ("._bcr", "clonal_abundance"),
+    "bcr_gene_usage":            ("._bcr", "bcr_gene_usage"),
+    "isotype_class":             ("._bcr", "isotype_class"),
+    "isotype_composition":       ("._bcr", "isotype_composition"),
+    "clone_timepoint_distribution": ("._bcr", "clone_timepoint_distribution"),
+    "mutation_by_region":        ("._bcr", "mutation_by_region"),
+    "collapse_germlines":        ("._bcr", "collapse_germlines"),
+    "normalize_gene_calls":      ("._bcr", "normalize_gene_calls"),
+    # --- TCR specificity (TCRdist / GLIPH2 / meta-clonotypes) ---
+    "tcrdist":                   ("._tcr", "tcrdist"),
+    "tcr_neighbors":             ("._tcr", "tcr_neighbors"),
+    "tcr_cluster":               ("._tcr", "tcr_cluster"),
+    "giana_cluster":             ("._tcr", "giana_cluster"),
+    "clustcr_cluster":           ("._tcr", "clustcr_cluster"),
+    "meta_clonotypes":           ("._tcr", "meta_clonotypes"),
+    "specificity_groups":        ("._tcr", "specificity_groups"),
+    "annotate_antigen":          ("._tcr", "annotate_antigen"),
+    "cdr3_logo":                 ("._tcr", "cdr3_logo"),
+    "cdr3_logo_background":      ("._tcr", "cdr3_logo_background"),
+    "detect_invariant":          ("._tcr", "detect_invariant"),
+    "clean_cdr3":                ("._tcr", "clean_cdr3"),
+    "usable_cdr3_mask":          ("._tcr", "usable_cdr3_mask"),
+    "tcrdist_embedding":         ("._tcr", "tcrdist_embedding"),
+    "specificity_group_purity":  ("._tcr", "specificity_group_purity"),
+    # --- TCR + GEX joint analysis (CoNGA-style) ---
+    "conga_score":               ("._tcr_gex", "conga_score"),
+    "conga_clusters":            ("._tcr_gex", "conga_clusters"),
+    "tcr_clumping":              ("._tcr_gex", "tcr_clumping"),
+    "hotspot_features":          ("._tcr_gex", "hotspot_features"),
+    "conga_cluster_table":       ("._tcr_gex", "conga_cluster_table"),
+    "conga_score_summary":       ("._tcr_gex", "conga_score_summary"),
+    "expression_by_group":       ("._tcr_gex", "expression_by_group"),
+    "conga_score_plot":          ("._tcr_gex", "conga_score_plot"),
+    "tcr_clumping_plot":         ("._tcr_gex", "tcr_clumping_plot"),
+    "hotspot_features_plot":     ("._tcr_gex", "hotspot_features_plot"),
 }
 
 _LAZY_SUBMODULES = {"io", "plotting"}
@@ -157,6 +228,8 @@ _REGISTRY_SUBMODULES = (
     ".plotting",
     "._bulk",
     "._bcr",
+    "._tcr",
+    "._tcr_gex",
 )
 
 
