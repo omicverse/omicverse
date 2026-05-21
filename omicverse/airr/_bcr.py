@@ -163,7 +163,7 @@ def distance_threshold(db, *, model: str = "ham",
     related=["airr.shm_targeting", "airr.baseline_selection"],
 )
 def mutation_analysis(db, *, frequency: bool = False, combine: bool = False,
-                      **kwargs):
+                      region: Optional[str] = "v", **kwargs):
     """Observed SHM mutation counts / frequencies (``pyshazam``).
 
     Parameters
@@ -175,15 +175,32 @@ def mutation_analysis(db, *, frequency: bool = False, combine: bool = False,
         Report mutation frequencies (per-base) instead of raw counts.
     combine
         Combine R + S mutations into a single total column.
+    region
+        Region scheme splitting mutations by FWR / CDR sub-region —
+        ``'v'`` (IMGT V-segment FWR1-3 / CDR1-2, default), ``'vdj'`` (full
+        V(D)J), or ``None`` for a single whole-sequence count. Ignored when
+        ``combine=True``.
     **kwargs
         Forwarded to :func:`pyshazam.observedMutations`.
 
     Returns
     -------
     :class:`pandas.DataFrame`
-        The input frame with ``mu_count_*`` / ``mu_freq_*`` columns.
+        The input frame with ``mu_count_*`` / ``mu_freq_*`` columns —
+        one R (replacement) and one S (silent) column per region.
     """
     shazam = _require("pyshazam", "Mutation analysis")
+    region_def = None
+    if region is not None and not combine:
+        schemes = {
+            "v": "IMGT_V_BY_REGIONS",
+            "vdj": "IMGT_VDJ_BY_REGIONS",
+        }
+        key = schemes.get(str(region).lower())
+        if key is None:
+            raise ValueError("region must be 'v', 'vdj' or None.")
+        region_def = getattr(shazam, key, None)
+    kwargs.setdefault("regionDefinition", region_def)
     return shazam.observedMutations(db, frequency=frequency, combine=combine,
                                     **kwargs)
 
@@ -235,39 +252,87 @@ def shm_targeting(db, **kwargs):
     related=["airr.mutation_analysis", "airr.shm_targeting"],
 )
 def baseline_selection(db, *, group_by: Optional[str] = None,
-                       test_statistic: str = "local", **kwargs):
+                       test_statistic: str = "focused",
+                       region: Optional[str] = "v",
+                       collapse: bool = True,
+                       clone: str = "clone_id", **kwargs):
     """BASELINe selection-pressure analysis (``pyshazam``).
 
-    Runs :func:`pyshazam.calcBaseline`; when ``group_by`` is given the result
-    is grouped (:func:`pyshazam.groupBaseline`) and summarised
-    (:func:`pyshazam.summarizeBaseline`).
+    Estimates antigen-driven selection (the BASELINe selection strength
+    ``Sigma``) from the ratio of replacement to silent mutations: positive
+    ``Sigma`` in CDRs indicates positive (affinity-maturing) selection,
+    negative ``Sigma`` in FWRs indicates purifying selection.
+
+    When ``collapse`` is ``True`` the per-clone consensus
+    ``clonal_sequence`` / ``clonal_germline`` are first built with
+    :func:`pyshazam.collapseClones`; selection is then computed
+    (:func:`pyshazam.calcBaseline`), grouped (:func:`pyshazam.groupBaseline`)
+    and summarised (:func:`pyshazam.summarizeBaseline`).
 
     Parameters
     ----------
     db
-        An AIRR-format :class:`pandas.DataFrame` with clonal consensus
-        sequences (``clonal_sequence`` / ``clonal_germline``).
+        An AIRR-format :class:`pandas.DataFrame` with a clonal partitioning
+        (``clone_id``) and germline-aligned sequences.
     group_by
         Column to group selection scores by (e.g. ``'clone_id'``,
-        ``'sample'``). If ``None`` the raw :class:`pyshazam.Baseline` is
-        returned.
+        ``'sample_id'``). If ``None`` the per-region summary is returned.
     test_statistic
-        BASELINe test statistic — ``'local'`` (default) or ``'focused'``.
+        BASELINe test statistic — ``'focused'`` (default) or ``'local'``.
+    region
+        Region scheme — ``'v'`` (IMGT V FWR/CDR, default) or ``'vdj'``.
+    collapse
+        If ``True`` (default) build per-clone consensus sequences first.
+    clone
+        Clone-id column used for the consensus collapse.
     **kwargs
         Forwarded to :func:`pyshazam.calcBaseline`.
 
     Returns
     -------
-    :class:`pyshazam.Baseline` or :class:`pandas.DataFrame`
-        Grouped + summarised selection table when ``group_by`` is set,
-        otherwise the raw Baseline object.
+    :class:`pandas.DataFrame`
+        Per-region (and per-group) selection table — ``baseline_sigma`` with
+        confidence interval and p-value.
     """
     shazam = _require("pyshazam", "BASELINe selection")
-    baseline = shazam.calcBaseline(db, testStatistic=test_statistic, **kwargs)
-    if group_by is None:
-        return baseline
-    grouped = shazam.groupBaseline(baseline, groupBy=[group_by])
-    return shazam.summarizeBaseline(grouped)
+    schemes = {"v": "IMGT_V_BY_REGIONS", "vdj": "IMGT_VDJ_BY_REGIONS"}
+    region_def = getattr(shazam, schemes.get(str(region).lower(), ""), None)
+
+    work = db
+    if collapse:
+        work = shazam.collapseClones(
+            db, cloneColumn=clone, regionDefinition=region_def,
+        )
+        if group_by is not None and group_by not in work.columns:
+            keep = db.groupby(clone)[group_by].first()
+            work[group_by] = keep.reindex(work[clone]).values
+
+    baseline = shazam.calcBaseline(
+        work, testStatistic=test_statistic, regionDefinition=region_def,
+        **kwargs,
+    )
+    grouped = shazam.groupBaseline(
+        baseline, groupBy=[group_by] if group_by else [],
+    )
+    summary = shazam.summarizeBaseline(grouped)
+    stats = getattr(summary, "stats", summary)
+    # summarizeBaseline drops the grouping label — re-attach it so a grouped
+    # selection table is interpretable. Rows are blocked per group (one block
+    # of regions per group) in the order held by the grouped Baseline's .db.
+    if group_by is not None and hasattr(stats, "columns") \
+            and group_by not in getattr(stats, "columns", []):
+        gdb = getattr(grouped, "db", None)
+        if gdb is not None and group_by in getattr(gdb, "columns", []):
+            labels = list(gdb[group_by])
+            n_rows = len(stats)
+            if labels and n_rows % len(labels) == 0:
+                per = n_rows // len(labels)
+                stats = stats.copy()
+                stats.insert(
+                    0, group_by,
+                    [lab for lab in labels for _ in range(per)],
+                )
+    return stats
 
 
 # ---------------------------------------------------------------------------

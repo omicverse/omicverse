@@ -60,7 +60,7 @@ Quick-start
 Pipeline stages
 ---------------
 I/O                       ``read_10x_vdj``, ``read_airr``, ``read_tracer``,
-                          ``simulate_airr``
+                          ``from_airr_array``, ``simulate_airr``
 Single-cell QC            ``chain_qc``
 Clonotypes (single-cell)  ``ir_dist``, ``define_clonotypes``,
                           ``define_clonotype_clusters``,
@@ -98,6 +98,7 @@ _LAZY_ATTRS: dict[str, tuple[str, str]] = {
     "read_10x_vdj":              (".io", "read_10x_vdj"),
     "read_airr":                 (".io", "read_airr"),
     "read_tracer":               (".io", "read_tracer"),
+    "from_airr_array":           (".io", "from_airr_array"),
     "simulate_airr":             (".io", "simulate_airr"),
     "airr_obs_columns":          (".io", "airr_obs_columns"),
     # --- single-cell QC ---

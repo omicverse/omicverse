@@ -381,7 +381,11 @@ def load_example_immdata(extdata_dir: Optional[str] = None):
     import pandas as pd
 
     pim = _require_immunarch()
-    imm = pim.load_example_immdata(extdata_dir)
+    try:
+        imm = pim.load_example_immdata(extdata_dir)
+    except TypeError:
+        # newer pyimmunarch: load_example_immdata() takes no arguments
+        imm = pim.load_example_immdata()
     count_col = getattr(pim.IMMCOL, "count", "Clones")
     prop_col = getattr(pim.IMMCOL, "prop", "Proportion")
     data = getattr(imm, "data", None)

@@ -122,4 +122,9 @@ from ._timecourse import (
     fission_timecourse,
     pombe_genesets,
 )
+from ._airr import (
+    # Real immune-repertoire (AIRR) datasets for the ov.airr tutorials
+    airr_singlecell,
+    airr_bcr,
+)
 from ._signatures import load_signatures_from_file, predefined_signatures

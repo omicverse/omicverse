@@ -345,6 +345,79 @@ def read_tracer(data, column_map: Optional[dict] = None):
 
 
 @register_function(
+    aliases=["from_airr_array", "airr_from_obsm", "obsm_airr读取", "awkward组库读取"],
+    category="airr",
+    description=(
+        "Convert an AnnData whose per-cell TCR/BCR contigs are stored in "
+        "obsm['airr'] (the scirpy awkward-array layout, e.g. as returned by "
+        "ov.datasets.airr_singlecell) into the per-cell ov.airr obs schema "
+        "(VJ_1/VJ_2/VDJ_1/VDJ_2 chain slots), preserving the gene-expression "
+        "matrix and the original obs metadata."
+    ),
+    examples=[
+        "adata = ov.datasets.airr_singlecell()",
+        "adata = ov.airr.from_airr_array(adata)",
+    ],
+    related=["airr.read_10x_vdj", "airr.chain_qc"],
+)
+def from_airr_array(adata, *, airr_key: str = "airr"):
+    """Bridge a scirpy-style ``obsm['airr']`` AnnData to the ov.airr schema.
+
+    Single-cell AIRR datasets are often distributed with the gene-expression
+    matrix in ``.X`` and the per-cell receptor contigs in an awkward array at
+    ``obsm['airr']`` (one variable-length list of chains per cell — the
+    scirpy on-disk layout). This reader flattens those contigs, collapses
+    them into the per-cell ``VJ_1`` / ``VJ_2`` / ``VDJ_1`` / ``VDJ_2`` chain
+    slots and merges the result back into ``adata.obs`` so the rest of the
+    ``ov.airr`` single-cell stack (``chain_qc``, ``define_clonotypes`` …) can
+    run directly — without losing the transcriptome.
+
+    Parameters
+    ----------
+    adata
+        AnnData with a per-cell receptor awkward array in
+        ``adata.obsm[airr_key]``.
+    airr_key
+        ``obsm`` key holding the receptor contigs (default ``'airr'``).
+
+    Returns
+    -------
+    :class:`~anndata.AnnData`
+        The same cells x genes AnnData with the per-cell AIRR ``obs`` columns
+        added; the raw contig table is kept in ``uns['airr_contigs']``.
+    """
+    if airr_key not in adata.obsm:
+        raise KeyError(
+            f"obsm[{airr_key!r}] not found — expected the per-cell receptor "
+            "contigs (e.g. from ov.datasets.airr_singlecell)."
+        )
+    arr = adata.obsm[airr_key]
+    fields = list(getattr(arr, "fields", []))
+    keep = [f for f in (
+        "locus", "v_call", "d_call", "j_call", "c_call",
+        "junction", "junction_aa", "productive",
+        "duplicate_count", "consensus_count",
+    ) if f in fields]
+
+    records = []
+    for i in range(len(arr)):
+        cell_id = str(adata.obs_names[i])
+        for chain in arr[i]:
+            rec = {f: chain[f] for f in keep}
+            rec["cell_id"] = cell_id
+            records.append(rec)
+    contigs = pd.DataFrame.from_records(records)
+    air_obs = _contigs_to_cells(contigs)
+    air_obs = air_obs.reindex(adata.obs_names)
+
+    out = adata.copy()
+    for col in air_obs.columns:
+        out.obs[col] = air_obs[col].values
+    out.uns["airr_contigs"] = contigs.reset_index(drop=True)
+    return out
+
+
+@register_function(
     aliases=["airr_simulate", "simulate_airr", "模拟免疫组库", "AIRR模拟数据"],
     category="airr",
     description=(
