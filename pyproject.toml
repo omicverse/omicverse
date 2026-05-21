@@ -226,6 +226,25 @@ genetics = [
   "statsmodels>=0.14",     # logistic GWAS association / mixed-model backends
 ]
 
+# Immune-repertoire (AIRR-seq: TCR/BCR) backends for ``ov.airr`` —
+# pure-Python R-parity ports of the canonical repertoire-analysis tools.
+# Install via:
+#   pip install omicverse[airr]
+# Enables the full bulk + B-cell workflow: bulk repertoire analytics
+# (immunarch), Immcantation core (alakazam), somatic hypermutation
+# (shazam), B-cell clonal clustering (scoper), immunoglobulin genotyping
+# (tigger), and B-cell phylogenetics (dowser). The single-cell AIRR
+# analysis (read_10x_vdj, chain_qc, define_clonotypes, …) needs no
+# backend — it runs on numpy / pandas / anndata directly.
+airr = [
+  "pyimmunarch>=0.1.0",    # immunarch — bulk repertoire diversity / overlap / usage
+  "pyalakazam>=0.1.0",     # alakazam — Immcantation core: Hill diversity, lineages
+  "pyshazam>=0.1.0",       # shazam — somatic hypermutation / targeting / BASELINe
+  "pyscoper>=0.1.0",       # scoper — B-cell clonal clustering
+  "pytigger>=0.1.0",       # tigger — immunoglobulin genotyping
+  "pydowser>=0.1.0",       # dowser — B-cell phylogenetics
+]
+
 # Lipidomics backend for the lipidomics path of ``ov.metabol`` — a
 # pure-Python port of the Bioconductor lipidr workflow. Install via:
 #   pip install omicverse[lipidomics]
