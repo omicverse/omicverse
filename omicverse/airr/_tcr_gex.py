@@ -853,9 +853,20 @@ def tcr_clumping(
             perm_counts[p] = (Dp <= radius).sum(axis=1)
 
     expected = perm_counts.mean(axis=0)
-    # one-sided empirical p-value with a +1 pseudocount
+    # Analytic one-sided p-value: model the close-neighbour count as Poisson
+    # with the permutation-estimated background rate. A raw permutation
+    # fraction is floored at 1/(n_permutations+1) (~5e-3 at 200 perms), so
+    # after BH correction across the whole repertoire no clonotype can reach
+    # significance even when it is genuinely enriched. The permutations still
+    # estimate the background rate robustly; the Poisson tail then yields a
+    # continuous p-value that survives multiple-testing correction — the same
+    # model CoNGA uses for TCR clumping.
+    from scipy.stats import poisson
+    pvals = poisson.sf(n_close - 1, np.maximum(expected, 1e-9))
+    pvals = np.clip(np.asarray(pvals, dtype=float), 1e-300, 1.0)
+    # empirical permutation fraction kept for transparency
     ge = (perm_counts >= n_close[None, :]).sum(axis=0)
-    pvals = (ge + 1.0) / (n_permutations + 1.0)
+    pvals_emp = (ge + 1.0) / (n_permutations + 1.0)
     padj = _bh_adjust(pvals)
 
     # merge clumping clonotypes (close + significant) into clumps
@@ -894,6 +905,7 @@ def tcr_clumping(
         "expected": expected,
         "pvalue": pvals,
         "pvalue_adj": padj,
+        "pvalue_empirical": pvals_emp,
         "clump_id": clump_id,
     }).sort_values("pvalue").reset_index(drop=True)
 
