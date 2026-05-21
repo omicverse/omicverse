@@ -9,6 +9,7 @@ This module provides comprehensive tools for fastq data processing and alignment
 """
 
 from .kb_api import single, ref, count, parallel_fastq_dump
+from .simpleaf import simpleaf, simpleaf_index, simpleaf_count, simpleaf_pipeline
 from .prefetch import prefetch
 from .fq_dump import fqdump
 from .fastp import fastp
@@ -36,6 +37,11 @@ __all__ = [
     "ref",
     "count",
     "parallel_fastq_dump",
+    # simpleaf / salmon / alevin-fry backend
+    "simpleaf",
+    "simpleaf_index",
+    "simpleaf_count",
+    "simpleaf_pipeline",
     "prefetch",
     "fqdump",
     "fastp",
