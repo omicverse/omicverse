@@ -954,7 +954,15 @@ def ebayes(
         winsor_tail_p=winsor_tail_p,
     )
 
-    su = np.clip(np.asarray(fit.stdev_unscaled, dtype=float), *stdev_coef_lim)
+    # The moderated t uses the RAW stdev_unscaled. R limma applies
+    # `stdev.coef.lim` only inside the B-statistic (lods) calculation,
+    # never to the t-statistic. Clipping stdev_unscaled here deflated
+    # the moderated t for any design column with a small
+    # stdev_unscaled — e.g. a continuous predictor — pushing every
+    # gene below significance. (A two-group contrast has
+    # stdev_unscaled ~sqrt(1/n1+1/n2) ≈ 0.5, inside the [0.1,4] clip,
+    # so the bug stayed latent there.)
+    su = np.asarray(fit.stdev_unscaled, dtype=float)
     with np.errstate(divide="ignore", invalid="ignore"):
         t = fit.coefficients / (su * np.sqrt(s2_post)[:, None])
     p = 2.0 * stats.t.sf(np.abs(t), df_total[:, None])
