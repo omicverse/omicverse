@@ -12,30 +12,47 @@ from ..utils import plot_text_set
 from .._registry import register_function
 import matplotlib
 
+
+def _resolve_genesets(pathways, organism: str = 'Human') -> dict:
+    """Normalise a gene-set argument to a ``{pathway: [genes]}`` dict.
+
+    Accepts a ready dict, a path to a ``.gmt`` / ``.txt`` file, or an
+    Enrichr library name (e.g. ``'MSigDB_Hallmark_2020'`` /
+    ``'KEGG_2021_Human'``). Paths and library names are resolved with
+    :func:`omicverse.utils.geneset_prepare`, which auto-downloads and
+    caches the library on first use; a dict is returned unchanged.
+    """
+    if isinstance(pathways, dict):
+        return pathways
+    if isinstance(pathways, str):
+        from ..utils import geneset_prepare
+        return geneset_prepare(pathways, organism=organism)
+    raise TypeError(
+        "pathways_dict must be a dict, or a str (a .gmt/.txt path or an "
+        f"Enrichr library name); got {type(pathways).__name__}"
+    )
+
+
 @register_function(
     aliases=["基因集富集", "geneset_enrichment", "enrichr_analysis", "pathway_enrichment", "富集分析"],
     category="bulk",
-    description="Perform gene set enrichment analysis. IMPORTANT: pathways_dict must be a dictionary loaded via ov.utils.geneset_prepare(), NOT a file path string!",
+    description="Over-representation (ORA) gene-set enrichment for a discrete gene list. pathways_dict accepts a prepared dict, a .gmt/.txt path, or an Enrichr library name (resolved + auto-downloaded internally).",
     prerequisites={
-        'optional_functions': ['download_pathway_database', 'geneset_prepare']
+        'optional_functions': ['geneset_prepare', 'download_pathway_database']
     },
     examples=[
-        "# STEP 1: Download pathway database (run once)",
-        "ov.utils.download_pathway_database()",
-        "",
-        "# STEP 2: Load geneset into dictionary - REQUIRED!",
-        "pathways_dict = ov.utils.geneset_prepare('genesets/GO_Biological_Process_2021.txt', organism='Human')",
-        "",
-        "# STEP 3: Run enrichment with the DICTIONARY (NOT file path!)",
+        "# pathways_dict accepts an Enrichr library name directly —",
+        "# it is auto-downloaded and cached on first use.",
         "enr = ov.bulk.geneset_enrichment(",
         "    gene_list=deg_genes,",
-        "    pathways_dict=pathways_dict,  # Must be dict, NOT string path!",
+        "    pathways_dict='MSigDB_Hallmark_2020',",
         "    pvalue_type='auto',",
-        "    organism='Human'",
+        "    organism='Human',",
         ")",
         "",
-        "# WRONG - DO NOT DO THIS:",
-        "# enr = ov.bulk.geneset_enrichment(gene_list=genes, pathways_dict='file.gmt')  # ERROR!"
+        "# A prepared dict or a local .gmt/.txt path also work:",
+        "# pathways_dict=ov.utils.geneset_prepare('genesets/h.all.symbols.gmt')",
+        "# pathways_dict='genesets/GO_Biological_Process_2021.txt'"
     ],
     related=["utils.geneset_prepare", "utils.download_pathway_database", "bulk.geneset_plot", "bulk.pyGSEA"]
 )
@@ -50,8 +67,10 @@ def geneset_enrichment(gene_list:list,pathways_dict:dict,
     ----------
     gene_list:list
         Input gene symbols (typically DEGs) for enrichment testing.
-    pathways_dict:dict
-        Gene-set dictionary loaded by ``ov.utils.geneset_prepare``.
+    pathways_dict:dict|str
+        Gene sets — a prepared dict (``ov.utils.geneset_prepare``), a
+        ``.gmt``/``.txt`` path, or an Enrichr library name (resolved and
+        auto-downloaded internally).
     pvalue_threshold:float, optional
         Significance threshold used to filter enrichment terms.
     pvalue_type:str, optional
@@ -72,6 +91,7 @@ def geneset_enrichment(gene_list:list,pathways_dict:dict,
     pandas.DataFrame
         Enrichment result table with statistics and derived plotting columns.
     """
+    pathways_dict = _resolve_genesets(pathways_dict, organism)
     from ..external.gseapy import enrichr
     # ``background=None`` is now passed straight through to the bundled
     # gseapy fork. Its ``Enrichr.enrich`` resolves a None background to the
@@ -139,7 +159,8 @@ def enrichment_multi_concat(enr_dict: Dict[str, pd.DataFrame]) -> pd.DataFrame:
 def geneset_enrichment_GSEA(gene_rnk:pd.DataFrame,pathways_dict:dict,
                             processes:int=8,
                      permutation_num:int=100, # reduce number to speed up testing
-                     outdir:str='./enrichr_gsea', format:str='png', seed:int=112)->dict:
+                     outdir:str='./enrichr_gsea', format:str='png', seed:int=112,
+                     organism:str='Human')->dict:
     r"""Enrichment analysis using GSEA.
 
     Parameters
@@ -157,6 +178,7 @@ def geneset_enrichment_GSEA(gene_rnk:pd.DataFrame,pathways_dict:dict,
         pre_res: A prerank object containing the enrichment results.
     
     """
+    pathways_dict = _resolve_genesets(pathways_dict, organism)
     from ..external.gseapy import prerank
     pre_res = prerank(rnk=gene_rnk, gene_sets=pathways_dict,
                      processes=processes,
@@ -396,7 +418,7 @@ class pyGSE(object):
         """
 
         self.gene_list=gene_list
-        self.pathways_dict=pathways_dict
+        self.pathways_dict=_resolve_genesets(pathways_dict, organism)
         self.pvalue_threshold=pvalue_threshold
         self.pvalue_type=pvalue_type
         self.organism=organism
@@ -454,10 +476,10 @@ class pyGSE(object):
 @register_function(
     aliases=["GSEA分析", "pyGSEA", "gene_set_enrichment", "基因集富集分析"],
     category="bulk",
-    description="Gene Set Enrichment Analysis (GSEA) for ranked gene lists",
+    description="Pre-ranked Gene Set Enrichment Analysis (GSEA) for a ranked gene list. pathways_dict accepts a prepared dict, a .gmt/.txt path, or an Enrichr library name (resolved + auto-downloaded internally).",
     examples=[
-        "# Initialize GSEA object",
-        "gsea_obj = ov.bulk.pyGSEA(ranked_genes, pathway_dict)",
+        "# Initialize GSEA — pathways_dict can be an Enrichr library name",
+        "gsea_obj = ov.bulk.pyGSEA(ranked_genes, 'MSigDB_Hallmark_2020')",
         "# Run enrichment analysis",
         "enrich_res = gsea_obj.enrichment()",
         "# Visualize enrichment results",
@@ -475,8 +497,9 @@ class pyGSEA(object):
     ----------
     gene_rnk:pd.DataFrame
         Ranked gene table used for enrichment scoring.
-    pathways_dict:dict
-        Mapping from pathway name to gene-set members.
+    pathways_dict:dict|str
+        Gene sets — a prepared dict, a ``.gmt``/``.txt`` path, or an
+        Enrichr library name (resolved and auto-downloaded internally).
     processes:int, optional, default=8
         Number of worker processes.
     permutation_num:int, optional, default=100
@@ -498,7 +521,8 @@ class pyGSEA(object):
 
     def __init__(self,gene_rnk:pd.DataFrame,pathways_dict:dict,
                  processes:int=8,permutation_num:int=100,
-                 outdir:str='./enrichr_gsea',cutoff:float=0.5) -> None:
+                 outdir:str='./enrichr_gsea',cutoff:float=0.5,
+                 organism:str='Human') -> None:
         """Initialize pyGSEA with ranked genes and pathway libraries.
 
         Parameters
@@ -518,7 +542,7 @@ class pyGSEA(object):
         """
 
         self.gene_rnk=gene_rnk
-        self.pathways_dict=pathways_dict
+        self.pathways_dict=_resolve_genesets(pathways_dict, organism)
         self.processes=processes
         self.permutation_num=permutation_num
         self.outdir=outdir
