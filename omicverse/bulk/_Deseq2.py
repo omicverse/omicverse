@@ -890,7 +890,8 @@ class pyDEG(object):
             raise ValueError('The method is not supported.')
 
     def continuous_deg(self, trait, covariates=None, alpha: float = 0.05,
-                       multipletests_method: str = 'fdr_bh') -> pd.DataFrame:
+                       multipletests_method: str = 'fdr_bh',
+                       data_type: str = 'auto') -> pd.DataFrame:
         r"""Differential expression against a CONTINUOUS sample-level trait.
 
         Where :meth:`deg_analysis` compares two groups, this models each
@@ -916,6 +917,17 @@ class pyDEG(object):
             alpha: FDR threshold for the ``sig`` column (default 0.05).
             multipletests_method: ``statsmodels`` multiple-testing
                 method for the q-value (default ``'fdr_bh'``).
+            data_type: Nature of the expression matrix —
+                ``'counts'`` (RNA-seq raw counts: ``voom`` removes the
+                mean-variance trend, then weighted ``lmFit``);
+                ``'continuous'`` (TPM / log-CPM / microarray or any
+                already-normalized, log-scaled matrix: ``lmFit`` is run
+                directly, no ``voom``, no weights); ``'auto'`` (default
+                — an all-non-negative, near-integer matrix is treated
+                as ``'counts'``, anything else as ``'continuous'``).
+                Match this to your input: feeding a TPM / log matrix to
+                the ``voom`` path is wrong — pass ``data_type='continuous'``
+                (or raw counts) rather than hand-rolling a per-gene model.
 
         Returns:
             A genes × stats DataFrame (also stored on ``self.result``):
@@ -979,9 +991,31 @@ class pyDEG(object):
 
         counts = self.data[use_samples]
 
-        # --- limma-voom + eBayes --------------------------------------
-        v = _limma.voom(counts, design.values)
-        fit = _limma.lmFit(v.E, design.values, weights=v.weights)
+        # --- resolve counts vs already-normalized (continuous) input --
+        dt = str(data_type).lower().strip()
+        if dt == 'auto':
+            arr = np.asarray(counts.values, dtype=float)
+            finite = arr[np.isfinite(arr)]
+            is_counts = (finite.size > 0 and (finite >= 0).all()
+                         and np.allclose(finite, np.round(finite)))
+            dt = 'counts' if is_counts else 'continuous'
+        if dt not in ('counts', 'continuous'):
+            raise ValueError(
+                f"data_type must be 'counts', 'continuous' or 'auto', "
+                f"got {data_type!r}")
+
+        # --- lmFit + eBayes -------------------------------------------
+        if dt == 'counts':
+            # RNA-seq counts: voom removes the mean-variance trend.
+            print("⏰ Start continuous-trait limma-voom pipeline (pylimma)...")
+            v = _limma.voom(counts, design.values)
+            fit = _limma.lmFit(v.E, design.values, weights=v.weights)
+        else:
+            # Already-normalized / log-scaled (TPM, log-CPM, microarray):
+            # lmFit directly — no voom, no precision weights.
+            print("⏰ Start continuous-trait limma pipeline (continuous input)...")
+            fit = _limma.lmFit(np.asarray(counts.values, dtype=float),
+                               design.values)
         print("⏰ Start to adjust pvalue...")
         fit = _limma.eBayes(fit)
 
