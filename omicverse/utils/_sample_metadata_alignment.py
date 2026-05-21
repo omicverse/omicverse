@@ -18,7 +18,9 @@ For both `matrix` and `meta`, accept either:
 
   * file paths (`str` / `pathlib.Path`) — CSV / TSV / TXT / TAB
     (any text format with a stable delimiter), Excel `.xlsx` / `.xls`,
-    HDF5 `.h5`, AnnData `.h5ad`, Parquet `.parquet`
+    AnnData `.h5ad`, a plain HDF5 matrix `.h5` (R/rhdf5-style: a 2-D
+    dataset or CSC/CSR triple plus a `.<name>_dimnames` group),
+    Parquet `.parquet`
   * in-memory `pd.DataFrame`
   * (matrix only) in-memory `anndata.AnnData`
 
@@ -212,6 +214,192 @@ def _read_xlsx_first_row(path: Path) -> list[str]:
     raise ValueError(f"empty xlsx: {path}")
 
 
+# ---------------------------------------------------------------------------
+# HDF5 matrix support — `.h5` files that are NOT AnnData h5ad
+# ---------------------------------------------------------------------------
+#
+# A `.h5` extension does not imply an AnnData `.h5ad`. Bulk count matrices
+# are routinely distributed as a plain HDF5 dataset written by R's `rhdf5`
+# / `HDF5Array`: a 2-D matrix dataset (or a CSC/CSR sparse triple) plus a
+# sibling `.<name>_dimnames` group holding the row / column labels.
+# `anndata.read_h5ad` cannot parse that layout and fails with an opaque
+# `unexpected keyword argument` TypeError. The helpers below detect it and
+# read it into an AnnData so the alignment pre-flight treats it like any
+# other matrix.
+
+_GENERIC_H5_HELP = (
+    "align_samples reads a `.h5` either as an AnnData `.h5ad` or as an "
+    "R/rhdf5-style HDF5 matrix (a 2-D dataset or a CSC/CSR triple plus a "
+    "`.<name>_dimnames` group). This file matches neither — load it with a "
+    "format-specific reader and pass the resulting AnnData / DataFrame."
+)
+
+
+def _decode_h5_strings(arr) -> list[str]:
+    """Decode an HDF5 string dataset (fixed-width bytes / vlen / object)."""
+    return [v.decode("utf-8", "replace") if isinstance(v, bytes) else str(v) for v in arr]
+
+
+def _h5_dimnames(f):
+    """Find an R/rhdf5-style dimnames group — a top-level group named
+    `.<dataset>_dimnames` whose members `1` / `2` hold the two axes'
+    labels. Returns `(base, dim0_labels, dim1_labels)` or `(None, None,
+    None)`."""
+    import h5py
+
+    for key in list(f.keys()):
+        if not (key.startswith(".") and key.endswith("_dimnames")):
+            continue
+        grp = f[key]
+        if isinstance(grp, h5py.Group) and "1" in grp and "2" in grp:
+            base = key[1:-len("_dimnames")]
+            return base, _decode_h5_strings(grp["1"][:]), _decode_h5_strings(grp["2"][:])
+    return None, None, None
+
+
+def _classify_h5(path) -> str:
+    """`"h5ad"` if the file is an AnnData h5ad, else `"h5matrix"`.
+
+    AnnData files carry a root `encoding-type == "anndata"` attribute
+    (modern anndata) or, for older files, both top-level `obs` and `var`
+    groups. A plain HDF5 count matrix has neither."""
+    import h5py
+
+    with h5py.File(path, "r") as f:
+        if str(f.attrs.get("encoding-type", "")) == "anndata":
+            return "h5ad"
+        if {"obs", "var"} <= set(f.keys()):
+            return "h5ad"
+    return "h5matrix"
+
+
+def _read_h5_matrix_dimnames(path) -> tuple[list[str], list[str]]:
+    """Axis labels of a non-h5ad HDF5 matrix. Cheap — reads only the
+    dimnames group, never the matrix body."""
+    import h5py
+
+    with h5py.File(path, "r") as f:
+        _, d0, d1 = _h5_dimnames(f)
+    if d0 is None:
+        raise ValueError(f"{path!r}: no `.<name>_dimnames` group found. " + _GENERIC_H5_HELP)
+    return d0, d1
+
+
+def _extract_h5_sparse(f):
+    """Find a CSC / CSR sparse matrix stored as a sub-group and return it
+    as a `scipy.sparse` matrix, or `None`.
+
+    Detection is structural, not name-based: a group holding a length-2
+    integer shape vector, an integer index-pointer array of length
+    `shape[k] + 1`, and an index array + a data array both of length the
+    non-zero count."""
+    import h5py
+    import numpy as np
+    from scipy import sparse as sp
+
+    for key in list(f.keys()):
+        grp = f[key]
+        if not isinstance(grp, h5py.Group) or key.endswith("_dimnames"):
+            continue
+        oned = {
+            m: grp[m]
+            for m in grp.keys()
+            if isinstance(grp[m], h5py.Dataset) and grp[m].ndim == 1
+        }
+        if len(oned) < 4:
+            continue
+        shape_ds = [
+            m for m, d in oned.items()
+            if d.shape[0] == 2 and np.issubdtype(d.dtype, np.integer)
+        ]
+        if not shape_ds:
+            continue
+        shape = tuple(int(x) for x in grp[shape_ds[0]][:])
+        indptr_name = fmt = None
+        for m, d in oned.items():
+            if m in shape_ds or not np.issubdtype(d.dtype, np.integer):
+                continue
+            if d.shape[0] == shape[1] + 1:
+                indptr_name, fmt = m, "csc"
+            elif d.shape[0] == shape[0] + 1:
+                indptr_name, fmt = m, "csr"
+        if indptr_name is None:
+            continue
+        indptr = grp[indptr_name][:]
+        nnz = int(indptr[-1])
+        rest = [m for m in oned if m not in shape_ds and m != indptr_name]
+        idx_name = next(
+            (m for m in rest
+             if grp[m].shape[0] == nnz and np.issubdtype(grp[m].dtype, np.integer)),
+            None,
+        )
+        data_name = next(
+            (m for m in rest if m != idx_name and grp[m].shape[0] == nnz), None
+        )
+        if idx_name is None or data_name is None:
+            continue
+        triple = (
+            np.asarray(grp[data_name][:], dtype=np.float32),
+            grp[idx_name][:],
+            indptr,
+        )
+        return (sp.csc_matrix if fmt == "csc" else sp.csr_matrix)(triple, shape=shape)
+    return None
+
+
+def _extract_h5_dense(f, base):
+    """Return a 2-D dataset as a float32 array — preferring the dataset
+    named by the dimnames base, else the largest 2-D dataset."""
+    import h5py
+    import numpy as np
+
+    cand = [k for k in f.keys() if isinstance(f[k], h5py.Dataset) and f[k].ndim == 2]
+    if not cand:
+        return None
+    name = base if base in cand else max(cand, key=lambda k: f[k].size)
+    return np.asarray(f[name][:], dtype=np.float32)
+
+
+def _read_generic_h5_matrix(path):
+    """Read an R/rhdf5-style HDF5 count matrix into an AnnData.
+
+    The returned AnnData carries dimnames axis 0 on `.obs` and axis 1 on
+    `.var`; the caller decides which is the sample axis. A CSC/CSR sparse
+    triple is preferred over a dense dataset to avoid materialising a
+    large matrix in memory."""
+    import h5py
+    from scipy import sparse as sp
+
+    if _ad is None:
+        raise ImportError("anndata is required to read an HDF5 matrix")
+    with h5py.File(path, "r") as f:
+        base, d0, d1 = _h5_dimnames(f)
+        if d0 is None:
+            raise ValueError(f"{path!r}: no `.<name>_dimnames` group found. " + _GENERIC_H5_HELP)
+        mat = _extract_h5_sparse(f)
+        if mat is None:
+            mat = _extract_h5_dense(f, base)
+    if mat is None:
+        raise ValueError(
+            f"{path!r}: dimnames found but no 2-D matrix dataset or sparse "
+            "triple. " + _GENERIC_H5_HELP
+        )
+    n0, n1 = len(d0), len(d1)
+    if {mat.shape[0], mat.shape[1]} != {n0, n1}:
+        raise ValueError(
+            f"{path!r}: matrix shape {tuple(mat.shape)} is inconsistent with "
+            f"the dimname lengths ({n0}, {n1})."
+        )
+    # Orient so axis 0 carries d0 and axis 1 carries d1 (matched by length).
+    if mat.shape[0] != n0:
+        mat = mat.T
+    X = mat.tocsr() if sp.issparse(mat) else mat
+    adata = _ad.AnnData(X=X)
+    adata.obs_names = [str(x) for x in d0]
+    adata.var_names = [str(x) for x in d1]
+    return adata
+
+
 def _load_matrix_axis_ids(
     matrix, sep: str | None = None
 ) -> tuple[dict[str, list[str]], str]:
@@ -260,15 +448,21 @@ def _load_matrix_axis_ids(
         return {"columns": cols, "rows": rows}, kind
     if kind == "h5ad":
         if _ad is None:
-            raise ImportError("anndata is required for h5ad pre-flight")
-        adata = _ad.read_h5ad(p)
-        return (
-            {
-                "columns": list(map(str, adata.var_names)),
-                "rows": list(map(str, adata.obs_names)),
-            },
-            "anndata",
-        )
+            raise ImportError("anndata is required for HDF5 pre-flight")
+        # A `.h5` extension may be a real AnnData h5ad or a plain HDF5
+        # matrix (R/rhdf5 export). Inspect the file rather than trusting
+        # the suffix.
+        if _classify_h5(p) == "h5ad":
+            adata = _ad.read_h5ad(p)
+            return (
+                {
+                    "columns": list(map(str, adata.var_names)),
+                    "rows": list(map(str, adata.obs_names)),
+                },
+                "anndata",
+            )
+        d0, d1 = _read_h5_matrix_dimnames(p)
+        return ({"rows": d0, "columns": d1}, "h5matrix")
     if kind == "parquet":
         try:
             import pyarrow.parquet as pq
@@ -503,9 +697,21 @@ def align_to_common(
         )
 
     meta_df, _ = _load_meta(meta, sep=sep)
+    # Matrix axis labels are matched as strings throughout (so an int64
+    # sample column inferred by a CSV reader still lines up with string
+    # column headers). Normalise the meta sample column to str up front so
+    # the `set_index(...).loc[common]` calls below — where `common` is a
+    # string set — resolve regardless of the column's inferred dtype.
+    meta_df[result.sample_col_used] = meta_df[result.sample_col_used].astype(str)
     if drop_dups and result.n_dup_in_meta:
+        # Exact-duplicate rows — a sample sheet that simply lists a sample
+        # twice with identical values — are not an ambiguous ID collision;
+        # collapse them to one row. Only rows that still share a sample ID
+        # *after* that (genuine conflicts) are dropped with keep=False,
+        # since there is no way to know which conflicting row is correct.
+        meta_df = meta_df.drop_duplicates()
         meta_df = meta_df[
-            ~meta_df[result.sample_col_used].astype(str).duplicated(keep=False)
+            ~meta_df[result.sample_col_used].duplicated(keep=False)
         ]
 
     if result.matrix_kind == "anndata":
@@ -520,6 +726,28 @@ def align_to_common(
             if _ad is None:
                 raise ImportError("anndata is required to align an AnnData input")
             adata = _ad.read_h5ad(str(matrix))
+        if drop_dups and result.n_dup_in_matrix:
+            adata = adata[~adata.obs_names.duplicated(keep=False)].copy()
+        common = sorted(
+            set(adata.obs_names.astype(str))
+            & set(meta_df[result.sample_col_used].astype(str))
+        )
+        adata = adata[common].copy()
+        aligned_meta = meta_df.set_index(result.sample_col_used).loc[common]
+        return adata, aligned_meta
+
+    if result.matrix_kind == "h5matrix":
+        # Plain HDF5 matrix (R/rhdf5 export). `_read_generic_h5_matrix`
+        # returns an AnnData with dimnames axis 0 on `.obs`; transpose so
+        # the sample axis the pre-flight resolved lands on `.obs`.
+        adata = _read_generic_h5_matrix(str(matrix))
+        if result.matrix_sample_axis == "columns":
+            adata = adata.T.copy()
+        elif result.matrix_sample_axis != "rows":
+            raise ValueError(
+                "matrix_sample_axis must be 'rows' or 'columns'; got "
+                f"{result.matrix_sample_axis!r}"
+            )
         if drop_dups and result.n_dup_in_matrix:
             adata = adata[~adata.obs_names.duplicated(keep=False)].copy()
         common = sorted(
