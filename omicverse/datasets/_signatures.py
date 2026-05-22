@@ -18,6 +18,8 @@ predefined_signatures = dict(
     mouse_brain=resources.files("omicverse.datasets").joinpath("data_files/mouse_brain.gmt").__fspath__(),
     mouse_liver=resources.files("omicverse.datasets").joinpath("data_files/mouse_liver.gmt").__fspath__(),
     emt_human=resources.files("omicverse.datasets").joinpath("data_files/emt_human.gmt").__fspath__(),
+    hallmark=resources.files("omicverse.datasets").joinpath("data_files/h.all.v7.5.1.symbols.gmt").__fspath__(),
+    canonical_pathway=resources.files("omicverse.datasets").joinpath("data_files/c2.cp.v7.5.1.symbols.gmt").__fspath__(),
 )
 
 

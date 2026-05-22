@@ -45,15 +45,16 @@ _RELEASE = (
     ],
     category="datasets",
     description=(
-        "Real 200-cell HNSC tumour scRNA-seq dataset for the ov.single "
-        "metabolism tutorial — a head-and-neck squamous-cell-carcinoma "
-        "demo (subset of Puram et al. 2017, GSE103322) with 200 cells x "
-        "18,241 genes, log-normalised expression in .X. obs carries the "
-        "cell-type annotation ('celltype': Malignant, Fibroblasts, CD8T, "
-        "CD8Tex, CD4Tconv, Mono/Macro, Endothelial, Plasma, Mast, Myocyte, "
-        "Myofibroblasts) plus a precomputed UMAP. Input for every "
-        "ov.single.Metabolism backend (scMetabolism / Compass / scFEA) "
-        "and for ov.single.MetaboliteCCC (MEBOCOST)."
+        "Real head-and-neck-cancer (HNSC) scRNA-seq atlas for the ov.single "
+        "metabolism tutorial — the full Puram et al. 2017 cohort (Cell, "
+        "GSE103322): 5,578 cells x 23,686 genes, log2(TPM/10+1) expression "
+        "in .X. obs carries 'malignant' (Malignant / Non-malignant), "
+        "'celltype' (Malignant, Fibroblast, T cell, Endothelial, B cell, "
+        "Mast, Macrophage, Dendritic, myocyte), 'patient' (19 patients) and "
+        "'lymph_node'. This is the dataset used by Xiao et al. 2019 "
+        "(Nat Commun) to map the metabolic landscape of the tumour "
+        "microenvironment — input for ov.single.Metabolism (scMetabolism / "
+        "scFEA / Compass) and ov.single.MetaboliteCCC (MEBOCOST)."
     ),
     examples=[
         "adata = ov.datasets.metabolism_hnsc()",
@@ -61,11 +62,14 @@ _RELEASE = (
     ],
     related=[
         "datasets.metabolism_compass", "single.Metabolism",
-        "single.MetaboliteCCC",
+        "single.MetaboliteCCC", "single.differential_metabolism",
     ],
 )
 def metabolism_hnsc(dir: str = "./data") -> "AnnData":
-    """Load the real 200-cell HNSC tumour scRNA-seq metabolism demo.
+    """Load the real Puram 2017 head-and-neck-cancer scRNA-seq atlas.
+
+    The full GSE103322 cohort — the dataset Xiao et al. 2019 used to map
+    the single-cell metabolic landscape of the tumour microenvironment.
 
     Parameters
     ----------
@@ -75,13 +79,13 @@ def metabolism_hnsc(dir: str = "./data") -> "AnnData":
     Returns
     -------
     :class:`anndata.AnnData`
-        200 cells x 18,241 genes, log-normalised, with ``obs['celltype']``
-        and a precomputed UMAP.
+        5,578 cells x 23,686 genes, log2(TPM/10+1) expression, with
+        ``obs['malignant']``, ``obs['celltype']`` and ``obs['patient']``.
     """
     import anndata as ad
     path = download_data(
-        f"{_RELEASE}/metabolism_hnsc_200cell.h5ad",
-        file_path="metabolism_hnsc_200cell.h5ad",
+        f"{_RELEASE}/hnsc_puram2017_full.h5ad",
+        file_path="hnsc_puram2017_full.h5ad",
         dir=dir,
     )
     return ad.read_h5ad(path)

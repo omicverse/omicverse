@@ -581,3 +581,112 @@ def _mebocost_to_comm_adata(res: pd.DataFrame, *, pvalue_threshold: float) -> An
     comm.layers["pvalues"] = pvalues
     comm.uns["mebocost_comm"] = True
     return comm
+
+
+@register_function(
+    aliases=["差异代谢", "differential_metabolism", "代谢差异分析",
+             "metabolic_differential", "differential_metabolic_activity"],
+    category="single",
+    description=(
+        "Differential metabolic-feature analysis between two groups of "
+        "cells. Tests every column of adata.obsm['X_metabolism'] (pathway "
+        "activities / reaction or module fluxes) for a difference between "
+        "two obs groups and returns a ranked statistics table."
+    ),
+    requires={"obsm": ["X_metabolism"], "uns": ["metabolism"]},
+    auto_fix="none",
+    examples=[
+        "# which metabolic pathways are up in malignant vs the rest",
+        "deg = ov.single.differential_metabolism(",
+        "    adata, groupby='celltype', group1='Malignant')",
+        "deg.query('padj < 0.05 and log2fc > 0').head(20)",
+    ],
+    related=["single.Metabolism", "pl.metabolism_heatmap"],
+)
+def differential_metabolism(
+    adata: AnnData,
+    *,
+    groupby: str,
+    group1: str,
+    group2: Union[str, Sequence[str]] = "rest",
+    method: str = "wilcoxon",
+) -> pd.DataFrame:
+    r"""Differential metabolic features between two groups of cells.
+
+    Compares every metabolic feature in ``adata.obsm['X_metabolism']``
+    (written by :meth:`Metabolism.run`) between ``group1`` and ``group2``
+    of ``adata.obs[groupby]``.
+
+    Parameters
+    ----------
+    adata : AnnData
+        Must carry ``obsm['X_metabolism']`` and ``uns['metabolism']``.
+    groupby : str
+        ``adata.obs`` column defining the groups.
+    group1 : str
+        The focal group (positive ``log2fc`` = higher in ``group1``).
+    group2 : str or list of str, default ``'rest'``
+        The comparison group; ``'rest'`` uses every cell not in ``group1``.
+    method : {'wilcoxon', 't-test'}
+        Per-feature test — Mann-Whitney U (default) or Welch's t-test.
+
+    Returns
+    -------
+    pandas.DataFrame
+        One row per metabolic feature, sorted by adjusted p-value:
+        ``feature``, ``mean1``, ``mean2``, ``log2fc``, ``statistic``,
+        ``pval``, ``padj`` (Benjamini-Hochberg), ``direction`` (``'up'`` /
+        ``'down'`` / ``'ns'`` at ``padj < 0.05``).
+    """
+    from scipy import stats as _stats
+    from statsmodels.stats.multitest import multipletests
+
+    if "metabolism" not in adata.uns or "X_metabolism" not in adata.obsm:
+        raise ValueError(
+            "no metabolism result — run ov.single.Metabolism(...).run() first."
+        )
+    if groupby not in adata.obs.columns:
+        raise ValueError(f"groupby {groupby!r} not in adata.obs")
+    if method not in {"wilcoxon", "t-test"}:
+        raise ValueError(f"method must be 'wilcoxon' or 't-test', got {method!r}")
+
+    labels = adata.obs[groupby].astype(str).to_numpy()
+    m1 = labels == str(group1)
+    if isinstance(group2, str) and group2 == "rest":
+        m2 = ~m1
+        g2name = "rest"
+    else:
+        g2set = {group2} if isinstance(group2, str) else set(map(str, group2))
+        m2 = np.isin(labels, list(g2set))
+        g2name = "|".join(sorted(g2set))
+    if m1.sum() < 3 or m2.sum() < 3:
+        raise ValueError(
+            f"each group needs >=3 cells (group1={int(m1.sum())}, "
+            f"group2={int(m2.sum())})."
+        )
+
+    feats = list(adata.uns["metabolism"]["features"])
+    X = np.asarray(adata.obsm["X_metabolism"], dtype=float)
+    A, B = X[m1], X[m2]
+    rows = []
+    for j, feat in enumerate(feats):
+        a, b = A[:, j], B[:, j]
+        if method == "wilcoxon":
+            stat, pval = _stats.mannwhitneyu(a, b, alternative="two-sided")
+        else:
+            stat, pval = _stats.ttest_ind(a, b, equal_var=False)
+        mean1, mean2 = float(np.mean(a)), float(np.mean(b))
+        log2fc = float(np.log2((mean1 + 1e-9) / (mean2 + 1e-9)))
+        rows.append((feat, mean1, mean2, log2fc, float(stat), float(pval)))
+
+    df = pd.DataFrame(
+        rows, columns=["feature", "mean1", "mean2", "log2fc", "statistic", "pval"]
+    )
+    df["padj"] = multipletests(df["pval"].to_numpy(), method="fdr_bh")[1]
+    df["direction"] = np.where(
+        df["padj"] >= 0.05, "ns",
+        np.where(df["log2fc"] > 0, "up", "down"),
+    )
+    df.attrs["group1"] = str(group1)
+    df.attrs["group2"] = g2name
+    return df.sort_values("padj").reset_index(drop=True)

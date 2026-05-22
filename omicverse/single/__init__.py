@@ -114,7 +114,7 @@ from ._cnv import CNV
 
 # Single-cell metabolism — scMetabolism / Compass / scFEA + MEBOCOST.
 # Usage: met = ov.single.Metabolism(adata, method='scmetabolism'); met.run()
-from ._metabolism import Metabolism, MetaboliteCCC
+from ._metabolism import Metabolism, MetaboliteCCC, differential_metabolism
 
 from ._stavia import StaVIA
 from ._lazy_step_by_step import (
@@ -403,6 +403,7 @@ __all__ = [
     # Single-cell metabolism
     'Metabolism',
     'MetaboliteCCC',
+    'differential_metabolism',
 
     # Differential expression
     'DCT',
