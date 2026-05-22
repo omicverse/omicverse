@@ -285,6 +285,33 @@ timecourse = [
   "pymfuzz>=0.1.0",        # Bioconductor Mfuzz — fuzzy c-means time-series clustering
 ]
 
+# Molecular structure & drug-binding analysis for ``ov.mol`` — takes an
+# omics target protein and answers "what does it look like in 3D, and can
+# it be drugged?". Install via:
+#   pip install omicverse[mol]
+# Core layer: structure acquisition (AlphaFold DB / RCSB PDB / ESMFold
+# API), interactive in-notebook 3D visualization (py3Dmol — survives
+# nbconvert HTML export), and known-drug lookup (ChEMBL).
+mol = [
+  "py3Dmol>=2.5",                    # 3Dmol.js — interactive HTML/JS 3D viz
+  "biotite>=1.0",                    # structure parsing (PDB / mmCIF)
+  "chembl_webresource_client>=0.10", # ChEMBL — known drugs / bioactivity
+  "requests>=2.0",                   # AlphaFold DB / RCSB / UniProt REST
+]
+
+# Docking layer for ``ov.mol`` — AutoDock Vina docking of small molecules
+# into target structures. Install via:
+#   pip install omicverse[mol-dock]
+# Adds receptor / ligand preparation and the Vina search engine. The
+# binding-pocket backend (rust-fpocket, distributed as the pip package
+# ``fpocket-rs``) is installed separately: pip install fpocket-rs.
+mol-dock = [
+  "rdkit>=2023.9",        # ligand handling — SMILES, ETKDG 3D embedding
+  "vina>=1.2",            # AutoDock Vina — docking search + scoring
+  "meeko>=0.7",           # receptor / ligand pdbqt preparation
+  "gemmi>=0.7",           # structure I/O (meeko dependency)
+]
+
 
 [project.urls]
 Github = 'https://github.com/Starlitnightly/omicverse'

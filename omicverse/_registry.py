@@ -1074,6 +1074,7 @@ def _hydrate_registry_for_export() -> None:
         "omicverse.single",
         "omicverse.space",
         "omicverse.metabol",
+        "omicverse.mol",
         "omicverse.protein",
         "omicverse.genetics",
         "omicverse.airr",
@@ -1113,6 +1114,13 @@ def _hydrate_registry_for_export() -> None:
         import omicverse.airr as _airr  # noqa: F401
 
         _airr._hydrate_registry()
+    except Exception:
+        pass
+    # And ov.mol — its __init__ is lazy too.
+    try:
+        import omicverse.mol as _mol  # noqa: F401
+
+        _mol._hydrate_registry()
     except Exception:
         pass
 
