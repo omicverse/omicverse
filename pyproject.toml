@@ -246,6 +246,24 @@ airr = [
   "pygliph>=0.1.0",        # gliph — GLIPH2 TCR specificity grouping
 ]
 
+# Ambient / contamination-RNA removal backends for ``ov.pp.ambient`` —
+# pure-Python R-parity ports of the canonical droplet-soup decontamination
+# methods. Install via:
+#   pip install omicverse[ambient]
+# Enables the full ambient-RNA QC step: SoupX (empty-droplet soup profile +
+# constrained multinomial subtraction), DecontX (variational-EM two-
+# component mixture), FastCAR (deterministic per-gene subtraction) and
+# scCDC (entropy-based correction of Global-Contamination-causing Genes).
+# The deep-learning methods reachable via remove_ambient(method='cellbender'
+# / 'scar') are heavyweight and intentionally NOT bundled here — install
+# CellBender / scAR directly when needed.
+ambient = [
+  "pysoupx>=0.1.0",        # SoupX — empty-droplet soup profile, multinomial subtraction
+  "pydecontx>=0.1.0",      # DecontX — variational-EM contamination mixture
+  "pyfastcar>=0.1.0",      # FastCAR — deterministic per-gene ambient subtraction
+  "pysccdc>=0.1.0",        # scCDC — entropy-based GCG-specific decontamination
+]
+
 # Lipidomics backend for the lipidomics path of ``ov.metabol`` — a
 # pure-Python port of the Bioconductor lipidr workflow. Install via:
 #   pip install omicverse[lipidomics]

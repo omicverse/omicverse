@@ -75,6 +75,12 @@ from ._normalization import log1p,normalize_total
 from ._scrublet import scrublet, scrublet_simulate_doublets
 from ._champ import champ
 
+# Ambient / contamination-RNA removal — exposed as ``ov.pp.ambient``.
+# The sub-package's __init__ is light (native backend imports are deferred
+# to call-time), so importing it here also hydrates its @register_function
+# decorators for the global registry.
+from . import ambient
+
 __all__ = [
     # Core preprocessing
     'identify_robust_genes',
@@ -111,6 +117,9 @@ __all__ = [
     'scrublet',
     'scrublet_simulate_doublets',
     'champ',
+
+    # Ambient / contamination-RNA removal (ov.pp.ambient)
+    'ambient',
 
     # Utility functions
     'score_genes_cell_cycle',
