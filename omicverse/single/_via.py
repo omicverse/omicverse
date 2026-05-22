@@ -281,7 +281,7 @@ class pyVIA(object):
         
 
         self.model=VIA(data=data,true_label=true_label,
-                 dist_std_local=dist_std_local,jac_std_global=jac_std_global,labels=labels,
+                 edgepruning_clustering_resolution_local=dist_std_local,edgepruning_clustering_resolution=jac_std_global,labels=labels,
                  keep_all_local_dist=keep_all_local_dist,too_big_factor=too_big_factor,resolution_parameter=resolution_parameter,partition_type=partition_type,small_pop=small_pop,
                  jac_weighted_edges=jac_weighted_edges,knn=knn,n_iter_leiden=n_iter_leiden,random_seed=random_seed,
                  num_threads=num_threads,distance=distance,time_smallpop=time_smallpop,
@@ -290,7 +290,7 @@ class pyVIA(object):
                  is_coarse=is_coarse,csr_full_graph=csr_full_graph,csr_array_locally_pruned=csr_array_locally_pruned,ig_full_graph=ig_full_graph,
                  full_neighbor_array=full_neighbor_array,full_distance_array=full_distance_array,embedding=embedding,df_annot=df_annot,
                  preserve_disconnected_after_pruning=preserve_disconnected_after_pruning,
-                 secondary_annotations=secondary_annotations,pseudotime_threshold_TS=pseudotime_threshold_TS,cluster_graph_pruning_std=cluster_graph_pruning_std,
+                 secondary_annotations=secondary_annotations,pseudotime_threshold_TS=pseudotime_threshold_TS,cluster_graph_pruning=cluster_graph_pruning_std,
                  visual_cluster_graph_pruning=visual_cluster_graph_pruning,neighboring_terminal_states_threshold=neighboring_terminal_states_threshold,num_mcmc_simulations=num_mcmc_simulations,
                  piegraph_arrow_head_width=piegraph_arrow_head_width,
                  piegraph_edgeweight_scalingfactor=piegraph_edgeweight_scalingfactor,max_visual_outgoing_edges=max_visual_outgoing_edges,via_coarse=via_coarse,velocity_matrix=velocity_matrix,
