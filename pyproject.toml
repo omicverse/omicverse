@@ -292,11 +292,13 @@ timecourse = [
 # Core layer: structure acquisition (AlphaFold DB / RCSB PDB / ESMFold
 # API), interactive in-notebook 3D visualization (py3Dmol — survives
 # nbconvert HTML export), and known-drug lookup (ChEMBL).
+# ov.mol needs Python >= 3.10 (biotite >= 1.0 drops 3.9) — every dependency
+# carries the marker so the universal resolver stays satisfiable on 3.9.
 mol = [
-  "py3Dmol>=2.5",                    # 3Dmol.js — interactive HTML/JS 3D viz
-  "biotite>=1.0",                    # structure parsing (PDB / mmCIF)
-  "chembl_webresource_client>=0.10", # ChEMBL — known drugs / bioactivity
-  "requests>=2.0",                   # AlphaFold DB / RCSB / UniProt REST
+  "py3Dmol>=2.5; python_version >= '3.10'",                    # 3Dmol.js — interactive HTML/JS 3D viz
+  "biotite>=1.0; python_version >= '3.10'",                    # structure parsing (PDB / mmCIF)
+  "chembl_webresource_client>=0.10; python_version >= '3.10'", # ChEMBL — known drugs / bioactivity
+  "requests>=2.0; python_version >= '3.10'",                   # AlphaFold DB / RCSB / UniProt REST
 ]
 
 # Docking layer for ``ov.mol`` — AutoDock Vina docking of small molecules
@@ -306,10 +308,10 @@ mol = [
 # binding-pocket backend (rust-fpocket, distributed as the pip package
 # ``fpocket-rs``) is installed separately: pip install fpocket-rs.
 mol-dock = [
-  "rdkit>=2023.9",        # ligand handling — SMILES, ETKDG 3D embedding
-  "vina>=1.2",            # AutoDock Vina — docking search + scoring
-  "meeko>=0.7",           # receptor / ligand pdbqt preparation
-  "gemmi>=0.7",           # structure I/O (meeko dependency)
+  "rdkit>=2023.9; python_version >= '3.10'", # ligand handling — SMILES, ETKDG 3D embedding
+  "vina>=1.2; python_version >= '3.10'",     # AutoDock Vina — docking search + scoring
+  "meeko>=0.7; python_version >= '3.10'",    # receptor / ligand pdbqt preparation
+  "gemmi>=0.7; python_version >= '3.10'",    # structure I/O (meeko dependency)
 ]
 
 
