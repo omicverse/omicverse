@@ -129,6 +129,13 @@ from ._airr import (
     airr_tcr_antigen,
     vdjdb_reference,
 )
+from ._ev import (
+    # Real single-extracellular-vesicle (single-EV) proteomic datasets
+    # for the ov.single.ev tutorials
+    ev_pba,
+    ev_masev,
+    ev_marker_reference,
+)
 from ._ambient import (
     # Real raw 10x droplet datasets for the ov.pp.ambient tutorial
     pbmc_raw_10x,
