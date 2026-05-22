@@ -129,4 +129,11 @@ from ._airr import (
     airr_tcr_antigen,
     vdjdb_reference,
 )
+from ._ev import (
+    # Real single-extracellular-vesicle (single-EV) proteomic datasets
+    # for the ov.single.ev tutorials
+    ev_pba,
+    ev_masev,
+    ev_marker_reference,
+)
 from ._signatures import load_signatures_from_file, predefined_signatures

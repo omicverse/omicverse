@@ -231,6 +231,8 @@ bind_optional_symbols(
 def __getattr__(name):
     if name == "popv":
         return importlib.import_module(".popv", package=__name__)
+    if name == "ev":
+        return importlib.import_module(".ev", package=__name__)
     if name in {"cNMF", "Hotspot"}:
         from . import _cnmf as cnmf_module
 
