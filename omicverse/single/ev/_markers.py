@@ -70,7 +70,7 @@ def _bh_fdr(pvals):
     ],
     related=[
         "single.ev.differential_abundance",
-        "single.ev.plotting.marker_dotplot",
+        "pl.dotplot",
     ],
 )
 def rank_markers(
@@ -296,7 +296,7 @@ def differential_abundance(
     ],
     related=[
         "single.ev.differential_abundance",
-        "single.ev.plotting.subpopulation_composition_plot",
+        "pl.cellproportion",
     ],
 )
 def differential_subpopulation(

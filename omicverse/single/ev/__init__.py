@@ -17,6 +17,12 @@ Three measurement modalities are supported behind one API:
   SP-IRIS, FCS files.
 * **digital binary** — droplet digital ELISA / Simoa.
 
+Generic preprocessing (scale / PCA / neighbors), graph clustering /
+embedding (leiden / UMAP) and the standard single-cell plots are NOT
+re-implemented here — use the omicverse-native ``ov.pp.*`` and ``ov.pl.*``
+functions for those. Only the genuinely EV-specific steps live in this
+module.
+
 Pipeline stages
 ---------------
 I/O                   ``read_ev_matrix``, ``read_pba``, ``read_exoview``,
@@ -24,9 +30,10 @@ I/O                   ``read_ev_matrix``, ``read_pba``, ``read_exoview``,
                       ``simulate_ev``, ``refresh_ev_metrics``
 QC                    ``qc``, ``subtract_isotype``, ``contaminant_score``,
                       ``detect_doublets``
-Preprocessing         ``normalize``, ``scale``, ``pca``, ``neighbors``
-Clustering            ``flowsom``, ``leiden``, ``cluster``, ``umap``,
-                      ``subpopulation_abundance``
+Preprocessing         ``normalize`` (then ``ov.pp.scale`` / ``ov.pp.pca`` /
+                      ``ov.pp.neighbors``)
+Clustering            ``flowsom``, ``subpopulation_abundance`` (graph
+                      clustering / UMAP via ``ov.pp.leiden`` / ``ov.pp.umap``)
 Annotation            ``misev_markers``, ``classify_markers``,
                       ``annotate_ev_subtype``, ``tissue_of_origin``,
                       ``marker_enrichment``, ``purity_report``
@@ -36,9 +43,8 @@ Differential          ``rank_markers``, ``differential_abundance``,
                       ``differential_subpopulation``
 Pseudo-bulk           ``pseudobulk``, ``pseudobulk_de``
 Reporting             ``misev_report``, ``ev_summary``
-Plotting              ``embedding_plot``, ``marker_dotplot``,
-                      ``subpopulation_composition_plot``, ``marker_heatmap``,
-                      ``misev_marker_plot``
+Plotting              ``misev_marker_plot`` (embeddings / dotplots /
+                      heatmaps / composition bars via ``ov.pl.*``)
 
 Quick-start
 -----------
@@ -46,8 +52,9 @@ Quick-start
 >>> adata = ov.single.ev.read_pba('pba_counts.tsv')
 >>> ov.single.ev.qc(adata)
 >>> ov.single.ev.normalize(adata)
->>> ov.single.ev.pca(adata); ov.single.ev.neighbors(adata)
->>> ov.single.ev.cluster(adata, method='flowsom')
+>>> ov.pp.scale(adata); ov.pp.pca(adata, layer='scaled')
+>>> ov.pp.neighbors(adata, use_rep='scaled|original|X_pca')
+>>> ov.single.ev.flowsom(adata, n_clusters=8)
 >>> ov.single.ev.classify_markers(adata)
 >>> ov.single.ev.annotate_ev_subtype(adata)
 >>> ov.single.ev.colocalization(adata)
@@ -74,14 +81,8 @@ _LAZY_ATTRS: dict[str, tuple[str, str]] = {
     "detect_doublets":             ("._qc", "detect_doublets"),
     # --- preprocessing ---
     "normalize":                   ("._preprocess", "normalize"),
-    "scale":                       ("._preprocess", "scale"),
-    "pca":                         ("._preprocess", "pca"),
-    "neighbors":                   ("._preprocess", "neighbors"),
     # --- clustering ---
     "flowsom":                     ("._cluster", "flowsom"),
-    "leiden":                      ("._cluster", "leiden"),
-    "cluster":                     ("._cluster", "cluster"),
-    "umap":                        ("._cluster", "umap"),
     "subpopulation_abundance":     ("._cluster", "subpopulation_abundance"),
     # --- annotation ---
     "misev_markers":               ("._annotate", "misev_markers"),
@@ -106,10 +107,6 @@ _LAZY_ATTRS: dict[str, tuple[str, str]] = {
     "misev_report":                ("._report", "misev_report"),
     "ev_summary":                  ("._report", "ev_summary"),
     # --- plotting ---
-    "embedding_plot":              (".plotting", "embedding_plot"),
-    "marker_dotplot":              (".plotting", "marker_dotplot"),
-    "subpopulation_composition_plot": (".plotting", "subpopulation_composition_plot"),
-    "marker_heatmap":              (".plotting", "marker_heatmap"),
     "misev_marker_plot":           (".plotting", "misev_marker_plot"),
 }
 

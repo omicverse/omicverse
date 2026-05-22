@@ -13,13 +13,15 @@ normalization step must branch on the *value type* of the assay:
 The value type is read from ``adata.uns['ev']['value_type']`` so that
 ``normalize(adata, method='auto')`` does the right thing automatically.
 
+Only the EV-specific normalization lives here. The generic single-cell
+preprocessing steps that follow it — scaling, PCA and the kNN graph — are
+omicverse-native and should be run with :func:`omicverse.pp.scale`,
+:func:`omicverse.pp.pca` and :func:`omicverse.pp.neighbors`.
+
 Functions
 ---------
 * :func:`normalize`  — value-type-aware normalization (CLR / arcsinh / log2),
   with an optional per-EV size-factor correction for vesicle size.
-* :func:`scale`      — per-protein z-scoring with max-clip, stored in a layer.
-* :func:`pca`        — PCA on the normalized/scaled matrix.
-* :func:`neighbors`  — kNN graph for downstream clustering / UMAP.
 """
 from __future__ import annotations
 
@@ -33,19 +35,6 @@ from ..._registry import register_function
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
-def _require(modname: str, role: str):
-    """Lazy-import a backend with an actionable error message."""
-    import importlib
-
-    try:
-        return importlib.import_module(modname)
-    except ImportError as exc:  # pragma: no cover
-        raise ImportError(
-            f"{role} needs the '{modname}' package. Install with: "
-            f"pip install {modname}."
-        ) from exc
-
-
 def _dense(x):
     """Return a dense float64 ndarray from a (possibly sparse) matrix."""
     if hasattr(x, "toarray"):
@@ -102,7 +91,7 @@ def _size_factors(mat: np.ndarray) -> np.ndarray:
         "ov.single.ev.normalize(adata, method='arcsinh', cofactor=150)",
         "ov.single.ev.normalize(adata, method='log2', size_factor=True)",
     ],
-    related=["single.ev.scale", "single.ev.pca"],
+    related=["pp.scale", "pp.pca"],
 )
 def normalize(
     adata,
@@ -204,246 +193,3 @@ def normalize(
     }
     return adata
 
-
-# ---------------------------------------------------------------------------
-# scale
-# ---------------------------------------------------------------------------
-@register_function(
-    aliases=["ev_scale", "scale_ev", "EV缩放", "蛋白标准化"],
-    category="ev",
-    description=(
-        "Per-protein z-scoring of a single-EV proteomics matrix with an "
-        "optional max-clip on the scaled values. The scaled matrix is stored "
-        "in a layer (default 'scaled') so the normalized X is preserved."
-    ),
-    examples=[
-        "ov.single.ev.scale(adata)",
-        "ov.single.ev.scale(adata, max_value=10, zero_center=True)",
-    ],
-    related=["single.ev.normalize", "single.ev.pca"],
-)
-def scale(
-    adata,
-    *,
-    max_value: Optional[float] = 10.0,
-    zero_center: bool = True,
-    layer: Optional[str] = None,
-    key_added: str = "scaled",
-):
-    """Per-protein z-scoring with max-clip, stored in a layer.
-
-    Parameters
-    ----------
-    adata
-        EV x protein AnnData (normalized).
-    max_value
-        Clip scaled values to ``[-max_value, max_value]``; ``None`` disables
-        clipping.
-    zero_center
-        Subtract the per-protein mean (``True``) or only divide by the
-        per-protein standard deviation (``False``).
-    layer
-        Input layer; ``None`` uses ``adata.X``.
-    key_added
-        Layer the scaled matrix is written to (default ``'scaled'``).
-
-    Returns
-    -------
-    :class:`anndata.AnnData`
-        The same object, with the scaled matrix in ``layers[key_added]``.
-    """
-    mat = _dense(adata.X) if layer is None else _dense(adata.layers[layer])
-    mean = mat.mean(axis=0, keepdims=True)
-    std = mat.std(axis=0, keepdims=True)
-    std[std == 0] = 1.0
-    out = (mat - mean) / std if zero_center else mat / std
-    if max_value is not None:
-        out = np.clip(out, -float(max_value), float(max_value))
-    adata.layers[key_added] = out
-    ev = adata.uns.setdefault("ev", {})
-    ev["scale"] = {
-        "max_value": None if max_value is None else float(max_value),
-        "zero_center": bool(zero_center),
-        "layer_out": key_added,
-    }
-    return adata
-
-
-# ---------------------------------------------------------------------------
-# pca
-# ---------------------------------------------------------------------------
-@register_function(
-    aliases=["ev_pca", "pca_ev", "EV主成分分析", "单囊泡PCA"],
-    category="ev",
-    description=(
-        "Principal-component analysis of a single-EV proteomics matrix. "
-        "Protein panels are small (8-250 markers), so there is no HVG step "
-        "— every protein is kept. Writes obsm['X_pca']."
-    ),
-    examples=[
-        "ov.single.ev.pca(adata)",
-        "ov.single.ev.pca(adata, n_comps=20, layer='scaled')",
-    ],
-    related=["single.ev.scale", "single.ev.neighbors"],
-)
-def pca(
-    adata,
-    *,
-    n_comps: Optional[int] = None,
-    layer: Optional[str] = "scaled",
-    use_highly_variable: bool = False,
-    svd_solver: str = "auto",
-    random_state: int = 0,
-):
-    """PCA on the normalized/scaled single-EV matrix.
-
-    Parameters
-    ----------
-    adata
-        EV x protein AnnData.
-    n_comps
-        Number of principal components. ``None`` keeps
-        ``min(n_proteins, n_evs) - 1`` (small panels keep all proteins).
-    layer
-        Layer to run PCA on (default ``'scaled'`` if present, else ``X``).
-    use_highly_variable
-        Kept for API compatibility — single-EV panels are small, so HVG
-        selection is skipped and every protein is used.
-    svd_solver
-        SVD solver passed to :class:`sklearn.decomposition.PCA`.
-    random_state
-        Random seed for reproducibility.
-
-    Returns
-    -------
-    :class:`anndata.AnnData`
-        The same object, with ``obsm['X_pca']``, the loadings in
-        ``varm['PCs']`` and the variance ratio in
-        ``uns['pca']['variance_ratio']``.
-    """
-    from sklearn.decomposition import PCA as _PCA
-
-    if layer is not None and layer in adata.layers:
-        mat = _dense(adata.layers[layer])
-    else:
-        mat = _dense(adata.X)
-
-    max_comps = max(1, min(mat.shape) - 1)
-    if n_comps is None:
-        n_comps = max_comps
-    n_comps = int(min(n_comps, max_comps))
-
-    model = _PCA(
-        n_components=n_comps, svd_solver=svd_solver, random_state=random_state
-    )
-    coords = model.fit_transform(mat - mat.mean(axis=0, keepdims=True))
-    adata.obsm["X_pca"] = coords
-    adata.varm["PCs"] = model.components_.T
-    adata.uns["pca"] = {
-        "variance_ratio": model.explained_variance_ratio_,
-        "variance": model.explained_variance_,
-        "n_comps": n_comps,
-        "layer": layer,
-    }
-    return adata
-
-
-# ---------------------------------------------------------------------------
-# neighbors
-# ---------------------------------------------------------------------------
-@register_function(
-    aliases=["ev_neighbors", "neighbors_ev", "EV近邻图", "单囊泡近邻"],
-    category="ev",
-    description=(
-        "Build a k-nearest-neighbor graph over EVs (on the PCA embedding, "
-        "or the protein matrix directly) for downstream Leiden clustering "
-        "and UMAP. Wraps scanpy.pp.neighbors when scanpy is available, with "
-        "a pure scikit-learn fallback."
-    ),
-    examples=[
-        "ov.single.ev.neighbors(adata)",
-        "ov.single.ev.neighbors(adata, n_neighbors=30, use_rep='X_pca')",
-    ],
-    related=["single.ev.pca", "single.ev.leiden"],
-)
-def neighbors(
-    adata,
-    *,
-    n_neighbors: int = 15,
-    use_rep: Optional[str] = None,
-    n_pcs: Optional[int] = None,
-    metric: str = "euclidean",
-    random_state: int = 0,
-):
-    """kNN graph over EVs for clustering / UMAP.
-
-    Parameters
-    ----------
-    adata
-        EV x protein AnnData.
-    n_neighbors
-        Number of neighbors per EV.
-    use_rep
-        Representation to compute neighbors on. ``None`` uses
-        ``obsm['X_pca']`` if present, else ``adata.X``.
-    n_pcs
-        Number of PCs to use when ``use_rep`` is a PCA embedding.
-    metric
-        Distance metric.
-    random_state
-        Random seed.
-
-    Returns
-    -------
-    :class:`anndata.AnnData`
-        The same object, with the connectivity / distance graphs in
-        ``obsp`` and the neighbor parameters in ``uns['neighbors']``.
-    """
-    try:
-        import scanpy as sc
-
-        kw = dict(
-            n_neighbors=n_neighbors, metric=metric, random_state=random_state
-        )
-        if use_rep is not None:
-            kw["use_rep"] = use_rep
-        elif "X_pca" in adata.obsm:
-            kw["use_rep"] = "X_pca"
-        else:
-            kw["use_rep"] = "X"
-        if n_pcs is not None:
-            kw["n_pcs"] = n_pcs
-        sc.pp.neighbors(adata, **kw)
-        return adata
-    except ImportError:  # pragma: no cover - fallback path
-        pass
-
-    # pure scikit-learn fallback
-    from sklearn.neighbors import kneighbors_graph
-
-    if use_rep is not None and use_rep in adata.obsm:
-        rep = _dense(adata.obsm[use_rep])
-    elif "X_pca" in adata.obsm:
-        rep = _dense(adata.obsm["X_pca"])
-    else:
-        rep = _dense(adata.X)
-    if n_pcs is not None:
-        rep = rep[:, :n_pcs]
-
-    n_obs = rep.shape[0]
-    k = int(min(n_neighbors, n_obs - 1))
-    dist = kneighbors_graph(rep, n_neighbors=k, mode="distance", metric=metric)
-    conn = kneighbors_graph(rep, n_neighbors=k, mode="connectivity", metric=metric)
-    conn = conn.maximum(conn.T)  # symmetrize
-    adata.obsp["distances"] = dist
-    adata.obsp["connectivities"] = conn
-    adata.uns["neighbors"] = {
-        "connectivities_key": "connectivities",
-        "distances_key": "distances",
-        "params": {
-            "n_neighbors": k,
-            "metric": metric,
-            "use_rep": use_rep or ("X_pca" if "X_pca" in adata.obsm else "X"),
-        },
-    }
-    return adata

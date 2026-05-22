@@ -4,21 +4,20 @@ EV-subpopulation discovery is the core of single-EV analysis: an EV x protein
 AnnData is partitioned into vesicle subpopulations that share a surface-marker
 profile.
 
-Two clustering routes are provided:
+This module keeps only the EV-specific routines:
 
-* :func:`leiden`  — graph-based community detection on the EV kNN graph
-  (the single-cell standard), via scanpy.
 * :func:`flowsom` — a native, pure-Python FlowSOM: a self-organizing map
   (SOM) is trained on the EV x protein matrix, then the SOM nodes are
   consensus / hierarchically *metaclustered* into the requested number of
   EV subpopulations. FlowSOM is the cytometry-standard clustering for this
   kind of marker-panel data; the native implementation removes any R / Java
   dependency.
+* :func:`subpopulation_abundance` builds the per-sample subpopulation-
+  frequency table for downstream differential-abundance testing.
 
-:func:`cluster` is a thin ``method=``-style dispatcher over the two.
-:func:`umap` produces a 2-D embedding and :func:`subpopulation_abundance`
-builds the per-sample subpopulation-frequency table for downstream
-differential-abundance testing.
+Graph-based clustering and the UMAP embedding are omicverse-native — use
+:func:`omicverse.pp.leiden` and :func:`omicverse.pp.umap` (after
+:func:`omicverse.pp.neighbors`) instead.
 """
 from __future__ import annotations
 
@@ -33,19 +32,6 @@ from ..._registry import register_function
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
-def _require(modname: str, role: str):
-    """Lazy-import a backend with an actionable error message."""
-    import importlib
-
-    try:
-        return importlib.import_module(modname)
-    except ImportError as exc:  # pragma: no cover
-        raise ImportError(
-            f"{role} needs the '{modname}' package. Install with: "
-            f"pip install {modname}."
-        ) from exc
-
-
 def _dense(x):
     """Return a dense float64 ndarray from a (possibly sparse) matrix."""
     if hasattr(x, "toarray"):
@@ -152,7 +138,7 @@ class _SOM:
         "ov.single.ev.flowsom(adata, n_clusters=10, grid=(12, 12))",
         "ov.single.ev.flowsom(adata, n_clusters=6, use_rep='X_pca')",
     ],
-    related=["single.ev.leiden", "single.ev.cluster"],
+    related=["pp.leiden", "single.ev.subpopulation_abundance"],
 )
 def flowsom(
     adata,
@@ -249,192 +235,6 @@ def flowsom(
 
 
 # ---------------------------------------------------------------------------
-# leiden
-# ---------------------------------------------------------------------------
-@register_function(
-    aliases=["ev_leiden", "leiden_ev", "EV莱顿聚类", "单囊泡聚类"],
-    category="ev",
-    description=(
-        "Leiden community-detection clustering of EV subpopulations on the "
-        "EV kNN graph (run single.ev.neighbors first). Wraps scanpy's "
-        "Leiden implementation; writes the cluster label into obs."
-    ),
-    examples=[
-        "ov.single.ev.leiden(adata)",
-        "ov.single.ev.leiden(adata, resolution=0.5, key_added='ev_leiden')",
-    ],
-    related=["single.ev.neighbors", "single.ev.flowsom", "single.ev.cluster"],
-)
-def leiden(
-    adata,
-    *,
-    resolution: float = 1.0,
-    key_added: str = "leiden",
-    random_state: int = 0,
-    flavor: str = "igraph",
-):
-    """Leiden clustering of EV subpopulations on the EV neighbor graph.
-
-    Parameters
-    ----------
-    adata
-        EV x protein AnnData with a neighbor graph
-        (:func:`omicverse.single.ev.neighbors`).
-    resolution
-        Leiden resolution — higher values yield more subpopulations.
-    key_added
-        ``obs`` column the cluster label is written to.
-    random_state
-        Random seed.
-    flavor
-        Leiden backend passed to scanpy (``'igraph'`` or ``'leidenalg'``).
-
-    Returns
-    -------
-    :class:`anndata.AnnData`
-        The same object with the Leiden labels in ``obs[key_added]``.
-    """
-    sc = _require("scanpy", "EV Leiden clustering")
-    if "neighbors" not in adata.uns:
-        raise ValueError(
-            "No neighbor graph found — run omicverse.single.ev.neighbors "
-            "before leiden()."
-        )
-    kw = dict(resolution=resolution, key_added=key_added, random_state=random_state)
-    try:
-        sc.tl.leiden(adata, flavor=flavor, n_iterations=2, directed=False, **kw)
-    except TypeError:  # pragma: no cover - older scanpy without flavor=
-        sc.tl.leiden(adata, **kw)
-    return adata
-
-
-# ---------------------------------------------------------------------------
-# cluster — dispatcher
-# ---------------------------------------------------------------------------
-@register_function(
-    aliases=["ev_cluster", "cluster_ev", "EV聚类", "囊泡亚群聚类"],
-    category="ev",
-    description=(
-        "Cluster EV subpopulations with a method= dispatcher: 'leiden' "
-        "(graph community detection on the EV kNN graph) or 'flowsom' "
-        "(native self-organizing-map + metaclustering). Writes the cluster "
-        "label into obs."
-    ),
-    examples=[
-        "ov.single.ev.cluster(adata, method='leiden', resolution=1.0)",
-        "ov.single.ev.cluster(adata, method='flowsom', n_clusters=8)",
-    ],
-    related=["single.ev.leiden", "single.ev.flowsom"],
-)
-def cluster(adata, *, method: str = "leiden", key_added: Optional[str] = None, **kwargs):
-    """Cluster EV subpopulations via a ``method=`` dispatcher.
-
-    Parameters
-    ----------
-    adata
-        EV x protein AnnData.
-    method
-        ``'leiden'`` (graph-based, needs a neighbor graph) or ``'flowsom'``
-        (native SOM + metaclustering).
-    key_added
-        ``obs`` column for the cluster label; defaults to the method name.
-    **kwargs
-        Forwarded to :func:`leiden` or :func:`flowsom`.
-
-    Returns
-    -------
-    :class:`anndata.AnnData`
-        The same object with the cluster label in ``obs``.
-    """
-    method = str(method).lower()
-    if method == "leiden":
-        return leiden(adata, key_added=key_added or "leiden", **kwargs)
-    if method == "flowsom":
-        return flowsom(adata, key_added=key_added or "flowsom", **kwargs)
-    raise ValueError(f"method must be 'leiden' or 'flowsom', got {method!r}")
-
-
-# ---------------------------------------------------------------------------
-# umap
-# ---------------------------------------------------------------------------
-@register_function(
-    aliases=["ev_umap", "umap_ev", "EV UMAP", "单囊泡UMAP"],
-    category="ev",
-    description=(
-        "UMAP embedding of EV subpopulations for visualization. Runs on the "
-        "EV neighbor graph (run single.ev.neighbors first); writes "
-        "obsm['X_umap']."
-    ),
-    examples=[
-        "ov.single.ev.umap(adata)",
-        "ov.single.ev.umap(adata, min_dist=0.3, random_state=0)",
-    ],
-    related=["single.ev.neighbors", "single.ev.leiden"],
-)
-def umap(
-    adata,
-    *,
-    min_dist: float = 0.5,
-    spread: float = 1.0,
-    n_components: int = 2,
-    random_state: int = 0,
-):
-    """UMAP embedding of the EVs.
-
-    Parameters
-    ----------
-    adata
-        EV x protein AnnData with a neighbor graph
-        (:func:`omicverse.single.ev.neighbors`).
-    min_dist
-        UMAP ``min_dist`` — smaller values pack EVs tighter.
-    spread
-        UMAP ``spread``.
-    n_components
-        Embedding dimensionality (2 for plotting).
-    random_state
-        Random seed.
-
-    Returns
-    -------
-    :class:`anndata.AnnData`
-        The same object with the embedding in ``obsm['X_umap']``.
-    """
-    if "neighbors" not in adata.uns:
-        raise ValueError(
-            "No neighbor graph found — run omicverse.single.ev.neighbors "
-            "before umap()."
-        )
-    try:
-        import scanpy as sc
-
-        sc.tl.umap(
-            adata,
-            min_dist=min_dist,
-            spread=spread,
-            n_components=n_components,
-            random_state=random_state,
-        )
-        return adata
-    except ImportError:  # pragma: no cover - fallback path
-        pass
-
-    # pure umap-learn fallback
-    umap_mod = _require("umap", "EV UMAP embedding")
-    rep = (
-        _dense(adata.obsm["X_pca"]) if "X_pca" in adata.obsm else _dense(adata.X)
-    )
-    reducer = umap_mod.UMAP(
-        n_components=n_components,
-        min_dist=min_dist,
-        spread=spread,
-        random_state=random_state,
-    )
-    adata.obsm["X_umap"] = reducer.fit_transform(rep)
-    return adata
-
-
-# ---------------------------------------------------------------------------
 # subpopulation_abundance
 # ---------------------------------------------------------------------------
 @register_function(
@@ -454,7 +254,7 @@ def umap(
         "tab = ov.single.ev.subpopulation_abundance(adata, groupby='condition', "
         "cluster_key='leiden', normalize=False)",
     ],
-    related=["single.ev.flowsom", "single.ev.leiden"],
+    related=["single.ev.flowsom", "pp.leiden"],
 )
 def subpopulation_abundance(
     adata,
