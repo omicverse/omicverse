@@ -141,4 +141,10 @@ from ._ambient import (
     pbmc_raw_10x,
     hgmm_mixture,
 )
+from ._metabolism import (
+    # Real scRNA-seq + precomputed Compass output for the ov.single
+    # metabolism tutorial (Metabolism / MetaboliteCCC)
+    metabolism_hnsc,
+    metabolism_compass,
+)
 from ._signatures import load_signatures_from_file, predefined_signatures

@@ -1,0 +1,791 @@
+ID	HMDB_ID	standard_metName	metName	Gene_name	Protein_name	Evidence	Annotation
+0	HMDB0006247	25-Hydroxycholesterol	25-Hydroxycholesterol	Abca1	Phospholipid-transporting ATPase ABCA1	16611739	Transporter
+1	HMDB0000517	L-Arginine	Arginine; L-Arginine	Slc7a1	High affinity cationic amino acid transporter 1	33209975; 17325243; 33639836; 23831616; 22144986; 19067360; Recon2	Transporter
+2	HMDB0000030	Biotin	Biotin	Slc5a6	Sodium-dependent multivitamin transporter	27084392	Transporter
+3	HMDB0000067	Cholesterol	Cholesterol	Cd36	Platelet glycoprotein 4	21763723; 32531545; 16133421; 10383407; 23247049; 15949682; 12145296; 28928671; 29883404; 34584385; 19718657; 29593722; 25174330; 27890613; 32684173; 18311054; 24371122; 21262584; 16959872; 20338238; 25250848; 23099443; 15168018; 16299001; 26828064; 19147991; 10946357; 23880196; 19016618; 23422832; 21474828; 28122883; 30702457; 21272192; 15136056; 18331615; 17464999; 32058595; 18276752; 31988148; 34603769; 17291449; 20170635; 16503643; 10713080; 10625497; 21674150; 26153221; 12488595; 24733016; 29533793; 12547883; 26582580; 31967154; 28634191; 20112301; 19937569; 21181286; 20360851; 33457418; 21217164; 16123174; 24515116; 18402819; 19028791; 27323079; 18305138; 33211179; 21034810; 11718687; 24162852; 18772361; 32308181; 25703059; 22858201; 28555086; 26759003; 28965954; 16517147; 32982800; 15345670; 19436068; 26832365; 21190831; 25855981; 32952497; 19074161	Receptor; Transporter
+4	HMDB0000073	Dopamine	Dopamine	Slc6a3	Sodium-dependent dopamine transporter	30967134; 12707943; 27217152; 28924877; 17466074	Transporter
+5	HMDB0000148	L-Glutamic acid	Glutamate	Slc1a5	Neutral amino acid transporter B(0)	29208682	Transporter
+6	HMDB0000641	L-Glutamine	L-Glutamine; Glutamine	Slc1a5	Neutral amino acid transporter B(0)	31535081; 30452920; 33953707; 34525179; 27154413; 25683269; 31881361; 28798141; 28507054; 25337245; 23213057; 32438035; 30025811; 33632871; 30935948; 33505538; 32422185; 30470977; 30671766; 25759021; 32747796; 31150647; 34054543; 31668020; 29208682; 32996252; 29542325; 30541099; 30071532; 34075790; 31866442; 26724577; 27055152; 33457003; 29337138; 32021249	Transporter
+7	HMDB0000641	L-Glutamine	L-Glutamine; Glutamine	Slc38a2	Sodium-coupled neutral amino acid symporter 2	32996252; 25759021; 26724577	Transporter
+8	HMDB0000641	L-Glutamine	Glutamine	Slc3a2	4F2 cell-surface antigen heavy chain	33953707; 30671766	Transporter
+9	HMDB0000641	L-Glutamine	Glutamine	Slc7a5	Large neutral amino acids transporter small subunit 1	33953707; 30671766; 26724577; 33505538	Transporter
+10	HMDB0003276	Hydrogen sulfide	Hydrogen sulfide	Cd36	Platelet glycoprotein 4	31262715	Receptor; Transporter
+11	HMDB0015531	Iron	Iron	Slc11a2	Natural resistance-associated macrophage protein 2	23506870	Transporter
+12	HMDB0015531	Iron	Iron	Slc40a1	Solute carrier family 40 member 1	25209728; 30852438; 27667161; 24644245; 21875943; 20675164; 23506870; 21199650; 33787609; 17181986; 14757427; 15338274; 27773819; 23922661; 29212168; 24121729; 28219768; 28978826; 21175851	Transporter
+13	HMDB0001311	D-Lactic acid	Lactate	Slc16a1	Monocarboxylate transporter 1	32144120; 22428047	Transporter
+14	HMDB0000687	L-Leucine	Leucine	Slc1a5	Neutral amino acid transporter B(0)	33953707; 30071532; 30470977	Transporter
+15	HMDB0000687	L-Leucine	Leucine	Slc3a2	4F2 cell-surface antigen heavy chain	33953707	Transporter
+16	HMDB0000687	L-Leucine	Leucine	Slc7a5	Large neutral amino acids transporter small subunit 1	33953707	Transporter
+17	HMDB0001429	Phosphate	Phosphate	Slc20a2	Sodium-dependent phosphate transporter 2	30721528	Transporter
+18	HMDB0000259	Serotonin	Serotonin	Slc6a4	Sodium-dependent serotonin transporter	33868590; 31342534; 16251523; 25012842	Transporter
+19	HMDB0000235	Thiamine	Thiamine	Slc19a1	Reduced folate transporter	28284395; 32498429	Transporter
+20	HMDB0000235	Thiamine	Thiamine	Slc19a2	Thiamine transporter 1	28284395; 32498429	Transporter
+21	HMDB0000338	2-Hydroxyestradiol	2-Hydroxyestradiol	Esr1	Estrogen receptor	27312859	Nuclear Receptor
+22	HMDB0006247	25-Hydroxycholesterol	25-Hydroxycholesterol	Esr1	Estrogen receptor	21304949	Nuclear Receptor
+23	HMDB0002103	27-Hydroxycholesterol	27-Hydroxycholesterol	Esr1	Estrogen receptor	33408073	Nuclear Receptor
+24	HMDB0000022	3-Methoxytyramine	3-Methoxytyramine	Taar1	Trace amine-associated receptor 1	22483291	Receptor
+25	HMDB0001149	5-Aminolevulinic acid	5-Aminolevulinic acid	Tspo2	Translocator protein 2	31989647	Transporter
+26	HMDB0000045	Adenosine monophosphate	AMP	Adora1	Adenosine receptor A1	32417395	Receptor
+27	HMDB0000895	Acetylcholine	Acetylcholine	Chrm1	Muscarinic acetylcholine receptor M1	30157420	Receptor
+28	HMDB0000895	Acetylcholine	Acetylcholine	Chrm2	Muscarinic acetylcholine receptor M2	23743182	Receptor
+29	HMDB0000895	Acetylcholine	Acetylcholine	Chrm3	Muscarinic acetylcholine receptor M3	30157420	Receptor
+30	HMDB0000895	Acetylcholine	Acetylcholine	Chrna1	Acetylcholine receptor subunit alpha	28045942	Receptor
+31	HMDB0000895	Acetylcholine	Acetylcholine	Chrna2	Neuronal acetylcholine receptor subunit alpha-2	29785025	Receptor
+32	HMDB0000895	Acetylcholine	Acetylcholine	Chrna4	Neuronal acetylcholine receptor subunit alpha-4	15902904	Receptor
+33	HMDB0000895	Acetylcholine	Acetylcholine	Chrna7	Neuronal acetylcholine receptor subunit alpha-7	32321403	Receptor
+34	HMDB0001178	Adenosine diphosphate ribose	Adenosine diphosphate ribose	Trpm2	Transient receptor potential cation channel subfamily M member 2	22493272	Receptor
+35	HMDB0000050	Adenosine	Adenosine	Adora1	Adenosine receptor A1	28598776; 23956030; 31675497; 27747290; 28196272; 33067580	Receptor
+36	HMDB0000050	Adenosine	Adenosine	Adora2a	Adenosine receptor A2a	34255555; 29298852; 28598776; 23956030; 27747290; 17616786; 19635551	Receptor
+37	HMDB0000050	Adenosine	Adenosine	Adora2b	Adenosine receptor A2b	28598776; 23956030; 23540714; 25087184; 27747290; 22504483; 31570448	Receptor
+38	HMDB0000050	Adenosine	Adenosine	Adora3	Adenosine receptor A3	23956030; 26194548; 28598776	Receptor
+39	HMDB0004080	Anandamide	Anandamide	Cnr1	Cannabinoid receptor 1	17935697; 26900150	Receptor
+40	HMDB0004080	Anandamide	Anandamide	Cnr2	Cannabinoid receptor 2	26900150; 20133390	Receptor
+41	HMDB0004080	Anandamide	Anandamide	Trpv1	Transient receptor potential cation channel subfamily V member 1	17935697; 29504066; 22568077; 17704831; 23573230; 17591864; 30243113; 22394688; 19647120; 14517174; 16107881	Receptor; Channel
+42	HMDB0000517	L-Arginine	Arginine	Avpr2	Vasopressin V2 receptor	24706579	Receptor
+43	HMDB0000067	Cholesterol	Cholesterol	Ldlr	Low-density lipoprotein receptor	10974047; 19063703; 26520906; 20090943; 26281596; 32855525; 23221398; 25487149; 24900971; 32220355; 34103960; 16741953; 27247956; 32236613; 25023761; 25394495; 32368969; 14978770; 18162663; 19913121; 28919473; 25403094; 27834848; 24675665; 33757439; 22911757; 29535632; 28762182; 22470048; 23580231; 27735997; 30273964; 31437157; 30566603; 16236385; 33423309; 7600118; 28515357; 24603306; 12213890; 24950000; 10669643; 25231171; 32334376; 23937379; 29988450; 26495026; 28012395; 30195495; 30896554; 9351364; 15523646; 20049331; 15358785; 22962999; 22544571; 25797218; 27442011; 20857860; 30584280; 34347016; 28469073; 17184503; 30508567; 33429337; 26686234; 26548330; 30182437; 9502769; 24518357; 15617508; 23654093; 27050279; 32438039; 20041784; 9249773; 22761797; 29301853; 34461308; 32109664; 27888903; 23431047; 26085104; 28145001; 21645898; 22683120; 23623643; 23599654; 22936343; 23422832; 22761969; 8941642; 26523989; 29931853; 24505463; 19916081; 23883163; 30600305; 31100394; 10333389; 28100270; 19888660; 33606190; 21343340; 11164418; 19632679; 22593575; 25548917; 17344580; 18672372; 17331334; 27175606; 28751953; 19322023; 31332430; 31358055; 21657943; 21559365; 10493153; 31647302; 27438015; 31511396; 33747976; 24851052; 29092018; 31753053; 31299237; 21273557; 28555288; 30744358; 21734060; 26246324; 32964731; 24940994; 9664080; 27401460; 24373748; 20176131; 26068142; 27707816; 17531953; 30332439; 30592221; 18039658; 30385871; 30704067; 27084371; 30876530; 20028367; 15450205; 26921684; 15118091; 28099631; 10395289; 19067122; 28169529; 22580899; 25468703; 27031271; 27763549; 29398429; 31167970; 32860619; 9405278; 27459037; 25889601; 26535009; 30576926; 24837748; 30768966; 31767163; 31815695; 16741291; 15677715; 27435541; 32161285; 11291309; 21153157; 25587205; 26721317; 17351764; 23166513; 15654122; 33515402; 29545368; 24443560; 9747026; 32644974; 24352472; 31913546; 29190549; 20887597; 19060325; 25272851; 27909053; 28063230; 17709443; 16185916; 29982529; 30741106; 30486328; 20197419; 32050453; 24412220; 27564380; 31004037; 29169169; 11397707; 32705598; 24489659; 24987033; 22332058; 20073037; 11387232; 32759540; 34558270; 26204136; 29204218; 27918728; 24930699; 20580938; 15904870; 22494195; 24256518; 25413784; 33977967; 11369802; 18799458; 10488949; 9360938; 19433409; 25675507; 12910492; 15888329; 22059152; 32685494; 25754609; 25811180; 18193043; 28013406; 24770487; 30765502; 34615375; 11983917; 32727844; 18187606; 24472543; 26546829; 18771980; 11181749; 26786161; 21377952; 32918994; 16920108; 26040332; 27769814; 17720268; 11445560; 29321129; 25070550; 26700830; 24993279; 25201834; 23862065; 27378433; 28292942; 25504870; 27350674; 28874442; 17766366; 9360301; 20459026; 27998977	Receptor
+44	HMDB0000067	Cholesterol	Cholesterol	Scarb1	Scavenger receptor class B member 1	17379624; 24253048; 29772548; 29285103; 24928939; 23510561; 20926582; 32591337; 24334872; 29516118; 18542840; 26754576; 25245032; 18276752; 25504870; 20064494; 29092018; 31753053; 31017097	Receptor
+45	HMDB0003406	D-Serine	D-Serine	Grin1	Glutamate receptor ionotropic, NMDA 1	28262924	Receptor
+46	HMDB0002961	Dihydrotestosterone	Dihydrotestosterone	Glp1r	Glucagon-like peptide 1 receptor	31669915	Receptor
+47	HMDB0002183	Docosahexaenoic acid	Docosahexaenoic acid	Ffar4	Free fatty acid receptor 4	24005906	Receptor
+48	HMDB0000073	Dopamine	Dopamine	Drd1	D(1A) dopamine receptor	33017522; 30967134; 12047334; 24909515	Receptor
+49	HMDB0000073	Dopamine	Dopamine	Drd2	D(2) dopamine receptor	21070510; 10578238; 30967134; 17476365; 15084894; 20975260; 23717492; 17466074; 24772965; 23232665; 26015071; 29466326; 18192895; 19635551; 22876458; 19931559; 11979061; 18366720; 24834916; 23947671; 23266708; 15542698; 29992511; 9129716; 21592505; 10235293; 16403463; 19803686; 11256581; 12497624; 30651332; 24288745	Receptor
+50	HMDB0000073	Dopamine	Dopamine	Drd3	D(3) dopamine receptor	18366720; 30967134; 12047334; 10578238; 23232665; 29525179; 7914177; 17616385; 17466074; 19931559; 23063408	Receptor
+51	HMDB0000073	Dopamine	Dopamine	Drd4	D(4) dopamine receptor	18366720; 23717434; 30967134; 15627814; 12624717; 15292670; 16182111; 21615938; 22725835; 22356182; 22575564; 12707943; 27217152; 33868590; 14605948; 17466074; 16930369; 19931559	Receptor
+52	HMDB0000073	Dopamine	Dopamine	Drd5	D(1B) dopamine receptor	10578238; 12047334	Receptor
+53	HMDB0000073	Dopamine	Dopamine	Trpv1	Transient receptor potential cation channel subfamily V member 1	24465516	Receptor; Channel
+54	HMDB0001999	Eicosapentaenoic acid	Eicosapentaenoic acid	Ffar4	Free fatty acid receptor 4	27489163	Receptor
+55	HMDB0000151	Estradiol	Estradiol	Esr1	Estrogen receptor	28490809; 9925803	Nuclear Receptor
+56	HMDB0000153	Estriol	Estriol	Esr1	Estrogen receptor	27471150	Nuclear Receptor
+57	HMDB0000145	Estrone	Estrone	Esr1	Estrogen receptor	9228655	Nuclear Receptor
+58	HMDB0000108	Ethanol	Ethanol	Chrna5	Neuronal acetylcholine receptor subunit alpha-5	29944862	Transporter
+59	HMDB0000121	Folic acid	Folic acid	Folr1	Folate receptor alpha	32581311; Recon2	Transporter
+60	HMDB0000121	Folic acid	Folic acid	Folr2	Folate receptor beta	32581311; Recon2	Transporter
+61	HMDB0000112	gamma-Aminobutyric acid	GABA	Gabbr1	Gamma-aminobutyric acid type B receptor subunit 1	17266109; 22253714; 26298628	Receptor
+62	HMDB0000112	gamma-Aminobutyric acid	GABA; gamma-Aminobutyric acid	Gabrg2	Gamma-aminobutyric acid receptor subunit gamma-2	22253714; 27367160; 30695556	Receptor
+63	HMDB0000148	L-Glutamic acid	Glutamate	Gria1	Glutamate receptor 1	7957959; 20579352	Receptor
+64	HMDB0000148	L-Glutamic acid	Glutamate	Gria2	Glutamate receptor 2	30695556; 19166514; 26047211; 25411160	Receptor
+65	HMDB0000148	L-Glutamic acid	Glutamate	Gria3	Glutamate receptor 3	30029590; 32839935	Receptor
+66	HMDB0000148	L-Glutamic acid	Glutamate	Gria4	Glutamate receptor 4	30029590; 28646511	Receptor
+67	HMDB0000148	L-Glutamic acid	Glutamate	Grid1	Glutamate receptor ionotropic, delta-1	32109663	Receptor
+68	HMDB0000148	L-Glutamic acid	Glutamate	Grid2	Glutamate receptor ionotropic, delta-2	11568633	Receptor
+69	HMDB0000148	L-Glutamic acid	Glutamate	Grik2	Glutamate receptor ionotropic, kainate 2	30695556	Receptor
+70	HMDB0000148	L-Glutamic acid	Glutamate	Grik4	Glutamate receptor ionotropic, kainate 4	30029590	Receptor
+71	HMDB0000148	L-Glutamic acid	Glutamate	Grin3a	Glutamate receptor ionotropic, NMDA 3A	30029590	Receptor
+72	HMDB0000148	L-Glutamic acid	Glutamate	Grm1	Metabotropic glutamate receptor 1	7957959; 22892214; 33145952	Receptor
+73	HMDB0000148	L-Glutamic acid	Glutamate	Grm2	Metabotropic glutamate receptor 2	30695556; 25411160; 29113156	Receptor
+74	HMDB0000148	L-Glutamic acid	Glutamate	Grm3	Metabotropic glutamate receptor 3	32839935	Receptor
+75	HMDB0000148	L-Glutamic acid	Glutamate	Grm4	Metabotropic glutamate receptor 4	28646511	Receptor
+76	HMDB0000148	L-Glutamic acid	Glutamate	Grm5	Metabotropic glutamate receptor 5	33053940; 30695556	Receptor
+77	HMDB0000148	L-Glutamic acid	Glutamate	Grm7	Metabotropic glutamate receptor 7	22138407	Receptor
+78	HMDB0000148	L-Glutamic acid	Glutamate	Grm8	Metabotropic glutamate receptor 8	26537360; 24392270	Receptor
+79	HMDB0000148	L-Glutamic acid	Glutamate	Trpv1	Transient receptor potential cation channel subfamily V member 1	23108547; 27157265; 20219639; 21957263; 22394688; 23562495	Receptor; Channel
+80	HMDB0000123	Glycine	Glycine	Grin1	Glutamate receptor ionotropic, NMDA 1	28262924	Receptor
+81	HMDB0003178	Heme	Heme	Tlr4	Toll-like receptor 4	33374506; 27821769	Receptor
+82	HMDB0003178	Heme	Heme	Trpv6	Transient receptor potential cation channel subfamily V member 6	27142151	Transporter
+83	HMDB0000870	Histamine	Histamine	Hrh1	Histamine H1 receptor	9512916	Receptor
+84	HMDB0000870	Histamine	Histamine	Hrh2	Histamine H2 receptor	9792230	Receptor
+85	HMDB0000870	Histamine	Histamine	Hrh3	Histamine H3 receptor	8960873	Receptor
+86	HMDB0000870	Histamine	Histamine	Hrh4	Histamine H4 receptor	30414378	Receptor
+87	HMDB0003125	Hydrogen peroxide	Hydrogen peroxide	Trpm2	Transient receptor potential cation channel subfamily M member 2	22493272	Receptor
+88	HMDB0015531	Iron	Iron	Tfr2	Transferrin receptor protein 2	27013087; 24847265; 20826723; 18565178; 19729324; 11535534; 24055409; 27169626; 11005792; 20593115; 32621410; 17098454; 11673399; 31707638; 27477597; 11358390; 16932966; 27667161; 32054685; 24644245; 20880062; 26608187; 34199599; 20542038; 25635054; 17241880; 17417667; 17181986; 18094142; 24055163; 26029709; 20133002; 19759876; 21150441; 16158226; 17207112; 15521925; 24284962; 15124225; 15317665; 15893030; 21422745; 22460705; 30186425; 16935854; 11027676; 17042772; 12547237; 24556216; 21864651; 34156073; 33323945; 29434729; 17428703; 23582421; 28978826; 30360575; 30034931; 15701302; 12406888	Receptor
+89	HMDB0015531	Iron	Iron	Tfrc	Transferrin receptor protein 1	21326867; 27773819; 22237814; 31401526; 23115478; 24890018; 33393230; 18603562; 25550467; 33693820; 23416069; 30076742; 32672503; 34389031; 34386079	Receptor
+90	HMDB0000517	L-Arginine	L-Arginine	Gprc6a	G-protein coupled receptor family C group 6 member A	22714012	Receptor
+91	HMDB0000159	L-Phenylalanine	Phenylalanine; L-Phenylalanine	Gpr142	Probable G-protein coupled receptor 142	27322810	Receptor
+92	HMDB0000929	L-Tryptophan	L-Tryptophan	Gpr142	Probable G-protein coupled receptor 142	27322810	Receptor
+93	HMDB0001311	D-Lactic acid	Lactate	Hcar1	Hydroxycarboxylic acid receptor 1	25881750; 34093243; 30728759; 25425080; 33659884; 26677077	Receptor
+94	HMDB0001251	Lanosterol	Lanosterol	Hrh2	Histamine H2 receptor	29142437	Receptor
+95	HMDB0000673	Linoleic acid	Linoleic acid	Trpv4	Transient receptor potential cation channel subfamily V member 4	25061872	Receptor
+96	HMDB0000761	Lithocholic acid	Lithocholic acid	Gpbar1	G-protein coupled bile acid receptor 1	26567894; 29290621; 27765751	Receptor
+97	HMDB0001389	Melatonin	Melatonin	Mtnr1a	Melatonin receptor type 1A	26067916	Receptor
+98	HMDB0001389	Melatonin	Melatonin	Mtnr1b	Melatonin receptor type 1B	28708046; 19651812; 25132852; 25160745; 33220095; 31901302; 29590381; 26440713	Receptor
+99	HMDB0001403	Prostaglandin D2	Prostaglandin D2	Ptgdr	Prostaglandin D2 receptor	34389612	Receptor
+100	HMDB0001403	Prostaglandin D2	Prostaglandin D2	Ptgdr2	Prostaglandin D2 receptor 2	29604141	Receptor
+101	HMDB0001220	Prostaglandin E2	Prostaglandin E2	Ptger1	Prostaglandin E2 receptor EP1 subtype	17761898	Receptor
+102	HMDB0001220	Prostaglandin E2	Prostaglandin E2	Ptger2	Prostaglandin E2 receptor EP2 subtype	17761898	Receptor
+103	HMDB0001220	Prostaglandin E2	Prostaglandin E2	Ptger4	Prostaglandin E2 receptor EP4 subtype	33129574	Receptor
+104	HMDB0001358	Retinal	Retinal	Stra6	Receptor for retinol uptake STRA6	27830500	Transporter
+105	HMDB0000244	Riboflavin	Riboflavin	Slc52a2	Solute carrier family 52, riboflavin transporter, member 1	30446350; 29122468	Transporter
+106	HMDB0000244	Riboflavin	Riboflavin	Slc52a2	Solute carrier family 52, riboflavin transporter, member 2	31500345; 22864630	Transporter
+107	HMDB0000259	Serotonin	Serotonin	Htr1a	5-hydroxytryptamine receptor 1A	16251523	Receptor
+108	HMDB0000259	Serotonin	Serotonin	Htr1b	5-hydroxytryptamine receptor 1B	28555718; 29860743; 23964727; 24074042	Receptor
+109	HMDB0000259	Serotonin	Serotonin	Htr1d	5-hydroxytryptamine receptor 1D	20581837	Receptor
+110	HMDB0000259	Serotonin	Serotonin	Htr2a	5-hydroxytryptamine receptor 2A	20521326; 32857933; 16251523; 27959337; 27024926; 32615731	Receptor
+111	HMDB0000259	Serotonin	Serotonin	Htr2b	5-hydroxytryptamine receptor 2B	20581837; 34618686	Receptor
+112	HMDB0000259	Serotonin	Serotonin	Htr2c	5-hydroxytryptamine receptor 2C	27681143	Receptor
+113	HMDB0000259	Serotonin	Serotonin	Htr3a	5-hydroxytryptamine receptor 3A	31342534; 30695556	Receptor
+114	HMDB0000259	Serotonin	Serotonin	Htr3b	5-hydroxytryptamine receptor 3B	23183509	Receptor
+115	HMDB0000259	Serotonin	Serotonin	Htr4	5-hydroxytryptamine receptor 4	30695556	Receptor
+116	HMDB0000259	Serotonin	Serotonin	Htr6	5-hydroxytryptamine receptor 6	18256283	Receptor
+117	HMDB0000259	Serotonin	Serotonin	Trpc6	Short transient receptor potential channel 6	24259679	Receptor
+118	HMDB0000277	Sphingosine 1-phosphate	Sphingosine 1-phosphate	S1pr1	Sphingosine 1-phosphate receptor 1	24977489; 25197261	Receptor
+119	HMDB0000277	Sphingosine 1-phosphate	Sphingosine 1-phosphate	S1pr2	Sphingosine 1-phosphate receptor 2	26518876; 25363242; 26669941	Receptor
+120	HMDB0000277	Sphingosine 1-phosphate	Sphingosine 1-phosphate	S1pr3	Sphingosine 1-phosphate receptor 3	28943478	Receptor
+121	HMDB0000277	Sphingosine 1-phosphate	Sphingosine 1-phosphate	S1pr5	Sphingosine 1-phosphate receptor 5	24977489	Receptor
+122	HMDB0000254	Succinic acid	Succinate	Sucnr1	Succinate receptor 1	25352636; 34270263; 33916314; 26808164; 33279412; 34301438; 29894669; 34233171	Receptor
+123	HMDB0000234	Testosterone	Testosterone	Gprc6a	G-protein coupled receptor family C group 6 member A	26785252; 29468843; 24032653; 24998176; 22374969; 24193547; 25093461; 27673554; 33474566; 28180060; 26440882; 31558901	Receptor
+124	HMDB0001452	Thromboxane A2	Thromboxane A2	Tbxa2r	Thromboxane A2 receptor	9774254	Receptor
+125	HMDB0000158	L-Tyrosine	Tyrosine	Gpr35	G-protein coupled receptor 35	22523636	Receptor
+126	HMDB0000305	Vitamin A	Vitamin A	Stra6	Receptor for retinol uptake STRA6	21782034; 19112531; 25481334; 22665496; 27830501; 32597569; 21704730; 23591992; 26729422; 31956331; 26373900; Recon2	Transporter
+127	HMDB0000292	Xanthine	Xanthine	Adora1	Adenosine receptor A1	31675497	Receptor
+128	HMDB0000112	gamma-Aminobutyric acid	gamma-Aminobutyric acid	Gabbr2	Gamma-aminobutyric acid type B receptor subunit 2	30610899	Receptor
+129	HMDB0000112	gamma-Aminobutyric acid	gamma-Aminobutyric acid	Gabra1	Gamma-aminobutyric acid receptor subunit alpha-1	30891080	Receptor
+130	HMDB0000112	gamma-Aminobutyric acid	gamma-Aminobutyric acid	Gabra4	Gamma-aminobutyric acid receptor subunit alpha-4	33594062	Receptor
+131	HMDB0000112	gamma-Aminobutyric acid	gamma-Aminobutyric acid	Gabrb2	Gamma-aminobutyric acid receptor subunit beta-2	33594062	Receptor
+132	HMDB0000123	Glycine	Glycine	Slc16a10	Monocarboxylate transporter 10	HMDB	Transporter
+133	HMDB0000097	Choline	Choline	Slc22a1	Solute carrier family 22 member 1	HMDB	Transporter
+134	HMDB0001256	Spermine	Spermine	Slc22a1	Solute carrier family 22 member 1	HMDB; Recon2	Transporter
+135	HMDB0001414	Putrescine	Putrescine	Slc22a4	Solute carrier family 22 member 4	HMDB	Transporter
+136	HMDB0001256	Spermine	Spermine	Slc22a4	Solute carrier family 22 member 4	HMDB	Transporter
+137	HMDB0000064	Creatine	Creatine	Slc16a12	Monocarboxylate transporter 12	23578822	Transporter
+138	HMDB0000123	Glycine	Glycine	Slc36a1	Proton-coupled amino acid transporter 1	HMDB	Transporter
+139	HMDB0000097	Choline	Choline	Slc44a1	Choline transporter-like protein 1	HMDB	Transporter
+140	HMDB0000097	Choline	Choline	Slc44a2	Choline transporter-like protein 2	HMDB	Transporter
+141	HMDB0000097	Choline	Choline	Slc44a3	Choline transporter-like protein 3	HMDB	Transporter
+142	HMDB0000097	Choline	Choline	Slc44a4	Choline transporter-like protein 4	HMDB	Transporter
+143	HMDB0000097	Choline	Choline	Slc5a7	High affinity choline transporter 1	HMDB	Transporter
+144	HMDB0000243	Pyruvic acid	Pyruvate	Slc16a11	Monocarboxylate transporter 11	https://www.genecards.org/cgi-bin/carddisp.pl?gene=SLC16A11	Transporter
+145	HMDB0000243	Pyruvic acid	Pyruvate	Slc16a1	Monocarboxylate transporter 1	31882442	Transporter
+146	HMDB0000254	Succinic acid	Succinate	Slc13a5	Na(+)/citrate cotransporter	31882442	Transporter
+147	HMDB0000094	Citric acid	Citrate	Slc13a5	Na(+)/citrate cotransporter	33597751	Transporter
+148	HMDB0000134	Fumaric acid	Fumarate	Slc13a5	Na(+)/citrate cotransporter	31882442	Transporter
+149	HMDB0000156	Malic acid	Malate	Slc13a5	Na(+)/citrate cotransporter	31882442	Transporter
+150	HMDB0000156	Malic acid	Malate	Slc1a3	Excitatory amino acid transporter 1	https://en.wikipedia.org/wiki/Excitatory_amino_acid_transporter_1	Transporter
+151	HMDB0000187	L-Serine	Serine	Slc7a10	Asc-type amino acid transporter 1	33269112	Transporter
+152	HMDB0000187	L-Serine	Serine	Slc3a2	4F2 cell-surface antigen heavy chain	33269112	Transporter
+153	HMDB0000187	L-Serine	Serine	Slc1a4	Neutral amino acid transporter A	33269112	Transporter
+154	HMDB0000187	L-Serine	Serine	Slc1a5	Neutral amino acid transporter B(0)	33269112	Transporter
+155	HMDB0000574	L-Cysteine	Cysteine	Slc7a11	Cystine/glutamate transporter	33000412	Transporter
+156	HMDB0000696	L-Methionine	Methionine	Slc7a5	Large neutral amino acids transporter small subunit 1	32377929	Transporter
+157	HMDB0000168	L-Asparagine	Asparagine	Slc1a5	Neutral amino acid transporter B(0)	33420487	Transporter
+158	HMDB0000641	L-Glutamine	Glutamine	Slc6a14	Sodium- and chloride-dependent neutral and basic amino acid transporter B(0+)	26724577	Transporter
+159	HMDB0000641	L-Glutamine	Glutamine	Slc6a19	Sodium-dependent neutral amino acid transporter B(0)AT1	26724577	Transporter
+160	HMDB0000641	L-Glutamine	Glutamine	Slc7a6	Y+L amino acid transporter 2	26724577	Transporter
+161	HMDB0000641	L-Glutamine	Glutamine	Slc7a7	Y+L amino acid transporter 1	26724577	Transporter
+162	HMDB0000641	L-Glutamine	Glutamine	Slc38a1	Sodium-coupled neutral amino acid symporter 1	26724577	Transporter
+163	HMDB0000641	L-Glutamine	Glutamine	Slc38a3	Sodium-coupled neutral amino acid transporter 3	26724577	Transporter
+164	HMDB0000641	L-Glutamine	Glutamine	Slc38a5	Sodium-coupled neutral amino acid transporter 5	26724577	Transporter
+165	HMDB0000641	L-Glutamine	Glutamine	Slc38a7	Sodium-coupled neutral amino acid transporter 7	26724577	Transporter
+166	HMDB0000641	L-Glutamine	Glutamine	Slc38a8	Putative sodium-coupled neutral amino acid transporter 8	26724577	Transporter
+167	HMDB0000112	gamma-Aminobutyric acid	GABA	Slc6a1	Sodium- and chloride-dependent GABA transporter 1	https://en.wikipedia.org/wiki/GABA_transporter	Transporter
+168	HMDB0000112	gamma-Aminobutyric acid	GABA	Slc6a13	Sodium- and chloride-dependent GABA transporter 2	https://en.wikipedia.org/wiki/GABA_transporter	Transporter
+169	HMDB0000112	gamma-Aminobutyric acid	GABA	Slc6a11	Sodium- and chloride-dependent GABA transporter 3	https://en.wikipedia.org/wiki/GABA_transporter	Transporter
+170	HMDB0000112	gamma-Aminobutyric acid	GABA	Slc6a12	Sodium- and chloride-dependent betaine transporter	https://en.wikipedia.org/wiki/GABA_transporter	Transporter
+171	HMDB0000112	gamma-Aminobutyric acid	GABA	Slc6a8	Sodium- and chloride-dependent creatine transporter 1	https://en.wikipedia.org/wiki/GABA_transporter	Transporter
+172	HMDB0000112	gamma-Aminobutyric acid	GABA	Slc6a6	Sodium- and chloride-dependent taurine transporter	https://en.wikipedia.org/wiki/GABA_transporter	Transporter
+173	HMDB0000158	L-Tyrosine	Tyrosine	Slc7a5	Large neutral amino acids transporter small subunit 1	32377929	Transporter
+174	HMDB0000191	L-Aspartic acid	Aspartate	Slc1a2	Excitatory amino acid transporter 2	31269432	Transporter
+175	HMDB0000177	L-Histidine	Histidine	Slc7a5	Large neutral amino acids transporter small subunit 1	32377929	Transporter
+176	HMDB0000159	L-Phenylalanine	Phenylalanine	Slc7a5	Large neutral amino acids transporter small subunit 1	32377929	Transporter
+177	HMDB0000883	L-Valine	Valine	Slc43a1	Large neutral amino acids transporter small subunit 3	31997805; Recon2	Transporter
+178	HMDB0000172	L-Isoleucine	Isoleucine	Slc43a1	Large neutral amino acids transporter small subunit 3	31997805; Recon2	Transporter
+179	HMDB0000687	L-Leucine	Leucine	Slc43a1	Large neutral amino acids transporter small subunit 3	31997805; Recon2	Transporter
+180	HMDB0000034	Adenine	Adenine	Slc28a3	Solute carrier family 28 member 3	33972798	Transporter
+181	HMDB0000034	Adenine	Adenine	Slc29a3	Equilibrative nucleoside transporter 3	33972798	Transporter
+182	HMDB0000034	Adenine	Adenine	Slc35f5	Solute carrier family 35 member F5	33972798	Transporter
+183	HMDB0000062	L-Carnitine	L-Carnitine	Slc22a21	Organic cation/carnitine transporter 2	Recon2	Transporter
+184	HMDB0000062	L-Carnitine	L-Carnitine	Slc22a5	Organic cation/carnitine transporter 2	Recon2	Transporter
+185	HMDB0000641	L-Glutamine	L-glutamine	Slc43a1	Large neutral amino acids transporter small subunit 3	Recon2	Transporter
+186	HMDB0000187	L-Serine	L-serine	Slc43a1	Large neutral amino acids transporter small subunit 3	Recon2	Transporter
+187	HMDB0000159	L-Phenylalanine	L-phenylalanine	Slc43a2	Large neutral amino acids transporter small subunit 4	Recon2	Transporter
+188	HMDB0000159	L-Phenylalanine	L-phenylalanine	Slc43a1	Large neutral amino acids transporter small subunit 3	Recon2	Transporter
+189	HMDB0000159	L-Phenylalanine	L-phenylalanine	Slc16a10	Monocarboxylate transporter 10	Recon2	Transporter
+190	HMDB0000687	L-Leucine	L-leucine	Slc43a2	Large neutral amino acids transporter small subunit 4	Recon2	Transporter
+191	HMDB0000574	L-Cysteine	L-cysteine	Slc43a2	Large neutral amino acids transporter small subunit 4	Recon2	Transporter
+192	HMDB0000696	L-Methionine	L-methionine	Slc43a1	Large neutral amino acids transporter small subunit 3	Recon2	Transporter
+193	HMDB0000696	L-Methionine	L-methionine	Slc43a2	Large neutral amino acids transporter small subunit 4	Recon2	Transporter
+194	HMDB0000158	L-Tyrosine	L-tyrosine	Slc16a10	Monocarboxylate transporter 10	Recon2	Transporter
+195	HMDB0000168	L-Asparagine	L-asparagine	Slc43a1	Large neutral amino acids transporter small subunit 3	Recon2	Transporter
+196	HMDB0000167	L-Threonine	L-threonine	Slc43a1	Large neutral amino acids transporter small subunit 3	Recon2	Transporter
+197	HMDB0000883	L-Valine	L-valine	Slc43a2	Large neutral amino acids transporter small subunit 4	Recon2	Transporter
+198	HMDB0000929	L-Tryptophan	L-tryptophan	Slc36a4	Neutral amino acid uniporter 4	Recon2	Transporter
+199	HMDB0000929	L-Tryptophan	L-tryptophan	Slc16a10	Monocarboxylate transporter 10	Recon2	Transporter
+200	HMDB0000172	L-Isoleucine	L-isoleucine	Slc43a2	Large neutral amino acids transporter small subunit 4	Recon2	Transporter
+201	HMDB0000517	L-Arginine	L-argininium(1+)	Slc38a4	Sodium-coupled neutral amino acid transporter 4	Recon2	Transporter
+202	HMDB0000517	L-Arginine	L-argininium(1+)	Slc7a2	Cationic amino acid transporter 2	Recon2	Transporter
+203	HMDB0000517	L-Arginine	L-argininium(1+)	Slc7a3	Cationic amino acid transporter 3	Recon2	Transporter
+204	HMDB0000177	L-Histidine	L-histidine	Slc38a4	Sodium-coupled neutral amino acid transporter 4	Recon2	Transporter
+205	HMDB0000182	L-Lysine	L-lysinium(1+)	Slc38a4	Sodium-coupled neutral amino acid transporter 4	Recon2	Transporter
+206	HMDB0000182	L-Lysine	L-lysinium(1+)	Slc7a2	Cationic amino acid transporter 2	Recon2	Transporter
+207	HMDB0000182	L-Lysine	L-lysinium(1+)	Slc7a1	High affinity cationic amino acid transporter 1	Recon2	Transporter
+208	HMDB0000182	L-Lysine	L-lysinium(1+)	Slc7a3	Cationic amino acid transporter 3	Recon2	Transporter
+209	HMDB0000214	Ornithine	Ornithine	Slc7a2	Cationic amino acid transporter 2	Recon2	Transporter
+210	HMDB0000214	Ornithine	Ornithine	Slc7a1	High affinity cationic amino acid transporter 1	Recon2	Transporter
+211	HMDB0000214	Ornithine	Ornithine	Slc7a3	Cationic amino acid transporter 3	Recon2	Transporter
+212	HMDB0000143	D-Galactose	D-Galactose	Slc2a2	Solute carrier family 2, facilitated glucose transporter member 2	Recon2	Transporter
+213	HMDB0000143	D-Galactose	D-Galactose	Slc2a3	Solute carrier family 2, facilitated glucose transporter member 3	Recon2	Transporter
+214	HMDB0000143	D-Galactose	D-Galactose	Slc2a8	Solute carrier family 2, facilitated glucose transporter member 8	Recon2	Transporter
+215	HMDB0000143	D-Galactose	D-Galactose	Slc2a10	Solute carrier family 2, facilitated glucose transporter member 10	Recon2	Transporter
+216	HMDB0000143	D-Galactose	D-Galactose	Slc2a1	Solute carrier family 2, facilitated glucose transporter member 1	Recon2	Transporter
+217	HMDB0001043	Arachidonic acid	arachidonate	Slc27a5	Long-chain fatty acid transport protein 5	Recon2	Transporter
+218	HMDB0000122	D-Glucose	D-glucose	Slc2a9	Solute carrier family 2, facilitated glucose transporter member 9	Recon2	Transporter
+219	HMDB0000122	D-Glucose	D-glucose	Slc2a2	Solute carrier family 2, facilitated glucose transporter member 2	Recon2	Transporter
+220	HMDB0000122	D-Glucose	D-glucose	Slc2a6	Solute carrier family 2, facilitated glucose transporter member 6	Recon2	Transporter
+221	HMDB0000122	D-Glucose	D-glucose	Slc2a3	Solute carrier family 2, facilitated glucose transporter member 3	Recon2	Transporter
+222	HMDB0000122	D-Glucose	D-glucose	Slc2a4	Solute carrier family 2, facilitated glucose transporter member 4	Recon2	Transporter
+223	HMDB0000122	D-Glucose	D-glucose	Slc2a8	Solute carrier family 2, facilitated glucose transporter member 8	Recon2	Transporter
+224	HMDB0000122	D-Glucose	D-glucose	Slc2a7	Solute carrier family 2, facilitated glucose transporter member 7	Recon2	Transporter
+225	HMDB0000122	D-Glucose	D-glucose	Slc2a12	Solute carrier family 2, facilitated glucose transporter member 12	Recon2	Transporter
+226	HMDB0000122	D-Glucose	D-glucose	Slc2a10	Solute carrier family 2, facilitated glucose transporter member 10	Recon2	Transporter
+227	HMDB0000122	D-Glucose	D-glucose	Slc2a1	Solute carrier family 2, facilitated glucose transporter member 1	Recon2	Transporter
+228	HMDB0001264	Dehydroascorbic acid	dehydroascorbide(1-)	Slc2a4	Solute carrier family 2, facilitated glucose transporter member 4	Recon2	Transporter
+229	HMDB0001264	Dehydroascorbic acid	dehydroascorbide(1-)	Slc2a3	Solute carrier family 2, facilitated glucose transporter member 3	Recon2	Transporter
+230	HMDB0001264	Dehydroascorbic acid	dehydroascorbide(1-)	Slc2a1	Solute carrier family 2, facilitated glucose transporter member 1	Recon2	Transporter
+231	HMDB0000073	Dopamine	dopaminium(1+)	Slc22a3	Solute carrier family 22 member 3	Recon2	Transporter
+232	HMDB0000073	Dopamine	dopaminium(1+)	Slc22a2	Solute carrier family 22 member 2	Recon2	Transporter
+233	HMDB0000073	Dopamine	dopaminium(1+)	Slc22a21	Organic cation/carnitine transporter 2	Recon2	Transporter
+234	HMDB0000073	Dopamine	dopaminium(1+)	Slc22a5	Organic cation/carnitine transporter 2	Recon2	Transporter
+235	HMDB0000169	D-Mannose	D-Mannose	Slc2a2	Solute carrier family 2, facilitated glucose transporter member 2	Recon2	Transporter
+236	HMDB0000169	D-Mannose	D-Mannose	Slc2a3	Solute carrier family 2, facilitated glucose transporter member 3	Recon2	Transporter
+237	HMDB0000169	D-Mannose	D-Mannose	Slc2a1	Solute carrier family 2, facilitated glucose transporter member 1	Recon2	Transporter
+238	HMDB0000050	Adenosine	Adenosine	Slc29a2	Equilibrative nucleoside transporter 2	Recon2	Transporter
+239	HMDB0000050	Adenosine	Adenosine	Slc29a1	Equilibrative nucleoside transporter 1	Recon2	Transporter
+240	HMDB0000216	Norepinephrine	Norepinephrine	Slc22a1	Solute carrier family 22 member 1	Recon2	Transporter
+241	HMDB0000216	Norepinephrine	Norepinephrine	Slc22a2	Solute carrier family 22 member 2	Recon2	Transporter
+242	HMDB0000216	Norepinephrine	Norepinephrine	Slc22a3	Solute carrier family 22 member 3	Recon2	Transporter
+243	HMDB0000097	Choline	Choline	Slc22a2	Solute carrier family 22 member 2	Recon2	Transporter
+244	HMDB0000097	Choline	Choline	Slc22a21	Organic cation/carnitine transporter 2	Recon2	Transporter
+245	HMDB0000097	Choline	Choline	Slc22a5	Organic cation/carnitine transporter 2	Recon2	Transporter
+246	HMDB0000259	Serotonin	serotonin(1+)	Slc22a1	Solute carrier family 22 member 1	Recon2	Transporter
+247	HMDB0000259	Serotonin	serotonin(1+)	Slc22a2	Solute carrier family 22 member 2	Recon2	Transporter
+248	HMDB0000660	D-Fructose	D-Fructose	Slc2a2	Solute carrier family 2, facilitated glucose transporter member 2	Recon2	Transporter
+249	HMDB0000660	D-Fructose	D-Fructose	Slc2a7	Solute carrier family 2, facilitated glucose transporter member 7	Recon2	Transporter
+250	HMDB0000660	D-Fructose	D-Fructose	Slc2a8	Solute carrier family 2, facilitated glucose transporter member 8	Recon2	Transporter
+251	HMDB0000660	D-Fructose	D-Fructose	Slc2a5	Solute carrier family 2, facilitated glucose transporter member 5	Recon2	Transporter
+252	HMDB0001220	Prostaglandin E2	prostaglandin E2(1-)	Slc22a1	Solute carrier family 22 member 1	Recon2	Transporter
+253	HMDB0001220	Prostaglandin E2	prostaglandin E2(1-)	Slc22a2	Solute carrier family 22 member 2	Recon2	Transporter
+254	HMDB0000296	Uridine	Uridine	Slc29a2	Equilibrative nucleoside transporter 2	Recon2	Transporter
+255	HMDB0000296	Uridine	Uridine	Slc29a1	Equilibrative nucleoside transporter 1	Recon2	Transporter
+256	HMDB0000220	Palmitic acid	Hexadecanoate (n-C16:0)	Slc27a5	Long-chain fatty acid transport protein 5	Recon2	Transporter
+257	HMDB0000305	Vitamin A	retinol	Rbp1	Retinol-binding protein 1	Recon2	Transporter
+258	HMDB0000305	Vitamin A	retinol	Rbp4	Retinol-binding protein 4	Recon2	Transporter
+259	HMDB0000305	Vitamin A	retinol	Rbp2	Retinol-binding protein 2	Recon2	Transporter
+260	HMDB0000195	Inosine	Inosine	Slc29a2	Equilibrative nucleoside transporter 2	Recon2	Transporter
+261	HMDB0000195	Inosine	Inosine	Slc29a1	Equilibrative nucleoside transporter 1	Recon2	Transporter
+262	HMDB0000089	Cytidine	Cytidine	Slc29a2	Equilibrative nucleoside transporter 2	Recon2	Transporter
+263	HMDB0000089	Cytidine	Cytidine	Slc29a1	Equilibrative nucleoside transporter 1	Recon2	Transporter
+264	HMDB0000207	Oleic acid	octadecenoate (n-C18:1)	Slc27a5	Long-chain fatty acid transport protein 5	Recon2	Transporter
+265	HMDB0000870	Histamine	histamium	Slc22a3	Solute carrier family 22 member 3	Recon2	Transporter
+266	HMDB0000870	Histamine	histamium	Slc22a2	Solute carrier family 22 member 2	Recon2	Transporter
+267	HMDB0000870	Histamine	histamium	Slc22a21	Organic cation/carnitine transporter 2	Recon2	Transporter
+268	HMDB0000870	Histamine	histamium	Slc22a5	Organic cation/carnitine transporter 2	Recon2	Transporter
+269	HMDB0000265	Liothyronine	3,3',5-triiodo-L-thyronine	Slc16a2	Monocarboxylate transporter 8	Recon2	Transporter
+270	HMDB0003550	Calcidiol	calcidiol	Cubn	Cubilin	Recon2	Transporter
+271	HMDB0003550	Calcidiol	calcidiol	Lrp2	Low-density lipoprotein receptor-related protein 2	Recon2	Transporter
+272	HMDB0003550	Calcidiol	calcidiol	Gc	Vitamin D-binding protein	Recon2	Transporter
+273	HMDB0000181	L-Dopa	L-dopa	Slc16a10	Monocarboxylate transporter 10	Recon2	Transporter
+274	HMDB0001396	5-Methyltetrahydrofolic acid	5-Methyltetrahydrofolate	Folr1	Folate receptor alpha	Recon2	Transporter
+275	HMDB0000895	Acetylcholine	acetylcholine	Slc22a1	Solute carrier family 22 member 1	Recon2	Transporter
+276	HMDB0000012	Deoxyuridine	Deoxyuridine	Slc29a2	Equilibrative nucleoside transporter 2	Recon2	Transporter
+277	HMDB0000133	Guanosine	Guanosine	Slc29a2	Equilibrative nucleoside transporter 2	Recon2	Transporter
+278	HMDB0000133	Guanosine	Guanosine	Slc29a1	Equilibrative nucleoside transporter 1	Recon2	Transporter
+279	HMDB0000157	Hypoxanthine	Hypoxanthine	Slc29a2	Equilibrative nucleoside transporter 2	Recon2	Transporter
+280	HMDB0000248	Thyroxine	L-thyroxine	Slc16a2	Monocarboxylate transporter 8	Recon2	Transporter
+281	HMDB0000273	Thymidine	Thymidine	Slc29a2	Equilibrative nucleoside transporter 2	Recon2	Transporter
+282	HMDB0000273	Thymidine	Thymidine	Slc29a1	Equilibrative nucleoside transporter 1	Recon2	Transporter
+283	HMDB0001139	Prostaglandin F2a	prostaglandin F2alpha(1-)	Slc22a1	Solute carrier family 22 member 1	Recon2	Transporter
+284	HMDB0001139	Prostaglandin F2a	prostaglandin F2alpha(1-)	Slc22a2	Solute carrier family 22 member 2	Recon2	Transporter
+285	HMDB0000673	Linoleic acid	linoleate	Slc27a5	Long-chain fatty acid transport protein 5	Recon2	Transporter
+286	HMDB0000034	Adenine	Adenine	Slc29a2	Equilibrative nucleoside transporter 2	Recon2	Transporter
+287	HMDB0000300	Uracil	uracil	Slc29a2	Equilibrative nucleoside transporter 2	Recon2	Transporter
+288	HMDB0000101	Deoxyadenosine	2-deoxyadenosine	Slc29a2	Equilibrative nucleoside transporter 2	Recon2	Transporter
+289	HMDB0000085	Deoxyguanosine	Deoxyguanosine	Slc29a2	Equilibrative nucleoside transporter 2	Recon2	Transporter
+290	HMDB0000163	D-Maltose	Maltose	Slc2a3	Solute carrier family 2, facilitated glucose transporter member 3	Recon2	Transporter
+291	HMDB0000876	Vitamin D3	calciol	Got2	Aspartate aminotransferase, mitochondrial	Recon2	Transporter
+292	HMDB0000876	Vitamin D3	calciol	Cd36	Platelet glycoprotein 4	Recon2	Receptor; Transporter
+293	HMDB0000294	Urea	Urea	Slc5a1	Sodium/glucose cotransporter 1	Recon2	Transporter
+294	HMDB0000294	Urea	Urea	Slc14a2	Urea transporter 2	Recon2	Transporter
+295	HMDB0000294	Urea	Urea	Slc5a5	Sodium/iodide cotransporter	Recon2	Transporter
+296	HMDB0000294	Urea	Urea	Slc14a1	Urea transporter 1	Recon2	Transporter
+297	HMDB0000071	Deoxyinosine	Deoxyinosine	Slc29a2	Equilibrative nucleoside transporter 2	Recon2	Transporter
+298	HMDB0000014	Deoxycytidine	Deoxycytidine	Slc29a2	Equilibrative nucleoside transporter 2	Recon2	Transporter
+299	HMDB0002925	Dihomo-gamma-linolenic acid	dihomo-gamma-linolenic acid (n-6)	Slc27a5	Long-chain fatty acid transport protein 5	Recon2	Transporter
+300	HMDB0000262	Thymine	Thymine	Slc29a2	Equilibrative nucleoside transporter 2	Recon2	Transporter
+301	HMDB0000806	Myristic acid	tetradecanoate (n-C14:0)	Slc27a2	Long-chain fatty acid transport protein 2	Recon2	Transporter
+302	HMDB0000827	Stearic acid	octadecanoate (n-C18:0)	Slc27a5	Long-chain fatty acid transport protein 5	Recon2	Transporter
+303	HMDB0003073	gamma-Linolenic acid	gamma-linolenate	Slc27a5	Long-chain fatty acid transport protein 5	Recon2	Transporter
+304	HMDB0001388	alpha-Linolenic acid	alpha-linolenate	Slc27a5	Long-chain fatty acid transport protein 5	Recon2	Transporter
+305	HMDB0000132	Guanine	Guanine	Slc29a2	Equilibrative nucleoside transporter 2	Recon2	Transporter
+306	HMDB0001514	Glucosamine	D-Glucosamine	Slc2a2	Solute carrier family 2, facilitated glucose transporter member 2	Recon2	Transporter
+307	HMDB0001514	Glucosamine	D-Glucosamine	Slc2a4	Solute carrier family 2, facilitated glucose transporter member 4	Recon2	Transporter
+308	HMDB0001514	Glucosamine	D-Glucosamine	Slc2a1	Solute carrier family 2, facilitated glucose transporter member 1	Recon2	Transporter
+309	HMDB0003178	Heme	Protoheme	Slc46a1	Proton-coupled folate transporter	Recon2	Transporter
+310	HMDB0003178	Heme	Protoheme	Lrp1	Prolow-density lipoprotein receptor-related protein 1	Recon2	Transporter
+311	HMDB0001178	Adenosine diphosphate ribose	ADPribose	Cd38	ADP-ribosyl cyclase/cyclic ADP-ribose hydrolase 1	Recon2	Transporter
+312	HMDB0000190	L-Lactic acid	L-Lactic acid	Hcar1	Hydroxycarboxylic acid receptor 1	30728759, 31259764	Receptor
+313	HMDB0000538	Adenosine triphosphate	ATP	P2rx1	P2X purinoceptor 1	24335194	Receptor
+314	HMDB0000538	Adenosine triphosphate	ATP	P2rx2	P2X purinoceptor 2	24335194	Receptor
+315	HMDB0000538	Adenosine triphosphate	ATP	P2rx3	P2X purinoceptor 3	24335194	Receptor
+316	HMDB0000538	Adenosine triphosphate	ATP	P2rx4	P2X purinoceptor 4	24335194	Receptor
+317	HMDB0000538	Adenosine triphosphate	ATP	P2rx5	P2X purinoceptor 5	24335194	Receptor
+318	HMDB0000538	Adenosine triphosphate	ATP	P2rx6	P2X purinoceptor 6	24335194	Receptor
+319	HMDB0000538	Adenosine triphosphate	ATP	P2rx7	P2X purinoceptor 7	24335194	Receptor
+320	HMDB0001341	ADP	ADP	P2ry1	P2Y purinoceptor 1	24335194	Receptor
+321	HMDB0000538	Adenosine triphosphate	ATP	P2ry1	P2Y purinoceptor 1	24335194	Receptor
+322	HMDB0000538	Adenosine triphosphate	ATP	P2ry2	P2Y purinoceptor 2	24335194	Receptor
+323	HMDB0000285	Uridine triphosphate	UTP	P2ry2	P2Y purinoceptor 2	24335194	Receptor
+324	HMDB0000285	Uridine triphosphate	UTP	P2ry4	P2Y purinoceptor 4	24335194	Receptor
+325	HMDB0000538	Adenosine triphosphate	Adenosine triphosphate	P2ry4	P2Y purinoceptor 4	24335194	Receptor
+326	HMDB0000285	Uridine triphosphate	UTP	P2ry6	P2Y purinoceptor 6	24335194	Receptor
+327	HMDB0000538	Adenosine triphosphate	Adenosine triphosphate	P2ry6	P2Y purinoceptor 6	24335194	Receptor
+328	HMDB0001341	ADP	ADP	P2ry12	P2Y purinoceptor 12	24335194	Receptor
+329	HMDB0000538	Adenosine triphosphate	Adenosine triphosphate	P2ry12	P2Y purinoceptor 12	24335194	Receptor
+330	HMDB0001341	ADP	ADP	P2ry13	P2Y purinoceptor 13	24335194	Receptor
+331	HMDB0000538	Adenosine triphosphate	Adenosine triphosphate	P2ry13	P2Y purinoceptor 13	24335194	Receptor
+332	HMDB0000286	Uridine diphosphate glucose	Uridine diphosphate glucose	P2ry14	P2Y purinoceptor 14	24335194	Receptor
+333	HMDB0000067	Cholesterol	Cholesterol	Npc1l1	NPC1-like intracellular cholesterol transporter 1	21763723	Receptor
+334	HMDB0002961	Dihydrotestosterone	Dihydrotestosterone	Ar	Androgen receptor	https://en.wikipedia.org/wiki/Androgen_receptor	Nuclear Receptor
+335	HMDB0000234	Testosterone	Testosterone	Ar	Androgen receptor	https://en.wikipedia.org/wiki/Androgen_receptor	Nuclear Receptor
+336	HMDB0000131	Glycerol	Glycerol	Aqp3	Aquaporin-3	32213983	Receptor
+337	HMDB0000043	Betaine	Betaine	Slc6a12	Sodium- and chloride-dependent betaine transporter	32213983	Transporter
+338	HMDB0000895	Acetylcholine	Acetylcholine	Chrm4	Muscarinic acetylcholine receptor M4	https://gpcrdb.org/ligand/statistics	Receptor
+339	HMDB0000895	Acetylcholine	Acetylcholine	Chrm5	Muscarinic acetylcholine receptor M5	https://gpcrdb.org/ligand/statistics	Receptor
+340	HMDB0000208	Oxoglutaric acid	Oxoglutaric acid	Oxgr1	2-oxoglutarate receptor 1	https://gpcrdb.org/ligand/statistics	Receptor
+341	HMDB0000248	Thyroxine	Thyroxine	Thra	Thyroid hormone receptor alpha	https://en.wikipedia.org/wiki/Nuclear_receptor#Ligands	Nuclear Receptor
+342	HMDB0000248	Thyroxine	Thyroxine	Thrb	Thyroid hormone receptor beta	https://en.wikipedia.org/wiki/Nuclear_receptor#Ligands	Nuclear Receptor
+343	HMDB0000305	Vitamin A	Vitamin A	Rara	Retinoic acid receptor alpha	https://en.wikipedia.org/wiki/Nuclear_receptor#Ligands	Nuclear Receptor
+344	HMDB0001358	Retinal	Retinal	Rara	Retinoic acid receptor alpha	https://en.wikipedia.org/wiki/Nuclear_receptor#Ligands	Nuclear Receptor
+345	HMDB0000561	beta-Carotene	beta-Carotene	Rara	Retinoic acid receptor alpha	https://en.wikipedia.org/wiki/Nuclear_receptor#Ligands	Nuclear Receptor
+346	HMDB0000305	Vitamin A	Vitamin A	Rarb	Retinoic acid receptor beta	https://en.wikipedia.org/wiki/Nuclear_receptor#Ligands	Nuclear Receptor
+347	HMDB0001358	Retinal	Retinal	Rarb	Retinoic acid receptor beta	https://en.wikipedia.org/wiki/Nuclear_receptor#Ligands	Nuclear Receptor
+348	HMDB0000561	beta-Carotene	beta-Carotene	Rarb	Retinoic acid receptor beta	https://en.wikipedia.org/wiki/Nuclear_receptor#Ligands	Nuclear Receptor
+349	HMDB0000305	Vitamin A	Vitamin A	Rarg	Retinoic acid receptor gamma	https://en.wikipedia.org/wiki/Nuclear_receptor#Ligands	Nuclear Receptor
+350	HMDB0001358	Retinal	Retinal	Rarg	Retinoic acid receptor gamma	https://en.wikipedia.org/wiki/Nuclear_receptor#Ligands	Nuclear Receptor
+351	HMDB0000561	beta-Carotene	beta-Carotene	Rarg	Retinoic acid receptor gamma	https://en.wikipedia.org/wiki/Nuclear_receptor#Ligands	Nuclear Receptor
+352	HMDB0003178	Heme	Heme	Nr1d1	Nuclear receptor subfamily 1 group D member 1	https://en.wikipedia.org/wiki/Nuclear_receptor#Ligands	Nuclear Receptor
+353	HMDB0003178	Heme	Heme	Nr1d2	Nuclear receptor subfamily 1 group D member 2	https://en.wikipedia.org/wiki/Nuclear_receptor#Ligands	Nuclear Receptor
+354	HMDB0000067	Cholesterol	Cholesterol	Rora	Nuclear receptor ROR-alpha	https://en.wikipedia.org/wiki/Nuclear_receptor#Ligands	Nuclear Receptor
+355	HMDB0000067	Cholesterol	Cholesterol	Rorb	Nuclear receptor ROR-beta	https://en.wikipedia.org/wiki/Nuclear_receptor#Ligands	Nuclear Receptor
+356	HMDB0000067	Cholesterol	Cholesterol	Rorc	Nuclear receptor ROR-gamma	https://en.wikipedia.org/wiki/Nuclear_receptor#Ligands	Nuclear Receptor
+357	HMDB0000876	Vitamin D3	Vitamin D3	Vdr	Vitamin D3 receptor	https://en.wikipedia.org/wiki/Nuclear_receptor#Ligands	Nuclear Receptor
+358	HMDB0001358	Retinal	Retinal	Rxra	Retinoic acid receptor RXR-alpha	https://en.wikipedia.org/wiki/Nuclear_receptor#Ligands	Nuclear Receptor
+359	HMDB0001852	all-trans-Retinoic acid	all-trans-Retinoic acid	Rxra	Retinoic acid receptor RXR-alpha	https://en.wikipedia.org/wiki/Nuclear_receptor#Ligands	Nuclear Receptor
+360	HMDB0002369	9-cis-Retinoic acid	9-cis-Retinoic acid	Rxra	Retinoic acid receptor RXR-alpha	https://en.wikipedia.org/wiki/Nuclear_receptor#Ligands	Nuclear Receptor
+361	HMDB0006219	13-cis-Retinoic acid	13-cis-Retinoic acid	Rxra	Retinoic acid receptor RXR-alpha	https://en.wikipedia.org/wiki/Nuclear_receptor#Ligands	Nuclear Receptor
+362	HMDB0001358	Retinal	Retinal	Rxrb	Retinoic acid receptor RXR-beta	https://en.wikipedia.org/wiki/Nuclear_receptor#Ligands	Nuclear Receptor
+363	HMDB0001852	all-trans-Retinoic acid	all-trans-Retinoic acid	Rxrb	Retinoic acid receptor RXR-beta	https://en.wikipedia.org/wiki/Nuclear_receptor#Ligands	Nuclear Receptor
+364	HMDB0002369	9-cis-Retinoic acid	9-cis-Retinoic acid	Rxrb	Retinoic acid receptor RXR-beta	https://en.wikipedia.org/wiki/Nuclear_receptor#Ligands	Nuclear Receptor
+365	HMDB0006219	13-cis-Retinoic acid	13-cis-Retinoic acid	Rxrb	Retinoic acid receptor RXR-beta	https://en.wikipedia.org/wiki/Nuclear_receptor#Ligands	Nuclear Receptor
+366	HMDB0001358	Retinal	Retinal	Rxrg	Retinoic acid receptor RXR-gamma	https://en.wikipedia.org/wiki/Nuclear_receptor#Ligands	Nuclear Receptor
+367	HMDB0001852	all-trans-Retinoic acid	all-trans-Retinoic acid	Rxrg	Retinoic acid receptor RXR-gamma	https://en.wikipedia.org/wiki/Nuclear_receptor#Ligands	Nuclear Receptor
+368	HMDB0002369	9-cis-Retinoic acid	9-cis-Retinoic acid	Rxrg	Retinoic acid receptor RXR-gamma	https://en.wikipedia.org/wiki/Nuclear_receptor#Ligands	Nuclear Receptor
+369	HMDB0006219	13-cis-Retinoic acid	13-cis-Retinoic acid	Rxrg	Retinoic acid receptor RXR-gamma	https://en.wikipedia.org/wiki/Nuclear_receptor#Ligands	Nuclear Receptor
+370	HMDB0006216	11-cis-Retinol	11-cis-Retinol	Nr2f2	COUP transcription factor 2	https://en.wikipedia.org/wiki/Nuclear_receptor#Ligands	Nuclear Receptor
+371	HMDB0000063	Cortisol	Cortisol	Nr3c1	Glucocorticoid receptor	https://en.wikipedia.org/wiki/Nuclear_receptor#Ligands	Nuclear Receptor
+372	HMDB0000037	Aldosterone	Aldosterone	Nr3c2	Mineralocorticoid receptor	https://en.wikipedia.org/wiki/Nuclear_receptor#Ligands	Nuclear Receptor
+373	HMDB0001830	Progesterone	Progesterone	Pgr	Progesterone receptor	https://en.wikipedia.org/wiki/Nuclear_receptor#Ligands	Nuclear Receptor
+374	HMDB0002369	9-cis-Retinoic acid	9-cis-Retinoic acid	Vdr	Vitamin D3 receptor	15824121	Nuclear Receptor
+375	HMDB0000053	Androstenedione	Androstenedione	Ar	Androgen receptor	16524719; 28457967; 12647261; 20534728; 24861263; 23856005; 18645714; 23258647	Nuclear Receptor
+376	HMDB0000031	Androsterone	Androsterone	Ar	Androgen receptor	21303972; 24861263; 12647261	Nuclear Receptor
+377	HMDB0003550	Calcidiol	Calcidiol	Vdr	Vitamin D3 receptor	25201891; 33348854	Nuclear Receptor
+378	HMDB0001903	Calcitriol	Calcitriol	Vdr	Vitamin D3 receptor	29657326; 15077124; 20303786; 28008815; 9211344; 8574944; 9211349; 19667157; 16061850; 10079704; 17629157; 15225804; 21337382; 19371337; 21647319; 16048257; 29367669; 22276021; 29113124; 24597598; 27530414; 12899526; 9144338; 20798257; 12465754; 18290711; 33348854; 33354999; 26000306; 15861036; 12753260; 10633458; 16886687; 17489022; 19034868; 19705334; 25614680; 33211721; 22213328; 8147918; 24060611; 7552094; 20592360; 22720752	Nuclear Receptor
+379	HMDB0000151	Estradiol	Estradiol	Esr2	Estrogen receptor beta	25765287; 20173016	Nuclear Receptor
+380	HMDB0000761	Lithocholic acid	Lithocholic acid	Vdr	Vitamin D3 receptor	32863311; 24343899; 20888898; 20006981; 29074825; 19244278; 18180267; 15489543; 19581390; 32213983; 14525957; 16724925; 15824121	Nuclear Receptor
+381	HMDB0000216	Norepinephrine	Norepinephrine	Adra1a	Alpha-1A adrenergic receptor	https://en.wikipedia.org/wiki/Adrenergic_receptor	Receptor
+382	HMDB0000068	Epinephrine	Epinephrine	Adra1a	Alpha-1A adrenergic receptor	https://en.wikipedia.org/wiki/Adrenergic_receptor	Receptor
+383	HMDB0000216	Norepinephrine	Norepinephrine	Adra1b	Alpha-1B adrenergic receptor	https://en.wikipedia.org/wiki/Adrenergic_receptor	Receptor
+384	HMDB0000068	Epinephrine	Epinephrine	Adra1b	Alpha-1B adrenergic receptor	https://en.wikipedia.org/wiki/Adrenergic_receptor	Receptor
+385	HMDB0000216	Norepinephrine	Norepinephrine	Adra1d	Alpha-1D adrenergic receptor	https://en.wikipedia.org/wiki/Adrenergic_receptor	Receptor
+386	HMDB0000068	Epinephrine	Epinephrine	Adra1d	Alpha-1D adrenergic receptor	https://en.wikipedia.org/wiki/Adrenergic_receptor	Receptor
+387	HMDB0000216	Norepinephrine	Norepinephrine	Adra2a	Alpha-2A adrenergic receptor	https://en.wikipedia.org/wiki/Adrenergic_receptor	Receptor
+388	HMDB0000068	Epinephrine	Epinephrine	Adra2a	Alpha-2A adrenergic receptor	https://en.wikipedia.org/wiki/Adrenergic_receptor	Receptor
+389	HMDB0000216	Norepinephrine	Norepinephrine	Adra2b	Alpha-2B adrenergic receptor	https://en.wikipedia.org/wiki/Adrenergic_receptor	Receptor
+390	HMDB0000068	Epinephrine	Epinephrine	Adra2b	Alpha-2B adrenergic receptor	https://en.wikipedia.org/wiki/Adrenergic_receptor	Receptor
+391	HMDB0000216	Norepinephrine	Norepinephrine	Adra2c	Alpha-2C adrenergic receptor	https://en.wikipedia.org/wiki/Adrenergic_receptor	Receptor
+392	HMDB0000068	Epinephrine	Epinephrine	Adra2c	Alpha-2C adrenergic receptor	https://en.wikipedia.org/wiki/Adrenergic_receptor	Receptor
+393	HMDB0000216	Norepinephrine	Norepinephrine	Adrb1	Beta-1 adrenergic receptor	https://en.wikipedia.org/wiki/Adrenergic_receptor	Receptor
+394	HMDB0000068	Epinephrine	Epinephrine	Adrb1	Beta-1 adrenergic receptor	https://en.wikipedia.org/wiki/Adrenergic_receptor	Receptor
+395	HMDB0000216	Norepinephrine	Norepinephrine	Adrb2	Beta-2 adrenergic receptor	https://en.wikipedia.org/wiki/Adrenergic_receptor	Receptor
+396	HMDB0000068	Epinephrine	Epinephrine	Adrb2	Beta-2 adrenergic receptor	https://en.wikipedia.org/wiki/Adrenergic_receptor	Receptor
+397	HMDB0000216	Norepinephrine	Norepinephrine	Adrb3	Beta-3 adrenergic receptor	https://en.wikipedia.org/wiki/Adrenergic_receptor	Receptor
+398	HMDB0000068	Epinephrine	Epinephrine	Adrb3	Beta-3 adrenergic receptor	https://en.wikipedia.org/wiki/Adrenergic_receptor	Receptor
+399	HMDB0001852	all-trans-Retinoic acid	all-trans-Retinoic acid	Rara	Retinoic acid receptor alpha	20615454	Nuclear Receptor
+400	HMDB0001085	Leukotriene B4	Leukotriene B4	Ppara	Peroxisome proliferator-activated receptor alpha	20615454	Nuclear Receptor
+401	HMDB0001547	Corticosterone	Corticosterone	Nr3c1	Glucocorticoid receptor	20615454	Nuclear Receptor
+402	HMDB0000518	Chenodeoxycholic acid	Chenodeoxycholic acid	Nr1h4	Bile acid receptor	20615454	Nuclear Receptor
+403	HMDB0006247	25-Hydroxycholesterol	25-Hydroxycholesterol	Nr1h3	Oxysterols receptor LXR-alpha	20615454	Nuclear Receptor
+404	HMDB0000121	Folic acid	Folic acid	Slc19a1	Reduced folate transporter	28284395	Transporter
+405	HMDB0000235	Thiamine	Thiamine	Slc19a3	Thiamine transporter 2	28284395	Transporter
+406	HMDB0000190	L-Lactic acid	Lactate	Slc16a1	Monocarboxylate transporter 1	32144120; 22428047	Transporter
+407	HMDB0000077	Dehydroepiandrosterone	Dehydroepiandrosterone	Ar	Androgen receptor	21303972; 24861263; 12647261	Nuclear Receptor
+408	HMDB0000586	Potassium	Potassium	Abcc8	ATP-binding cassette sub-family C member 8	https://en.wikipedia.org/wiki/ABCC8; 23226049; 24399968; 22050960; 24700710	Transporter
+409	HMDB0006111	12-HETE	12-HETE	Gpr31b	12-(S)-hydroxy-5,8,10,14-eicosatetraenoic acid receptor	32918516	Receptor
+410	HMDB0000757	Glycogen	Glycogen	Stbd1	Starch-binding domain-containing protein 1	20810658; 21893048; 32927708; 24837458	Receptor
+411	HMDB0000715	Kynurenic acid	Kynurenic acid	Gpr35	G-protein coupled receptor 35	22523636; 23123095; 30141532; 29414686; 16754668	Receptor
+412	HMDB0004385	Lipoxin A4	Lipoxin A4	Esr1	Estrogen receptor	24587003	Nuclear Receptor
+413	HMDB0000588	Sodium	Sodium	Slc5a1	Sodium/glucose cotransporter 1	Recon2	Transporter
+414	HMDB0000588	Sodium	Sodium	Slc5a5	Sodium/iodide cotransporter	Recon2	Transporter
+415	HMDB0000588	Sodium	Sodium	Slc5a3	Sodium/myo-inositol cotransporter	Recon2	Transporter
+416	HMDB0000719	L-Homoserine	L-homoserine	Slc43a1	Large neutral amino acids transporter small subunit 3	Recon2	Transporter
+417	HMDB0000492	Chloride ion	Chloride	Slc17a1	Sodium-dependent phosphate transport protein 1	Recon2	Transporter
+418	HMDB0003229	Palmitoleic acid	Hexadecenoate (n-C16:1)	Slc27a2	Long-chain fatty acid transport protein 2	Recon2	Transporter
+419	HMDB0012238	Iodide	iodide	Slc5a8	Sodium-coupled monocarboxylate transporter 1	Recon2	Transporter
+420	HMDB0002003	Tetracosanoic acid	lignocerate	Slc27a2	Long-chain fatty acid transport protein 2	Recon2	Transporter
+421	HMDB0001893	alpha-Tocopherol	(+)-alpha-tocopherol	Scarb1	Scavenger receptor class B member 1	Recon2	Receptor
+422	HMDB0001893	alpha-Tocopherol	(+)-alpha-tocopherol	Npc1l1	NPC1-like intracellular cholesterol transporter 1	Recon2	Receptor
+423	HMDB0000573	Elaidic acid	elaidate	Slc27a2	Long-chain fatty acid transport protein 2	Recon2	Transporter
+424	HMDB0002086	Adenosylcobalamin	Adenosylcobalamin	Cubn	Cubilin	Recon2	Transporter
+425	HMDB0002086	Adenosylcobalamin	Adenosylcobalamin	Amn	Protein amnionless [Cleaved into: Soluble protein amnionless]	Recon2	Transporter
+426	HMDB0000630	Cytosine	cytosine	Slc29a2	Equilibrative nucleoside transporter 2	Recon2	Transporter
+427	HMDB0006543	Debrisoquine	debrisoquine	Slc22a2	Solute carrier family 22 member 2	Recon2	Transporter
+428	HMDB0011733	Glycyl-glycine	Glycyl-glycine	Slc15a1	Solute carrier family 15 member 1	Recon2	Transporter
+429	HMDB0000295	Uridine 5'-diphosphate	Uridine 5'-diphosphate	P2ry6	P2Y purinoceptor 6	24335194	Receptor
+430	HMDB0000801	Phytanic acid	Phytanic acid	Ppara	Peroxisome proliferator-activated receptor alpha	11923221	Nuclear Receptor
+431	HMDB0000801	Phytanic acid	Phytanic acid	Pparg	Peroxisome proliferator-activated receptor gamma	11923221	Nuclear Receptor
+432	HMDB0005079	15-Deoxy-d-12,14-PGJ2	15-Deoxy-d-12,14-PGJ2	Pparg	Peroxisome proliferator-activated receptor gamma	20615454	Nuclear Receptor
+433	HMDB0000016	Deoxycorticosterone	Deoxycorticosterone	Nr3c1	Glucocorticoid receptor	Cellinker	Nuclear Receptor
+434	HMDB0000016	Deoxycorticosterone	Deoxycorticosterone	Nr3c2	Mineralocorticoid receptor	Cellinker	Nuclear Receptor
+435	HMDB0000039	Butyric acid	Butyric acid	Ffar2	Free fatty acid receptor 2	Cellinker	Receptor
+436	HMDB0000039	Butyric acid	Butyric acid	Ffar3	Free fatty acid receptor 3	Cellinker	Receptor
+437	HMDB0000039	Butyric acid	Butyric acid	Hcar2	Hydroxycarboxylic acid receptor 2	Cellinker	Receptor
+438	HMDB0000042	Acetic acid	Acetic acid	Ffar2	Free fatty acid receptor 2	Cellinker	Receptor
+439	HMDB0000045	Adenosine monophosphate	Adenosine monophosphate	Trpm4	Transient receptor potential cation channel subfamily M member 4	Cellinker	Receptor; Channel
+440	HMDB0000056	beta-Alanine	beta-Alanine	Mrgprd	Mas-related G-protein coupled receptor member D	Cellinker	Receptor
+441	HMDB0000058	Cyclic AMP	Cyclic AMP	Cnga3	Cyclic nucleotide-gated cation channel alpha-3	Cellinker	Channel
+442	HMDB0000073	Dopamine	Dopamine	Comt	Catechol O-methyltransferase	Cellinker	Enzyme
+443	HMDB0000112	gamma-Aminobutyric acid	gamma-Aminobutyric acid	Kctd12	BTB/POZ domain-containing protein KCTD12	Cellinker	Channel
+444	HMDB0000112	gamma-Aminobutyric acid	gamma-Aminobutyric acid	Kctd12b	BTB/POZ domain-containing protein KCTD12	Cellinker	Channel
+445	HMDB0000112	gamma-Aminobutyric acid	gamma-Aminobutyric acid	Kctd16	BTB/POZ domain-containing protein KCTD16	Cellinker	Channel
+446	HMDB0000112	gamma-Aminobutyric acid	gamma-Aminobutyric acid	Kctd8	BTB/POZ domain-containing protein KCTD8	Cellinker	Channel
+447	HMDB0000112	gamma-Aminobutyric acid	gamma-Aminobutyric acid	Gabra2	Gamma-aminobutyric acid receptor subunit alpha-2	Cellinker	Receptor
+448	HMDB0000112	gamma-Aminobutyric acid	gamma-Aminobutyric acid	Gabra3	Gamma-aminobutyric acid receptor subunit alpha-3	Cellinker	Receptor
+449	HMDB0000112	gamma-Aminobutyric acid	gamma-Aminobutyric acid	Gabra5	Gamma-aminobutyric acid receptor subunit alpha-5	Cellinker	Receptor
+450	HMDB0000112	gamma-Aminobutyric acid	gamma-Aminobutyric acid	Gabra6	Gamma-aminobutyric acid receptor subunit alpha-6	Cellinker	Receptor
+451	HMDB0000112	gamma-Aminobutyric acid	gamma-Aminobutyric acid	Gabrb1	Gamma-aminobutyric acid receptor subunit beta-1	Cellinker	Receptor
+452	HMDB0000112	gamma-Aminobutyric acid	gamma-Aminobutyric acid	Gabrb3	Gamma-aminobutyric acid receptor subunit beta-3	Cellinker	Receptor
+453	HMDB0000112	gamma-Aminobutyric acid	gamma-Aminobutyric acid	Gabrg1	Gamma-aminobutyric acid receptor subunit gamma-1	Cellinker	Receptor
+454	HMDB0000112	gamma-Aminobutyric acid	gamma-Aminobutyric acid	Gabrg3	Gamma-aminobutyric acid receptor subunit gamma-3	Cellinker	Receptor
+455	HMDB0000123	Glycine	Glycine	Grin2a	Glutamate receptor ionotropic, NMDA 2A	Cellinker	Receptor
+456	HMDB0000123	Glycine	Glycine	Grin2b	Glutamate receptor ionotropic, NMDA 2B	Cellinker	Receptor
+457	HMDB0000123	Glycine	Glycine	Grin2c	Glutamate receptor ionotropic, NMDA 2C	Cellinker	Receptor
+458	HMDB0000123	Glycine	Glycine	Grin2d	Glutamate receptor ionotropic, NMDA 2D	Cellinker	Receptor
+459	HMDB0000123	Glycine	Glycine	Gprc6a	G-protein coupled receptor family C group 6 member A	Cellinker	Receptor
+460	HMDB0000123	Glycine	Glycine	Glrb	Glycine receptor subunit beta	Cellinker	Receptor
+461	HMDB0000123	Glycine	Glycine	Glra4	Glycine Receptor Alpha 4	Cellinker	Receptor
+462	HMDB0000123	Glycine	Glycine	Slc6a9	Sodium- and chloride-dependent glycine transporter 1	Cellinker	Transporter
+463	HMDB0000123	Glycine	Glycine	Slc6a5	Sodium- and chloride-dependent glycine transporter 2	Cellinker	Transporter
+464	HMDB0000123	Glycine	Glycine	Glra2	Glycine receptor subunit alpha-2	Cellinker	Receptor
+465	HMDB0000123	Glycine	Glycine	Glra1	Glycine receptor subunit alpha-1	Cellinker	Receptor
+466	HMDB0000123	Glycine	Glycine	Glra3	Glycine receptor subunit alpha-3	Cellinker	Receptor
+467	HMDB0000148	L-Glutamic acid	L-Glutamic acid	Grm6	Metabotropic glutamate receptor 6	Cellinker	Receptor
+468	HMDB0000148	L-Glutamic acid	L-Glutamic acid	Grin1	Glutamate receptor ionotropic, NMDA 1	Cellinker	Receptor
+469	HMDB0000148	L-Glutamic acid	L-Glutamic acid	Grin2a	Glutamate receptor ionotropic, NMDA 2A	Cellinker	Receptor
+470	HMDB0000148	L-Glutamic acid	L-Glutamic acid	Grin2b	Glutamate receptor ionotropic, NMDA 2B	Cellinker	Receptor
+471	HMDB0000148	L-Glutamic acid	L-Glutamic acid	Grin2c	Glutamate receptor ionotropic, NMDA 2C	Cellinker	Receptor
+472	HMDB0000148	L-Glutamic acid	L-Glutamic acid	Grin2d	Glutamate receptor ionotropic, NMDA 2D	Cellinker	Receptor
+473	HMDB0000148	L-Glutamic acid	L-Glutamic acid	Grin3b	Glutamate receptor ionotropic, NMDA 3B	Cellinker	Receptor
+474	HMDB0000148	L-Glutamic acid	L-Glutamic acid	Grik1	Glutamate receptor ionotropic, kainate 1	Cellinker	Receptor
+475	HMDB0000148	L-Glutamic acid	L-Glutamic acid	Grik3	Glutamate receptor ionotropic, kainate 3	Cellinker	Receptor
+476	HMDB0000148	L-Glutamic acid	L-Glutamic acid	Grik5	Glutamate receptor ionotropic, kainate 5	Cellinker	Receptor
+477	HMDB0000159	L-Phenylalanine	L-Phenylalanine	Gpr139	Probable G-protein coupled receptor 139	Cellinker	Receptor
+478	HMDB0000161	L-Alanine	L-Alanine	Gprc6a	G-protein coupled receptor family C group 6 member A	Cellinker	Receptor
+479	HMDB0000181	L-Dopa	L-Dopa	Gpr143	G-protein coupled receptor 143	Cellinker	Receptor
+480	HMDB0000182	L-Lysine	L-Lysine	Gprc6a	G-protein coupled receptor family C group 6 member A	Cellinker	Receptor
+481	HMDB0000187	L-Serine	L-Serine	Gprc6a	G-protein coupled receptor family C group 6 member A	Cellinker	Receptor
+482	HMDB0000191	L-Aspartic acid	L-Aspartic acid	Grin1	Glutamate receptor ionotropic, NMDA 1	Cellinker	Receptor
+483	HMDB0000191	L-Aspartic acid	L-Aspartic acid	Grin2a	Glutamate receptor ionotropic, NMDA 2A	Cellinker	Receptor
+484	HMDB0000191	L-Aspartic acid	L-Aspartic acid	Grin2b	Glutamate receptor ionotropic, NMDA 2B	Cellinker	Receptor
+485	HMDB0000191	L-Aspartic acid	L-Aspartic acid	Grin2c	Glutamate receptor ionotropic, NMDA 2C	Cellinker	Receptor
+486	HMDB0000191	L-Aspartic acid	L-Aspartic acid	Grin2d	Glutamate receptor ionotropic, NMDA 2D	Cellinker	Receptor
+487	HMDB0000207	Oleic acid	Oleic acid	Ffar1	Free fatty acid receptor 1	Cellinker	Receptor
+488	HMDB0000207	Oleic acid	Oleic acid	Ffar4	Free fatty acid receptor 4	Cellinker	Receptor
+489	HMDB0000207	Oleic acid	Oleic acid	Pld2	Phospholipase D2	Cellinker	Enzyme
+490	HMDB0000214	Ornithine	Ornithine	Gprc6a	G-protein coupled receptor family C group 6 member A	Cellinker	Receptor
+491	HMDB0000216	Norepinephrine	Norepinephrine	Slc6a2	Sodium-dependent noradrenaline transporter	Cellinker	Transporter
+492	HMDB0000216	Norepinephrine	Norepinephrine	Comt	Catechol O-methyltransferase	Cellinker	Enzyme
+493	HMDB0000237	Propionic acid	Propionic acid	Ffar2	Free fatty acid receptor 2	Cellinker	Receptor
+494	HMDB0000237	Propionic acid	Propionic acid	Ffar3	Free fatty acid receptor 3	Cellinker	Receptor
+495	HMDB0000251	Taurine	Taurine	Glra1	Glycine receptor subunit alpha-1	Cellinker	Receptor
+496	HMDB0000251	Taurine	Taurine	Glra2	Glycine receptor subunit alpha-2	Cellinker	Receptor
+497	HMDB0000251	Taurine	Taurine	Glra3	Glycine receptor subunit alpha-3	Cellinker	Receptor
+498	HMDB0000251	Taurine	Taurine	Glrb	Glycine receptor subunit beta	Cellinker	Receptor
+499	HMDB0000252	Sphingosine	Sphingosine	Trpm3	Transient receptor potential cation channel subfamily M member 3	Cellinker	Receptor; Channel
+500	HMDB0000254	Succinic acid	Succinic acid	Trpc6	Short transient receptor potential channel 6	Cellinker	Receptor
+501	HMDB0000259	Serotonin	Serotonin	Htr1f	5-hydroxytryptamine receptor 1F	Cellinker	Receptor
+502	HMDB0000259	Serotonin	Serotonin	Htr5a	5-hydroxytryptamine receptor 5A	Cellinker	Receptor
+503	HMDB0000259	Serotonin	Serotonin	Htr7	5-hydroxytryptamine receptor 7	Cellinker	Receptor
+504	HMDB0000259	Serotonin	Serotonin	Drd1	D(1A) dopamine receptor	Cellinker	Receptor
+505	HMDB0000259	Serotonin	Serotonin	Drd5	D(1B) dopamine receptor	Cellinker	Receptor
+506	HMDB0000269	Sphinganine	Sphinganine	Trpm3	Transient receptor potential cation channel subfamily M member 3	Cellinker	Receptor; Channel
+507	HMDB0000272	Phosphoserine	Phosphoserine	Grm4	Metabotropic glutamate receptor 4	Cellinker	Receptor
+508	HMDB0000272	Phosphoserine	Phosphoserine	Grm6	Metabotropic glutamate receptor 6	Cellinker	Receptor
+509	HMDB0000272	Phosphoserine	Phosphoserine	Grm7	Metabotropic glutamate receptor 7	Cellinker	Receptor
+510	HMDB0000272	Phosphoserine	Phosphoserine	Grm8	Metabotropic glutamate receptor 8	Cellinker	Receptor
+511	HMDB0000277	Sphingosine 1-phosphate	Sphingosine 1-phosphate	Gpr12	G-protein coupled receptor 12	Cellinker	Receptor
+512	HMDB0000277	Sphingosine 1-phosphate	Sphingosine 1-phosphate	Gpr3	G-protein coupled receptor 3	Cellinker	Receptor
+513	HMDB0000277	Sphingosine 1-phosphate	Sphingosine 1-phosphate	Gpr63	Probable G-protein coupled receptor 63	Cellinker	Receptor
+514	HMDB0000277	Sphingosine 1-phosphate	Sphingosine 1-phosphate	P2ry10	Putative P2Y purinoceptor 10	Cellinker	Receptor
+515	HMDB0000277	Sphingosine 1-phosphate	Sphingosine 1-phosphate	S1pr4	Sphingosine 1-phosphate receptor 4	Cellinker	Receptor
+516	HMDB0000286	Uridine diphosphate glucose	Uridine diphosphate glucose	Gpr17	Uracil nucleotide/cysteinyl leukotriene receptor	Cellinker	Receptor
+517	HMDB0000295	Uridine 5'-diphosphate	Uridine 5'-diphosphate	Gpr17	Uracil nucleotide/cysteinyl leukotriene receptor	Cellinker	Receptor
+518	HMDB0000295	Uridine 5'-diphosphate	Uridine 5'-diphosphate	P2ry14	P2Y purinoceptor 14	Cellinker	Receptor
+519	HMDB0000302	Uridine diphosphategalactose	Uridine diphosphategalactose	Gpr17	Uracil nucleotide/cysteinyl leukotriene receptor	Cellinker	Receptor
+520	HMDB0000302	Uridine diphosphategalactose	Uridine diphosphategalactose	P2ry14	P2Y purinoceptor 14	Cellinker	Receptor
+521	HMDB0000303	Tryptamine	Tryptamine	Htr1b	5-hydroxytryptamine receptor 1B	Cellinker	Receptor
+522	HMDB0000303	Tryptamine	Tryptamine	Htr2a	5-hydroxytryptamine receptor 2A	Cellinker	Receptor
+523	HMDB0000305	Vitamin A	Vitamin A	Nr2c2	Nuclear receptor subfamily 2 group C member 2	Cellinker	Nuclear Receptor
+524	HMDB0000306	Tyramine	Tyramine	Taar1	Trace amine-associated receptor 1	Cellinker	Receptor
+525	HMDB0000464	Calcium	Calcium	Htr3a	5-hydroxytryptamine receptor 3A	Cellinker	Receptor
+526	HMDB0000464	Calcium	Calcium	Ano1	Anoctamin-1	Cellinker	Channel
+527	HMDB0000464	Calcium	Calcium	Casr	Extracellular calcium-sensing receptor	Cellinker	Receptor
+528	HMDB0000464	Calcium	Calcium	Gje1	Putative gap junction epsilon-1 protein	Cellinker	Channel
+529	HMDB0000464	Calcium	Calcium	Gjb2	Gap junction beta-2 protein	Cellinker	Channel
+530	HMDB0000464	Calcium	Calcium	Gjb6	Gap junction beta-6 protein	Cellinker	Channel
+531	HMDB0000464	Calcium	Calcium	Gjc3	Gap junction gamma-3 protein	Cellinker	Channel
+532	HMDB0000464	Calcium	Calcium	Gjb4	Gap junction beta-4 protein	Cellinker	Channel
+533	HMDB0000464	Calcium	Calcium	Gjb3	Gap junction beta-3 protein	Cellinker	Channel
+534	HMDB0000464	Calcium	Calcium	Gjb5	Gap junction beta-5 protein	Cellinker	Channel
+535	HMDB0000464	Calcium	Calcium	Gjd3	Gap junction delta-3 protein	Cellinker	Channel
+536	HMDB0000464	Calcium	Calcium	Gjb1	Gap junction beta-1 protein	Cellinker	Channel
+537	HMDB0000464	Calcium	Calcium	Gjd2	Gap junction delta-2 protein	Cellinker	Channel
+538	HMDB0000464	Calcium	Calcium	Gja4	Gap junction alpha-4 protein	Cellinker	Channel
+539	HMDB0000464	Calcium	Calcium	Gja5	Gap junction alpha-5 protein	Cellinker	Channel
+540	HMDB0000464	Calcium	Calcium	Gjd4	Gap junction delta-4 protein	Cellinker	Channel
+541	HMDB0000464	Calcium	Calcium	Gja1	Gap junction alpha-1 protein	Cellinker	Channel
+542	HMDB0000464	Calcium	Calcium	Gja6	Gap junction alpha-1 protein	Cellinker	Channel
+543	HMDB0000464	Calcium	Calcium	Gjc1	Gap junction gamma-1 protein	Cellinker	Channel
+544	HMDB0000464	Calcium	Calcium	Gja3	Gap junction alpha-3 protein	Cellinker	Channel
+545	HMDB0000464	Calcium	Calcium	Gjc2	Gap junction gamma-2 protein	Cellinker	Channel
+546	HMDB0000464	Calcium	Calcium	Gja8	Gap junction alpha-8 protein	Cellinker	Channel
+547	HMDB0000464	Calcium	Calcium	Gja10	Gap junction alpha-10 protein	Cellinker	Channel
+548	HMDB0000464	Calcium	Calcium	Itpr1	Inositol 1,4,5-trisphosphate receptor type 1	Cellinker	Receptor
+549	HMDB0000464	Calcium	Calcium	Itpr2	Inositol 1,4,5-trisphosphate receptor type 2	Cellinker	Receptor
+550	HMDB0000464	Calcium	Calcium	Itpr3	Inositol 1,4,5-trisphosphate receptor type 3	Cellinker	Receptor
+551	HMDB0000464	Calcium	Calcium	Kcnn1	Small conductance calcium-activated potassium channel protein 1	Cellinker	Channel
+552	HMDB0000464	Calcium	Calcium	Kcnn2	Small conductance calcium-activated potassium channel protein 2	Cellinker	Channel
+553	HMDB0000464	Calcium	Calcium	Ryr1	Ryanodine receptor 1	Cellinker	Receptor
+554	HMDB0000464	Calcium	Calcium	Ryr2	Ryanodine receptor 2	Cellinker	Receptor
+555	HMDB0000464	Calcium	Calcium	Ryr3	Ryanodine receptor 3	Cellinker	Receptor
+556	HMDB0000464	Calcium	Calcium	Trpc5	Short transient receptor potential channel 5	Cellinker	Receptor; Channel
+557	HMDB0000464	Calcium	Calcium	Trpm2	Transient receptor potential cation channel subfamily M member 2	Cellinker	Receptor
+558	HMDB0000464	Calcium	Calcium	Trpm4	Transient receptor potential cation channel subfamily M member 4	Cellinker	Receptor; Channel
+559	HMDB0000464	Calcium	Calcium	Trpm6	Transient receptor potential cation channel subfamily M member 6	Cellinker	Receptor; Channel
+560	HMDB0000538	Adenosine triphosphate	Adenosine triphosphate	Gpr17	Uracil nucleotide/cysteinyl leukotriene receptor	Cellinker	Receptor
+561	HMDB0000538	Adenosine triphosphate	Adenosine triphosphate	Itpr1	Inositol 1,4,5-trisphosphate receptor type 1	Cellinker	Receptor
+562	HMDB0000538	Adenosine triphosphate	Adenosine triphosphate	Ryr1	Ryanodine receptor 1	Cellinker	Receptor
+563	HMDB0000538	Adenosine triphosphate	Adenosine triphosphate	Ryr2	Ryanodine receptor 2	Cellinker	Receptor
+564	HMDB0000538	Adenosine triphosphate	Adenosine triphosphate	Ryr3	Ryanodine receptor 3	Cellinker	Receptor
+565	HMDB0000538	Adenosine triphosphate	Adenosine triphosphate	Trpm4	Transient receptor potential cation channel subfamily M member 4	Cellinker	Receptor; Channel
+566	HMDB0000588	Sodium	Sodium	Kcnj3	G protein-activated inward rectifier potassium channel 1	Cellinker	Channel
+567	HMDB0000588	Sodium	Sodium	Kcnj6	G protein-activated inward rectifier potassium channel 2	Cellinker	Channel
+568	HMDB0000588	Sodium	Sodium	Kcnj5	G protein-activated inward rectifier potassium channel 4	Cellinker	Channel
+569	HMDB0000588	Sodium	Sodium	Trpm3	Transient receptor potential cation channel subfamily M member 3	Cellinker	Receptor; Channel
+570	HMDB0000619	Cholic acid	Cholic acid	Gpbar1	G-protein coupled bile acid receptor 1	Cellinker	Receptor
+571	HMDB0000626	Deoxycholic acid	Deoxycholic acid	Gpbar1	G-protein coupled bile acid receptor 1	Cellinker	Receptor
+572	HMDB0000641	L-Glutamine	L-Glutamine	Gprc6a	G-protein coupled receptor family C group 6 member A	Cellinker	Receptor
+573	HMDB0000673	Linoleic acid	Linoleic acid	Ffar4	Free fatty acid receptor 4	Cellinker	Receptor
+574	HMDB0000673	Linoleic acid	Linoleic acid	Hnf4a	Hepatocyte nuclear factor 4-alpha	Cellinker	Nuclear Receptor
+575	HMDB0000673	Linoleic acid	Linoleic acid	Pparg	Peroxisome proliferator-activated receptor gamma	Cellinker	Nuclear Receptor
+576	HMDB0000761	Lithocholic acid	Lithocholic acid	Nr1i2	Nuclear receptor subfamily 1 group I member 2	Cellinker	Nuclear Receptor
+577	HMDB0000795	Pristanic acid	Pristanic acid	Rorc	Nuclear receptor ROR-gamma	Cellinker	Nuclear Receptor
+578	HMDB0000806	Myristic acid	Myristic acid	Ffar1	Free fatty acid receptor 1	Cellinker	Receptor
+579	HMDB0000806	Myristic acid	Myristic acid	Ffar4	Free fatty acid receptor 4	Cellinker	Receptor
+580	HMDB0000879	Tetrahydrodeoxycorticosterone	Tetrahydrodeoxycorticosterone	Gabra1	Gamma-aminobutyric acid receptor subunit alpha-1	Cellinker	Receptor
+581	HMDB0000879	Tetrahydrodeoxycorticosterone	Tetrahydrodeoxycorticosterone	Gabra2	Gamma-aminobutyric acid receptor subunit alpha-2	Cellinker	Receptor
+582	HMDB0000879	Tetrahydrodeoxycorticosterone	Tetrahydrodeoxycorticosterone	Gabra3	Gamma-aminobutyric acid receptor subunit alpha-3	Cellinker	Receptor
+583	HMDB0000879	Tetrahydrodeoxycorticosterone	Tetrahydrodeoxycorticosterone	Gabra4	Gamma-aminobutyric acid receptor subunit alpha-4	Cellinker	Receptor
+584	HMDB0000879	Tetrahydrodeoxycorticosterone	Tetrahydrodeoxycorticosterone	Gabra5	Gamma-aminobutyric acid receptor subunit alpha-5	Cellinker	Receptor
+585	HMDB0000879	Tetrahydrodeoxycorticosterone	Tetrahydrodeoxycorticosterone	Gabra6	Gamma-aminobutyric acid receptor subunit alpha-6	Cellinker	Receptor
+586	HMDB0000895	Acetylcholine	Acetylcholine	Chrna3	Neuronal acetylcholine receptor subunit alpha-3	Cellinker	Receptor
+587	HMDB0000895	Acetylcholine	Acetylcholine	Chrna5	Neuronal acetylcholine receptor subunit alpha-5	Cellinker	Transporter
+588	HMDB0000895	Acetylcholine	Acetylcholine	Chrna6	Neuronal acetylcholine receptor subunit alpha-6	Cellinker	Receptor
+589	HMDB0000895	Acetylcholine	Acetylcholine	Chrna9	Neuronal acetylcholine receptor subunit alpha-9	Cellinker	Receptor
+590	HMDB0000895	Acetylcholine	Acetylcholine	Chrna10	Neuronal acetylcholine receptor subunit alpha-10	Cellinker	Receptor
+591	HMDB0000895	Acetylcholine	Acetylcholine	Chrnb1	Acetylcholine receptor subunit beta	Cellinker	Receptor
+592	HMDB0000895	Acetylcholine	Acetylcholine	Chrnb2	Neuronal acetylcholine receptor subunit beta-2	Cellinker	Receptor
+593	HMDB0000895	Acetylcholine	Acetylcholine	Chrnb3	Neuronal acetylcholine receptor subunit beta-3	Cellinker	Receptor
+594	HMDB0000895	Acetylcholine	Acetylcholine	Chrnb4	Neuronal acetylcholine receptor subunit beta-4	Cellinker	Receptor
+595	HMDB0000895	Acetylcholine	Acetylcholine	Chrnd	Acetylcholine receptor subunit delta	Cellinker	Receptor
+596	HMDB0000895	Acetylcholine	Acetylcholine	Chrne	Acetylcholine receptor subunit epsilon	Cellinker	Receptor
+597	HMDB0000895	Acetylcholine	Acetylcholine	Chrng	Acetylcholine receptor subunit gamma	Cellinker	Receptor
+598	HMDB0000895	Acetylcholine	Acetylcholine	Ache	Acetylcholinesterase	Cellinker	Enzyme
+599	HMDB0000902	NAD	NAD	Trpm2	Transient receptor potential cation channel subfamily M member 2	Cellinker	Receptor
+600	HMDB0000929	L-Tryptophan	L-Tryptophan	Casr	Extracellular calcium-sensing receptor	Cellinker	Receptor
+601	HMDB0000929	L-Tryptophan	L-Tryptophan	Gpr139	Probable G-protein coupled receptor 139	Cellinker	Receptor
+602	HMDB0000961	Farnesyl pyrophosphate	Farnesyl pyrophosphate	Mvk	Mevalonate kinase	Cellinker	Enzyme
+603	HMDB0000961	Farnesyl pyrophosphate	Farnesyl pyrophosphate	Gpr183	G-protein coupled receptor 183	Cellinker	Receptor
+604	HMDB0000961	Farnesyl pyrophosphate	Farnesyl pyrophosphate	Lpar2	Lysophosphatidic acid receptor 2	Cellinker	Receptor
+605	HMDB0000961	Farnesyl pyrophosphate	Farnesyl pyrophosphate	Sucnr1	Succinate receptor 1	Cellinker	Receptor
+606	HMDB0000961	Farnesyl pyrophosphate	Farnesyl pyrophosphate	Cysltr1	Cysteinyl leukotriene receptor 1	Cellinker	Receptor
+607	HMDB0001043	Arachidonic acid	Arachidonic acid	Clcn2	Chloride channel protein 2	Cellinker	Channel
+608	HMDB0001043	Arachidonic acid	Arachidonic acid	Kcnk10	Potassium channel subfamily K member 10	Cellinker	Channel
+609	HMDB0001043	Arachidonic acid	Arachidonic acid	Kcnk18	Potassium channel subfamily K member 18	Cellinker	Channel
+610	HMDB0001043	Arachidonic acid	Arachidonic acid	Kcnk2	Potassium channel subfamily K member 2	Cellinker	Channel
+611	HMDB0001043	Arachidonic acid	Arachidonic acid	Kcnk4	Potassium channel subfamily K member 4	Cellinker	Channel
+612	HMDB0001043	Arachidonic acid	Arachidonic acid	Kcnj4	Inward rectifier potassium channel 4	Cellinker	Channel
+613	HMDB0001043	Arachidonic acid	Arachidonic acid	Prkcz	Protein kinase C zeta type	Cellinker	Enzyme
+614	HMDB0001043	Arachidonic acid	Arachidonic acid	Trpc6	Short transient receptor potential channel 6	Cellinker	Receptor
+615	HMDB0001043	Arachidonic acid	Arachidonic acid	Trpm2	Transient receptor potential cation channel subfamily M member 2	Cellinker	Receptor
+616	HMDB0001085	Leukotriene B4	Leukotriene B4	Ltb4r1	Leukotriene B4 receptor 1	Cellinker	Receptor
+617	HMDB0001085	Leukotriene B4	Leukotriene B4	Ltb4r2	Leukotriene B4 receptor 2	Cellinker	Receptor
+618	HMDB0001090	(R)-5-Diphosphomevalonic acid	(R)-5-Diphosphomevalonic acid	Pmvk	Phosphomevalonate kinase	Cellinker	Enzyme
+619	HMDB0001120	Dimethylallylpyrophosphate	Dimethylallylpyrophosphate	Mvk	Mevalonate kinase	Cellinker	Enzyme
+620	HMDB0001167	Pyruvaldehyde	Pyruvaldehyde	Trpa1	Transient receptor potential cation channel subfamily A member 1	Cellinker	Receptor; Channel
+621	HMDB0001198	Leukotriene C4	Leukotriene C4	Cysltr1	Cysteinyl leukotriene receptor 1	Cellinker	Receptor
+622	HMDB0001198	Leukotriene C4	Leukotriene C4	Cysltr2	Cysteinyl leukotriene receptor 2	Cellinker	Receptor
+623	HMDB0001198	Leukotriene C4	Leukotriene C4	Gpr17	Uracil nucleotide/cysteinyl leukotriene receptor	Cellinker	Receptor
+624	HMDB0001256	Spermine	Spermine	Casr	Extracellular calcium-sensing receptor	Cellinker	Receptor
+625	HMDB0001256	Spermine	Spermine	Kcnj4	Inward rectifier potassium channel 4	Cellinker	Channel
+626	HMDB0001257	Spermidine	Spermidine	Kcnj4	Inward rectifier potassium channel 4	Cellinker	Channel
+627	HMDB0001285	Geranyl-PP	Geranyl-PP	Mvk	Mevalonate kinase	Cellinker	Enzyme
+628	HMDB0001314	Cyclic GMP	Cyclic GMP	Cnga1	cGMP-gated cation channel alpha-1	Cellinker	Channel
+629	HMDB0001314	Cyclic GMP	Cyclic GMP	Cnga3	Cyclic nucleotide-gated cation channel alpha-3	Cellinker	Channel
+630	HMDB0001314	Cyclic GMP	Cyclic GMP	Pde2a	cGMP-dependent 3',5'-cyclic phosphodiesterase	Cellinker	Enzyme
+631	HMDB0001314	Cyclic GMP	Cyclic GMP	Pde3a	cGMP-inhibited 3',5'-cyclic phosphodiesterase 3A	Cellinker	Enzyme
+632	HMDB0001314	Cyclic GMP	Cyclic GMP	Pde3b	cGMP-inhibited 3',5'-cyclic phosphodiesterase 3B	Cellinker	Enzyme
+633	HMDB0001341	ADP	ADP	Trpm4	Transient receptor potential cation channel subfamily M member 4	Cellinker	Receptor; Channel
+634	HMDB0001347	Isopentenyl pyrophosphate	Isopentenyl pyrophosphate	Fdps	Farnesyl pyrophosphate synthase	Cellinker	Enzyme
+635	HMDB0001347	Isopentenyl pyrophosphate	Isopentenyl pyrophosphate	Mvk	Mevalonate kinase	Cellinker	Enzyme
+636	HMDB0001361	Carbon monoxide	Carbon monoxide	Gucy1b1	Guanylate cyclase soluble subunit beta-1	Cellinker	Enzyme
+637	HMDB0001361	Carbon monoxide	Carbon monoxide	Gucy1b2	Guanylate cyclase soluble subunit beta-2	Cellinker	Enzyme
+638	HMDB0001361	Carbon monoxide	Carbon monoxide	Gucy1a1	Guanylate cyclase soluble subunit alpha-1	Cellinker	Enzyme
+639	HMDB0001361	Carbon monoxide	Carbon monoxide	Gucy1a2	Guanylate cyclase soluble subunit alpha-2	Cellinker	Enzyme
+640	HMDB0001388	alpha-Linolenic acid	alpha-Linolenic acid	Ffar1	Free fatty acid receptor 1	Cellinker	Receptor
+641	HMDB0001388	alpha-Linolenic acid	alpha-Linolenic acid	Ffar4	Free fatty acid receptor 4	Cellinker	Receptor
+642	HMDB0001403	Prostaglandin D2	Prostaglandin D2	Ptger1	Prostaglandin E2 receptor EP1 subtype	Cellinker	Receptor
+643	HMDB0001403	Prostaglandin D2	Prostaglandin D2	Ptger2	Prostaglandin E2 receptor EP2 subtype	Cellinker	Receptor
+644	HMDB0001403	Prostaglandin D2	Prostaglandin D2	Ptger4	Prostaglandin E2 receptor EP4 subtype	Cellinker	Receptor
+645	HMDB0001403	Prostaglandin D2	Prostaglandin D2	Ptgfr	Prostaglandin F2-alpha receptor	Cellinker	Receptor
+646	HMDB0001414	Putrescine	Putrescine	Kcnj4	Inward rectifier potassium channel 4	Cellinker	Channel
+647	HMDB0001419	24-Hydroxycholesterol	24-Hydroxycholesterol	Nr1h3	Oxysterols receptor LXR-alpha	Cellinker	Nuclear Receptor
+648	HMDB0001419	24-Hydroxycholesterol	24-Hydroxycholesterol	Nr1h2	Oxysterols receptor LXR-beta	Cellinker	Receptor
+649	HMDB0001449	Allopregnanolone	Allopregnanolone	Gabra1	Gamma-aminobutyric acid receptor subunit alpha-1	Cellinker	Receptor
+650	HMDB0001449	Allopregnanolone	Allopregnanolone	Gabra2	Gamma-aminobutyric acid receptor subunit alpha-2	Cellinker	Receptor
+651	HMDB0001449	Allopregnanolone	Allopregnanolone	Gabra3	Gamma-aminobutyric acid receptor subunit alpha-3	Cellinker	Receptor
+652	HMDB0001449	Allopregnanolone	Allopregnanolone	Gabra4	Gamma-aminobutyric acid receptor subunit alpha-4	Cellinker	Receptor
+653	HMDB0001449	Allopregnanolone	Allopregnanolone	Gabra5	Gamma-aminobutyric acid receptor subunit alpha-5	Cellinker	Receptor
+654	HMDB0001449	Allopregnanolone	Allopregnanolone	Gabra6	Gamma-aminobutyric acid receptor subunit alpha-6	Cellinker	Receptor
+655	HMDB0001498	myo-Inositol 1,4,5-trisphosphate	myo-Inositol 1,4,5-trisphosphate	Itpr1	Inositol 1,4,5-trisphosphate receptor type 1	Cellinker	Receptor
+656	HMDB0001498	myo-Inositol 1,4,5-trisphosphate	myo-Inositol 1,4,5-trisphosphate	Itpr2	Inositol 1,4,5-trisphosphate receptor type 2	Cellinker	Receptor
+657	HMDB0001498	myo-Inositol 1,4,5-trisphosphate	myo-Inositol 1,4,5-trisphosphate	Itpr3	Inositol 1,4,5-trisphosphate receptor type 3	Cellinker	Receptor
+658	HMDB0001509	20-Hydroxy-leukotriene B4	20-Hydroxy-leukotriene B4	Ltb4r1	Leukotriene B4 receptor 1	Cellinker	Receptor
+659	HMDB0001547	Corticosterone	Corticosterone	Nr3c2	Mineralocorticoid receptor	Cellinker	Nuclear Receptor
+660	HMDB0002103	27-Hydroxycholesterol	27-Hydroxycholesterol	Gpr183	G-protein coupled receptor 183	Cellinker	Receptor
+661	HMDB0002103	27-Hydroxycholesterol	27-Hydroxycholesterol	Nr1h3	Oxysterols receptor LXR-alpha	Cellinker	Nuclear Receptor
+662	HMDB0002103	27-Hydroxycholesterol	27-Hydroxycholesterol	Nr1h2	Oxysterols receptor LXR-beta	Cellinker	Receptor
+663	HMDB0002183	Docosahexaenoic acid	Docosahexaenoic acid	Ffar1	Free fatty acid receptor 1	Cellinker	Receptor
+664	HMDB0002200	Leukotriene E4	Leukotriene E4	Cysltr1	Cysteinyl leukotriene receptor 1	Cellinker	Receptor
+665	HMDB0002200	Leukotriene E4	Leukotriene E4	Cysltr2	Cysteinyl leukotriene receptor 2	Cellinker	Receptor
+666	HMDB0002710	Prostaglandin J2	Prostaglandin J2	Ptgdr	Prostaglandin D2 receptor	Cellinker	Receptor
+667	HMDB0002710	Prostaglandin J2	Prostaglandin J2	Ptgdr2	Prostaglandin D2 receptor 2	Cellinker	Receptor
+668	HMDB0003080	Leukotriene D4	Leukotriene D4	Kcnj5	G protein-activated inward rectifier potassium channel 4	Cellinker	Channel
+669	HMDB0003080	Leukotriene D4	Leukotriene D4	Kcnq2	Potassium voltage-gated channel subfamily KQT member 2	Cellinker	Channel
+670	HMDB0003080	Leukotriene D4	Leukotriene D4	Kcnq4	Potassium voltage-gated channel subfamily KQT member 4	Cellinker	Channel
+671	HMDB0003378	Nitric oxide	Nitric oxide	Gucy1b1	Guanylate cyclase soluble subunit beta-1	Cellinker	Enzyme
+672	HMDB0003378	Nitric oxide	Nitric oxide	Gucy1b2	Guanylate cyclase soluble subunit beta-2	Cellinker	Enzyme
+673	HMDB0003378	Nitric oxide	Nitric oxide	Gucy1a1	Guanylate cyclase soluble subunit alpha-1	Cellinker	Enzyme
+674	HMDB0003378	Nitric oxide	Nitric oxide	Gucy1a2	Guanylate cyclase soluble subunit alpha-2	Cellinker	Enzyme
+675	HMDB0003406	D-Serine	D-Serine	Grin2a	Glutamate receptor ionotropic, NMDA 2A	Cellinker	Receptor
+676	HMDB0003406	D-Serine	D-Serine	Grin2b	Glutamate receptor ionotropic, NMDA 2B	Cellinker	Receptor
+677	HMDB0003406	D-Serine	D-Serine	Grin2c	Glutamate receptor ionotropic, NMDA 2C	Cellinker	Receptor
+678	HMDB0003406	D-Serine	D-Serine	Grin2d	Glutamate receptor ionotropic, NMDA 2D	Cellinker	Receptor
+679	HMDB0003848	D-myo-Inositol 3,4,5,6-tetrakisphosphate	D-myo-Inositol 3,4,5,6-tetrakisphosphate	Ano1	Anoctamin-1	Cellinker	Channel
+680	HMDB0004080	Anandamide	Anandamide	Cacna1g	Voltage-dependent T-type calcium channel subunit alpha-1G	Cellinker	Channel
+681	HMDB0004080	Anandamide	Anandamide	Cacna1h	Voltage-dependent T-type calcium channel subunit alpha-1H	Cellinker	Channel
+682	HMDB0004080	Anandamide	Anandamide	Gpr55	G-protein coupled receptor 55	Cellinker	Receptor
+683	HMDB0004385	Lipoxin A4	Lipoxin A4	Fpr-rs4	N-formyl peptide receptor 2	Cellinker	Receptor
+684	HMDB0004385	Lipoxin A4	Lipoxin A4	Fpr2	N-formyl peptide receptor 2	Cellinker	Receptor
+685	HMDB0004385	Lipoxin A4	Lipoxin A4	Fpr3	N-formyl peptide receptor 2	Cellinker	Receptor
+686	HMDB0004385	Lipoxin A4	Lipoxin A4	Fpr-rs3	N-formyl peptide receptor 2	Cellinker	Receptor
+687	HMDB0004385	Lipoxin A4	Lipoxin A4	Fpr-rs6	N-formyl peptide receptor 2	Cellinker	Receptor
+688	HMDB0004486	Geranylgeranyl-PP	Geranylgeranyl-PP	Ggps1	Geranylgeranyl pyrophosphate synthase	Cellinker	Enzyme
+689	HMDB0004486	Geranylgeranyl-PP	Geranylgeranyl-PP	Mvk	Mevalonate kinase	Cellinker	Enzyme
+690	HMDB0004666	MG(0:0/20:4(5Z,8Z,11Z,14Z)/0:0)	MG(0:0/20:4(5Z,8Z,11Z,14Z)/0:0)	Cnr2	Cannabinoid receptor 2	Cellinker	Receptor
+691	HMDB0004666	MG(0:0/20:4(5Z,8Z,11Z,14Z)/0:0)	MG(0:0/20:4(5Z,8Z,11Z,14Z)/0:0)	Gpr55	G-protein coupled receptor 55	Cellinker	Receptor
+692	HMDB0006111	12-HETE	12-HETE	Ltb4r2	Leukotriene B4 receptor 2	Cellinker	Receptor
+693	HMDB0006247	25-Hydroxycholesterol	25-Hydroxycholesterol	Lpar3	Lysophosphatidic acid receptor 3	Cellinker	Receptor
+694	HMDB0006247	25-Hydroxycholesterol	25-Hydroxycholesterol	Lpar4	Lysophosphatidic acid receptor 4	Cellinker	Receptor
+695	HMDB0006280	7-a,25-Dihydroxycholesterol	7-a,25-Dihydroxycholesterol	Trpm2	Transient receptor potential cation channel subfamily M member 2	Cellinker	Receptor
+696	HMDB0006281	7-a,27-Dihydroxycholesterol	7-a,27-Dihydroxycholesterol	Ppara	Peroxisome proliferator-activated receptor alpha	Cellinker	Nuclear Receptor
+697	HMDB0011134	5-HETE	5-HETE	Trpv1	Transient receptor potential cation channel subfamily V member 1	Cellinker	Receptor; Channel
+698	HMDB0012275	Phenylethylamine	Phenylethylamine	Taar1	Trace amine-associated receptor 1	Cellinker	Receptor
+699	HMDB0012535	12S-HHT	12S-HHT	Ltb4r2	Leukotriene B4 receptor 2	Cellinker	Receptor
+700	HMDB0015532	Zinc	Zinc	Glra2	Glycine receptor subunit alpha-2	Cellinker	Receptor
+701	HMDB0015532	Zinc	Zinc	Adrb2	Beta-2 adrenergic receptor	Cellinker	Receptor
+702	HMDB0015532	Zinc	Zinc	Gabra1	Gamma-aminobutyric acid receptor subunit alpha-1	Cellinker	Receptor
+703	HMDB0015532	Zinc	Zinc	Gabra2	Gamma-aminobutyric acid receptor subunit alpha-2	Cellinker	Receptor
+704	HMDB0015532	Zinc	Zinc	Gabra3	Gamma-aminobutyric acid receptor subunit alpha-3	Cellinker	Receptor
+705	HMDB0015532	Zinc	Zinc	Gabra4	Gamma-aminobutyric acid receptor subunit alpha-4	Cellinker	Receptor
+706	HMDB0015532	Zinc	Zinc	Gabra5	Gamma-aminobutyric acid receptor subunit alpha-5	Cellinker	Receptor
+707	HMDB0015532	Zinc	Zinc	Gabra6	Gamma-aminobutyric acid receptor subunit alpha-6	Cellinker	Receptor
+708	HMDB0015532	Zinc	Zinc	Glra1	Glycine receptor subunit alpha-1	Cellinker	Receptor
+709	HMDB0015532	Zinc	Zinc	Glra3	Glycine receptor subunit alpha-3	Cellinker	Receptor
+710	HMDB0015532	Zinc	Zinc	Glrb	Glycine receptor subunit beta	Cellinker	Receptor
+711	HMDB0015532	Zinc	Zinc	Gpr39	G-protein coupled receptor 39	Cellinker	Receptor
+712	HMDB0015532	Zinc	Zinc	Trpm1	Transient receptor potential cation channel subfamily M member 1	Cellinker	Receptor; Channel
+713	HMDB0015532	Zinc	Zinc	Trpm2	Transient receptor potential cation channel subfamily M member 2	Cellinker	Receptor
+714	HMDB0000031	Androsterone	Androsterone	Nr1h4	Bile acid receptor	CellPhoneDB	Nuclear Receptor
+715	HMDB0000151	Estradiol	Estradiol	Gper1	G-protein coupled estrogen receptor 1	CellPhoneDB	Receptor
+716	HMDB0000151	Estradiol	Estradiol	Nr1i2	Nuclear receptor subfamily 1 group I member 2	CellPhoneDB	Nuclear Receptor
+717	HMDB0000253	Pregnenolone	Pregnenolone	Nr1i2	Nuclear receptor subfamily 1 group I member 2	CellPhoneDB	Nuclear Receptor
+718	HMDB0004666	MG(0:0/20:4(5Z,8Z,11Z,14Z)/0:0)	MG(0:0/20:4(5Z,8Z,11Z,14Z)/0:0)	Cnr1	Cannabinoid receptor 1	CellPhoneDB	Receptor
+719	HMDB0002719	Desmosterol	Desmosterol	Nr1h2	Oxysterols receptor LXR-beta	CellPhoneDB	Receptor
+720	HMDB0002719	Desmosterol	Desmosterol	Nr1h3	Oxysterols receptor LXR-alpha	CellPhoneDB	Nuclear Receptor
+721	HMDB0001032	Dehydroepiandrosterone sulfate	Dehydroepiandrosterone sulfate	Ppara	Peroxisome proliferator-activated receptor alpha	CellPhoneDB	Nuclear Receptor
+722	HMDB0001032	Dehydroepiandrosterone sulfate	Dehydroepiandrosterone sulfate	Ppard	Peroxisome proliferator-activated receptor delta	CellPhoneDB	Receptor
+723	HMDB0001032	Dehydroepiandrosterone sulfate	Dehydroepiandrosterone sulfate	Pparg	Peroxisome proliferator-activated receptor gamma	CellPhoneDB	Nuclear Receptor
+724	HMDB0000077	Dehydroepiandrosterone	Dehydroepiandrosterone	Esr1	Estrogen receptor	CellPhoneDB	Nuclear Receptor
+725	HMDB0000077	Dehydroepiandrosterone	Dehydroepiandrosterone	Nr1i2	Nuclear receptor subfamily 1 group I member 2	CellPhoneDB	Nuclear Receptor
+726	HMDB0000077	Dehydroepiandrosterone	Dehydroepiandrosterone	Ppara	Peroxisome proliferator-activated receptor alpha	CellPhoneDB	Nuclear Receptor
+727	HMDB0003759	5a-Pregnane-3,20-dione	5a-Pregnane-3,20-dione	Pgr	Progesterone receptor	CellPhoneDB	Nuclear Receptor
+728	HMDB0003080	Leukotriene D4	Leukotriene D4	Cysltr1	Cysteinyl leukotriene receptor 1	CellPhoneDB	Receptor
+729	HMDB0003080	Leukotriene D4	Leukotriene D4	Cysltr2	Cysteinyl leukotriene receptor 2	CellPhoneDB	Receptor
+730	HMDB0003080	Leukotriene D4	Leukotriene D4	Gpr17	Uracil nucleotide/cysteinyl leukotriene receptor	CellPhoneDB	Receptor
+731	HMDB0005087	6-trans-Leukotriene B4	6-trans-Leukotriene B4	Gpr17	Uracil nucleotide/cysteinyl leukotriene receptor	CellPhoneDB	Receptor
+732	HMDB0005087	6-trans-Leukotriene B4	6-trans-Leukotriene B4	Ltb4r1	Leukotriene B4 receptor 1	CellPhoneDB	Receptor
+733	HMDB0005087	6-trans-Leukotriene B4	6-trans-Leukotriene B4	Ltb4r2	Leukotriene B4 receptor 2	CellPhoneDB	Receptor
+734	HMDB0004234	12-Keto-leukotriene B4	12-Keto-leukotriene B4	Ltb4r1	Leukotriene B4 receptor 1	CellPhoneDB	Receptor
+735	HMDB0004234	12-Keto-leukotriene B4	12-Keto-leukotriene B4	Ltb4r2	Leukotriene B4 receptor 2	CellPhoneDB	Receptor
+736	HMDB0012587	15-Epi-lipoxin A4	15-Epi-lipoxin A4	Cysltr1	Cysteinyl leukotriene receptor 1	CellPhoneDB	Receptor
+737	HMDB0012587	15-Epi-lipoxin A4	15-Epi-lipoxin A4	Fpr-rs4	N-formyl peptide receptor 2	CellPhoneDB	Receptor
+738	HMDB0012587	15-Epi-lipoxin A4	15-Epi-lipoxin A4	Fpr2	N-formyl peptide receptor 2	CellPhoneDB	Receptor
+739	HMDB0012587	15-Epi-lipoxin A4	15-Epi-lipoxin A4	Fpr3	N-formyl peptide receptor 2	CellPhoneDB	Receptor
+740	HMDB0012587	15-Epi-lipoxin A4	15-Epi-lipoxin A4	Fpr-rs3	N-formyl peptide receptor 2	CellPhoneDB	Receptor
+741	HMDB0012587	15-Epi-lipoxin A4	15-Epi-lipoxin A4	Fpr-rs6	N-formyl peptide receptor 2	CellPhoneDB	Receptor
+742	HMDB0001139	Prostaglandin F2a	Prostaglandin F2a	Ptgfr	Prostaglandin F2-alpha receptor	CellPhoneDB	Receptor
+743	HMDB0001220	Prostaglandin E2	Prostaglandin E2	Ptger3	Prostaglandin E2 receptor EP3 subtype	CellPhoneDB	Receptor
+744	HMDB0000265	Liothyronine	Liothyronine	Thra	Thyroid hormone receptor alpha	CellPhoneDB	Nuclear Receptor
+745	HMDB0000265	Liothyronine	Liothyronine	Thrb	Thyroid hormone receptor beta	CellPhoneDB	Nuclear Receptor
+746	HMDB0001335	Prostaglandin I2	Prostaglandin I2	Ptgir	Prostacyclin receptor	CellPhoneDB	Receptor
+747	HMDB0001198	Leukotriene C4	Leukotriene C4	Cysltr1	Cysteinyl leukotriene receptor 1	CellChat	Receptor
+748	HMDB0003080	Leukotriene D4	Leukotriene D4	Cysltr1	Cysteinyl leukotriene receptor 1	CellChat	Receptor
+749	HMDB0002200	Leukotriene E4	Leukotriene E4	Cysltr1	Cysteinyl leukotriene receptor 1	CellChat	Receptor
+750	HMDB0001198	Leukotriene C4	Leukotriene C4	Cysltr2	Cysteinyl leukotriene receptor 2	CellChat	Receptor
+751	HMDB0003080	Leukotriene D4	Leukotriene D4	Cysltr2	Cysteinyl leukotriene receptor 2	CellChat	Receptor
+752	HMDB0002200	Leukotriene E4	Leukotriene E4	Cysltr2	Cysteinyl leukotriene receptor 2	CellChat	Receptor
+753	HMDB0000259	Serotonin	Serotonin	Htr1f	5-hydroxytryptamine receptor 1F	CellChat	Receptor
+754	HMDB0000259	Serotonin	Serotonin	Htr5a	5-hydroxytryptamine receptor 5A	CellChat	Receptor
+755	HMDB0000259	Serotonin	Serotonin	Htr7	5-hydroxytryptamine receptor 7	CellChat	Receptor
+756	HMDB0005087	6-trans-Leukotriene B4	6-trans-Leukotriene B4	Ltb4r1	Leukotriene B4 receptor 1	CellChat	Receptor
+757	HMDB0005087	6-trans-Leukotriene B4	6-trans-Leukotriene B4	Ltb4r2	Leukotriene B4 receptor 2	CellChat	Receptor
+758	HMDB0001220	Prostaglandin E2	Prostaglandin E2	Ptger3	Prostaglandin E2 receptor EP3 subtype	CellChat	Receptor
+759	HMDB0001139	Prostaglandin F2a	Prostaglandin F2a	Ptgfr	Prostaglandin F2-alpha receptor	CellChat	Receptor
+760	HMDB0001335	Prostaglandin I2	Prostaglandin I2	Ptgir	Prostacyclin receptor	CellChat	Receptor
+761	HMDB0003759	5a-Pregnane-3,20-dione	5a-Pregnane-3,20-dione	Pgr	Progesterone receptor	CellChat	Nuclear Receptor
+762	HMDB0000031	Androsterone	Androsterone	Nr1h4	Bile acid receptor	CellChat	Nuclear Receptor
+763	HMDB0000253	Pregnenolone	Pregnenolone	Nr1i2	Nuclear receptor subfamily 1 group I member 2	CellChat	Nuclear Receptor
+764	HMDB0001043	Arachidonic acid	Arachidonic acid	Slco2a1	Solute carrier organic anion transporter family member 2A1	Cellinker	Transporter
+765	HMDB0001043	Arachidonic acid	Arachidonic acid	Anxa2	Annexin A2	Cellinker	Receptor
+766	HMDB0001043	Arachidonic acid	Arachidonic acid	S100a10	Protein S100-A10	Cellinker	Receptor
+767	HMDB0001043	Arachidonic acid	Arachidonic acid	Lrrc8a	Volume-regulated anion channel subunit LRRC8A	Cellinker	Channel
+768	HMDB0001043	Arachidonic acid	Arachidonic acid	Lrrc8b	Volume-regulated anion channel subunit LRRC8B	Cellinker	Channel
+769	HMDB0001043	Arachidonic acid	Arachidonic acid	Lrrc8c	Volume-regulated anion channel subunit LRRC8C	Cellinker	Channel
+770	HMDB0001043	Arachidonic acid	Arachidonic acid	Lrrc8d	Volume-regulated anion channel subunit LRRC8D	Cellinker	Channel
+771	HMDB0001043	Arachidonic acid	Arachidonic acid	Lrrc8e	Volume-regulated anion channel subunit LRRC8E	Cellinker	Channel
+772	HMDB0003178	Heme	Heme	Slc48a1	Heme transporter HRG1	18418376	Transporter
+773	HMDB0000125	Glutathione	Glutathione	Slc22a6	Solute carrier family 22 member 6	39442522	Transporter
+774	HMDB0000125	Glutathione	Glutathione	Slc22a8	Organic anion transporter 3	39442522	Transporter
+775	HMDB0000125	Glutathione	Glutathione	Slc13a3	Na(+)/dicarboxylate cotransporter 3	39442522	Transporter
+776	HMDB0003337	Oxidized glutathione	Oxidized glutathione	Casr	Extracellular calcium-sensing receptor	35054903	Receptor
+777	HMDB0000125	Glutathione	Glutathione	Casr	Extracellular calcium-sensing receptor	35054903	Receptor
+778	HMDB0003178	Heme	Heme	Flvcr2	Feline leukemia virus subgroup C receptor-related protein 2	20823265	Transporter
+779	HMDB00000606	Acetoacetic acid	Acetoacetate	Slc16a1	Monocarboxylate transporter 1	25390740; 35729663; 23506875	Transporter
+780	HMDB0000011	3-Hydroxybutyric acid	3-Hydroxybutyric acid	Slc16a1	Monocarboxylate transporter 1	25390740; 35729663; 23506875	Transporter
+781	HMDB0000060	Acetoacetic acid	Acetoacetate	Slc16a7	Monocarboxylate transporter 2	22131303; https://en.wikipedia.org/wiki/Monocarboxylate_transporter_2	Transporter
+782	HMDB0000011	3-Hydroxybutyric acid	3-Hydroxybutyric acid	Slc16a7	Monocarboxylate transporter 2	22131303; https://en.wikipedia.org/wiki/Monocarboxylate_transporter_2	Transporter
+783	HMDB0000060	Acetoacetic acid	Acetoacetate	Slc16a3	Monocarboxylate transporter 4	32144120; 23506875	Transporter
+784	HMDB0000011	3-Hydroxybutyric acid	3-Hydroxybutyric acid	Slc16a3	Monocarboxylate transporter 4	32144120; 23506875	Transporter
+785	HMDB0000011	3-Hydroxybutyric acid	3-Hydroxybutyric acid	Slc16a6	Monocarboxylate transporter 7	32144120; 22302940; 38132294	Transporter
+786	HMDB0000060	Acetoacetic acid	Acetoacetate	Ffar2	Gpr43	31685604; https://en.wikipedia.org/wiki/Free_fatty_acid_receptor_2	Receptor
+787	HMDB0000042	Acetic acid	Acetate	Ffar2	Gpr43	31337751; 34845033; 32997697	Receptor
+788	HMDB0000011	3-Hydroxybutyric acid	3-Hydroxybutyric acid	Hcar2	Gpr109A	31685604; 35649469	Receptor
+789	HMDB0000011	3-Hydroxybutyric acid	3-Hydroxybutyric acid	Ffar3	Gpr41	31685604; 21518883	Receptor

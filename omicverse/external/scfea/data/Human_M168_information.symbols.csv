@@ -1,0 +1,169 @@
+"","Module_id","Compound_IN_name","Compound_IN_ID","Compound_OUT_name","Compound_OUT_ID","Supermodule_id"
+"M_1",1,"Glucose","C00267","G6P","C00668",1
+"M_2",2,"G6P","C00668","G3P","C00118",1
+"M_3",3,"G3P","C00118","3PD","C00197",1
+"M_4",4,"3PD","C00197","Pyruvate","C00022",1
+"M_5",5,"Pyruvate","C00022","Acetyl-Coa","C00024",1
+"M_6",6,"Pyruvate","C00022","Lactate","C00256",1
+"M_7",7,"Acetyl-CoA+Oxaloacetate","C00024+C00036","Citrate","C00158",1
+"M_8",8,"Citrate","C00158","2OG","C00026",1
+"M_9",9,"2OG","C00026","Succinyl-CoA","C00091",1
+"M_10",10,"Succinyl-CoA","C00091","Succinate","C00042",1
+"M_11",11,"Succinate","C00042","Fumarate","C00122",1
+"M_12",12,"Fumarate","C00122","Malate","C00149",1
+"M_13",13,"Malate","C00149","Oxaloacetate","C00036",1
+"M_14",14,"Pyruvate","C00022","Oxaloacetate","C00036",1
+"M_15",15,"3PD","C00197","Serine","C00065",2
+"M_16",16,"Serine","C00065","Pyruvate","C00022",2
+"M_17",17,"Serine","C00065","Cysteine","C00097",2
+"M_18",18,"Serine","C00065","Glycine","C00037",2
+"M_19",19,"Glycine","C00037","Creatine","C00300",2
+"M_20",20,"Glycine","C00037","Glyoxylate","C00048",2
+"M_21",21,"Choline","C00114","Glycine","C00037",2
+"M_22",22,"Glycine","C00037","Glycine-OUT","C00000",2
+"M_23",23,"Glycine","C00037","Glutathione","C00051",2
+"M_24",24,"Glutathione","C00051","Glycine + Cysteine","C00037+C00097",2
+"M_25",25,"Glutathione","C00051","glutamate","C00025",2
+"M_26",26,"Glutamate + Cysteine","C00025+C00097","Glutathione","C00051",2
+"M_27",27,"Serine","C00065","2-Aminoacrylate","C02218",2
+"M_28",28,"Serine","C00065","Methionine","C00073",2
+"M_29",29,"Cysteine","C00097","Pyruvate","C00022",2
+"M_30",30,"Methionine","C00073","Cysteine","C00097",2
+"M_31",31,"Methionine","C00073","Methionine-OUT","C00000",2
+"M_32",32,"Threonine","C00188","Propanoyl-CoA","C00100",2
+"M_33",33,"G3P","C00118","PRPP","C00119",3
+"M_34",34,"Acetyl-CoA","C00024","Fatty Acid","CC0001",4
+"M_35",35,"Fatty Acid","CC0001","Acetyl-CoA","C00024",4
+"M_36",36,"Aspartate","C00049","Pyrimidine","CC0002",5
+"M_37",37,"Aspartate","C00049","Aspartate-OUT","C00000",5
+"M_38",38,"Aspartate","C00049","Asparagine","C00152",5
+"M_39",39,"Aspartate","C00049","Fumarate","C00122",5
+"M_40",40,"Aspartate","C00049","Oxaloacetate","C00036",5
+"M_41",41,"Aspartate","C00049","B-Alanine","C00099",6
+"M_42",42,"Spermine","C00750","B-Alanine","C00099",6
+"M_43",43,"Histidine","C00135","B-Alanine","C00099",6
+"M_44",44,"B-Alanine","C00099","Acetyl-CoA","C00024",6
+"M_45",45,"Pyrimidine","CC0002","B-Alanine","C00099",6
+"M_46",46,"Propanoyl-CoA","C00100","Succinate","C00042",7
+"M_47",47,"Propanoyl-CoA","C00100","Acetyl-CoA","C00024",7
+"M_48",48,"Glutamate","C00025","Glutamine","C00064",8
+"M_49",49,"Glutamate","C00025","GABA","C00334",8
+"M_50",50,"GABA","C00334","Succinate","C00042",8
+"M_51",51,"Glutamate","C00025","2OG","C00026",8
+"M_52",52,"Histidine","C00135","glutamate","C00025",8
+"M_53",53,"Leucine","C00123","Acetyl-CoA","C00024",9
+"M_54",54,"Valine","C00183","Succinyl-CoA","C00091",9
+"M_55",55,"Isoleucine","C00407","Succinyl-CoA","C00091",9
+"M_56",56,"Isoleucine","C00407","Acetyl-CoA","C00024",9
+"M_57",57,"Tyrosine","C00082","Fumarate","C00122",9
+"M_58",58,"Tyrosine","C00082","Tyrosine-OUT","C00000",9
+"M_59",59,"Phenylalanine","C00079","Tyrosine","C00082",9
+"M_60",60,"lysine","C00047","Acetyl-CoA","C00024",9
+"M_61",61,"Putrescine","C00134","GABA","C00334",10
+"M_62",62,"Ornithine","C00077","Putrescine","C00134",10
+"M_63",63,"Arginine","C00062","Ornithine","C00077",10
+"M_64",64,"Arginine","C00062","Putrescine","C00134",10
+"M_65",65,"Argininosuccinate","C03406","Arginine + Fumarate","C00062+C00122",10
+"M_66",66,"Citruline + Aspartate","C00327+C00049","Argininosuccinate","C03406",10
+"M_67",67,"Ornithine","C00077","Proline","C00148",10
+"M_68",68,"Proline","C00148","Glyoxylate + pyruvate","C00048+C00022",10
+"M_69",69,"Putresine","C00134","Spermine","C00750",11
+"M_70",70,"Methionine","C00073","Spermine","C00750",11
+"M_71",71,"Glucose_in","C00000","Glucose","C00267",12
+"M_72",72,"Acetyl-CoA_in","C00000","Acetyl-CoA","C00024",12
+"M_73",73,"Citrate_in","C00000","Citrate","C00158",12
+"M_74",74,"2OG_in","C00000","2OG","C00026",12
+"M_75",75,"Succinate_in","C00000","Succinate","C00042",12
+"M_76",76,"Malate_in","C00000","Malate","C00149",12
+"M_77",77,"Oxaloacetate_in","C00000","Oxaloacetate","C00036",12
+"M_78",78,"Lactate","C00256","Lactate_out","C00000",12
+"M_79",79,"serine_in","C00000","serine","C00065",12
+"M_80",80,"Cysteine_in","C00000","Cysteine","C00097",12
+"M_81",81,"Glycine_in","C00000","Glycine","C00037",12
+"M_83",83,"Choline_in","C00000","Choline","C00114",12
+"M_84",84,"Threonine_in","C00000","Threonine","C00188",12
+"M_85",85,"Aspartate_in","C00000","Aspartate","C00049",12
+"M_87",87,"Pyrimidine_in","C00000","Pyrimidine","CC0002",12
+"M_88",88,"Histidine_in","C00000","Histidine","C00135",12
+"M_89",89,"B-Alanine_in","C00000","B-Alanine","C00099",12
+"M_90",90,"Propanoyl-CoA_in","C00000","Propanoyl-CoA","C00100",12
+"M_91",91,"glutamate_in","C00000","glutamate","C00025",12
+"M_92",92,"Glutamine_in","C00000","Glutamine","C00064",12
+"M_93",93,"GABA_in","C00000","GABA","C00334",12
+"M_94",94,"Tyrosine_in","C00000","Tyrosine","C00082",12
+"M_95",95,"phenylalanine_in","C00000","phenylalanine","C00079",12
+"M_96",96,"Valine_in","C00000","Valine","C00183",12
+"M_97",97,"Isoleucine_in","C00000","Isoleucine","C00407",12
+"M_98",98,"Leucine_in","C00000","Leucine","C00123",12
+"M_99",99,"Lysine_in","C00000","Lysine","C00047",12
+"M_100",100,"Arginine","C00000","Arginine","C00062",12
+"M_101",101,"Citrulline_in","C00000","Citrulline","C00327",12
+"M_102",102,"Ornithine_in","C00000","Ornithine","C00077",12
+"M_103",103,"Proline_in","C00000","Proline","C00148",12
+"M_105",105,"Fatty Acid_in","C00000","Fatty Acid","CC0001",12
+"M_106",106,"Glucose","C00267","Glucose-6-phosphate","C00668",13
+"M_107",107,"Glucose-6-phosphate","C00668","UDP-N-acetylglucosamine","C00043",13
+"M_108",108,"Glucose-6-phosphate","C00668","Glucose-1-phosphate","C00103",13
+"M_109",109,"Glucose-1-phosphate","C00103","UDP-glucuronic acid","C00167",13
+"M_110",110,"UDP-glucuronic acid+UDP-N-acetylglucosamine","C00167+C00043","Hyaluronic acid","C00518",13
+"M_111",111,"Glucose-1-phosphate","C00103","Glycogen","C00182",14
+"M_112",112,"UDP-N-acetylglucosamine","C00043","CMP-N-acetylneuraminate","C00128",15
+"M_113",113,"Acetyl-CoA","C00024","(E,E)-Farnesyl-PP","C00448",16
+"M_114",114,"(E,E)-Farnesyl-PP","C00448","Geranylgeranyl-PP","C00353",16
+"M_115",115,"(E,E)-Farnesyl-PP","C00448","Farnesal","C03461",16
+"M_116",116,"(E,E)-Farnesyl-PP","C00448","Ubiquinone","C00399",16
+"M_117",117,"(E,E)-Farnesyl-PP","C00448","Dolichyl phosphate","C00110",16
+"M_118",118,"Dolichyl phosphate","C00110","Dolichyl phosphate D-mannose","C03862",16
+"M_119",119,"Dolichyl phosphate","C00110","(GlcNAc)4 (Man)3 (Asn)1","G00015",16
+"M_120",120,"(Glc)3 (GlcNAc)2 (Man)9 (PP-Dol)1+Protein asparagine","G00008+C03021","(Glc)3 (GlcNAc)2 (Man)9 (Asn)1","G00009",16
+"M_121",121,"(Glc)3 (GlcNAc)2 (Man)9 (Asn)1","G00009","(GlcNAc)4 (Man)3 (Asn)1","G00015",16
+"M_122",122,"(GlcNAc)4 (Man)3 (Asn)1","G00015","(Gal)2 (GlcNAc)4 (LFuc)1 (Man)3 (Neu5Ac)2 (Asn)1","G00018",16
+"M_123",123,"(GlcNAc)4 (Man)3 (Asn)1","G00015","(GlcNAc)7 (Man)3 (Asn)1","G00022",16
+"M_124",124,"(GlcNAc)4 (Man)3 (Asn)1","G00015","(GlcNAc)5 (Man)3 (Asn)1","G00019",16
+"M_125",125,"Dolichyl phosphate D-mannose+Protein serine","C03862+C02189","(Gal)1 (GlcNAc)1 (Man)1 (Ser/Thr)1","G13084",17
+"M_126",126,"(Gal)1 (GlcNAc)1 (Man)1 (Ser/Thr)1","G13084","(Gal)1 (GlcNAc)1 (Man)1 (Neu5Ac)1 (Ser/Thr)1","G13085",17
+"M_127",127,"(Gal)1 (GlcNAc)1 (Man)1 (Ser/Thr)1","G13084","(Gal)1 (GlcA)1 (GlcNAc)1 (Man)1 (S)1 (Ser/Thr)1","G13088",17
+"M_128",128,"(Gal)1 (GlcNAc)1 (Man)1 (Ser/Thr)1","G13084","(Gal)1 (GlcNAc)1 (LFuc)1 (Man)1 (Ser/Thr)1","G13100",17
+"M_129",129,"Protein serine","C02189","(Gal)2 (GlcA)1 (Xyl)1 (Ser)1","G00157",18
+"M_130",130,"(Gal)2 (GlcA)1 (Xyl)1 (Ser)1","G00157","Chondroitin","C00401",18
+"M_131",131,"Chondroitin","C00401","Dermatan","C01490",18
+"M_132",132,"(Gal)2 (GlcA)1 (Xyl)1 (Ser)1","G00157","(Gal)2 (GlcA)2 (GlcNAc)2 (Xyl)1 (Ser)1","G00164",19
+"M_133",133,"PRPP+Glutamine","C00119+C00064","IMP","C00130",20
+"M_134",134,"5-Phosphoribosylamine","C03090","AICAR","C04677",20
+"M_135",135,"AICAR","C04677","IMP","C00130",20
+"M_136",136,"IMP","C00130","AMP","C00020",20
+"M_137",137,"IMP","C00130","XMP","C00655",20
+"M_138",138,"AMP","C00020","Deoxyadenosine","C00559",20
+"M_139",139,"AMP","C00020","Adenine","C00147",20
+"M_140",140,"ADP","C00008","Deoxyadenosine","C00559",20
+"M_141",141,"Deoxyadenosine","C00559","Adenine","C00147",20
+"M_142",142,"Deoxyadenosine","C00559","Hypoxanthine","C00262",20
+"M_143",143,"IMP","C00130","Hypoxanthine","C00262",20
+"M_144",144,"Hypoxanthine","C00262","Xanthine","C00385",20
+"M_145",145,"XMP","C00655","Xanthine","C00385",20
+"M_146",146,"Xanthine","C00385","Uric acid","C00366",20
+"M_147",147,"Xanthine","C00385","Guanine","C00242",20
+"M_148",148,"XMP","C00655","Guanine","C00242",20
+"M_149",149,"GMP","C00144","Guanine","C00242",20
+"M_150",150,"PRPP","C00119","UMP","C00105",21
+"M_151",151,"Orotidylic acid","C01103","UMP","C00105",21
+"M_152",152,"UMP","C00105","B-Alanine","C00099",21
+"M_153",153,"UMP","C00105","CDP","C00112",21
+"M_154",154,"Uracil","C00106","B-Alanine","C00099",21
+"M_155",155,"UTP","C00075","CDP","C00112",21
+"M_156",156,"CDP","C00112","Cytidine","C00475",21
+"M_157",157,"CDP","C00112","dCDP","C00705",21
+"M_158",158,"dCDP","C00705","Deoxycytidine","C00881",21
+"M_159",159,"dCMP","C00239","Deoxycytidine","C00881",21
+"M_160",160,"dCDP","C00705","dUMP","C00365",21
+"M_161",161,"dCDP","C00705","dCTP","C00458",21
+"M_162",162,"dUMP","C00365","Deoxyuridine","C00526",21
+"M_163",163,"dUMP","C00365","dTMP","C00364",21
+"M_164",164,"dTMP","C00364","Succinyl-CoA","C00091",21
+"M_165",165,"dTMP","C00364","dTTP","C00459",21
+"M_166",166,"Thymine","C00178","Succinyl-CoA","C00091",21
+"M_167",167,"(E,E)-Farnesyl-PP","C00448","Cholesterol","C00187",22
+"M_168",168,"Cholesterol","C00187","Chenodeoxycholate","C02528",22
+"M_169",169,"Cholesterol","C00187"," Steroid_hormone","CC0003",22
+"M_170",170,"XMP","C00655","GMP","C00144",20
+"M_171",171,"dCDP","C00705","dCMP","C00239",21

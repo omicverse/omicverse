@@ -17,6 +17,14 @@ data
 !omicverse/metabol/data/*.json
 !omicverse/metabol/data/README*
 omicverse/metabol/data/*.parquet
+# Keep the vendored single-cell-metabolism backend data (gene sets,
+# metabolic models, metabolite-sensor DB) — required at run time.
+!omicverse/external/py_scmetabolism/data/
+!omicverse/external/py_scmetabolism/data/**
+!omicverse/external/scfea/data/
+!omicverse/external/scfea/data/**
+!omicverse/external/mebocost/data/
+!omicverse/external/mebocost/data/**
 genesets
 temp
 result_simba

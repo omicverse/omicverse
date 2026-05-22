@@ -165,6 +165,7 @@ from ._flowsig import (
 )
 from ._embedding import embedding_atlas
 from ._cnv import cnv_heatmap, cnv_summary, cnv_umap
+from ._metabolism import metabolism_heatmap
 from ._metacell import (
     metacell_metrics,
     metacell_purity_box,
@@ -421,6 +422,7 @@ __all__ = [
     "cnv_heatmap",
     "cnv_summary",
     "cnv_umap",
+    "metabolism_heatmap",
     # @ _perturbation
     "perturbation_shift_violin",
     "perturbation_embedding_shift",

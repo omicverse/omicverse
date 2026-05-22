@@ -112,6 +112,10 @@ from ._monocle import Monocle
 # Usage: cnv = ov.single.CNV(adata, method='copykat'); cnv.run()
 from ._cnv import CNV
 
+# Single-cell metabolism — scMetabolism / Compass / scFEA + MEBOCOST.
+# Usage: met = ov.single.Metabolism(adata, method='scmetabolism'); met.run()
+from ._metabolism import Metabolism, MetaboliteCCC
+
 from ._stavia import StaVIA
 from ._lazy_step_by_step import (
     lazy_step_qc, lazy_step_preprocess, lazy_step_scale, lazy_step_pca,
@@ -395,6 +399,10 @@ __all__ = [
 
     # Single-cell CNV
     'CNV',
+
+    # Single-cell metabolism
+    'Metabolism',
+    'MetaboliteCCC',
 
     # Differential expression
     'DCT',
