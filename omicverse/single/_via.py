@@ -4,6 +4,9 @@ import scanpy as sc
 import pandas as pd
 
 import igraph as ig
+import matplotlib
+import matplotlib.figure
+import matplotlib.axes
 
 from datetime import datetime
 from typing import Union,Tuple
