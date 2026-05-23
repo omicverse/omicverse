@@ -1016,7 +1016,7 @@ def sc_loc_ofsuperCluster_PCAspace(p0, idx):
         p_ds = hnswlib.Index(space='l2', dim=p0.data.shape[1])
         p_ds.init_index(max_elements=X_ds.shape[0], ef_construction=200, M=16)
         p_ds.add_items(X_ds)
-        p_ds.set_ef(50)
+        p_ds.set_ef(max(1, min(50, X_ds.shape[0])))
 
         new_superclust_index_ds = {}
         for en_item, item in enumerate(ci_list):

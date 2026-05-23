@@ -963,7 +963,7 @@ def plot_differentiation_flow(via_object, idx: list = None, dpi=150, marker_line
     p_ds = hnswlib.Index(space='l2', dim=X_ds.shape[1])
     p_ds.init_index(max_elements=X_ds.shape[0], ef_construction=200, M=16)
     p_ds.add_items(X_ds)
-    p_ds.set_ef(50)
+    p_ds.set_ef(max(1, min(50, X_ds.shape[0])))
     num_cluster = len(set(via_object.labels))
     G_orange = ig.Graph(n=num_cluster, edges=via_object.edgelist_maxout,
                         edge_attrs={'weight': via_object.edgeweights_maxout})
@@ -1222,7 +1222,7 @@ def plot_sc_lineage_probability(via_object, embedding: ndarray = None, idx: list
     p_ds = hnswlib.Index(space='l2', dim=X_ds.shape[1])
     p_ds.init_index(max_elements=X_ds.shape[0], ef_construction=200, M=16)
     p_ds.add_items(X_ds)
-    p_ds.set_ef(50)
+    p_ds.set_ef(max(1, min(50, X_ds.shape[0])))
     num_cluster = len(set(via_object.labels))
     G_orange = ig.Graph(n=num_cluster, edges=via_object.edgelist_maxout,
                         edge_attrs={'weight': via_object.edgeweights_maxout})
@@ -2959,6 +2959,7 @@ def get_gene_expression_ov(adata,clusters,via_object,
                         else:
                             print(
                                 f'{datetime.now()}\tLineage {i_terminal} cannot be reached. Exclude this lineage in trend plotting')
+                            continue
                         if cmap_dict is None:
                             color_ = cmap_[enum_i_lineage]
                         else:

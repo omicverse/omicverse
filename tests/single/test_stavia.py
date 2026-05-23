@@ -296,6 +296,47 @@ def test_via_core_get_gene_expression_uses_shared_legend(monkeypatch):
     plt.close(fig)
 
 
+def test_via_get_gene_expression_skips_single_cell_lineage(monkeypatch):
+    _install_fake_pygam(monkeypatch)
+    from omicverse.external.VIA import core as via_core
+    from omicverse.external.VIA import plotting_via_ov
+
+    class FakeVIA:
+        terminal_clusters = [1]
+        labels = np.array([1, 0, 0])
+        true_label = np.array(["A", "B", "B"])
+        single_cell_pt_markov = np.array([0.0, 0.5, 1.0])
+        single_cell_bp = np.array([[1.0], [0.0], [0.0]], dtype=float)
+
+        @staticmethod
+        def func_mode(values):
+            return pd.Series(values).mode().iloc[0]
+
+    gene_exp = pd.DataFrame({"G0": [1.0, 2.0, 3.0]})
+
+    fig, axs = via_core.get_gene_expression(
+        FakeVIA(),
+        gene_exp=gene_exp,
+        marker_genes=["G0"],
+        marker_lineages=[1],
+        dpi=80,
+    )
+    assert sum(len(ax.lines) for ax in np.ravel(axs)) == 0
+    plt.close(fig)
+
+    fig, axs = plotting_via_ov.get_gene_expression_ov(
+        None,
+        None,
+        FakeVIA(),
+        gene_exp=gene_exp,
+        marker_genes=["G0"],
+        marker_lineages=[1],
+        dpi=80,
+    )
+    assert sum(len(ax.lines) for ax in np.ravel(axs)) == 0
+    plt.close(fig)
+
+
 def test_stavia_rejects_missing_spatial_key():
     adata = _make_adata()
     model = StaVIA(adata, spatial_key="missing")
