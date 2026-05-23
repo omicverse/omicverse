@@ -75,6 +75,63 @@ class DockingResult:
         from rdkit.Chem import rdMolAlign
         return float(rdMolAlign.CalcRMS(self.best, reference))
 
+    def save_poses(self, path: str, *, format: Optional[str] = None) -> str:
+        r"""Write every docked pose to a file (``.sdf`` or ``.pdb``).
+
+        ``.sdf`` preserves bond orders and tags each pose with its Vina
+        affinity (``vina_affinity`` SD field) — the format MGLTools, PyMOL
+        and most downstream tools expect. ``.pdb`` writes a multi-``MODEL``
+        PDB; coarser but universally readable.
+
+        Format is inferred from the extension unless ``format`` overrides.
+        Returns the output path.
+        """
+        return self._write_poses(path, range(len(self.poses)), format)
+
+    def save_pose(self, path: str, *, pose: int = 0,
+                  format: Optional[str] = None) -> str:
+        r"""Write a single docked pose to a file (``.sdf`` or ``.pdb``).
+
+        ``pose=0`` is the top-scored pose. See :meth:`save_poses`.
+        """
+        if pose < 0 or pose >= len(self.poses):
+            raise IndexError(
+                f"pose {pose} out of range — result has "
+                f"{len(self.poses)} poses")
+        return self._write_poses(path, [pose], format)
+
+    def _write_poses(self, path: str, indices, format: Optional[str]) -> str:
+        from rdkit import Chem
+        fmt = (format or os.path.splitext(path)[1].lstrip(".")).lower()
+        if fmt in ("sdf", "sd"):
+            writer = Chem.SDWriter(path)
+            try:
+                for i in indices:
+                    mol = Chem.Mol(self.poses[i])
+                    mol.SetProp("_Name", f"pose_{i + 1}")
+                    mol.SetProp("vina_affinity_kcal_mol",
+                                f"{float(self.affinities[i]):.3f}")
+                    mol.SetProp("pose_rank", str(i + 1))
+                    writer.write(mol)
+            finally:
+                writer.close()
+            return path
+        if fmt == "pdb":
+            with open(path, "w") as fh:
+                for n, i in enumerate(indices, start=1):
+                    fh.write(f"MODEL     {n}\n")
+                    for line in self.pose_blocks[i].splitlines():
+                        if line.startswith(("MODEL", "ENDMDL", "END ", "END\n")):
+                            continue
+                        fh.write(line + "\n")
+                    fh.write(f"REMARK   1 VINA_AFFINITY "
+                             f"{float(self.affinities[i]):.3f}\n")
+                    fh.write("ENDMDL\n")
+                fh.write("END\n")
+            return path
+        raise ValueError(
+            f"unsupported format {fmt!r}; use '.sdf' (recommended) or '.pdb'")
+
     def __repr__(self) -> str:
         if not len(self.affinities):
             return "DockingResult(no poses)"
@@ -87,8 +144,49 @@ class DockingResult:
 # ------------------------------------------------------------------ #
 
 
+_LIGAND_FILE_EXTS = (".sdf", ".mol", ".mol2", ".pdb", ".smi", ".smiles")
+
+
+def _load_ligand_file(path: str):
+    """Load an RDKit Mol from a local ligand file — sdf/mol/mol2/pdb/smi."""
+    from rdkit import Chem
+
+    ext = os.path.splitext(path)[1].lower()
+    if ext == ".sdf":
+        for m in Chem.SDMolSupplier(path, removeHs=False):
+            if m is not None:
+                return m
+        raise ValueError(f"no parseable molecule in SDF: {path}")
+    if ext == ".mol":
+        m = Chem.MolFromMolFile(path, removeHs=False)
+    elif ext == ".mol2":
+        m = Chem.MolFromMol2File(path, removeHs=False)
+    elif ext == ".pdb":
+        m = Chem.MolFromPDBFile(path, removeHs=False)
+    elif ext in (".smi", ".smiles"):
+        with open(path) as fh:
+            first = fh.readline().strip()
+        if not first:
+            raise ValueError(f"empty SMILES file: {path}")
+        # SMILES files can have "<smiles> <name>" — take the first token
+        m = Chem.MolFromSmiles(first.split()[0])
+    else:
+        raise ValueError(
+            f"unsupported ligand file extension {ext!r} — "
+            f"accepted: {', '.join(_LIGAND_FILE_EXTS)}")
+    if m is None:
+        raise ValueError(f"RDKit failed to parse ligand file: {path}")
+    return m
+
+
 def _resolve_ligand(ligand: Any):
-    """Resolve a ligand spec to an RDKit Mol (SMILES / name / Mol / row)."""
+    """Resolve a ligand spec to an RDKit Mol.
+
+    Accepts an RDKit ``Mol``, a local file path
+    (``.sdf`` / ``.mol`` / ``.mol2`` / ``.pdb`` / ``.smi``), a SMILES
+    string, a drug name (resolved via ChEMBL), or a row / dict carrying
+    a ``smiles`` key (e.g. one row of ``known_drugs()``).
+    """
     from rdkit import Chem
 
     if isinstance(ligand, Chem.Mol):
@@ -106,8 +204,12 @@ def _resolve_ligand(ligand: Any):
         return Chem.MolFromSmiles(smiles)
 
     if isinstance(ligand, str):
-        # probe as SMILES first — silence RDKit's parser log, since a
-        # failure here just means the string is a drug name, not an error
+        # local file path with a known molecular-file extension
+        ext = os.path.splitext(ligand)[1].lower()
+        if ext in _LIGAND_FILE_EXTS and os.path.exists(ligand):
+            return _load_ligand_file(ligand)
+        # probe as SMILES — silence RDKit's parser log, since a failure
+        # here just means the string is a drug name, not an error
         from rdkit import RDLogger
         RDLogger.DisableLog("rdApp.*")
         try:
@@ -126,7 +228,8 @@ def _resolve_ligand(ligand: Any):
             if smi:
                 return Chem.MolFromSmiles(smi)
         raise ValueError(f"could not resolve ligand {ligand!r} "
-                          "(not a valid SMILES, not a known ChEMBL drug)")
+                          "(not a valid SMILES, no ChEMBL drug by that name, "
+                          "no such ligand file)")
     raise TypeError(f"unsupported ligand type: {type(ligand)}")
 
 
@@ -296,17 +399,23 @@ def _run_vina(receptor_pdbqt: str, ligand_pdbqt: str, center, size,
     category="mol",
     description=(
         "Dock a small molecule into a target protein structure with "
-        "AutoDock Vina. The ligand may be a SMILES string, a drug name "
-        "(resolved via ChEMBL), an RDKit Mol or a known_drugs() row; the "
+        "AutoDock Vina. The ligand accepts five inputs: a SMILES string, "
+        "a drug name (resolved via ChEMBL), an RDKit Mol, a known_drugs() "
+        "row, or a local file path (.sdf / .mol / .mol2 / .pdb / .smi) — "
+        "use the file form to dock compounds from a vendor catalog, an "
+        "in-house design pipeline, or a virtual-screening hit list. The "
         "search box is taken from a detected pocket, given explicitly, or "
         "spans the whole protein (blind docking). Returns a DockingResult "
-        "with ranked poses and Vina affinities. Docking is stochastic — "
-        "results are reproducible for a fixed seed."
+        "with ranked poses, Vina affinities, and save_poses() / "
+        "save_pose() helpers to write the poses to SDF or PDB. Docking is "
+        "stochastic — results are reproducible for a fixed seed."
     ),
     examples=[
         "result = ov.mol.dock(s, 'gefitinib', pocket=1)",
         "result = ov.mol.dock(s, 'CCOc1cc2ncnc(Nc3ccc...)c2cc1', pocket=1)",
+        "result = ov.mol.dock(s, '/path/to/my_compound.sdf', pocket=1)",
         "result = ov.mol.dock(s, known_drugs('EGFR').iloc[0], pocket=1)",
+        "result.save_poses('poses.sdf')",
     ],
     related=["mol.redock_validate", "mol.view_docking", "mol.pockets"],
 )
@@ -321,8 +430,17 @@ def dock(structure, ligand: Any, *, pocket: Optional[int] = None,
     structure : MolStructure
         The receptor.
     ligand
-        A SMILES string, a drug name, an RDKit ``Mol``, or a row from
-        :func:`omicverse.mol.known_drugs`.
+        Accepts five forms:
+
+        - a **SMILES string** (e.g. ``'c1ccccc1'``);
+        - a **drug name** (resolved via ChEMBL — e.g. ``'gefitinib'``);
+        - an **RDKit** :class:`~rdkit.Chem.Mol`;
+        - a row / dict carrying a ``smiles`` key (e.g. a row of
+          :func:`omicverse.mol.known_drugs`);
+        - a **local file path** with a molecular-file extension —
+          ``.sdf`` / ``.mol`` / ``.mol2`` / ``.pdb`` / ``.smi``. Use this
+          to dock a compound from a vendor SDF, an in-house design
+          pipeline, or a virtual-screening hit list.
     pocket
         A ``pocket_id`` from :func:`omicverse.mol.pockets` — its
         alpha-spheres define the search box.

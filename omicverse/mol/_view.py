@@ -1,22 +1,24 @@
 r"""Interactive 3D visualization for :mod:`omicverse.mol`.
 
-Built on **py3Dmol** (3Dmol.js). Unlike ``ipywidgets``-based viewers,
-py3Dmol emits a self-contained HTML/JS block — the interactive 3D view is
-captured in the notebook cell output and **survives ``nbconvert`` to
-static HTML**, so the rendered omicverse docs keep a rotatable structure
-with no live kernel.
+Built on **py3Dmol** (3Dmol.js): each view is a self-contained HTML/JS
+block embedded in the notebook cell output, with no ``ipywidgets``
+dependency, and **renders in nbconvert HTML / mkdocs** without a live
+kernel.
 
-The view is wrapped in an ``<iframe srcdoc="…">`` so the inline 3Dmol.js
-loader script runs reliably both in *trusted* live Jupyter and in
-**untrusted** notebooks (the default state for any notebook executed via
-``nbconvert``, downloaded from a repo, or viewed in nbviewer / mkdocs).
-Without the wrapper, Jupyter's trust model strips the bare ``<script>``
-tag and the viewer displays only its "3Dmol.js failed to load" warning.
+The one caveat is Jupyter's **notebook-trust model**. JupyterLab strips
+``<script>`` (and ``<iframe>``) from outputs of notebooks it has not
+signed with the user's local trust key — i.e. any notebook produced by
+``nbconvert``, freshly cloned from a repo, or served by nbviewer. In
+that case 3D views display only the "3Dmol.js failed to load" warning
+that py3Dmol pre-inserts. The fix is to **trust the notebook** —
+``jupyter trust <path>.ipynb`` — or simply re-execute the cells in your
+own kernel (which auto-trusts outputs of the current session). The
+mkdocs-rendered docs work without trust because static HTML is not
+sanitized.
 """
 
 from __future__ import annotations
 
-import html as _html
 import os
 import tempfile
 from typing import Any, Dict, Mapping, Optional, Sequence, Union
@@ -33,37 +35,6 @@ _PLDDT_BANDS = [
     (50.0, 70.0, "#FFDB13", "Low (50-70)"),
     (-1e9, 50.0, "#FF7D45", "Very low (<50)"),
 ]
-
-
-def _wrap_in_iframe(view, width: int, height: int):
-    """Wrap a py3Dmol view in an iframe so its inline loader script runs
-    regardless of Jupyter's notebook-trust state.
-
-    Bare ``<script>`` tags in notebook outputs are stripped on display
-    when a notebook is *untrusted* — which is what happens to any
-    notebook ``nbconvert`` executed, or that a user opens after cloning
-    the docs repo, or that a static HTML renderer (nbviewer, mkdocs)
-    serves. The browser treats ``srcdoc`` as a separate document, so its
-    inline scripts execute even though the surrounding notebook output
-    was sanitized.
-
-    ``_repr_html_`` is rebuilt on each render so later mutations of the
-    view (style / selection / pose changes) are picked up correctly.
-    """
-    iframe_w, iframe_h = width + 20, height + 20
-
-    def _repr_html_():
-        inner = view._make_html()
-        srcdoc = _html.escape(inner, quote=True)
-        return (
-            f'<iframe srcdoc="{srcdoc}" width="{iframe_w}" '
-            f'height="{iframe_h}" frameborder="0" '
-            f'style="border:none;display:block;" '
-            f'sandbox="allow-scripts allow-same-origin"></iframe>'
-        )
-
-    view._repr_html_ = _repr_html_
-    return view
 
 
 def _pdb_text(structure) -> str:
@@ -227,7 +198,7 @@ def view(structure, *, style: str = "cartoon", color_by: Any = "pLDDT",
     v.zoomTo()
     if note:
         print(f"ov.mol.view: {note}")
-    return _wrap_in_iframe(v, width, height)
+    return v
 
 
 @register_function(
@@ -299,7 +270,7 @@ def view_docking(structure, result, *, pose: int = 0,
                 "backgroundColor": "white", "fontColor": "black",
                 "fontSize": 12})
     v.zoomTo({"model": -1})
-    return _wrap_in_iframe(v, width, height)
+    return v
 
 
 @register_function(
