@@ -212,13 +212,13 @@ def auto_resolution(
     For each candidate resolution :math:`r`:
 
     1. Run Leiden on the **full** AnnData → reference labels at ``r``.
-    2. Take :paramref:`n_subsamples` independent without-replacement
+    2. Take ``n_subsamples`` independent without-replacement
        subsamples of size ``subsample_frac × n_obs``.
     3. For each subsample run Leiden on the induced subgraph and
        compute Adjusted Rand Index against the reference restricted to
        the subsample.
     4. :math:`s_\mathrm{real}(r) = \mathrm{mean\,ARI}` across the
-       :paramref:`n_subsamples` bootstraps — the **observed**
+       ``n_subsamples`` bootstraps — the **observed**
        reproducibility.
 
     Bootstrap stability alone is biased toward fine resolutions: small
@@ -231,7 +231,7 @@ def auto_resolution(
        distributions but destroys all cell-cell co-expression — there
        is no cluster structure left.
     6. Run the same PCA → kNN-graph → bootstrap-stability pipeline on
-       the null with :paramref:`n_null_subsamples` subsamples.
+       the null with ``n_null_subsamples`` subsamples.
        :math:`s_\mathrm{null}(r)` is the chance-level reproducibility
        of leiden at this resolution given the data's marginal-only
        statistical structure.
@@ -242,10 +242,10 @@ def auto_resolution(
            \Delta(r) = s_\mathrm{real}(r) - s_\mathrm{null}(r)
 
        and the chosen resolution is :math:`\arg\max_r \Delta(r)`
-       subject to producing at least :paramref:`min_clusters` clusters
+       subject to producing at least ``min_clusters`` clusters
        on the full data.
 
-    Setting :paramref:`use_null_correction` ``=False`` falls back to
+    Setting ``use_null_correction`` ``=False`` falls back to
     plain bootstrap-ARI; it's exposed mostly for diagnostics. The
     default is the null-adjusted variant.
 
@@ -266,11 +266,11 @@ def auto_resolution(
         Lange et al. 2004. ``False`` returns plain bootstrap stability.
     n_null_subsamples
         Bootstrap subsamples per resolution on the **null** data — can
-        be smaller than :paramref:`n_subsamples` because the null is
+        be smaller than ``n_subsamples`` because the null is
         low-variance.
     null_seed
         Seed for the per-gene permutation generating the null. Held
-        separate from :paramref:`random_state` so the null is
+        separate from ``random_state`` so the null is
         reproducible independently of the real-data search.
     null_layer
         ``adata.layers`` key to permute. Defaults to ``adata.X``.

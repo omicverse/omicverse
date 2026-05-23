@@ -47,10 +47,10 @@ def gptcelltype(input, tissuename=None, speciename='human',
     Parameters
     ----------
     input : dict or pandas.DataFrame
-        Cluster marker input. Use either:
-        1) ``dict[cluster_id -> list[str]]`` of marker genes, or
-        2) DE result table containing ``cluster``, ``names``, and
-           ``logfoldchanges`` columns.
+        Cluster marker input. Use either a
+        ``dict[cluster_id -> list[str]]`` of marker genes, or a
+        DE result table containing ``cluster``, ``names``, and
+        ``logfoldchanges`` columns.
     tissuename : str or None, default=None
         Tissue context provided to the model prompt (for example, PBMC or brain).
     speciename : str, default='human'

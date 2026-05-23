@@ -29,9 +29,9 @@ def gptcelltype_local(input, tissuename=None, speciename='human',
     Parameters
     ----------
     input : dict or pandas.DataFrame
-        Marker definition per cluster. Accepted formats:
-        1) ``dict[cluster_id -> list[str]]`` marker genes, or
-        2) DE table with ``cluster``, ``names``, ``logfoldchanges`` columns.
+        Marker definition per cluster. Accepts either a
+        ``dict[cluster_id -> list[str]]`` of marker genes, or a
+        DE table with ``cluster``, ``names``, ``logfoldchanges`` columns.
     tissuename : str or None, default=None
         Tissue context included in the prompt.
     speciename : str, default='human'

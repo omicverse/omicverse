@@ -202,9 +202,9 @@ def champ(
 
     Algorithm
     ---------
-    1. Run Leiden at :paramref:`n_partitions` candidate γ values
+    1. Run Leiden at ``n_partitions`` candidate γ values
        evenly spaced over :math:`[\gamma_\min,\,\gamma_\max]` (or use
-       the explicit grid passed in :paramref:`resolutions`). Deduplicate
+       the explicit grid passed in ``resolutions``). Deduplicate
        partitions that produce identical labels.
     2. For each unique partition :math:`P`, compute
        :math:`(a_P, b_P)` such that
@@ -238,8 +238,8 @@ def champ(
         AnnData with a precomputed neighbor graph
         (``adata.obsp['connectivities']``).
     resolutions
-        Explicit γ grid; overrides :paramref:`n_partitions` /
-        :paramref:`gamma_min` / :paramref:`gamma_max`.
+        Explicit γ grid; overrides ``n_partitions`` /
+        ``gamma_min`` / ``gamma_max``.
     n_partitions
         Number of γ values to scan when ``resolutions`` is ``None``.
     gamma_min, gamma_max
@@ -288,10 +288,10 @@ def champ(
     adaptive
         If ``True``, iteratively refine the γ-grid around the current
         hull's crossovers (active-set style): build the hull → for
-        each crossover sample :paramref:`adaptive_n_refine` extra γ
+        each crossover sample ``adaptive_n_refine`` extra γ
         values nearby → re-run leiden → recompute the hull → repeat
         until no new hull vertex appears or
-        :paramref:`adaptive_max_iter` iterations are reached. Catches
+        ``adaptive_max_iter`` iterations are reached. Catches
         hull partitions that uniform γ-sampling misses around sharp
         transitions.
     adaptive_max_iter
