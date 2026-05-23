@@ -232,7 +232,7 @@ def blank_filter(
     blank_mask: str | np.ndarray,
     ratio: float = 3.0,
 ) -> AnnData:
-    """Drop features whose sample-mean intensity isn't at least ``ratio``×
+    """Drop features whose sample-mean intensity isn't at least ``ratio``\ ×
     the blank-mean intensity.
 
     Parameters

@@ -562,7 +562,7 @@ def corr_network_plot(
 
     Renders the output of :func:`omicverse.metabol.corr_network` as a
     correlation graph: nodes are metabolites, edges are pairs whose
-    Spearman / Pearson |r| exceeded the network's threshold. Edge
+    Spearman / Pearson ``|r|`` exceeded the network's threshold. Edge
     colour encodes the sign of the correlation (red = positive,
     blue = negative); edge width is proportional to ``|r|``.
 

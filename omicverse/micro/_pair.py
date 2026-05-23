@@ -105,13 +105,13 @@ def fetch_franzosa_ibd_2019(
     microbe_count_scale
         The Borenstein TSV delivers per-sample *relative abundances*.
         To make the tables look like familiar 16S count matrices
-        (integer counts, range 10⁰–10⁵) we multiply by this scale and
-        round — a pseudo-count-per-million by default. Pass 1.0 to
-        keep proportions (most useful if you plan to CLR-transform
-        immediately and don't need integer counts). All downstream
-        ov.micro APIs (``filter_by_prevalence``, ``paired_spearman``,
-        ``paired_cca``, ``MMvec``) work on either, but ``min_count``
-        filters expect counts ≥ 1.
+        (integer counts, range 1 to ~100,000) we multiply by this
+        scale and round — a pseudo-count-per-million by default.
+        Pass ``1.0`` to keep proportions (most useful if you plan to
+        CLR-transform immediately and don't need integer counts). All
+        downstream ``ov.micro`` APIs (``filter_by_prevalence``,
+        ``paired_spearman``, ``paired_cca``, ``MMvec``) work on either,
+        but ``min_count`` filters expect counts >= 1.
 
     Returns
     -------

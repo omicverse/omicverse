@@ -356,13 +356,15 @@ def read_nanostring(
     """Read Nanostring formatted dataset.
 
     This follows the Squidpy nanostring reader layout:
+
     - ``obsm['spatial']``: local cell center coordinates.
     - ``obsm['spatial_fov']``: global cell center coordinates.
     - ``uns['spatial'][fov]['images']``: hires and segmentation images from
       ``CellComposite`` and ``CellLabels``.
     - ``uns['spatial'][fov]['metadata']``: optional FOV-level metadata.
-    - If geometry-like columns exist in metadata, writes ``obs['geometry']`` as
-      WKT strings to match ``read_visium_hd_seg`` format for ``ov.pl.spatialseg``.
+    - If geometry-like columns exist in metadata, writes ``obs['geometry']``
+      as WKT strings to match ``read_visium_hd_seg`` format for
+      ``ov.pl.spatialseg``.
     """
     root = Path(path).resolve()
     _progress(f"Reading Nanostring data from: {root}")
