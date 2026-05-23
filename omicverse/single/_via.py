@@ -123,15 +123,17 @@ def _patched_lineage_probability_layout(plot_func, ncol):
 )
 def hematopoiesis()->anndata.AnnData:
     r"""Load scRNA-seq hematopoiesis dataset for trajectory inference.
-        Returns
-        -------
-        AnnData: Preprocessed hematopoiesis dataset with embeddings and annotations.
-    
-    Examples:
-        >>> import omicverse as ov
-        >>> # Load the dataset
-        >>> adata = ov.single.scRNA_hematopoiesis()
-        >>> print(adata.shape)
+
+    Returns
+    -------
+    AnnData
+        Preprocessed hematopoiesis dataset with embeddings and annotations.
+
+    Examples
+    --------
+    >>> import omicverse as ov
+    >>> adata = ov.single.scRNA_hematopoiesis()
+    >>> print(adata.shape)
     """
     _load_via_modules()
     return scRNA_hematopoiesis()
