@@ -38,7 +38,7 @@ def _get_palantir_backend():
 @register_function(
     aliases=["轨迹推断", "TrajInfer", "trajectory_inference", "轨迹分析", "发育轨迹"],
     category="single",
-    description="Comprehensive trajectory inference for single-cell data using multiple algorithms including Palantir, diffusion maps, Slingshot, and StaVIA",
+    description="Comprehensive trajectory inference for single-cell data — Palantir, diffusion maps, Slingshot, StaVIA, scTour, plus the dynbenchmark zoo (SCORPIUS, TSCAN, destiny, URD, Monocle3, CytoTRACE)",
     prerequisites={
         'functions': ['pca', 'neighbors'],
         'optional_functions': ['leiden', 'umap']
@@ -133,6 +133,54 @@ class TrajInfer(object):
         """
         self.terminal=terminal
         
+    def _dense_counts(self):
+        """Return (X, var_names) — dense cells × genes counts matrix + gene labels.
+
+        Many zoo backends (SCORPIUS, TSCAN, destiny, URD, CytoTRACE) need RAW
+        counts because they log-transform internally. The resolution order is:
+
+        1. ``adata.layers['counts']`` if present (omicverse preprocess saves
+           raw counts here before normalisation).
+        2. ``adata.raw.X`` with ``adata.raw.var_names`` if a raw is set
+           (note: omicverse stores the *normalised* matrix as raw, so this
+           is a fallback only when no counts layer exists).
+        3. ``adata.X`` with ``adata.var_names`` (post-HVG, post-normalisation).
+        """
+        if 'counts' in self.adata.layers:
+            X = self.adata.layers['counts']
+            var_names = list(self.adata.var_names)
+        elif self.adata.raw is not None:
+            X = self.adata.raw.X
+            var_names = list(self.adata.raw.var_names)
+        else:
+            X = self.adata.X
+            var_names = list(self.adata.var_names)
+        if issparse(X):
+            X = X.toarray()
+        return np.asarray(X), var_names
+
+    def _origin_row_index(self) -> int:
+        """Resolve ``self.origin`` to a row index in ``adata``.
+
+        Used as the root cell for diffusion-map-based methods. Falls back to
+        the first cell of the origin cluster, or to the global extremum of the
+        first PCA component if origin is unset.
+        """
+        if self.origin is not None and self.groupby in self.adata.obs.columns:
+            mask = self.adata.obs[self.groupby].astype(str) == str(self.origin)
+            if mask.any():
+                return int(np.where(mask.values)[0][0])
+        if self.use_rep in self.adata.obsm:
+            return int(np.argmin(self.adata.obsm[self.use_rep][:, 0]))
+        return 0
+
+    def _monocle3_root_fallback(self, cds) -> list:
+        """Pick a data-driven root for Monocle3 when origin is unspecified."""
+        for k in ('UMAP', 'X_umap'):
+            if k in cds.obsm:
+                return [cds.obs_names[int(np.argmin(cds.obsm[k][:, 0]))]]
+        return [cds.obs_names[0]]
+
     def set_origin_cells(self,origin:str):
         r"""Set origin cell type for trajectory inference.
         
@@ -270,8 +318,178 @@ class TrajInfer(object):
             model.fit()
             self.stavia = model
             return model
+        elif method == 'scorpius':
+            # Linear-trajectory method via SCORPIUS (Cannoodt 2016).
+            # Backend: pyscorpius — `pip install omicverse[trajectory]`
+            import pyscorpius
+            counts, _ = self._dense_counts()
+            space = pyscorpius.reduce_dimensionality(counts, ndim=kwargs.pop('ndim', 3))
+            traj = pyscorpius.infer_trajectory(space, **kwargs)
+            time_vec = traj['time'] if isinstance(traj, dict) else getattr(traj, 'time', None)
+            self.adata.obs['scorpius_pseudotime'] = np.asarray(time_vec, dtype=float)
+            self.adata.obsm['X_scorpius'] = np.asarray(space)
+            add_reference(self.adata, 'SCORPIUS', 'trajectory inference with SCORPIUS')
+        elif method == 'tscan':
+            # mclust-based pseudotime (Ji & Ji 2016).
+            # Backend: pytscan — `pip install omicverse[trajectory]`
+            import pytscan
+            counts, var_names = self._dense_counts()
+            expr = pd.DataFrame(counts.T,
+                                index=var_names,
+                                columns=list(self.adata.obs_names))
+            mclust_kwargs = {k: kwargs.pop(k) for k in
+                             ('clusternum', 'reduce', 'modelNames', 'clustermethod')
+                             if k in kwargs}
+            res = pytscan.exprmclust(expr, **mclust_kwargs)
+            order = pytscan.TSCANorder(res, orderonly=True)
+            n = max(len(order.ordered_names) - 1, 1)
+            cell_to_t = {c: i / n for i, c in enumerate(order.ordered_names)}
+            pt = np.array([cell_to_t.get(c, np.nan) for c in self.adata.obs_names])
+            if np.any(np.isnan(pt)):
+                pt = np.where(np.isnan(pt), np.nanmedian(pt), pt)
+            self.adata.obs['tscan_pseudotime'] = pt
+            self.adata.obs['tscan_cluster'] = pd.Categorical([f'C{c}' for c in res.clusterid])
+            add_reference(self.adata, 'TSCAN', 'trajectory inference with TSCAN')
+        elif method == 'destiny':
+            # DiffusionMap + DPT pseudotime (Haghverdi 2016 / Angerer 2016).
+            # Backend: pydestiny — `pip install omicverse[trajectory]`
+            import pydestiny
+            counts, _ = self._dense_counts()
+            expr = np.log2(counts + 1)
+            dm = pydestiny.DiffusionMap.fit(
+                expr,
+                sigma=kwargs.pop('sigma', 'local'),
+                n_eigs=kwargs.pop('n_eigs', 5),
+                k=kwargs.pop('k', min(20, max(2, expr.shape[0] // 5))),
+            )
+            root = self._origin_row_index()
+            dpt = pydestiny.DPT(dm, root=int(root))
+            self.adata.obs['destiny_pseudotime'] = np.asarray(dpt, dtype=float)
+            try:
+                self.adata.obsm['X_destiny'] = np.asarray(dm.eigenvectors)
+            except Exception:
+                pass
+            self.destiny = dm
+            add_reference(self.adata, 'destiny', 'trajectory inference with destiny DPT')
+        elif method == 'urd':
+            # Flood-pseudotime with diffusion-map transitions (Farrell 2018).
+            # Backend: pyurd + pydestiny — `pip install omicverse[trajectory]`
+            import pydestiny, pyurd
+            counts, _ = self._dense_counts()
+            expr = np.log2(counts + 1)
+            dm = pydestiny.DiffusionMap.fit(
+                expr,
+                sigma=kwargs.pop('sigma', 'local'),
+                n_eigs=kwargs.pop('n_eigs', 5),
+                k=kwargs.pop('k', min(20, max(2, expr.shape[0] // 5))),
+            )
+            urd = pyurd.URD(
+                cell_names=list(self.adata.obs_names),
+                transitions=dm.transitions,
+                dm_eigenvectors=dm.eigenvectors,
+                dm_eigenvalues=dm.eigenvalues,
+            )
+            n_root = kwargs.pop('n_root', max(5, len(self.adata) // 8))
+            # Match R URD: roots = the n_root cells closest to one extremum of DC1.
+            # If `self.origin` is set, choose the DC1 extremum whose mean lies inside
+            # the origin cluster — otherwise default to the smaller-DC1 end.
+            dc1 = np.asarray(dm.eigenvectors)[:, 0]
+            order_low  = np.argsort(dc1)[:n_root]
+            order_high = np.argsort(-dc1)[:n_root]
+            if (self.origin is not None
+                    and self.groupby in self.adata.obs.columns):
+                origin_mask = (self.adata.obs[self.groupby].astype(str) == str(self.origin)).values
+                low_hit  = origin_mask[order_low].mean()
+                high_hit = origin_mask[order_high].mean()
+                root_idx = list(order_low if low_hit >= high_hit else order_high)
+            else:
+                root_idx = list(order_low)
+            floods = pyurd.floodPseudotime(
+                urd,
+                root_cells=root_idx,
+                n=kwargs.pop('flood_n', 30),
+                minimum_cells_flooded=1,
+                seed=kwargs.pop('seed', 42),
+            )
+            res = pyurd.floodPseudotimeProcess(floods, max_frac_NA=0.9, stability_div=3)
+            pt_series = res['pseudotime'] if isinstance(res, dict) else getattr(res, 'pseudotime', None)
+            pt = np.full(len(self.adata), np.nan)
+            for idx, c in enumerate(self.adata.obs_names):
+                if c in pt_series.index:
+                    pt[idx] = pt_series.loc[c]
+            if np.all(np.isnan(pt)):
+                pt = np.zeros_like(pt)
+            else:
+                pt = np.where(np.isnan(pt), np.nanmedian(pt), pt)
+            self.adata.obs['urd_pseudotime'] = pt
+            self.urd = urd
+            add_reference(self.adata, 'URD', 'trajectory inference with URD')
+        elif method == 'monocle3':
+            # UMAP + principal-graph pseudotime (Cao 2019).
+            # Backend: pymonocle3 — `pip install omicverse[trajectory]`
+            import pymonocle3 as m3
+            cds = self.adata.copy()
+            if issparse(cds.X):
+                cds.X = cds.X.toarray()
+            m3.estimate_size_factors(cds)
+            m3.preprocess_cds(cds, num_dim=kwargs.pop('num_dim', min(20, cds.n_vars - 1)))
+            m3.reduce_dimension(cds,
+                                max_components=kwargs.pop('max_components', 2),
+                                umap_min_dist=kwargs.pop('umap_min_dist', 0.1),
+                                umap_n_neighbors=kwargs.pop('umap_n_neighbors', 15))
+            m3.cluster_cells(cds, resolution=kwargs.pop('cluster_resolution', 0.001))
+            m3.learn_graph(cds, use_partition=kwargs.pop('use_partition', False))
+            if self.origin is not None and self.groupby in self.adata.obs.columns:
+                mask = self.adata.obs[self.groupby].astype(str) == str(self.origin)
+                if mask.any():
+                    root_cells = [self.adata.obs_names[np.where(mask.values)[0][0]]]
+                else:
+                    root_cells = self._monocle3_root_fallback(cds)
+            else:
+                root_cells = self._monocle3_root_fallback(cds)
+            m3.order_cells(cds, root_cells=root_cells)
+            # pymonocle3 writes to monocle3_pseudotime / monocle3_partitions
+            pt_col = 'monocle3_pseudotime' if 'monocle3_pseudotime' in cds.obs \
+                     else ('pseudotime' if 'pseudotime' in cds.obs else None)
+            if pt_col is None:
+                pt = np.zeros(cds.n_obs)
+            else:
+                pt = np.asarray(cds.obs[pt_col], dtype=float)
+            finite = np.isfinite(pt)
+            if finite.sum():
+                pt = np.where(finite, pt, np.nanmedian(pt[finite]))
+            else:
+                pt = np.zeros_like(pt)
+            if pt.max() > pt.min():
+                pt = (pt - pt.min()) / (pt.max() - pt.min())
+            self.adata.obs['monocle3_pseudotime'] = pt
+            for part_col in ('monocle3_partitions', 'partition', 'monocle3_partition'):
+                if part_col in cds.obs.columns:
+                    self.adata.obs['monocle3_partition'] = cds.obs[part_col].astype(str).values
+                    break
+            for k in ('UMAP', 'X_umap'):
+                if k in cds.obsm:
+                    self.adata.obsm['X_monocle3'] = np.asarray(cds.obsm[k])
+                    break
+            self.monocle3 = cds
+            add_reference(self.adata, 'Monocle3', 'trajectory inference with Monocle3')
+        elif method == 'cytotrace':
+            # Differentiation potential ranked by gene-count correlate (Gulati 2020).
+            # Backend: pycytotrace — `pip install omicverse[trajectory]`
+            import pycytotrace
+            counts, _ = self._dense_counts()
+            # pycytotrace expects genes × cells, like R upstream.
+            res = pycytotrace.cytotrace_run(counts.T, **kwargs)
+            stem = np.asarray(getattr(res, 'cytotrace', res), dtype=float)
+            self.adata.obs['cytotrace_stemness'] = stem
+            self.adata.obs['cytotrace_pseudotime'] = 1.0 - stem
+            add_reference(self.adata, 'CytoTRACE', 'trajectory inference with CytoTRACE')
         else:
-            print('Please input the correct method name, such as `palantir`, `diffusion_map`, or `stavia`')
+            print(
+                'Please input the correct method name. Supported: '
+                'palantir, diffusion_map, slingshot, sctour, stavia, '
+                'scorpius, tscan, destiny, urd, monocle3, cytotrace'
+            )
             return
         
     def palantir_plot_pseudotime(self, return_fig: bool = False, **kwargs):

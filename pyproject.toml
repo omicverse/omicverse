@@ -146,6 +146,20 @@ web = [
   "omicclaw",
 ]
 
+# Trajectory inference zoo — Python ports of the dynbenchmark methods
+# (Saelens et al. 2019). Pulls one wrapper per method that registers as a
+# backend for ``ov.single.TrajInfer(method=...)``. Slingshot is bundled in
+# ``omicverse/single/_pyslingshot.py`` so it stays out of this extras set.
+# Install via: pip install omicverse[trajectory]
+trajectory = [
+  "pycytotrace-bio>=0.1.0",
+  "pydestiny-bio>=0.2.0",
+  "pyurd-bio>=0.2.0",
+  "pymonocle3-bio>=0.1.0",
+  "pyscorpius>=0.1.0",
+  "pytscan>=0.1.0",
+]
+
 skillseeker = [
   "beautifulsoup4>=4.12",
   "PyGithub>=2.2",
