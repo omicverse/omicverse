@@ -556,9 +556,7 @@ def perturb_quiver(
     if cluster_col is not None and cluster_col in adata.obs:
         labels = pd.Categorical(adata.obs[cluster_col])
         cats = list(labels.categories)
-        if cluster_palette is None:
-            cmap = plt.get_cmap("tab20")
-            cluster_palette = {c: cmap(i % 20) for i, c in enumerate(cats)}
+        cluster_palette = _resolve_cluster_palette(adata, cluster_col, cats, cluster_palette)
         c_arr = [cluster_palette[c] for c in labels.astype(str)]
         ax.scatter(emb[:, 0], emb[:, 1], s=background_size, c=c_arr,
                    alpha=background_alpha, linewidths=0, rasterized=True)
@@ -699,6 +697,31 @@ def perturb_sankey(
     return fig, ax
 
 
+def _resolve_cluster_palette(adata, cluster_col, cats, cluster_palette=None):
+    """Pick a cluster colour palette consistent with what scanpy renders.
+
+    Resolution order:
+      1. explicit ``cluster_palette`` argument
+      2. ``adata.uns[f"{cluster_col}_colors"]`` if scanpy already plotted it
+      3. scanpy's ``vega_20_scanpy`` (the default for `sc.pl.umap`)
+      4. matplotlib ``tab20`` fallback
+    """
+    if cluster_palette is not None:
+        return cluster_palette
+    key = f"{cluster_col}_colors"
+    if adata is not None and key in getattr(adata, "uns", {}):
+        colors = list(adata.uns[key])
+        if len(colors) >= len(cats):
+            return {c: colors[i] for i, c in enumerate(cats)}
+    try:
+        from scanpy.plotting import palettes as _sc_palettes
+        pal = list(_sc_palettes.vega_20_scanpy)
+        return {c: pal[i % len(pal)] for i, c in enumerate(cats)}
+    except Exception:  # pragma: no cover
+        cmap = plt.get_cmap("tab20")
+        return {c: cmap(i % 20) for i, c in enumerate(cats)}
+
+
 def _make_sankey_ribbon(*, x0, x1, y0_src, y1_src, y0_dst, y1_dst, n_pts: int = 30):
     """Smooth ribbon polygon between two vertical bars (source/destination).
 
@@ -736,7 +759,7 @@ def perturb_inner_product_on_grid(
     grid_size: int = 30,
     min_mass: float = 1.0,
     vmax: Optional[float] = None,
-    cmap: str = "coolwarm",
+    cmap: str = "PiYG",
     overlay_arrows: bool = True,
     arrow_target_length: float = 0.018,
     arrow_width: float = 0.005,
@@ -785,9 +808,7 @@ def perturb_inner_product_on_grid(
     if cluster_col is not None and cluster_col in adata.obs:
         labels = pd.Categorical(adata.obs[cluster_col])
         cats = list(labels.categories)
-        if cluster_palette is None:
-            cmap_pal = plt.get_cmap("tab20")
-            cluster_palette = {c: cmap_pal(i % 20) for i, c in enumerate(cats)}
+        cluster_palette = _resolve_cluster_palette(adata, cluster_col, cats, cluster_palette)
         c_arr = [cluster_palette[c] for c in labels.astype(str)]
         ax.scatter(emb[:, 0], emb[:, 1], s=background_size, c=c_arr,
                    alpha=0.35, linewidths=0, rasterized=True)
@@ -884,9 +905,7 @@ def perturb_cell_quiver(
     if cluster_col is not None and cluster_col in adata.obs:
         labels = pd.Categorical(adata.obs[cluster_col])
         cats = list(labels.categories)
-        if cluster_palette is None:
-            cmap = plt.get_cmap("tab20")
-            cluster_palette = {c: cmap(i % 20) for i, c in enumerate(cats)}
+        cluster_palette = _resolve_cluster_palette(adata, cluster_col, cats, cluster_palette)
         c_arr = [cluster_palette[c] for c in labels.astype(str)]
         ax.scatter(emb[:, 0], emb[:, 1], s=background_size, c=c_arr,
                    alpha=background_alpha, linewidths=0, rasterized=True)
@@ -1086,9 +1105,7 @@ def perturb_development_layout(
 
     labels = pd.Categorical(adata.obs[cluster_col])
     cats = list(labels.categories)
-    if cluster_palette is None:
-        cmap_pal = plt.get_cmap("tab20")
-        cluster_palette = {c: cmap_pal(i % 20) for i, c in enumerate(cats)}
+    cluster_palette = _resolve_cluster_palette(adata, cluster_col, cats, cluster_palette)
 
     # Helper to draw lightgray cell background on a panel and turn axis off
     def _bg(ax):
@@ -1167,7 +1184,7 @@ def perturb_development_layout(
     mask2d = (~(keep & np.isfinite(ps_grid))).reshape(grid_size, grid_size)
     PS2d_m = np.ma.array(PS2d, mask=mask2d)
     sc = ax.pcolormesh(
-        xs, ys, PS2d_m, cmap="coolwarm",
+        xs, ys, PS2d_m, cmap="PiYG",
         vmin=-vm, vmax=vm, shading="nearest", alpha=0.85, zorder=2,
     )
     fig.colorbar(sc, ax=ax, fraction=0.04, pad=0.02,
@@ -1185,7 +1202,7 @@ def perturb_development_layout(
     valid = keep & np.isfinite(ps_grid) & np.isfinite(pt_grid)
     sc2 = ax.scatter(
         pt_grid[valid], ps_grid[valid], c=ps_grid[valid],
-        cmap="coolwarm", vmin=-vm, vmax=vm, s=25,
+        cmap="PiYG", vmin=-vm, vmax=vm, s=25,
         linewidths=0, alpha=0.95,
     )
     ax.axhline(0.0, color="lightgray", lw=0.8)
