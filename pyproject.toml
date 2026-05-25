@@ -155,7 +155,7 @@ trajectory = [
   "pycytotrace-bio>=0.1.0",
   "pydestiny-bio>=0.2.0",
   "pyurd-bio>=0.2.0",
-  "pymonocle3-bio>=0.1.0",
+  'pymonocle3-bio>=0.1.0; python_version >= "3.10"',
   "pyscorpius>=0.1.0",
   "pytscan>=0.1.0",
 ]
