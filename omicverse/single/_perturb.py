@@ -155,6 +155,33 @@ class PerturbResult:
         return top
 
     # ------------------------------------------------------------------
+    # Persistence
+    # ------------------------------------------------------------------
+
+    def save(self, path: str) -> None:
+        """Persist this result to a ``.pkl`` on disk.
+
+        All attributes (``delta_X``, ``trajectory_shift``, ``grn``,
+        ``delta_expr``, ``adata_perturbed`` …) are picklable, so we
+        delegate to :func:`omicverse.utils.save` for cross-version
+        compatibility. Reload with :meth:`PerturbResult.load`.
+        """
+        from .. import utils as ov_utils
+        ov_utils.save(self, path)
+
+    @classmethod
+    def load(cls, path: str) -> "PerturbResult":
+        """Restore a result previously saved via :meth:`save`."""
+        from .. import utils as ov_utils
+        obj = ov_utils.load(path)
+        if not isinstance(obj, cls):
+            raise TypeError(
+                f"Loaded object from {path!r} is a {type(obj).__name__}, "
+                f"not a PerturbResult."
+            )
+        return obj
+
+    # ------------------------------------------------------------------
     # Tier A: shared downstream methods
     # ------------------------------------------------------------------
 
@@ -275,25 +302,43 @@ class PerturbResult:
         pseudotime: "str | np.ndarray",
         embedding_name: str = "X_umap",
         n_neighbors: int = 30,
+        grid_size: int = 30,
+        min_mass: float = 1.0,
+        level: str = "cell",
     ):
         """CellOracle-style perturbation score (PS).
 
-        PS quantifies whether the perturbation **promotes** (+) or
-        **blocks** (−) progression along the developmental trajectory:
+        PS is the **raw dot product** of the perturbation flow vector and
+        the developmental-gradient vector on a 2-D embedding — exactly
+        the construction of CellOracle's
+        :class:`Oracle_development_module.calculate_inner_product`:
 
-            grad[i] = local 2-D gradient of pseudotime on the embedding
-            PS[i]   = cos( Δemb[i] , grad[i] )
+            simulation_flow_on_grid · pseudotime_gradient_on_grid
+
+        Both vector fields are first **aggregated onto a grid** of
+        ``grid_size × grid_size`` points using a Gaussian neighbourhood
+        kernel (CellOracle's ``calculate_p_mass`` / ``flow_grid``
+        construction); the dot product is computed at each grid point.
+        Sparse grid points are filtered with ``min_mass``.
+
+        Sign convention: **PS > 0** = perturbation **promotes**
+        differentiation along the local pseudotime gradient; **PS < 0**
+        = perturbation **blocks** it.
 
         Parameters
         ----------
+        level
+            ``'cell'`` (default) — return a per-cell Series indexed by
+            cell name; each cell is assigned the PS of its nearest
+            grid point. Suitable for the PS-vs-pseudotime scatter and
+            per-cluster boxplot.
+            ``'grid'`` — return a dict with the grid arrays
+            (``grid_pts``, ``flow_grid``, ``ref_flow_grid``,
+            ``ps_grid``, ``mass``, ``keep``) — what
+            :func:`ov.pl.perturb_inner_product_on_grid` uses.
         pseudotime : str or array-like
-            Column name in ``adata.obs`` or a per-cell array of pseudotime
-            values.
-
-        Returns
-        -------
-        pandas.Series indexed by cell name (or by integer index when
-        ``cell_names`` is missing).
+            Column name in ``adata.obs`` or a per-cell array of
+            pseudotime values.
         """
         delta_emb = self.delta_embedding(adata=adata, embedding_name=embedding_name)
         _, _, embedding, _ = _resolve_inputs(self, adata=adata,
@@ -304,14 +349,32 @@ class PerturbResult:
             pt = np.asarray(adata.obs[pseudotime].values, dtype=np.float64)
         else:
             pt = np.asarray(pseudotime, dtype=np.float64)
-        grad = _local_pseudotime_gradient(embedding, pt, n_neighbors=n_neighbors)
 
-        # cosine similarity (unit-normalise both)
-        norm_d = np.linalg.norm(delta_emb, axis=1) + 1e-12
-        norm_g = np.linalg.norm(grad, axis=1) + 1e-12
-        ps = (delta_emb * grad).sum(axis=1) / (norm_d * norm_g)
-        idx = self.cell_names if self.cell_names is not None else range(len(ps))
-        return pd.Series(ps, index=list(idx), name="perturbation_score")
+        grid = _compute_ps_grid(
+            embedding=embedding,
+            delta_emb=delta_emb,
+            pseudotime=pt,
+            grid_size=grid_size,
+            min_mass=min_mass,
+            n_neighbors=n_neighbors,
+        )
+        if level == "grid":
+            return grid
+
+        # Per-cell PS = nearest grid-point PS (so each cell carries the
+        # local CellOracle-style raw dot product, which is what gets
+        # plotted in the PS-vs-pseudotime scatter and the per-cluster
+        # boxplot in `visualize_development_module_layout_0`).
+        from sklearn.neighbors import NearestNeighbors
+        valid = grid["keep"]
+        if valid.any():
+            nn = NearestNeighbors(n_neighbors=1).fit(grid["grid_pts"][valid])
+            _, ix = nn.kneighbors(embedding)
+            ps_cell = np.asarray(grid["ps_grid"][valid][ix.ravel()], dtype=np.float64)
+        else:
+            ps_cell = np.zeros(embedding.shape[0], dtype=np.float64)
+        idx = self.cell_names if self.cell_names is not None else range(len(ps_cell))
+        return pd.Series(ps_cell, index=list(idx), name="perturbation_score")
 
     def cluster_transitions(
         self,
@@ -1301,6 +1364,77 @@ def _local_pseudotime_gradient(embedding, pseudotime, *, n_neighbors: int = 30):
             continue
         grad[i] = beta
     return grad
+
+
+def _compute_ps_grid(
+    *,
+    embedding,
+    delta_emb,
+    pseudotime,
+    grid_size: int = 30,
+    min_mass: float = 1.0,
+    n_neighbors: int = 30,
+):
+    """CellOracle-style PS computation on a 2-D grid.
+
+    Replicates the construction in
+    ``celloracle.applications.Oracle_development_module``:
+
+      * ``flow_grid``      — simulation flow vectors aggregated onto a
+        regular grid via a Gaussian neighbourhood kernel.
+      * ``ref_flow_grid``  — pseudotime gradient vectors aggregated the
+        same way (CellOracle's ``Gradient_calculator`` ref_flow).
+      * ``ps_grid[g]``     = ``flow_grid[g] · ref_flow_grid[g]``
+        (a raw dot product, **not** cosine similarity).
+
+    Returns a dict with the grid arrays so callers can reuse them for
+    both the heatmap (``perturb_inner_product_on_grid``) and the
+    per-cell lookup (``perturbation_score(level='cell')``).
+    """
+    from scipy.spatial import cKDTree
+    embedding = np.asarray(embedding, dtype=np.float64)
+    delta_emb = np.asarray(delta_emb, dtype=np.float64)
+    pt = np.asarray(pseudotime, dtype=np.float64)
+
+    # Local pseudotime gradient per cell
+    grad = _local_pseudotime_gradient(embedding, pt, n_neighbors=n_neighbors)
+
+    # Grid construction
+    xs = np.linspace(embedding[:, 0].min(), embedding[:, 0].max(), grid_size)
+    ys = np.linspace(embedding[:, 1].min(), embedding[:, 1].max(), grid_size)
+    GX, GY = np.meshgrid(xs, ys)
+    grid_pts = np.column_stack([GX.ravel(), GY.ravel()])
+
+    # Gaussian-weighted aggregation of BOTH flows onto the grid
+    tree = cKDTree(embedding)
+    radius = float(np.linalg.norm([xs[1] - xs[0], ys[1] - ys[0]]))
+    flow_grid = np.zeros_like(grid_pts)
+    ref_flow_grid = np.zeros_like(grid_pts)
+    mass = np.zeros(grid_pts.shape[0])
+    for g_i, p in enumerate(grid_pts):
+        ix = tree.query_ball_point(p, r=radius * 1.5)
+        if not ix:
+            continue
+        d = np.linalg.norm(embedding[ix] - p, axis=1)
+        w = np.exp(-(d ** 2) / (2 * (radius / 2) ** 2))
+        mass[g_i] = w.sum()
+        if mass[g_i] > 0:
+            flow_grid[g_i] = (delta_emb[ix] * w[:, None]).sum(axis=0) / mass[g_i]
+            ref_flow_grid[g_i] = (grad[ix] * w[:, None]).sum(axis=0) / mass[g_i]
+    keep = mass >= min_mass
+
+    # CellOracle's PS = raw dot product per grid point
+    ps_grid = (flow_grid * ref_flow_grid).sum(axis=1)
+
+    return dict(
+        grid_pts=grid_pts,
+        flow_grid=flow_grid,
+        ref_flow_grid=ref_flow_grid,
+        ps_grid=ps_grid,
+        mass=mass,
+        keep=keep,
+        grid_size=grid_size,
+    )
 
 
 def _permutation_significance(

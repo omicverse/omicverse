@@ -759,38 +759,22 @@ def perturb_inner_product_on_grid(
 
     Optionally overlays the simulation vector field via ``overlay_arrows``.
     """
-    ps = result.perturbation_score(
+    # Grid-level PS computed exactly the CellOracle way: aggregate the
+    # per-cell delta_embedding and the per-cell pseudotime gradient onto
+    # the same grid, then take the RAW dot product per grid point
+    # (no cosine normalisation).
+    grid = result.perturbation_score(
         adata=adata, pseudotime=pseudotime, embedding_name=embedding_name,
         n_neighbors=n_neighbors,
+        grid_size=grid_size, min_mass=min_mass,
+        level="grid",
     )
-    delta_emb = result.delta_embedding(adata=adata, embedding_name=embedding_name)
+    grid_pts = grid["grid_pts"]
+    UV = grid["flow_grid"]
+    PS_grid = grid["ps_grid"]
+    keep = grid["keep"]
     emb = np.asarray(adata.obsm[embedding_name])
-    xrange = emb[:, 0].max() - emb[:, 0].min()
-    yrange = emb[:, 1].max() - emb[:, 1].min()
-    bbox_diag = float(np.hypot(xrange, yrange))
-
-    xs = np.linspace(emb[:, 0].min(), emb[:, 0].max(), grid_size)
-    ys = np.linspace(emb[:, 1].min(), emb[:, 1].max(), grid_size)
-    GX, GY = np.meshgrid(xs, ys)
-    grid_pts = np.column_stack([GX.ravel(), GY.ravel()])
-    from scipy.spatial import cKDTree
-    tree = cKDTree(emb)
-    radius = float(np.linalg.norm([xs[1] - xs[0], ys[1] - ys[0]]))
-    PS_grid = np.full(grid_pts.shape[0], np.nan)
-    UV = np.zeros((grid_pts.shape[0], 2))
-    mass = np.zeros(grid_pts.shape[0])
-    ps_arr = np.asarray(ps.values, dtype=np.float64)
-    for g_i, p in enumerate(grid_pts):
-        ix = tree.query_ball_point(p, r=radius * 1.5)
-        if not ix:
-            continue
-        d = np.linalg.norm(emb[ix] - p, axis=1)
-        w = np.exp(-(d ** 2) / (2 * (radius / 2) ** 2))
-        mass[g_i] = w.sum()
-        if mass[g_i] > 0:
-            PS_grid[g_i] = (ps_arr[ix] * w).sum() / mass[g_i]
-            UV[g_i] = (delta_emb[ix] * w[:, None]).sum(axis=0) / mass[g_i]
-    keep = mass >= min_mass
+    bbox_diag = float(np.hypot(np.ptp(emb[:, 0]), np.ptp(emb[:, 1])))
 
     if ax is None:
         fig, ax = plt.subplots(figsize=figsize)
