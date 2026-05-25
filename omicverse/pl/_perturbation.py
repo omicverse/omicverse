@@ -792,16 +792,22 @@ def perturb_inner_product_on_grid(
         ax.scatter(emb[:, 0], emb[:, 1], s=background_size, c=c_arr,
                    alpha=0.35, linewidths=0, rasterized=True)
 
-    # PS heatmap via scatter on grid
+    # PS heatmap via pcolormesh so the grid renders cleanly regardless of
+    # subplot size — `scatter(marker='s')` doesn't auto-size and produces
+    # stripes inside small subplots (e.g. the 6-panel layout).
     valid = keep & np.isfinite(PS_grid)
     if vmax is None:
         vmax = float(np.nanpercentile(np.abs(PS_grid[valid]), 95)) if valid.any() else 1.0
         vmax = max(vmax, 1e-6)
-    sc = ax.scatter(
-        grid_pts[valid, 0], grid_pts[valid, 1], c=PS_grid[valid],
+    PS2d = PS_grid.reshape(grid_size, grid_size)
+    mask2d = (~valid).reshape(grid_size, grid_size)
+    PS2d_masked = np.ma.array(PS2d, mask=mask2d)
+    xs = np.linspace(emb[:, 0].min(), emb[:, 0].max(), grid_size)
+    ys = np.linspace(emb[:, 1].min(), emb[:, 1].max(), grid_size)
+    sc = ax.pcolormesh(
+        xs, ys, PS2d_masked,
         cmap=cmap, vmin=-vmax, vmax=vmax,
-        s=(bbox_diag / grid_size) ** 2 * 0.18,
-        marker="s", linewidths=0, alpha=0.85, zorder=2,
+        shading="nearest", alpha=0.85, zorder=2,
     )
     fig.colorbar(sc, ax=ax, fraction=0.04, pad=0.02,
                  label="Perturbation Score")
