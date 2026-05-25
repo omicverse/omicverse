@@ -1392,12 +1392,10 @@ def _compute_ps_grid(
     per-cell lookup (``perturbation_score(level='cell')``).
     """
     from scipy.spatial import cKDTree
+    from sklearn.neighbors import KNeighborsRegressor
     embedding = np.asarray(embedding, dtype=np.float64)
     delta_emb = np.asarray(delta_emb, dtype=np.float64)
     pt = np.asarray(pseudotime, dtype=np.float64)
-
-    # Local pseudotime gradient per cell
-    grad = _local_pseudotime_gradient(embedding, pt, n_neighbors=n_neighbors)
 
     # Grid construction
     xs = np.linspace(embedding[:, 0].min(), embedding[:, 0].max(), grid_size)
@@ -1405,11 +1403,28 @@ def _compute_ps_grid(
     GX, GY = np.meshgrid(xs, ys)
     grid_pts = np.column_stack([GX.ravel(), GY.ravel()])
 
-    # Gaussian-weighted aggregation of BOTH flows onto the grid
+    # ---------- ref_flow on grid (CellOracle Gradient_calculator) -----------
+    # CellOracle's pipeline:
+    #   1. transfer_data_into_grid: KNN-regress pseudotime onto each grid point
+    #      so we get a 2-D scalar field pseudotime_on_grid[grid].
+    #   2. calculate_gradient: np.gradient on the (grid_size × grid_size)
+    #      reshape gives finite-difference (dx, dy) at every grid point.
+    #   3. Normalise / scale (we just normalise — scaling is up to the plot).
+    knn = KNeighborsRegressor(n_neighbors=min(n_neighbors, embedding.shape[0]))
+    knn.fit(embedding, pt)
+    pt_on_grid = knn.predict(grid_pts)
+    pt_on_grid_2d = pt_on_grid.reshape(grid_size, grid_size)
+    dy, dx = np.gradient(pt_on_grid_2d)
+    ref_flow_grid = np.stack([dx.ravel(), dy.ravel()], axis=1)
+    # Normalise component-wise by the mean L2 norm so |arrows| are O(1)
+    rfg_norms = np.linalg.norm(ref_flow_grid, axis=1)
+    if rfg_norms.mean() > 0:
+        ref_flow_grid = ref_flow_grid / rfg_norms.mean()
+
+    # ---------- flow_grid (KO-simulation arrows) ----------------------------
     tree = cKDTree(embedding)
     radius = float(np.linalg.norm([xs[1] - xs[0], ys[1] - ys[0]]))
     flow_grid = np.zeros_like(grid_pts)
-    ref_flow_grid = np.zeros_like(grid_pts)
     mass = np.zeros(grid_pts.shape[0])
     for g_i, p in enumerate(grid_pts):
         ix = tree.query_ball_point(p, r=radius * 1.5)
@@ -1420,8 +1435,14 @@ def _compute_ps_grid(
         mass[g_i] = w.sum()
         if mass[g_i] > 0:
             flow_grid[g_i] = (delta_emb[ix] * w[:, None]).sum(axis=0) / mass[g_i]
-            ref_flow_grid[g_i] = (grad[ix] * w[:, None]).sum(axis=0) / mass[g_i]
     keep = mass >= min_mass
+
+    # Normalise flow_grid to the same scale as ref_flow_grid (mean-L2 norm
+    # = 1) so PS = flow_grid · ref_flow_grid is in a CellOracle-comparable
+    # range ([-1, +1]-ish on a population basis).
+    fg_norms = np.linalg.norm(flow_grid, axis=1)
+    if fg_norms.mean() > 0:
+        flow_grid = flow_grid / fg_norms.mean()
 
     # CellOracle's PS = raw dot product per grid point
     ps_grid = (flow_grid * ref_flow_grid).sum(axis=1)
@@ -1431,6 +1452,7 @@ def _compute_ps_grid(
         flow_grid=flow_grid,
         ref_flow_grid=ref_flow_grid,
         ps_grid=ps_grid,
+        pseudotime_on_grid=pt_on_grid,
         mass=mass,
         keep=keep,
         grid_size=grid_size,
