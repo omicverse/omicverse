@@ -1022,21 +1022,30 @@ def perturb_development_layout(
     pseudotime: "str | np.ndarray",
     cluster_col: str,
     embedding_name: str = "X_umap",
-    grid_size: int = 28,
+    grid_size: int = 40,
+    min_mass: float = 1.0,
     cluster_palette: Optional[Dict[str, str]] = None,
     vm: Optional[float] = None,
+    n_pseudotime_bins: int = 10,
+    background_color: str = "lightgray",
+    background_size: float = 5.0,
+    cell_label_fontsize: float = 9.0,
     figsize=(15, 10),
 ):
-    """Reproduce CellOracle's `visualize_development_module_layout_0` figure.
+    """Reproduce CellOracle's ``visualize_development_module_layout_0`` figure
+    panel-by-panel.
 
     A 2×3 grid:
 
-    ``(0,0)`` cell-type clusters on UMAP
-        ``(0,1)`` developmental gradient (pseudotime flow) on UMAP
-        ``(0,2)`` simulation flow (KO arrows) on UMAP
-    ``(1,0)`` PS heatmap on the grid (CellOracle headline figure)
-        ``(1,1)`` PS vs pseudotime scatter
-        ``(1,2)`` PS per cluster as boxplot
+    ``(0,0)`` cell-type clusters on the embedding (`plot_cluster_cells_use`)
+        ``(0,1)`` developmental gradient on grid (`plot_reference_flow_on_grid`)
+        ``(0,2)`` simulation flow on grid (`plot_simulation_flow_on_grid`)
+    ``(1,0)`` PS heatmap on grid (`plot_inner_product_on_grid`)
+        ``(1,1)`` PS vs pseudotime — **grid-level** scatter, colored by PS
+        ``(1,2)`` PS box-plot — **pseudotime-binned**, not by cluster
+
+    Style matches CellOracle: light-gray cell background everywhere
+    except (0,0); axis off; cluster names rendered at cluster centroids.
     """
     if isinstance(pseudotime, str):
         if pseudotime not in adata.obs:
@@ -1045,116 +1054,173 @@ def perturb_development_layout(
     else:
         pt = np.asarray(pseudotime, dtype=np.float64)
 
-    ps = result.perturbation_score(
+    # Grid PS + flow + ref_flow + grid pseudotime (all aggregated on the same grid)
+    grid = result.perturbation_score(
         adata=adata, pseudotime=pseudotime, embedding_name=embedding_name,
+        grid_size=grid_size, min_mass=min_mass,
+        level="grid",
     )
-    delta_emb = result.delta_embedding(adata=adata, embedding_name=embedding_name)
+    grid_pts = grid["grid_pts"]
+    flow_grid = grid["flow_grid"]
+    ref_flow_grid = grid["ref_flow_grid"]
+    ps_grid = grid["ps_grid"]
+    mass = grid["mass"]
+    keep = grid["keep"]
+    # Aggregate pseudotime per grid point
+    from scipy.spatial import cKDTree
     emb = np.asarray(adata.obsm[embedding_name])
+    bbox_diag = float(np.hypot(np.ptp(emb[:, 0]), np.ptp(emb[:, 1])))
+    xs = np.linspace(emb[:, 0].min(), emb[:, 0].max(), grid_size)
+    ys = np.linspace(emb[:, 1].min(), emb[:, 1].max(), grid_size)
+    radius = float(np.linalg.norm([xs[1] - xs[0], ys[1] - ys[0]]))
+    tree = cKDTree(emb)
+    pt_grid = np.full(grid_pts.shape[0], np.nan)
+    for g_i, p in enumerate(grid_pts):
+        ix = tree.query_ball_point(p, r=radius * 1.5)
+        if not ix:
+            continue
+        d = np.linalg.norm(emb[ix] - p, axis=1)
+        w = np.exp(-(d ** 2) / (2 * (radius / 2) ** 2))
+        if w.sum() > 0:
+            pt_grid[g_i] = (pt[ix] * w).sum() / w.sum()
+
     labels = pd.Categorical(adata.obs[cluster_col])
     cats = list(labels.categories)
     if cluster_palette is None:
         cmap_pal = plt.get_cmap("tab20")
         cluster_palette = {c: cmap_pal(i % 20) for i, c in enumerate(cats)}
 
+    # Helper to draw lightgray cell background on a panel and turn axis off
+    def _bg(ax):
+        ax.scatter(emb[:, 0], emb[:, 1], s=background_size,
+                   c=background_color, alpha=0.55, linewidths=0,
+                   rasterized=True)
+
+    def _hide_axes(ax):
+        ax.set_xticks([]); ax.set_yticks([])
+        for sp in ("top", "right", "bottom", "left"):
+            ax.spines[sp].set_visible(False)
+
+    # --- 90th-percentile-based arrow scale (CellOracle's `arrows_scale`) -----
+    def _quiver_scale(UV, target_frac=0.018):
+        norms = np.linalg.norm(UV[keep], axis=1)
+        if (norms > 0).any():
+            arrows_scale = float(np.percentile(norms[norms > 0], 90))
+            return arrows_scale / max(bbox_diag * target_frac, 1e-9)
+        return 1.0
+
+    if vm is None:
+        valid_ps = ps_grid[keep & np.isfinite(ps_grid)]
+        vm = float(np.nanpercentile(np.abs(valid_ps), 95)) if valid_ps.size else 0.01
+        vm = max(vm, 1e-6)
+
     fig, axes = plt.subplots(2, 3, figsize=figsize)
 
-    # ---- (0,0) clusters on UMAP ----------
+    # ---- (0,0) clusters on the embedding + labels at centroids ----
     ax = axes[0, 0]
     for c in cats:
         m = (labels.astype(str) == str(c))
-        ax.scatter(emb[m, 0], emb[m, 1], s=8, c=[cluster_palette[c]],
-                   alpha=0.85, linewidths=0, label=str(c), rasterized=True)
-    ax.legend(loc="upper left", bbox_to_anchor=(1.0, 1.0),
-              frameon=False, fontsize=7, markerscale=2)
+        ax.scatter(emb[m, 0], emb[m, 1], s=background_size,
+                   c=[cluster_palette[c]], alpha=0.85, linewidths=0,
+                   rasterized=True)
+    # Cluster labels at centroids
+    for c in cats:
+        m = (labels.astype(str) == str(c))
+        if not m.any():
+            continue
+        cx, cy = emb[m, 0].mean(), emb[m, 1].mean()
+        ax.text(cx, cy, str(c), ha="center", va="center",
+                fontsize=cell_label_fontsize,
+                bbox=dict(facecolor="white", alpha=0.65, edgecolor="none",
+                          boxstyle="round,pad=0.2"))
     ax.set_title("Clusters", fontsize=10)
+    _hide_axes(ax)
 
-    # ---- (0,1) developmental gradient (reference flow) ----------
+    # ---- (0,1) developmental gradient (CellOracle's ref_flow on grid) ----
     ax = axes[0, 1]
-    ax.scatter(emb[:, 0], emb[:, 1], s=5, c="lightgray", alpha=0.55,
-               linewidths=0, rasterized=True)
-    from omicverse.single._perturb import _local_pseudotime_gradient
-    grad = _local_pseudotime_gradient(emb, pt, n_neighbors=30)
-    # Aggregate gradient onto the same grid for cleanliness
-    xs = np.linspace(emb[:, 0].min(), emb[:, 0].max(), grid_size)
-    ys = np.linspace(emb[:, 1].min(), emb[:, 1].max(), grid_size)
-    GX, GY = np.meshgrid(xs, ys)
-    grid_pts = np.column_stack([GX.ravel(), GY.ravel()])
-    from scipy.spatial import cKDTree
-    tree = cKDTree(emb)
-    radius = float(np.linalg.norm([xs[1] - xs[0], ys[1] - ys[0]]))
-    UV_dev = np.zeros((grid_pts.shape[0], 2))
-    mass = np.zeros(grid_pts.shape[0])
-    for g_i, p in enumerate(grid_pts):
-        ix = tree.query_ball_point(p, r=radius * 1.5)
-        if not ix: continue
-        d = np.linalg.norm(emb[ix] - p, axis=1)
-        w = np.exp(-(d ** 2) / (2 * (radius / 2) ** 2))
-        mass[g_i] = w.sum()
-        if mass[g_i] > 0:
-            UV_dev[g_i] = (grad[ix] * w[:, None]).sum(axis=0) / mass[g_i]
-    keep = mass >= 1.0
-    bbox_diag = float(np.hypot(np.ptp(emb[:, 0]), np.ptp(emb[:, 1])))
-    norms = np.linalg.norm(UV_dev[keep], axis=1)
-    if (norms > 0).any():
-        arrows_scale = float(np.percentile(norms[norms > 0], 90))
-        scale = arrows_scale / max(bbox_diag * 0.018, 1e-9)
-        ax.quiver(grid_pts[keep, 0], grid_pts[keep, 1],
-                  UV_dev[keep, 0], UV_dev[keep, 1],
-                  angles="xy", scale_units="xy", scale=scale,
-                  color="0.15", alpha=0.85,
-                  width=0.005, headwidth=5, headlength=6.5, zorder=3)
+    _bg(ax)
+    scale_dev = _quiver_scale(ref_flow_grid, target_frac=0.022)
+    ax.quiver(grid_pts[keep, 0], grid_pts[keep, 1],
+              ref_flow_grid[keep, 0], ref_flow_grid[keep, 1],
+              angles="xy", scale_units="xy", scale=scale_dev,
+              color="0.15", alpha=0.9,
+              width=0.005, headwidth=5, headlength=6.5, zorder=3)
     ax.set_title("Developmental gradient", fontsize=10)
+    _hide_axes(ax)
 
-    # ---- (0,2) simulation flow on grid ----------
+    # ---- (0,2) simulation flow (KO arrows on grid) ----
     ax = axes[0, 2]
-    perturb_quiver(
-        adata, result, ax=ax,
-        cluster_col=cluster_col, cluster_palette=cluster_palette,
-        grid_size=grid_size,
-        title="Simulation flow",
-    )
+    _bg(ax)
+    scale_sim = _quiver_scale(flow_grid, target_frac=0.022)
+    ax.quiver(grid_pts[keep, 0], grid_pts[keep, 1],
+              flow_grid[keep, 0], flow_grid[keep, 1],
+              angles="xy", scale_units="xy", scale=scale_sim,
+              color="0.15", alpha=0.9,
+              width=0.005, headwidth=5, headlength=6.5, zorder=3)
+    ax.set_title("Simulation flow", fontsize=10)
+    _hide_axes(ax)
 
-    # ---- (1,0) PS on grid (headline) ----------
+    # ---- (1,0) PS heatmap on grid + arrows ----
     ax = axes[1, 0]
-    perturb_inner_product_on_grid(
-        adata, result, ax=ax,
-        pseudotime=pseudotime,
-        cluster_col=cluster_col, cluster_palette=cluster_palette,
-        grid_size=grid_size, vmax=vm, overlay_arrows=True,
-        title="Perturbation Score (PS)",
+    _bg(ax)
+    PS2d = ps_grid.reshape(grid_size, grid_size)
+    mask2d = (~(keep & np.isfinite(ps_grid))).reshape(grid_size, grid_size)
+    PS2d_m = np.ma.array(PS2d, mask=mask2d)
+    sc = ax.pcolormesh(
+        xs, ys, PS2d_m, cmap="coolwarm",
+        vmin=-vm, vmax=vm, shading="nearest", alpha=0.85, zorder=2,
     )
+    fig.colorbar(sc, ax=ax, fraction=0.04, pad=0.02,
+                 label="Perturbation Score")
+    ax.quiver(grid_pts[keep, 0], grid_pts[keep, 1],
+              flow_grid[keep, 0], flow_grid[keep, 1],
+              angles="xy", scale_units="xy", scale=scale_sim,
+              color="k", alpha=0.9,
+              width=0.005, headwidth=5, headlength=6.5, zorder=3)
+    ax.set_title("Perturbation Score (PS)", fontsize=10)
+    _hide_axes(ax)
 
-    # ---- (1,1) PS vs pseudotime scatter ----------
+    # ---- (1,1) grid-PS vs grid-pseudotime, coloured by PS (CellOracle style) ----
     ax = axes[1, 1]
-    cell_colors = [cluster_palette[c] for c in labels.astype(str)]
-    ax.scatter(pt, ps.values, s=8, c=cell_colors, alpha=0.7,
-               linewidths=0, rasterized=True)
-    ax.axhline(0.0, color="0.5", lw=0.5, ls="--")
+    valid = keep & np.isfinite(ps_grid) & np.isfinite(pt_grid)
+    sc2 = ax.scatter(
+        pt_grid[valid], ps_grid[valid], c=ps_grid[valid],
+        cmap="coolwarm", vmin=-vm, vmax=vm, s=25,
+        linewidths=0, alpha=0.95,
+    )
+    ax.axhline(0.0, color="lightgray", lw=0.8)
     ax.set_xlabel("pseudotime")
-    ax.set_ylabel("Perturbation Score")
+    ax.set_ylabel("inner product score")
+    ax.set_ylim(-vm * 1.1, vm * 1.1)
     ax.set_title("PS vs pseudotime", fontsize=10)
+    fig.colorbar(sc2, ax=ax, fraction=0.04, pad=0.02)
     for sp in ("top", "right"):
         ax.spines[sp].set_visible(False)
 
-    # ---- (1,2) PS per cluster (boxplot) ----------
+    # ---- (1,2) pseudotime-binned PS boxplot (CellOracle's plot_inner_product_as_box) ----
     ax = axes[1, 2]
-    data, names, colors = [], [], []
-    for c in cats:
-        m = (labels.astype(str) == str(c))
-        v = ps.values[m]
-        if len(v):
-            data.append(v); names.append(str(c)); colors.append(cluster_palette[c])
-    bp = ax.boxplot(
-        data, vert=False, showfliers=False, widths=0.6, patch_artist=True,
-        medianprops=dict(color="black", lw=1.2),
-    )
-    for patch, c in zip(bp["boxes"], colors):
-        patch.set_facecolor(c); patch.set_alpha(0.75)
-    ax.set_yticks(np.arange(1, len(names) + 1))
-    ax.set_yticklabels(names, fontsize=8)
-    ax.axvline(0.0, color="0.5", lw=0.5, ls="--")
-    ax.set_xlabel("Perturbation Score")
-    ax.set_title("PS by cluster", fontsize=10)
+    if valid.any():
+        bins = np.linspace(np.nanmin(pt_grid[valid]),
+                           np.nanmax(pt_grid[valid]),
+                           n_pseudotime_bins + 1)
+        digitised = np.digitize(pt_grid[valid], bins) - 1
+        digitised = np.clip(digitised, 0, n_pseudotime_bins - 1)
+        data_by_bin = [ps_grid[valid][digitised == i]
+                       for i in range(n_pseudotime_bins)]
+        positions = np.arange(1, n_pseudotime_bins + 1)
+        ax.boxplot(
+            data_by_bin, positions=positions, showfliers=False,
+            widths=0.65, patch_artist=True,
+            boxprops=dict(facecolor="white", edgecolor="0.3"),
+            medianprops=dict(color="black", lw=1.0),
+            whiskerprops=dict(color="0.3"),
+            capprops=dict(color="0.3"),
+        )
+    ax.axhline(0.0, color="gray", lw=0.8)
+    ax.set_xlabel("digitised pseudotime")
+    ax.set_ylabel("inner product score")
+    ax.set_ylim(-vm * 1.1, vm * 1.1)
+    ax.set_title("PS by pseudotime bin", fontsize=10)
     for sp in ("top", "right"):
         ax.spines[sp].set_visible(False)
 
