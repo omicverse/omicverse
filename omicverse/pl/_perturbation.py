@@ -462,3 +462,715 @@ def perturbation_embedding_shift(
         ax.spines[spine_name].set_visible(False)
     ax.set_title(title or f"In-silico {result.get('perturb_type', 'perturbation')} of {gene}", fontsize=11)
     return fig, ax
+
+
+# --------------------------------------------------------------------------- #
+# Tier B helpers for ov.single.perturb (sctenifoldknk / cell_oracle backends) #
+# --------------------------------------------------------------------------- #
+
+
+@register_function(
+    aliases=["perturb_quiver", "扰动箭头图", "perturbation_quiver"],
+    category="pl",
+    description=(
+        "Aggregated quiver plot of per-cell perturbation arrows on a 2-D "
+        "embedding (UMAP / FA). Reproduces CellOracle's "
+        "`plot_simulation_flow_on_grid` for both sctenifoldknk + cell_oracle "
+        "backends — feed it a PerturbResult and an AnnData."
+    ),
+)
+def perturb_quiver(
+    adata,
+    result,
+    *,
+    embedding_name: str = "X_umap",
+    grid_size: int = 25,
+    min_mass: float = 1.0,
+    color: str = "k",
+    cluster_col: Optional[str] = None,
+    cluster_palette: Optional[Dict[str, str]] = None,
+    background_size: float = 18.0,
+    background_alpha: float = 0.55,
+    arrow_target_length: float = 0.022,
+    arrow_width: float = 0.006,
+    arrow_headwidth: float = 5.0,
+    figsize=(7, 6),
+    ax: Optional[Axes] = None,
+    title: Optional[str] = None,
+):
+    """CellOracle-style aggregated arrow plot of the perturbation flow.
+
+    The per-cell ΔX is converted to a 2-D embedding shift, then
+    aggregated onto a regular ``grid_size × grid_size`` grid by
+    Gaussian-weighted averaging. Grid cells with mass below
+    ``min_mass`` are dropped.
+
+    ``arrow_target_length`` is the desired length of the median arrow
+    expressed as a fraction of the embedding bounding-box diagonal — the
+    arrow magnitudes are scaled so the *median* arrow has this length,
+    which makes the picture readable regardless of the raw ΔX scale.
+    """
+    delta_emb = result.delta_embedding(adata=adata, embedding_name=embedding_name)
+    emb = np.asarray(adata.obsm[embedding_name])
+    xrange = emb[:, 0].max() - emb[:, 0].min()
+    yrange = emb[:, 1].max() - emb[:, 1].min()
+    bbox_diag = float(np.hypot(xrange, yrange))
+
+    # Build grid + Gaussian-weighted aggregation
+    xs = np.linspace(emb[:, 0].min(), emb[:, 0].max(), grid_size)
+    ys = np.linspace(emb[:, 1].min(), emb[:, 1].max(), grid_size)
+    GX, GY = np.meshgrid(xs, ys)
+    grid_pts = np.column_stack([GX.ravel(), GY.ravel()])
+    from scipy.spatial import cKDTree
+    tree = cKDTree(emb)
+    radius = float(np.linalg.norm([xs[1] - xs[0], ys[1] - ys[0]]))
+    UV = np.zeros((grid_pts.shape[0], 2))
+    mass = np.zeros(grid_pts.shape[0])
+    for g_i, p in enumerate(grid_pts):
+        ix = tree.query_ball_point(p, r=radius * 1.5)
+        if not ix:
+            continue
+        d = np.linalg.norm(emb[ix] - p, axis=1)
+        w = np.exp(-(d ** 2) / (2 * (radius / 2) ** 2))
+        mass[g_i] = w.sum()
+        if mass[g_i] > 0:
+            UV[g_i] = (delta_emb[ix] * w[:, None]).sum(axis=0) / mass[g_i]
+    keep = mass >= min_mass
+
+    # Auto-rescale arrows using CellOracle's formula: 90th-percentile arrow
+    # norm divided by ``plot_diag * arrow_target_length`` — arrows stay small
+    # and reproducible, outliers don't blow up the picture. ``scale`` here is
+    # matplotlib quiver's "data units per plot unit", so SMALLER scale = bigger
+    # arrows.
+    arrow_norms = np.linalg.norm(UV[keep], axis=1) if keep.any() else np.array([1.0])
+    arrows_scale = float(np.percentile(arrow_norms[arrow_norms > 0], 90)) \
+        if (arrow_norms > 0).any() else 1.0
+    scale = arrows_scale / max(bbox_diag * arrow_target_length, 1e-9)
+
+    if ax is None:
+        fig, ax = plt.subplots(figsize=figsize)
+    else:
+        fig = ax.figure
+
+    # Coloured cell background (per cluster if available) — otherwise lightgray
+    if cluster_col is not None and cluster_col in adata.obs:
+        labels = pd.Categorical(adata.obs[cluster_col])
+        cats = list(labels.categories)
+        if cluster_palette is None:
+            cmap = plt.get_cmap("tab20")
+            cluster_palette = {c: cmap(i % 20) for i, c in enumerate(cats)}
+        c_arr = [cluster_palette[c] for c in labels.astype(str)]
+        ax.scatter(emb[:, 0], emb[:, 1], s=background_size, c=c_arr,
+                   alpha=background_alpha, linewidths=0, rasterized=True)
+        # legend
+        from matplotlib.patches import Patch
+        ax.legend(
+            handles=[Patch(color=cluster_palette[c], label=str(c)) for c in cats],
+            loc="upper left", bbox_to_anchor=(1.0, 1.0), frameon=False, fontsize=8,
+        )
+    else:
+        ax.scatter(emb[:, 0], emb[:, 1], s=background_size, c="lightgray",
+                   alpha=background_alpha, linewidths=0, rasterized=True)
+
+    if keep.any():
+        ax.quiver(
+            grid_pts[keep, 0], grid_pts[keep, 1],
+            UV[keep, 0], UV[keep, 1],
+            angles="xy", scale_units="xy", scale=scale,
+            color=color, width=arrow_width,
+            headwidth=arrow_headwidth, headlength=arrow_headwidth + 1.5,
+            alpha=0.9, zorder=3,
+        )
+    ax.set_xlabel(f"{embedding_name} 1")
+    ax.set_ylabel(f"{embedding_name} 2")
+    for sp in ("top", "right"):
+        ax.spines[sp].set_visible(False)
+    ax.set_title(title or f"Perturbation flow ({result.target} {result.mode}, {result.backend})",
+                 fontsize=11)
+    fig.tight_layout()
+    return fig, ax
+
+
+@register_function(
+    aliases=["perturb_sankey", "扰动桑基图", "perturbation_sankey"],
+    category="pl",
+    description=(
+        "Cluster-to-cluster transition Sankey for ov.single.perturb. Calls "
+        "result.cluster_transitions(...) and renders the aggregated flow as "
+        "a Sankey diagram (matplotlib-only, no plotly dependency)."
+    ),
+)
+def perturb_sankey(
+    result,
+    adata,
+    *,
+    cluster_col: str = "leiden",
+    min_flow: float = 0.02,
+    palette: Optional[Dict[str, str]] = None,
+    figsize=(8, 5),
+    ax: Optional[Axes] = None,
+    title: Optional[str] = None,
+):
+    """Two-column Sankey of cluster→cluster post-perturbation flow.
+
+    Draws each cluster as a vertical bar on left (source) and right
+    (destination); ribbons connect source→target with width
+    proportional to transition probability. Off-diagonal flows below
+    ``min_flow`` are dropped.
+    """
+    ct = result.cluster_transitions(adata=adata, cluster_col=cluster_col)
+    cats = list(ct.index)
+    n = len(cats)
+    if palette is None:
+        cmap = plt.get_cmap("tab20")
+        palette = {c: cmap(i % 20) for i, c in enumerate(cats)}
+
+    # Equal-height source bars so small clusters (e.g. Mk) stay visible.
+    # Each row of `ct` is already row-stochastic (out-distribution).
+    src_sizes = np.full(n, 1.0 / n, dtype=float)
+    # Destination heights = total inflow probability mass per destination.
+    right_in = ct.sum(axis=0).to_numpy()
+    right_in = right_in / right_in.sum()
+    right_sizes = right_in
+
+    if ax is None:
+        fig, ax = plt.subplots(figsize=figsize)
+    else:
+        fig = ax.figure
+
+    y_pad = 0.005
+    left_tops = np.cumsum(src_sizes + y_pad)
+    left_bottoms = left_tops - src_sizes
+    right_tops = np.cumsum(right_sizes + y_pad)
+    right_bottoms = right_tops - right_sizes
+
+    for i, c in enumerate(cats):
+        ax.barh(left_bottoms[i] + src_sizes[i] / 2, height=src_sizes[i] - y_pad / 2,
+                width=0.04, left=0.0,
+                color=palette[c], edgecolor="white", linewidth=0.5, zorder=3)
+        ax.text(-0.01, left_bottoms[i] + src_sizes[i] / 2, str(c),
+                ha="right", va="center", fontsize=9)
+
+    x_right = 1.0
+    for j, c in enumerate(cats):
+        ax.barh(right_bottoms[j] + right_sizes[j] / 2, height=right_sizes[j] - y_pad / 2,
+                width=0.04, left=x_right - 0.04,
+                color=palette[c], edgecolor="white", linewidth=0.5, zorder=3)
+        ax.text(x_right + 0.01, right_bottoms[j] + right_sizes[j] / 2, str(c),
+                ha="left", va="center", fontsize=9)
+
+    # Each source bar splits proportionally by row probability.
+    src_y_offsets = np.copy(left_bottoms)
+    dst_y_offsets = np.copy(right_bottoms)
+    for i, src in enumerate(cats):
+        # absolute height occupied by source bar
+        for j, dst in enumerate(cats):
+            p = float(ct.iloc[i, j])
+            if p < min_flow:
+                continue
+            src_flow = p * src_sizes[i]
+            # destination flow occupies in_p[i,j] / right_in[j] fraction
+            dst_flow = ct.iloc[i, j] / right_in[j] * right_sizes[j] if right_in[j] > 0 else src_flow
+            y0_src = src_y_offsets[i]
+            y0_dst = dst_y_offsets[j]
+            verts = _make_sankey_ribbon(
+                x0=0.04, x1=x_right - 0.04,
+                y0_src=y0_src, y1_src=y0_src + src_flow,
+                y0_dst=y0_dst, y1_dst=y0_dst + dst_flow,
+            )
+            # Highlight off-diagonal flows (the perturbation signal)
+            alpha = 0.85 if i != j else 0.22
+            ax.fill(verts[:, 0], verts[:, 1], color=palette[src],
+                    alpha=alpha, edgecolor="none", zorder=2)
+            src_y_offsets[i] += src_flow
+            dst_y_offsets[j] += dst_flow
+
+    ax.set_xlim(-0.15, x_right + 0.15)
+    ax.set_ylim(-0.02, max(left_tops[-1], right_tops[-1]) + 0.02)
+    ax.set_xticks([])
+    ax.set_yticks([])
+    for sp in ("top", "right", "bottom", "left"):
+        ax.spines[sp].set_visible(False)
+    ax.set_title(
+        title or f"Cluster-level flow after {result.target} {result.mode} ({result.backend})",
+        fontsize=11,
+    )
+    fig.tight_layout()
+    return fig, ax
+
+
+def _make_sankey_ribbon(*, x0, x1, y0_src, y1_src, y0_dst, y1_dst, n_pts: int = 30):
+    """Smooth ribbon polygon between two vertical bars (source/destination).
+
+    Uses a sigmoid-shaped curve so both edges of the ribbon look
+    natural. Returns an ``(n_pts*2, 2)`` polygon to ``ax.fill``.
+    """
+    xs = np.linspace(0, 1, n_pts)
+    # smoothstep
+    sigm = xs * xs * (3 - 2 * xs)
+    x_line = x0 + (x1 - x0) * xs
+    upper = y1_src + (y1_dst - y1_src) * sigm
+    lower = y0_src + (y0_dst - y0_src) * sigm
+    poly = np.vstack([
+        np.column_stack([x_line, upper]),
+        np.column_stack([x_line[::-1], lower[::-1]]),
+    ])
+    return poly
+
+
+@register_function(
+    aliases=["perturb_ps_grid", "PS热图", "perturbation_score_heatmap"],
+    category="pl",
+    description=(
+        "Perturbation Score (PS) on a 2-D grid — CellOracle's headline "
+        "figure. Red = perturbation promotes development along pseudotime; "
+        "blue = perturbation blocks development."
+    ),
+)
+def perturb_inner_product_on_grid(
+    adata,
+    result,
+    *,
+    pseudotime: "str | np.ndarray",
+    embedding_name: str = "X_umap",
+    grid_size: int = 30,
+    min_mass: float = 1.0,
+    vmax: Optional[float] = None,
+    cmap: str = "coolwarm",
+    overlay_arrows: bool = True,
+    arrow_target_length: float = 0.018,
+    arrow_width: float = 0.005,
+    arrow_headwidth: float = 5.0,
+    n_neighbors: int = 30,
+    cluster_col: Optional[str] = None,
+    cluster_palette: Optional[Dict[str, str]] = None,
+    background_size: float = 14.0,
+    figsize=(7, 6),
+    ax: Optional[Axes] = None,
+    title: Optional[str] = None,
+):
+    """Plot the per-grid-cell Perturbation Score as a colored heatmap.
+
+    Implements the CellOracle paper's headline figure (Kamimoto 2023,
+    Fig. 2/3): the inner product of the perturbation embedding-shift
+    vector with the local pseudotime gradient, aggregated onto a
+    digitised grid. Negative = perturbation blocks differentiation
+    along this trajectory; positive = it promotes.
+
+    Optionally overlays the simulation vector field via ``overlay_arrows``.
+    """
+    ps = result.perturbation_score(
+        adata=adata, pseudotime=pseudotime, embedding_name=embedding_name,
+        n_neighbors=n_neighbors,
+    )
+    delta_emb = result.delta_embedding(adata=adata, embedding_name=embedding_name)
+    emb = np.asarray(adata.obsm[embedding_name])
+    xrange = emb[:, 0].max() - emb[:, 0].min()
+    yrange = emb[:, 1].max() - emb[:, 1].min()
+    bbox_diag = float(np.hypot(xrange, yrange))
+
+    xs = np.linspace(emb[:, 0].min(), emb[:, 0].max(), grid_size)
+    ys = np.linspace(emb[:, 1].min(), emb[:, 1].max(), grid_size)
+    GX, GY = np.meshgrid(xs, ys)
+    grid_pts = np.column_stack([GX.ravel(), GY.ravel()])
+    from scipy.spatial import cKDTree
+    tree = cKDTree(emb)
+    radius = float(np.linalg.norm([xs[1] - xs[0], ys[1] - ys[0]]))
+    PS_grid = np.full(grid_pts.shape[0], np.nan)
+    UV = np.zeros((grid_pts.shape[0], 2))
+    mass = np.zeros(grid_pts.shape[0])
+    ps_arr = np.asarray(ps.values, dtype=np.float64)
+    for g_i, p in enumerate(grid_pts):
+        ix = tree.query_ball_point(p, r=radius * 1.5)
+        if not ix:
+            continue
+        d = np.linalg.norm(emb[ix] - p, axis=1)
+        w = np.exp(-(d ** 2) / (2 * (radius / 2) ** 2))
+        mass[g_i] = w.sum()
+        if mass[g_i] > 0:
+            PS_grid[g_i] = (ps_arr[ix] * w).sum() / mass[g_i]
+            UV[g_i] = (delta_emb[ix] * w[:, None]).sum(axis=0) / mass[g_i]
+    keep = mass >= min_mass
+
+    if ax is None:
+        fig, ax = plt.subplots(figsize=figsize)
+    else:
+        fig = ax.figure
+
+    # Optional cluster background dots
+    if cluster_col is not None and cluster_col in adata.obs:
+        labels = pd.Categorical(adata.obs[cluster_col])
+        cats = list(labels.categories)
+        if cluster_palette is None:
+            cmap_pal = plt.get_cmap("tab20")
+            cluster_palette = {c: cmap_pal(i % 20) for i, c in enumerate(cats)}
+        c_arr = [cluster_palette[c] for c in labels.astype(str)]
+        ax.scatter(emb[:, 0], emb[:, 1], s=background_size, c=c_arr,
+                   alpha=0.35, linewidths=0, rasterized=True)
+
+    # PS heatmap via scatter on grid
+    valid = keep & np.isfinite(PS_grid)
+    if vmax is None:
+        vmax = float(np.nanpercentile(np.abs(PS_grid[valid]), 95)) if valid.any() else 1.0
+        vmax = max(vmax, 1e-6)
+    sc = ax.scatter(
+        grid_pts[valid, 0], grid_pts[valid, 1], c=PS_grid[valid],
+        cmap=cmap, vmin=-vmax, vmax=vmax,
+        s=(bbox_diag / grid_size) ** 2 * 0.18,
+        marker="s", linewidths=0, alpha=0.85, zorder=2,
+    )
+    fig.colorbar(sc, ax=ax, fraction=0.04, pad=0.02,
+                 label="Perturbation Score")
+
+    if overlay_arrows:
+        norms = np.linalg.norm(UV[valid], axis=1)
+        if (norms > 0).any():
+            arrows_scale = float(np.percentile(norms[norms > 0], 90))
+            scale = arrows_scale / max(bbox_diag * arrow_target_length, 1e-9)
+            ax.quiver(
+                grid_pts[valid, 0], grid_pts[valid, 1],
+                UV[valid, 0], UV[valid, 1],
+                angles="xy", scale_units="xy", scale=scale,
+                color="k", width=arrow_width,
+                headwidth=arrow_headwidth, headlength=arrow_headwidth + 1.5,
+                alpha=0.9, zorder=3,
+            )
+
+    ax.set_xlabel(f"{embedding_name} 1")
+    ax.set_ylabel(f"{embedding_name} 2")
+    for sp in ("top", "right"):
+        ax.spines[sp].set_visible(False)
+    ax.set_title(title or f"Perturbation Score ({result.target} {result.mode}, {result.backend})",
+                 fontsize=11)
+    fig.tight_layout()
+    return fig, ax
+
+
+@register_function(
+    aliases=["perturb_cell_quiver", "per-cell扰动箭头", "perturbation_cell_quiver"],
+    category="pl",
+    description=(
+        "Per-cell (not aggregated) quiver of the perturbation embedding-"
+        "shift vectors. Equivalent to CellOracle's `plot_quiver`."
+    ),
+)
+def perturb_cell_quiver(
+    adata,
+    result,
+    *,
+    embedding_name: str = "X_umap",
+    arrow_target_length: float = 0.025,
+    arrow_width: float = 0.0045,
+    arrow_headwidth: float = 5.0,
+    cluster_col: Optional[str] = None,
+    cluster_palette: Optional[Dict[str, str]] = None,
+    background_size: float = 22.0,
+    background_alpha: float = 0.55,
+    arrow_color: str = "0.15",
+    arrow_alpha: float = 0.8,
+    subsample: int = 1,
+    ax: Optional[Axes] = None,
+    figsize=(7, 6),
+    title: Optional[str] = None,
+):
+    """Per-cell arrow plot of the perturbation flow.
+
+    One arrow per cell (or per ``subsample``-th cell), arrow length
+    proportional to the per-cell embedding-shift magnitude. The cell-level
+    counterpart to :func:`perturb_quiver`.
+    """
+    delta_emb = result.delta_embedding(adata=adata, embedding_name=embedding_name)
+    emb = np.asarray(adata.obsm[embedding_name])
+    sl = slice(None, None, max(1, subsample))
+    xrange = emb[:, 0].max() - emb[:, 0].min()
+    yrange = emb[:, 1].max() - emb[:, 1].min()
+    bbox_diag = float(np.hypot(xrange, yrange))
+
+    if ax is None:
+        fig, ax = plt.subplots(figsize=figsize)
+    else:
+        fig = ax.figure
+
+    if cluster_col is not None and cluster_col in adata.obs:
+        labels = pd.Categorical(adata.obs[cluster_col])
+        cats = list(labels.categories)
+        if cluster_palette is None:
+            cmap = plt.get_cmap("tab20")
+            cluster_palette = {c: cmap(i % 20) for i, c in enumerate(cats)}
+        c_arr = [cluster_palette[c] for c in labels.astype(str)]
+        ax.scatter(emb[:, 0], emb[:, 1], s=background_size, c=c_arr,
+                   alpha=background_alpha, linewidths=0, rasterized=True)
+        from matplotlib.patches import Patch
+        ax.legend(
+            handles=[Patch(color=cluster_palette[c], label=str(c)) for c in cats],
+            loc="upper left", bbox_to_anchor=(1.0, 1.0), frameon=False, fontsize=8,
+        )
+    else:
+        ax.scatter(emb[:, 0], emb[:, 1], s=background_size, c="lightgray",
+                   alpha=background_alpha, linewidths=0, rasterized=True)
+
+    norms = np.linalg.norm(delta_emb[sl], axis=1)
+    arrows_scale = float(np.percentile(norms[norms > 0], 90)) if (norms > 0).any() else 1.0
+    scale = arrows_scale / max(bbox_diag * arrow_target_length, 1e-9)
+    ax.quiver(
+        emb[sl, 0], emb[sl, 1],
+        delta_emb[sl, 0], delta_emb[sl, 1],
+        angles="xy", scale_units="xy", scale=scale,
+        color=arrow_color, alpha=arrow_alpha,
+        width=arrow_width,
+        headwidth=arrow_headwidth, headlength=arrow_headwidth + 1.5,
+        zorder=3,
+    )
+    ax.set_xlabel(f"{embedding_name} 1")
+    ax.set_ylabel(f"{embedding_name} 2")
+    for sp in ("top", "right"):
+        ax.spines[sp].set_visible(False)
+    ax.set_title(title or f"Per-cell perturbation flow ({result.target} {result.mode}, {result.backend})",
+                 fontsize=11)
+    fig.tight_layout()
+    return fig, ax
+
+
+@register_function(
+    aliases=["perturb_volcano", "扰动火山图", "perturbation_volcano"],
+    category="pl",
+    description=(
+        "Volcano plot of |Δ| (x) vs −log10(p) (y) from a PerturbResult, with "
+        "the top-N most significant genes labelled."
+    ),
+)
+def perturb_volcano(
+    result,
+    *,
+    top_n: int = 20,
+    p_col: Optional[str] = None,
+    delta_col: str = "delta",
+    sig_threshold: float = 0.05,
+    ax: Optional[Axes] = None,
+    figsize=(7, 5),
+    title: Optional[str] = None,
+):
+    """Volcano of delta vs −log10(p) for the per-gene table."""
+    df = result.delta_expr.copy()
+    if p_col is None:
+        # prefer adjusted p, fall back to raw p
+        p_col = "adjusted p-value" if "adjusted p-value" in df.columns else (
+            "adj_p_value" if "adj_p_value" in df.columns else (
+                "p-value" if "p-value" in df.columns else (
+                    "p_value" if "p_value" in df.columns else None
+                )
+            )
+        )
+    if p_col is None:
+        raise ValueError(
+            "delta_expr has no p-value column. Call result.add_significance(...) "
+            "first for the cell_oracle backend."
+        )
+    if ax is None:
+        fig, ax = plt.subplots(figsize=figsize)
+    else:
+        fig = ax.figure
+
+    p = np.asarray(df[p_col].astype(float)).clip(min=1e-300)
+    neglog = -np.log10(p)
+    # Cap -log10(p) at 50 so the y-axis doesn't get hijacked by one super-significant gene
+    y_cap = 50.0
+    neglog_plot = np.minimum(neglog, y_cap)
+    sig = df[p_col] < sig_threshold
+    ax.scatter(df.loc[~sig, delta_col], neglog_plot[~sig.to_numpy()],
+               s=10, c="lightgray", alpha=0.6, linewidths=0)
+    ax.scatter(df.loc[sig, delta_col], neglog_plot[sig.to_numpy()],
+               s=14, c="C3", alpha=0.85, linewidths=0)
+    # Rank top-N by |Δ| × −log10(p) — picks both significant AND large-effect genes
+    df["_neglog"] = neglog_plot
+    score = np.abs(df[delta_col].to_numpy()) * neglog_plot
+    top_idx = np.argsort(-score)[:top_n]
+    top = df.iloc[top_idx]
+    try:
+        from adjustText import adjust_text  # type: ignore
+        texts = [
+            ax.text(row[delta_col], row["_neglog"], str(row.get("gene", "")),
+                    fontsize=8)
+            for _, row in top.iterrows()
+        ]
+        adjust_text(texts, ax=ax, arrowprops=dict(arrowstyle="-", color="0.6", lw=0.4))
+    except ImportError:
+        for _, row in top.iterrows():
+            ax.annotate(
+                str(row.get("gene", "")),
+                xy=(row[delta_col], row["_neglog"]),
+                xytext=(4, 4), textcoords="offset points",
+                fontsize=8, ha="left", va="bottom",
+            )
+    ax.axhline(-np.log10(sig_threshold), color="0.5", lw=0.5, ls="--")
+    ax.set_xlabel(delta_col)
+    ax.set_ylabel(f"−log10({p_col})")
+    for sp in ("top", "right"):
+        ax.spines[sp].set_visible(False)
+    ax.set_title(title or f"{result.target} {result.mode} ({result.backend})",
+                 fontsize=11)
+    return fig, ax
+
+
+@register_function(
+    aliases=[
+        "perturb_development_layout", "扰动六面板综合图",
+        "perturbation_development_module_layout",
+    ],
+    category="pl",
+    description=(
+        "Six-panel composite figure reproducing CellOracle's "
+        "`visualize_development_module_layout_0`: clusters / dev-gradient / "
+        "simulation-flow on the top row, PS-on-grid / PS-vs-pseudotime / "
+        "PS-per-cluster-box on the bottom row."
+    ),
+)
+def perturb_development_layout(
+    adata,
+    result,
+    *,
+    pseudotime: "str | np.ndarray",
+    cluster_col: str,
+    embedding_name: str = "X_umap",
+    grid_size: int = 28,
+    cluster_palette: Optional[Dict[str, str]] = None,
+    vm: Optional[float] = None,
+    figsize=(15, 10),
+):
+    """Reproduce CellOracle's `visualize_development_module_layout_0` figure.
+
+    A 2×3 grid:
+
+    ``(0,0)`` cell-type clusters on UMAP
+        ``(0,1)`` developmental gradient (pseudotime flow) on UMAP
+        ``(0,2)`` simulation flow (KO arrows) on UMAP
+    ``(1,0)`` PS heatmap on the grid (CellOracle headline figure)
+        ``(1,1)`` PS vs pseudotime scatter
+        ``(1,2)`` PS per cluster as boxplot
+    """
+    if isinstance(pseudotime, str):
+        if pseudotime not in adata.obs:
+            raise ValueError(f"pseudotime {pseudotime!r} not in adata.obs")
+        pt = np.asarray(adata.obs[pseudotime].values, dtype=np.float64)
+    else:
+        pt = np.asarray(pseudotime, dtype=np.float64)
+
+    ps = result.perturbation_score(
+        adata=adata, pseudotime=pseudotime, embedding_name=embedding_name,
+    )
+    delta_emb = result.delta_embedding(adata=adata, embedding_name=embedding_name)
+    emb = np.asarray(adata.obsm[embedding_name])
+    labels = pd.Categorical(adata.obs[cluster_col])
+    cats = list(labels.categories)
+    if cluster_palette is None:
+        cmap_pal = plt.get_cmap("tab20")
+        cluster_palette = {c: cmap_pal(i % 20) for i, c in enumerate(cats)}
+
+    fig, axes = plt.subplots(2, 3, figsize=figsize)
+
+    # ---- (0,0) clusters on UMAP ----------
+    ax = axes[0, 0]
+    for c in cats:
+        m = (labels.astype(str) == str(c))
+        ax.scatter(emb[m, 0], emb[m, 1], s=8, c=[cluster_palette[c]],
+                   alpha=0.85, linewidths=0, label=str(c), rasterized=True)
+    ax.legend(loc="upper left", bbox_to_anchor=(1.0, 1.0),
+              frameon=False, fontsize=7, markerscale=2)
+    ax.set_title("Clusters", fontsize=10)
+
+    # ---- (0,1) developmental gradient (reference flow) ----------
+    ax = axes[0, 1]
+    ax.scatter(emb[:, 0], emb[:, 1], s=5, c="lightgray", alpha=0.55,
+               linewidths=0, rasterized=True)
+    from omicverse.single._perturb import _local_pseudotime_gradient
+    grad = _local_pseudotime_gradient(emb, pt, n_neighbors=30)
+    # Aggregate gradient onto the same grid for cleanliness
+    xs = np.linspace(emb[:, 0].min(), emb[:, 0].max(), grid_size)
+    ys = np.linspace(emb[:, 1].min(), emb[:, 1].max(), grid_size)
+    GX, GY = np.meshgrid(xs, ys)
+    grid_pts = np.column_stack([GX.ravel(), GY.ravel()])
+    from scipy.spatial import cKDTree
+    tree = cKDTree(emb)
+    radius = float(np.linalg.norm([xs[1] - xs[0], ys[1] - ys[0]]))
+    UV_dev = np.zeros((grid_pts.shape[0], 2))
+    mass = np.zeros(grid_pts.shape[0])
+    for g_i, p in enumerate(grid_pts):
+        ix = tree.query_ball_point(p, r=radius * 1.5)
+        if not ix: continue
+        d = np.linalg.norm(emb[ix] - p, axis=1)
+        w = np.exp(-(d ** 2) / (2 * (radius / 2) ** 2))
+        mass[g_i] = w.sum()
+        if mass[g_i] > 0:
+            UV_dev[g_i] = (grad[ix] * w[:, None]).sum(axis=0) / mass[g_i]
+    keep = mass >= 1.0
+    bbox_diag = float(np.hypot(np.ptp(emb[:, 0]), np.ptp(emb[:, 1])))
+    norms = np.linalg.norm(UV_dev[keep], axis=1)
+    if (norms > 0).any():
+        arrows_scale = float(np.percentile(norms[norms > 0], 90))
+        scale = arrows_scale / max(bbox_diag * 0.018, 1e-9)
+        ax.quiver(grid_pts[keep, 0], grid_pts[keep, 1],
+                  UV_dev[keep, 0], UV_dev[keep, 1],
+                  angles="xy", scale_units="xy", scale=scale,
+                  color="0.15", alpha=0.85,
+                  width=0.005, headwidth=5, headlength=6.5, zorder=3)
+    ax.set_title("Developmental gradient", fontsize=10)
+
+    # ---- (0,2) simulation flow on grid ----------
+    ax = axes[0, 2]
+    perturb_quiver(
+        adata, result, ax=ax,
+        cluster_col=cluster_col, cluster_palette=cluster_palette,
+        grid_size=grid_size,
+        title="Simulation flow",
+    )
+
+    # ---- (1,0) PS on grid (headline) ----------
+    ax = axes[1, 0]
+    perturb_inner_product_on_grid(
+        adata, result, ax=ax,
+        pseudotime=pseudotime,
+        cluster_col=cluster_col, cluster_palette=cluster_palette,
+        grid_size=grid_size, vmax=vm, overlay_arrows=True,
+        title="Perturbation Score (PS)",
+    )
+
+    # ---- (1,1) PS vs pseudotime scatter ----------
+    ax = axes[1, 1]
+    cell_colors = [cluster_palette[c] for c in labels.astype(str)]
+    ax.scatter(pt, ps.values, s=8, c=cell_colors, alpha=0.7,
+               linewidths=0, rasterized=True)
+    ax.axhline(0.0, color="0.5", lw=0.5, ls="--")
+    ax.set_xlabel("pseudotime")
+    ax.set_ylabel("Perturbation Score")
+    ax.set_title("PS vs pseudotime", fontsize=10)
+    for sp in ("top", "right"):
+        ax.spines[sp].set_visible(False)
+
+    # ---- (1,2) PS per cluster (boxplot) ----------
+    ax = axes[1, 2]
+    data, names, colors = [], [], []
+    for c in cats:
+        m = (labels.astype(str) == str(c))
+        v = ps.values[m]
+        if len(v):
+            data.append(v); names.append(str(c)); colors.append(cluster_palette[c])
+    bp = ax.boxplot(
+        data, vert=False, showfliers=False, widths=0.6, patch_artist=True,
+        medianprops=dict(color="black", lw=1.2),
+    )
+    for patch, c in zip(bp["boxes"], colors):
+        patch.set_facecolor(c); patch.set_alpha(0.75)
+    ax.set_yticks(np.arange(1, len(names) + 1))
+    ax.set_yticklabels(names, fontsize=8)
+    ax.axvline(0.0, color="0.5", lw=0.5, ls="--")
+    ax.set_xlabel("Perturbation Score")
+    ax.set_title("PS by cluster", fontsize=10)
+    for sp in ("top", "right"):
+        ax.spines[sp].set_visible(False)
+
+    fig.suptitle(
+        f"Development module layout — {result.target} {result.mode} ({result.backend})",
+        fontsize=12, y=1.0,
+    )
+    fig.tight_layout()
+    return fig, axes

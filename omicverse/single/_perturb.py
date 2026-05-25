@@ -50,6 +50,7 @@ Over-expression mirrors the KO call with ``mode='oe'`` and an optional
 
 from __future__ import annotations
 
+import warnings
 from dataclasses import dataclass, field
 from typing import Any, Iterable, Sequence
 
@@ -101,8 +102,21 @@ class PerturbResult:
         Per-gene expression change with columns
         ``[gene, mean_base, mean_pert, delta, log2_fc]``.
     trajectory_shift : Any
-        Backend-specific cell-state shift (e.g. CellOracle's
-        ``transition_prob`` matrix). ``None`` when not produced.
+        Cell × cell transition probability matrix. Populated automatically
+        when an embedding is available (``adata.obsm[embedding_name]``).
+        Compute / refresh post-hoc with :meth:`compute_transition_prob`.
+    delta_X : numpy.ndarray or None
+        Per-cell, per-gene predicted change (``cells × genes``). Both
+        backends populate this — for CellOracle it's
+        ``adata.layers['simulated_count'] - adata.layers['imputed_count']``;
+        for scTenifoldKnk it's ``X @ (KO_pcnet − WT_pcnet)``. It is the
+        common input that drives every downstream method.
+    cell_names : Iterable[str] or None
+        Row index for ``delta_X``.
+    gene_names : Iterable[str] or None
+        Column index for ``delta_X``.
+    embedding : numpy.ndarray or None
+        2-D embedding used for trajectory analysis (typically a UMAP).
     meta : dict
         Backend-specific extras (timings, hyper-parameters, …).
     """
@@ -116,6 +130,10 @@ class PerturbResult:
     delta_grn: pd.DataFrame = field(default_factory=pd.DataFrame)
     delta_expr: pd.DataFrame = field(default_factory=pd.DataFrame)
     trajectory_shift: Any = None
+    delta_X: Any = None
+    cell_names: Any = None
+    gene_names: Any = None
+    embedding: Any = None
     meta: dict = field(default_factory=dict)
 
     def summary(self, top_n: int = 10) -> pd.DataFrame:
@@ -135,6 +153,437 @@ class PerturbResult:
               f"by |Δexpr|:")
         print(top.to_string(index=False))
         return top
+
+    # ------------------------------------------------------------------
+    # Tier A: shared downstream methods
+    # ------------------------------------------------------------------
+
+    def compute_transition_prob(
+        self,
+        adata=None,
+        *,
+        embedding_name: str = "X_umap",
+        n_neighbors: int = 30,
+        sigma_corr: float = 0.05,
+        n_jobs: int = 4,
+    ):
+        """Compute / refresh the cell × cell transition probability.
+
+        Both backends use the **same** correlation-kernel formulation —
+        see :func:`compute_transition_prob`. After this call,
+        :attr:`trajectory_shift` is the cell × cell matrix and every
+        downstream method that needs trajectories will work regardless
+        of which backend produced ``delta_X``.
+
+        Parameters
+        ----------
+        adata
+            AnnData providing the expression matrix (``X``) and embedding
+            (``obsm[embedding_name]``). If ``None``, falls back to the
+            embedding stored on this ``PerturbResult`` and to
+            ``adata_perturbed.X``.
+        embedding_name
+            Key under ``adata.obsm`` to use for the kNN graph.
+        """
+        delta_X, X, embedding, gene_names = _resolve_inputs(
+            self, adata=adata, embedding_name=embedding_name
+        )
+        tp = compute_transition_prob(
+            delta_X=delta_X,
+            X=X,
+            embedding=embedding,
+            n_neighbors=n_neighbors,
+            sigma_corr=sigma_corr,
+            n_jobs=n_jobs,
+        )
+        self.trajectory_shift = tp
+        self.embedding = embedding
+        return tp
+
+    def add_significance(
+        self,
+        adata=None,
+        *,
+        n_perms: int = 100,
+        random_state: int = 0,
+        layer: str | None = None,
+    ):
+        """Attach Z-score + p-value columns to :attr:`delta_expr`.
+
+        For ``cell_oracle`` the null distribution is the per-gene
+        absolute |Δ| produced by ``n_perms`` permutations of the
+        expression matrix (a non-parametric null that does not require
+        re-fitting the GRN). For ``sctenifoldknk`` the columns are
+        already present and this is a no-op.
+
+        The added columns are ``z_score``, ``p_value``,
+        ``adj_p_value`` (BH-corrected). They overwrite any existing
+        columns with the same names.
+        """
+        if self.backend == "sctenifoldknk":
+            return self  # already has Z/p
+        if self.delta_expr is None or self.delta_expr.empty:
+            return self
+        delta_X, X, _, gene_names = _resolve_inputs(self, adata=adata)
+        z, p, adj_p = _permutation_significance(
+            delta_X=delta_X, X=X, n_perms=n_perms, random_state=random_state
+        )
+        df = self.delta_expr.copy()
+        if "gene" in df.columns and gene_names is not None:
+            order = pd.Index(df["gene"]).map(
+                {g: i for i, g in enumerate(gene_names)}
+            )
+            order = order.to_numpy()
+            mask = ~pd.isna(order)
+            df.loc[mask, "z_score"] = z[order[mask].astype(int)]
+            df.loc[mask, "p_value"] = p[order[mask].astype(int)]
+            df.loc[mask, "adj_p_value"] = adj_p[order[mask].astype(int)]
+        else:
+            df["z_score"] = z
+            df["p_value"] = p
+            df["adj_p_value"] = adj_p
+        self.delta_expr = df
+        return self
+
+    # ------------------------------------------------------------------
+    # Tier B: trajectory analyses + visual primitives
+    # ------------------------------------------------------------------
+
+    def delta_embedding(self, adata=None, *, embedding_name: str = "X_umap"):
+        """Per-cell 2-D arrow vector on the embedding.
+
+        Computed from the (cell × cell) ``trajectory_shift``:
+
+            Δemb[i] = Σ_j T[i,j] · (emb[j] − emb[i])
+
+        i.e. the expected displacement on the embedding after one step
+        of the cell-state Markov chain — what CellOracle's
+        ``calculate_embedding_shift`` returns.
+        """
+        if self.trajectory_shift is None:
+            self.compute_transition_prob(adata=adata, embedding_name=embedding_name)
+        _, _, embedding, _ = _resolve_inputs(self, adata=adata,
+                                             embedding_name=embedding_name)
+        tp = np.asarray(self.trajectory_shift)
+        diffs = embedding[None, :, :] - embedding[:, None, :]  # (n,n,2)
+        return np.einsum("ij,ijk->ik", tp, diffs)
+
+    def perturbation_score(
+        self,
+        adata=None,
+        *,
+        pseudotime: "str | np.ndarray",
+        embedding_name: str = "X_umap",
+        n_neighbors: int = 30,
+    ):
+        """CellOracle-style perturbation score (PS).
+
+        PS quantifies whether the perturbation **promotes** (+) or
+        **blocks** (−) progression along the developmental trajectory:
+
+            grad[i] = local 2-D gradient of pseudotime on the embedding
+            PS[i]   = cos( Δemb[i] , grad[i] )
+
+        Parameters
+        ----------
+        pseudotime : str or array-like
+            Column name in ``adata.obs`` or a per-cell array of pseudotime
+            values.
+
+        Returns
+        -------
+        pandas.Series indexed by cell name (or by integer index when
+        ``cell_names`` is missing).
+        """
+        delta_emb = self.delta_embedding(adata=adata, embedding_name=embedding_name)
+        _, _, embedding, _ = _resolve_inputs(self, adata=adata,
+                                             embedding_name=embedding_name)
+        if isinstance(pseudotime, str):
+            if adata is None or pseudotime not in adata.obs:
+                raise ValueError(f"pseudotime column {pseudotime!r} not found in adata.obs")
+            pt = np.asarray(adata.obs[pseudotime].values, dtype=np.float64)
+        else:
+            pt = np.asarray(pseudotime, dtype=np.float64)
+        grad = _local_pseudotime_gradient(embedding, pt, n_neighbors=n_neighbors)
+
+        # cosine similarity (unit-normalise both)
+        norm_d = np.linalg.norm(delta_emb, axis=1) + 1e-12
+        norm_g = np.linalg.norm(grad, axis=1) + 1e-12
+        ps = (delta_emb * grad).sum(axis=1) / (norm_d * norm_g)
+        idx = self.cell_names if self.cell_names is not None else range(len(ps))
+        return pd.Series(ps, index=list(idx), name="perturbation_score")
+
+    def cluster_transitions(
+        self,
+        adata=None,
+        *,
+        cluster_col: str = "leiden",
+    ) -> pd.DataFrame:
+        """Aggregate ``trajectory_shift`` into a source × target cluster matrix.
+
+        Each row is row-stochastic (rows sum to 1): row ``c`` shows
+        where cells of cluster ``c`` are predicted to flow after the
+        perturbation, by destination cluster.
+        """
+        if self.trajectory_shift is None:
+            self.compute_transition_prob(adata=adata)
+        if adata is None:
+            raise ValueError("Need an `adata=` to read the cluster annotation.")
+        if cluster_col not in adata.obs:
+            raise ValueError(f"cluster_col {cluster_col!r} not in adata.obs")
+        labels = pd.Categorical(adata.obs[cluster_col])
+        cats = list(labels.categories)
+        codes = np.asarray(labels.codes)
+        tp = np.asarray(self.trajectory_shift)
+        n_clusters = len(cats)
+        out = np.zeros((n_clusters, n_clusters), dtype=np.float64)
+        for c_src in range(n_clusters):
+            mask = codes == c_src
+            if not mask.any():
+                continue
+            avg = tp[mask].mean(axis=0)
+            for c_dst in range(n_clusters):
+                out[c_src, c_dst] = avg[codes == c_dst].sum()
+        return pd.DataFrame(out, index=cats, columns=cats)
+
+    # ------------------------------------------------------------------
+    # Tier C: enrichment, Markov, ground-truth validation
+    # ------------------------------------------------------------------
+
+    def _ranked_genes(self, *, top_n: int, by: str | None = None) -> list[str]:
+        if self.delta_expr is None or self.delta_expr.empty:
+            return []
+        df = self.delta_expr.copy()
+        if by is None:
+            for cand in ("Z", "z_score", "delta"):
+                if cand in df.columns:
+                    by = cand
+                    break
+        if by is None:
+            return []
+        col = df[by]
+        if "p-value" in df.columns or "p_value" in df.columns:
+            df = df.iloc[col.abs().sort_values(ascending=False).index]
+        else:
+            df = df.iloc[col.abs().sort_values(ascending=False).index]
+        return df.head(top_n)["gene"].astype(str).tolist()
+
+    def pathway_enrichment(
+        self,
+        *,
+        top_n: int = 200,
+        gene_sets: "str | list[str]" = "GO_Biological_Process_2023",
+        organism: str = "mouse",
+        rank_by: str | None = None,
+        cutoff: float = 0.05,
+    ) -> pd.DataFrame:
+        """Enrichr over the top-``n`` perturbed genes.
+
+        Uses ``gseapy.enrichr`` against any Enrichr library
+        (``GO_Biological_Process_2023``, ``KEGG_2021_Human``,
+        ``Reactome_2022``, …).  Genes are ranked by ``|Z|`` if present
+        (sctenifoldknk) or by ``|delta|`` (cell_oracle) — pass
+        ``rank_by=`` to override.
+
+        Returns
+        -------
+        pandas.DataFrame
+            Enrichr terms with ``Term``, ``P-value``, ``Adjusted P-value``,
+            ``Combined Score``, ``Genes`` columns. Empty if no enrichment.
+        """
+        try:
+            import gseapy
+        except ImportError as exc:  # pragma: no cover
+            raise build_optional_dependency_error(
+                feature="PerturbResult.pathway_enrichment",
+                dependencies=("gseapy",),
+                install_hint="pip install gseapy",
+            ) from exc
+        genes = self._ranked_genes(top_n=top_n, by=rank_by)
+        if not genes:
+            return pd.DataFrame()
+        if isinstance(gene_sets, str):
+            gene_sets = [gene_sets]
+        enr = gseapy.enrichr(
+            gene_list=genes,
+            gene_sets=gene_sets,
+            organism=organism,
+            outdir=None,
+            cutoff=cutoff,
+        )
+        if enr is None or enr.results is None:
+            return pd.DataFrame()
+        return enr.results.copy()
+
+    def phenotype_enrichment(
+        self,
+        *,
+        top_n: int = 200,
+        db: str = "MGI_Mammalian_Phenotype_Level_4_2024",
+        organism: str = "mouse",
+        rank_by: str | None = None,
+    ) -> pd.DataFrame:
+        """Phenotype-database enrichment for the top perturbed genes.
+
+        Useful aliases:
+            * ``'MGI_Mammalian_Phenotype_Level_4_2024'`` — mouse phenotypes
+            * ``'Human_Phenotype_Ontology'`` — HPO
+            * ``'DisGeNET'`` — disease associations
+
+        Thin wrapper around :meth:`pathway_enrichment` with a different
+        Enrichr library — the scTenifoldKnk paper highlights this as
+        the recommended downstream analysis (Osorio 2022).
+        """
+        return self.pathway_enrichment(
+            top_n=top_n, gene_sets=db, organism=organism, rank_by=rank_by
+        )
+
+    def run_markov(
+        self,
+        *,
+        start_cells,
+        n_steps: int = 20,
+        n_walks_per_cell: int = 50,
+        random_state: int = 0,
+        adata=None,
+    ) -> pd.DataFrame:
+        """Sample Markov walks from ``trajectory_shift``.
+
+        Starting from each of ``start_cells`` (integer indices or
+        cell-name strings), follow the transition matrix for ``n_steps``
+        steps, ``n_walks_per_cell`` times.
+
+        Returns
+        -------
+        pandas.DataFrame indexed by start-cell with columns
+        ``end_cell_idx`` (one column per walk) — useful for aggregating
+        endpoint distributions by cluster.
+        """
+        if self.trajectory_shift is None:
+            self.compute_transition_prob(adata=adata)
+        tp = np.asarray(self.trajectory_shift)
+        n_cells = tp.shape[0]
+        rng = np.random.default_rng(random_state)
+
+        if self.cell_names is None:
+            name_to_idx = {i: i for i in range(n_cells)}
+        else:
+            name_to_idx = {n: i for i, n in enumerate(self.cell_names)}
+        start_ix = []
+        for c in start_cells:
+            if isinstance(c, str):
+                if c not in name_to_idx:
+                    raise ValueError(f"start cell {c!r} not in result.cell_names")
+                start_ix.append(name_to_idx[c])
+            else:
+                start_ix.append(int(c))
+
+        # cumulative distribution per row for fast sampling
+        cdf = np.cumsum(tp, axis=1)
+        cdf = cdf / cdf[:, -1:].clip(min=1e-12)
+
+        ends = np.empty((len(start_ix), n_walks_per_cell), dtype=np.int64)
+        for i, s in enumerate(start_ix):
+            for w in range(n_walks_per_cell):
+                cur = s
+                for _ in range(n_steps):
+                    r = rng.random()
+                    cur = int(np.searchsorted(cdf[cur], r, side="left"))
+                ends[i, w] = cur
+        idx = [self.cell_names[s] if self.cell_names else s for s in start_ix]
+        cols = [f"walk_{w}" for w in range(n_walks_per_cell)]
+        return pd.DataFrame(ends, index=idx, columns=cols)
+
+    def permutation_test(
+        self,
+        adata=None,
+        *,
+        n_perms: int = 100,
+        random_state: int = 0,
+    ) -> dict:
+        """Overall robustness Z against a sign-flip null on ΔX.
+
+        Returns ``{'Z_obs', 'Z_mean_null', 'Z_std_null', 'p_value'}``
+        — a single scalar p-value asking 'is the perturbation's overall
+        consistency higher than chance?' Complementary to
+        :meth:`add_significance` (per-gene).
+        """
+        delta_X, _, _, _ = _resolve_inputs(self, adata=adata)
+        rng = np.random.default_rng(random_state)
+        n_cells = delta_X.shape[0]
+        sd = delta_X.std(axis=0) + 1e-12
+        z_obs = float(np.mean(np.abs(delta_X.mean(axis=0) / (sd / np.sqrt(n_cells)))))
+        nulls = np.empty(n_perms)
+        for k in range(n_perms):
+            signs = rng.choice([-1.0, 1.0], size=n_cells)
+            dX_null = delta_X * signs[:, None]
+            sd_null = dX_null.std(axis=0) + 1e-12
+            nulls[k] = float(np.mean(np.abs(dX_null.mean(axis=0) / (sd_null / np.sqrt(n_cells)))))
+        p = (np.sum(nulls >= z_obs) + 1) / (n_perms + 1)
+        return dict(
+            Z_obs=z_obs, Z_mean_null=float(nulls.mean()),
+            Z_std_null=float(nulls.std()), p_value=float(p),
+        )
+
+    def validate_against_perturbseq(
+        self,
+        perturbed_adata,
+        control_adata,
+        *,
+        gene_layer: str | None = None,
+        top_k: int = 50,
+    ) -> dict:
+        """Compare predicted ``delta_expr`` against observed Perturb-seq Δ.
+
+        Computes:
+            * Pearson + Spearman correlation between predicted and
+              observed gene-level Δ on the shared genes.
+            * Top-``k`` precision: of the top-``k`` predicted genes by
+              |Δ|, how many are in the top-``k`` observed.
+
+        Parameters
+        ----------
+        perturbed_adata, control_adata
+            AnnData of cells from the same perturbed-vs-control screen
+            (e.g. Perturb-seq, ECCITE-seq). The observed Δ is
+            ``mean(perturbed) − mean(control)`` per gene on the shared
+            gene set.
+
+        Returns
+        -------
+        dict with keys ``pearson_r``, ``pearson_p``, ``spearman_r``,
+        ``spearman_p``, ``top_k_precision``, ``n_shared_genes``,
+        ``shared_top_genes``.
+        """
+        from scipy.stats import pearsonr, spearmanr
+        if self.delta_expr is None or self.delta_expr.empty:
+            raise ValueError("PerturbResult has no delta_expr to compare.")
+
+        pX = _expression_matrix(perturbed_adata, layer=gene_layer).mean(axis=0)
+        cX = _expression_matrix(control_adata, layer=gene_layer).mean(axis=0)
+        obs = pd.Series(np.asarray(pX - cX).ravel(),
+                        index=list(perturbed_adata.var_names))
+
+        pred = self.delta_expr.set_index("gene")["delta"].copy()
+        shared = sorted(set(pred.index) & set(obs.index))
+        if not shared:
+            raise ValueError("No genes shared between predicted and observed.")
+        a = pred.loc[shared].astype(float).to_numpy()
+        b = obs.loc[shared].astype(float).to_numpy()
+
+        pr, pp = pearsonr(a, b)
+        sr, sp = spearmanr(a, b)
+        # Top-k precision (by |Δ|)
+        pred_top = pred.loc[shared].abs().sort_values(ascending=False).head(top_k).index
+        obs_top = obs.loc[shared].abs().sort_values(ascending=False).head(top_k).index
+        inter = sorted(set(pred_top) & set(obs_top))
+        return dict(
+            n_shared_genes=len(shared),
+            pearson_r=float(pr), pearson_p=float(pp),
+            spearman_r=float(sr), spearman_p=float(sp),
+            top_k_precision=len(inter) / top_k,
+            shared_top_genes=inter,
+        )
 
 
 # ---------------------------------------------------------------------------
@@ -415,6 +864,51 @@ def _run_sctenifoldknk(
                 targets=targets, mode=mode, fold_change=fold_change,
             )
 
+    # Per-cell ΔX via one-step propagation through the perturbed PCNet:
+    #   ΔX[cell, gene_j] = sum_i X[cell, gene_i] * (KO[i,j] - WT[i,j])
+    # The PCNets are gene × gene weight matrices indexed by
+    # ``shared_gene_names`` (the genes that survived scTenifold's QC).
+    delta_X = None
+    cell_names = None
+    embedding = None
+    transition_prob = None
+    if wt_tensor is not None and ko_tensor is not None:
+        try:
+            shared = list(gene_names)
+            # X restricted to shared genes, in the same order as the PCNet
+            shared_in_adata = [g for g in shared if g in adata.var_names]
+            if len(shared_in_adata) == len(shared):
+                X_sub = _expression_matrix(adata[:, shared], layer=layer)
+                ko_arr = np.asarray(ko_tensor, dtype=np.float64)
+                wt_arr = np.asarray(wt_tensor, dtype=np.float64)
+                delta_X = X_sub @ (ko_arr - wt_arr)
+                cell_names = list(adata.obs_names)
+                # Compute transition_prob if an embedding is available
+                for emb_key in ("X_umap", "X_draw_graph_fa", "X_pca"):
+                    if emb_key in adata.obsm:
+                        embedding = np.asarray(adata.obsm[emb_key])
+                        break
+                if embedding is not None and delta_X.shape[0] > 5:
+                    try:
+                        transition_prob = compute_transition_prob(
+                            delta_X=delta_X,
+                            X=X_sub,
+                            embedding=embedding,
+                            n_neighbors=min(30, adata.n_obs - 1),
+                        )
+                    except Exception as exc:  # pragma: no cover
+                        warnings.warn(
+                            f"compute_transition_prob failed ({exc!r}); "
+                            "trajectory_shift not populated.",
+                            RuntimeWarning,
+                        )
+        except Exception as exc:  # pragma: no cover
+            warnings.warn(
+                f"delta_X computation failed ({exc!r}); per-cell outputs "
+                "not populated.",
+                RuntimeWarning,
+            )
+
     return PerturbResult(
         target=targets[0] if len(targets) == 1 else list(targets),
         mode=mode,
@@ -424,7 +918,11 @@ def _run_sctenifoldknk(
         grn_base=grn_base if grn_output else None,
         delta_grn=delta_grn,
         delta_expr=delta_expr,
-        trajectory_shift=None,
+        trajectory_shift=transition_prob,
+        delta_X=delta_X,
+        cell_names=cell_names,
+        gene_names=list(gene_names),
+        embedding=embedding,
         meta={"library": "sctenifoldpy", "n_cells": adata.n_obs,
               "n_shared_genes": len(gene_names)},
     )
@@ -490,6 +988,32 @@ def _run_cell_oracle(
             cluster_column_name=backend_kwargs.pop("cluster_column_name", None),
             embedding_name=backend_kwargs.pop("embedding_name", "X_umap"),
         )
+        # CellOracle requires a kNN-imputed expression layer
+        # (``adata.layers['imputed_count']``) before simulate_shift can run.
+        # Run the standard PCA + kNN imputation pipeline now unless the
+        # caller already did it themselves.
+        if (
+            "imputed_count" not in getattr(oracle.adata, "layers", {})
+            and hasattr(oracle, "perform_PCA")
+            and hasattr(oracle, "knn_imputation")
+        ):
+            oracle.perform_PCA()
+            n_cells = oracle.adata.shape[0]
+            k = backend_kwargs.pop("knn_k", max(4, min(8, n_cells - 1)))
+            try:
+                oracle.knn_imputation(
+                    n_pca_dims=backend_kwargs.pop("n_pca_dims", 20),
+                    k=k,
+                    balanced=False,
+                    b_sight=backend_kwargs.pop("b_sight", min(max(n_cells // 4, k * 2), 200)),
+                    b_maxl=backend_kwargs.pop("b_maxl", min(max(n_cells // 10, k), 50)),
+                    n_jobs=backend_kwargs.pop("knn_n_jobs", 4),
+                )
+            except Exception:  # pragma: no cover - falls back to a no-op imputation
+                # If kNN imputation fails (typically due to tiny demos), fall
+                # back to using the raw counts as the imputed layer so
+                # downstream simulate_shift can proceed.
+                oracle.adata.layers["imputed_count"] = oracle.adata.X
         if grn_base is None:
             grn_base = adata.uns.get("base_grn") or adata.uns.get("celloracle_base_grn")
         if grn_base is None:
@@ -505,7 +1029,10 @@ def _run_cell_oracle(
     # Build the per-target value dict.
     value_dict: dict[str, float] = {}
     for g in targets:
-        base = float(np.asarray(adata[:, g].X).mean())
+        x = adata[:, g].X
+        if hasattr(x, "toarray"):
+            x = x.toarray()
+        base = float(np.asarray(x).mean())
         if mode == "ko":
             value_dict[g] = 0.0
         elif mode == "kd":
@@ -518,12 +1045,50 @@ def _run_cell_oracle(
         n_propagation=n_propagation,
     )
 
-    grn_pre = _ensure_networkx(getattr(oracle, "coef_matrix_baseline", None),
-                               var_names=adata.var_names)
-    grn_post = _ensure_networkx(getattr(oracle, "coef_matrix", None),
-                                var_names=adata.var_names)
+    # CellOracle computes the cell→cell transition probability matrix
+    # in a separate step (estimate_transition_prob). Run it so
+    # ``result.trajectory_shift`` is populated — guard for tiny demos.
+    if hasattr(oracle, "estimate_transition_prob"):
+        n_cells = oracle.adata.shape[0]
+        n_neighbors = backend_kwargs.pop(
+            "transition_n_neighbors", min(200, max(20, n_cells // 5))
+        )
+        sigma_corr = backend_kwargs.pop("transition_sigma_corr", 0.05)
+        try:
+            oracle.estimate_transition_prob(
+                n_neighbors=n_neighbors,
+                knn_random=True,
+                sampled_fraction=1.0,
+                threads=backend_kwargs.pop("transition_threads", 4),
+            )
+            if hasattr(oracle, "calculate_embedding_shift"):
+                oracle.calculate_embedding_shift(sigma_corr=sigma_corr)
+        except Exception as exc:  # pragma: no cover - transition_prob is optional
+            warnings.warn(
+                f"CellOracle estimate_transition_prob failed ({exc!r}); "
+                "trajectory_shift will be None.",
+                RuntimeWarning,
+            )
 
-    delta_grn = _diff_grn(grn_pre, grn_post) if return_delta else pd.DataFrame()
+    # CellOracle stores its inferred GRN as either:
+    #   * ``oracle.coef_matrix``               (when GRN_unit='whole')
+    #   * ``oracle.coef_matrix_per_cluster``   (when GRN_unit='cluster', default)
+    # Propagation through the GRN changes expression — not edges — so
+    # ``grn`` and ``grn_base`` reflect the inferred GRN, and ``delta_grn``
+    # is empty for this backend (the user-facing change is in
+    # ``delta_expr`` / ``adata_perturbed``).
+    coef_whole = getattr(oracle, "coef_matrix", None)
+    coef_per_cluster = getattr(oracle, "coef_matrix_per_cluster", None)
+    if coef_whole is not None:
+        inferred_coef = coef_whole
+    elif coef_per_cluster:
+        inferred_coef = _average_coef_matrices(coef_per_cluster)
+    else:
+        inferred_coef = None
+    grn_post = _ensure_networkx(inferred_coef, var_names=adata.var_names)
+    grn_pre = _celloracle_base_to_graph(grn_base)
+
+    delta_grn = pd.DataFrame()
 
     # Pull delta-expression from the oracle's stored layers
     delta_expr = pd.DataFrame()
@@ -545,6 +1110,24 @@ def _run_cell_oracle(
 
     transition_prob = getattr(oracle, "transition_prob", None)
 
+    # Per-cell ΔX = simulated_count − imputed_count (CellOracle's native output).
+    delta_X = None
+    cell_names = None
+    embedding = None
+    if hasattr(oracle, "adata"):
+        try:
+            imp = oracle.adata.layers["imputed_count"]
+            sim = oracle.adata.layers["simulated_count"]
+            imp = imp.toarray() if hasattr(imp, "toarray") else np.asarray(imp)
+            sim = sim.toarray() if hasattr(sim, "toarray") else np.asarray(sim)
+            delta_X = np.asarray(sim - imp, dtype=np.float64)
+            cell_names = list(oracle.adata.obs_names)
+            emb_key = getattr(oracle, "embedding_name", "X_umap")
+            if emb_key in oracle.adata.obsm:
+                embedding = np.asarray(oracle.adata.obsm[emb_key])
+        except (KeyError, AttributeError):  # pragma: no cover
+            pass
+
     return PerturbResult(
         target=targets[0] if len(targets) == 1 else list(targets),
         mode=mode,
@@ -555,6 +1138,10 @@ def _run_cell_oracle(
         delta_grn=delta_grn,
         delta_expr=delta_expr,
         trajectory_shift=transition_prob,
+        delta_X=delta_X,
+        cell_names=cell_names,
+        gene_names=list(oracle.adata.var_names) if hasattr(oracle, "adata") else None,
+        embedding=embedding,
         meta={"library": "celloracle", "n_propagation": n_propagation,
               "n_cells": adata.n_obs},
     )
@@ -575,6 +1162,209 @@ def _try_import_celloracle():
 # ---------------------------------------------------------------------------
 # Shared helpers
 # ---------------------------------------------------------------------------
+
+
+def _resolve_inputs(result, *, adata=None, embedding_name: str = "X_umap"):
+    """Pull ``delta_X``, ``X``, ``embedding`` from a result + (optional) adata.
+
+    The downstream methods on :class:`PerturbResult` all reduce to these
+    four arrays, so we centralise the lookup.
+    """
+    if result.delta_X is None:
+        raise ValueError(
+            "PerturbResult has no per-cell delta_X. "
+            "Re-run perturb() with this version of omicverse, or call "
+            "result.compute_transition_prob(adata=...) once delta_X has "
+            "been populated."
+        )
+    delta_X = np.asarray(result.delta_X)
+
+    # Expression matrix
+    if adata is not None:
+        X = _expression_matrix(adata, layer=None)
+        if X.shape != delta_X.shape:
+            # subset adata to the gene columns of delta_X
+            gene_names = list(result.gene_names) if result.gene_names is not None else None
+            if gene_names is not None and all(g in adata.var_names for g in gene_names):
+                X = _expression_matrix(adata[:, gene_names], layer=None)
+    else:
+        ap = result.adata_perturbed
+        if ap is None:
+            raise ValueError(
+                "Need an `adata=` (or result.adata_perturbed) to read X."
+            )
+        X = _expression_matrix(ap, layer=None)
+
+    # Embedding
+    embedding = None
+    if adata is not None and embedding_name in adata.obsm:
+        embedding = np.asarray(adata.obsm[embedding_name])
+    elif result.embedding is not None:
+        embedding = np.asarray(result.embedding)
+    elif result.adata_perturbed is not None and embedding_name in result.adata_perturbed.obsm:
+        embedding = np.asarray(result.adata_perturbed.obsm[embedding_name])
+
+    gene_names = list(result.gene_names) if result.gene_names is not None else None
+    return delta_X, X, embedding, gene_names
+
+
+def compute_transition_prob(
+    delta_X,
+    X,
+    embedding,
+    *,
+    n_neighbors: int = 30,
+    sigma_corr: float = 0.05,
+    n_jobs: int = 4,
+):
+    """Cell × cell transition probability from per-cell ΔX.
+
+    Implements the CellOracle / velocyto-style correlation kernel
+    (Kamimoto 2023 Methods, La Manno 2018): for each cell ``i`` and each
+    of its ``n_neighbors`` neighbours ``j`` in the embedding,
+
+        corr[i,j] = cos( ΔX[i] , X[j] − X[i] )
+        T[i,j]    = exp(corr[i,j] / σ)     and is row-normalised.
+
+    The output is a dense ``(n_cells, n_cells)`` matrix that's sparse in
+    structure (only k entries per row are non-zero).
+    """
+    delta_X = np.ascontiguousarray(np.asarray(delta_X), dtype=np.float64)
+    X = np.ascontiguousarray(np.asarray(X), dtype=np.float64)
+    embedding = np.ascontiguousarray(np.asarray(embedding), dtype=np.float64)
+    n_cells = X.shape[0]
+    if delta_X.shape != X.shape:
+        raise ValueError(
+            f"delta_X{delta_X.shape} must match X{X.shape} (cells × genes)"
+        )
+    if embedding.shape[0] != n_cells:
+        raise ValueError(
+            f"embedding{embedding.shape} must have {n_cells} rows"
+        )
+
+    from sklearn.neighbors import NearestNeighbors  # local import
+    k = min(n_neighbors + 1, n_cells)
+    nn = NearestNeighbors(n_neighbors=k, n_jobs=n_jobs)
+    nn.fit(embedding)
+    _, neigh_ixs = nn.kneighbors(embedding)
+
+    # Normalise ΔX rows once
+    norm_dx = np.linalg.norm(delta_X, axis=1) + 1e-12
+    dx_unit = delta_X / norm_dx[:, None]
+
+    tp = np.zeros((n_cells, n_cells), dtype=np.float64)
+    for i in range(n_cells):
+        nbrs = neigh_ixs[i, 1:]  # drop self
+        diffs = X[nbrs] - X[i]   # (k, n_genes)
+        norm_diff = np.linalg.norm(diffs, axis=1) + 1e-12
+        diff_unit = diffs / norm_diff[:, None]
+        corr = diff_unit @ dx_unit[i]
+        weights = np.exp(corr / sigma_corr)
+        tp[i, nbrs] = weights
+        s = tp[i].sum()
+        if s > 0:
+            tp[i] /= s
+    return tp
+
+
+def _local_pseudotime_gradient(embedding, pseudotime, *, n_neighbors: int = 30):
+    """Per-cell 2-D pseudotime gradient via local linear regression.
+
+    For each cell, fit ``pt ~ emb_x + emb_y`` on its ``n_neighbors``
+    nearest neighbours; the regression slopes (β_x, β_y) form the local
+    pseudotime gradient vector. This is the same construction
+    CellOracle's ``Gradient_calculator`` uses.
+    """
+    from sklearn.neighbors import NearestNeighbors
+    embedding = np.asarray(embedding, dtype=np.float64)
+    pt = np.asarray(pseudotime, dtype=np.float64)
+    n_cells = embedding.shape[0]
+    k = min(n_neighbors + 1, n_cells)
+    nn = NearestNeighbors(n_neighbors=k).fit(embedding)
+    _, neigh = nn.kneighbors(embedding)
+
+    grad = np.zeros_like(embedding)
+    for i in range(n_cells):
+        ix = neigh[i]
+        e = embedding[ix]
+        p = pt[ix]
+        if np.allclose(p, p[0]):
+            continue
+        # center and regress (least squares)
+        ec = e - e.mean(axis=0)
+        pc = p - p.mean()
+        # β = (E^T E)^-1 E^T p  ; 2-D so 2x2 inverse
+        EtE = ec.T @ ec
+        try:
+            beta = np.linalg.solve(EtE + 1e-9 * np.eye(2), ec.T @ pc)
+        except np.linalg.LinAlgError:  # pragma: no cover
+            continue
+        grad[i] = beta
+    return grad
+
+
+def _permutation_significance(
+    delta_X,
+    X,
+    *,
+    n_perms: int = 100,
+    random_state: int = 0,
+):
+    """Per-gene significance for the per-cell ΔX matrix.
+
+    For each gene, the Z-statistic measures whether ``ΔX[:, g]`` is
+    consistently non-zero across cells:
+
+        Z[g] = mean(ΔX[:, g]) / SE(ΔX[:, g])
+             = mean(ΔX[:, g]) / (std(ΔX[:, g]) / sqrt(n_cells))
+
+    This is the equivalent of a one-sample t-statistic against zero —
+    "do most cells shift in the same direction for gene g?" — and is
+    the per-cell-consistency scoring used by CellOracle's downstream
+    `evaluate_simulated_gene_distribution_range` workflow.
+
+    A permutation null (``n_perms``) is then built by sign-flipping the
+    rows of ΔX, which preserves the per-cell magnitude but destroys the
+    cross-cell direction agreement. The two-sided empirical p is the
+    fraction of permutations with |Z_null| ≥ |Z_obs|, BH-adjusted.
+    """
+    from scipy.stats import norm as _norm
+    rng = np.random.default_rng(random_state)
+    delta_X = np.asarray(delta_X, dtype=np.float64)
+    n_cells, n_genes = delta_X.shape
+
+    mu_obs = delta_X.mean(axis=0)
+    sd_obs = delta_X.std(axis=0) + 1e-12
+    z_obs = mu_obs / (sd_obs / np.sqrt(n_cells))
+
+    # Parametric two-sided p-value from the normal Z (avoids the n_perms cap
+    # at min p ≈ 1/(n_perms+1)). When n_perms > 0 we also blend in the
+    # empirical right-tail fraction for the largest |Z| values.
+    p_param = 2.0 * (1.0 - _norm.cdf(np.abs(z_obs)))
+
+    if n_perms > 0:
+        extreme = np.zeros(n_genes, dtype=np.int64)
+        abs_z_obs = np.abs(z_obs)
+        for _ in range(n_perms):
+            signs = rng.choice([-1.0, 1.0], size=n_cells)
+            dX_null = delta_X * signs[:, None]
+            mu_null = dX_null.mean(axis=0)
+            z_null = mu_null / (sd_obs / np.sqrt(n_cells))
+            extreme += np.abs(z_null) >= abs_z_obs
+        p_emp = (extreme + 1) / (n_perms + 1)
+        # For very-significant genes use parametric p; for the borderline /
+        # null genes use the empirical p (which is conservative).
+        p_val = np.minimum(p_param, p_emp)
+    else:
+        p_val = p_param
+    # BH-FDR
+    order = np.argsort(p_val)
+    ranked = p_val[order]
+    n = len(ranked)
+    adj = np.minimum.accumulate((ranked * n / np.arange(1, n + 1))[::-1])[::-1]
+    adj_p = np.empty_like(adj)
+    adj_p[order] = np.clip(adj, 0.0, 1.0)
+    return z_obs, p_val, adj_p
 
 
 def _expression_matrix(adata, layer: str | None):
@@ -657,6 +1447,64 @@ def _ensure_networkx(graph_like, *, var_names: Iterable[str] | None = None):
         df = pd.DataFrame(arr, index=list(var_names), columns=list(var_names))
         return nx.from_pandas_adjacency(df, create_using=nx.DiGraph)
     raise TypeError(f"cannot coerce {type(graph_like)!r} to a networkx graph")
+
+
+def _average_coef_matrices(coef_per_cluster: dict) -> "pd.DataFrame | None":
+    """Average CellOracle's per-cluster GRN coefficient matrices.
+
+    ``oracle.coef_matrix_per_cluster`` is a ``{cluster: DataFrame}`` of TF×target
+    coefficients (same row/col index per cluster). We mean across clusters to
+    give a single population-level GRN suitable for a networkx graph.
+    """
+    if not coef_per_cluster:
+        return None
+    mats = list(coef_per_cluster.values())
+    if not mats:
+        return None
+    # All DataFrames share the same index/columns; mean across them
+    arr = np.stack([m.values for m in mats], axis=0).mean(axis=0)
+    return pd.DataFrame(arr, index=mats[0].index, columns=mats[0].columns)
+
+
+def _celloracle_base_to_graph(grn_base):
+    """Convert a CellOracle base-GRN DataFrame into a ``networkx.DiGraph``.
+
+    CellOracle base GRNs are wide-format: rows are target genes (with
+    ``gene_short_name`` + ``peak_id`` columns) and one extra column per TF
+    holding a 0/1 indicator that the TF regulates the row's target. We
+    add an edge TF → target for every non-zero cell.
+    """
+    if grn_base is None:
+        return None
+    try:
+        import networkx as nx
+    except ImportError as exc:  # pragma: no cover
+        raise build_optional_dependency_error(
+            feature="ov.single.perturb (GRN output)",
+            dependencies=("networkx",),
+            install_hint="pip install networkx",
+        ) from exc
+
+    if hasattr(grn_base, "edges") and hasattr(grn_base, "nodes"):
+        return grn_base
+    if not isinstance(grn_base, pd.DataFrame):
+        return _ensure_networkx(grn_base)
+
+    df = grn_base
+    if "gene_short_name" not in df.columns:
+        # already an adjacency-like DataFrame
+        return _ensure_networkx(df)
+
+    meta_cols = {"gene_short_name", "peak_id"}
+    tf_cols = [c for c in df.columns if c not in meta_cols]
+    G = nx.DiGraph()
+    for _, row in df.iterrows():
+        target = row["gene_short_name"]
+        for tf in tf_cols:
+            w = row[tf]
+            if w and float(w) != 0.0:
+                G.add_edge(tf, target, weight=float(w))
+    return G
 
 
 def _apply_perturbation_to_graph(graph, *, targets, mode, fold_change):
