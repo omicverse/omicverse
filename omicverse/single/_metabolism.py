@@ -536,9 +536,20 @@ def _align_compass_to_cells(
 def _mebocost_to_comm_adata(res: pd.DataFrame, *, pvalue_threshold: float) -> AnnData:
     """Shape a MEBOCOST communication table into a comm-AnnData.
 
-    Schema produced (consumed by ``ov.pl.ccc_*``): one ``obs`` row per
-    communication event with ``sender`` / ``receiver`` columns, plus
-    ``layers['means']`` (communication score) and ``layers['pvalues']``.
+    The schema mirrors what ``ov.pl.ccc_*`` consumes for ligand-receptor
+    inputs (LIANA): ``obs`` rows are sender→receiver cell-type pairs,
+    ``var`` rows are metabolite→sensor interactions, and ``layers``
+    carry per-pair × per-interaction matrices.
+
+    var metadata:
+      * ``gene_a`` — metabolite display name (resolves to "ligand" in
+        downstream plots)
+      * ``gene_b`` — sensor gene (resolves to "receptor")
+      * ``interaction_name`` — ``metabolite → sensor``
+      * ``classification`` — HMDB ``sub_class`` (fine-grained pathway-like
+        grouping, ~50–100 categories) if the HMDB annotation table can be
+        located; falls back to ``"Unclassified"``
+      * ``classification_super`` — HMDB ``super_class`` (~20 broad groups)
     """
     df = res.copy()
 
@@ -555,32 +566,128 @@ def _mebocost_to_comm_adata(res: pd.DataFrame, *, pvalue_threshold: float) -> An
     score = _pick("Commu_Score", "communication_score", "score")
     pval = _pick("permutation_test_fdr", "permutation_test_pval",
                  "permutation_test_pvalue", "ttest_fdr", "pvalue", "pval")
+    hmdb_col = next((c for c in ("Metabolite", "HMDB_ID", "metabolite") if c in df.columns), None)
 
     df = df[df[pval] <= pvalue_threshold].copy()
-    obs = pd.DataFrame(
-        {
-            "sender": df[sender].astype(str).to_numpy(),
-            "receiver": df[receiver].astype(str).to_numpy(),
-            "metabolite": df[metab].astype(str).to_numpy(),
-            "sensor": df[sensor].astype(str).to_numpy(),
-        }
-    )
-    obs["interaction"] = obs["metabolite"] + " → " + obs["sensor"]
-    obs.index = (
-        obs["sender"] + "|" + obs["receiver"] + "|" + obs["interaction"]
-    )
-    means = df[score].to_numpy(dtype=np.float32).reshape(-1, 1)
-    pvalues = df[pval].to_numpy(dtype=np.float32).reshape(-1, 1)
+    df["_metab"] = df[metab].astype(str)
+    df["_sensor"] = df[sensor].astype(str)
+    df["_sender"] = df[sender].astype(str)
+    df["_receiver"] = df[receiver].astype(str)
+    df["_pair"] = df["_sender"] + "|" + df["_receiver"]
+    df["_interaction"] = df["_metab"] + " → " + df["_sensor"]
 
-    comm = AnnData(
-        X=means.copy(),
-        obs=obs,
-        var=pd.DataFrame(index=["communication"]),
-    )
-    comm.layers["means"] = means
-    comm.layers["pvalues"] = pvalues
+    # If multiple rows share (pair, interaction) keep the most-significant one
+    # (smallest p, ties broken by larger score).
+    df = (df.sort_values([pval, score], ascending=[True, False])
+            .drop_duplicates(subset=["_pair", "_interaction"], keep="first"))
+
+    # Index names left blank on purpose — ov.pl.ccc_* builds a long_df via
+    # ``means.stack().reset_index()`` and expects the auto-generated
+    # ``level_0`` / ``level_1`` columns to be renamed to ``pair_id`` /
+    # ``feature_id`` (see ``_communication_long_table``). Naming the index
+    # breaks that rename and surfaces as ``KeyError: 'pair_id'`` from the
+    # downstream merge.
+    pairs = pd.Index(sorted(df["_pair"].unique()))
+    inters = pd.Index(sorted(df["_interaction"].unique()))
+
+    means = (df.pivot(index="_pair", columns="_interaction", values=score)
+               .reindex(index=pairs, columns=inters))
+    pvalues = (df.pivot(index="_pair", columns="_interaction", values=pval)
+                 .reindex(index=pairs, columns=inters))
+    means_arr = means.fillna(0.0).to_numpy(dtype=np.float32)
+    pvalues_arr = pvalues.fillna(1.0).to_numpy(dtype=np.float32)
+
+    obs = pd.DataFrame(index=pairs)
+    split = obs.index.to_series().str.split("|", n=1, expand=True)
+    obs["sender"] = split[0].astype(str).to_numpy()
+    obs["receiver"] = split[1].astype(str).to_numpy()
+
+    # var carries the interaction-level metadata the ov.pl.ccc_* plots need.
+    var = pd.DataFrame(index=inters)
+    metab_for_var = (df.drop_duplicates("_interaction")
+                       .set_index("_interaction")["_metab"]
+                       .reindex(inters))
+    sensor_for_var = (df.drop_duplicates("_interaction")
+                        .set_index("_interaction")["_sensor"]
+                        .reindex(inters))
+    var["interaction_name"] = inters.to_numpy()
+    var["interaction_name_2"] = inters.to_numpy()
+    var["interacting_pair"] = inters.to_numpy()
+    var["gene_a"] = metab_for_var.to_numpy()
+    var["gene_b"] = sensor_for_var.to_numpy()
+    var["ligand"] = metab_for_var.to_numpy()
+    var["receptor"] = sensor_for_var.to_numpy()
+    var["metabolite"] = metab_for_var.to_numpy()
+    var["sensor"] = sensor_for_var.to_numpy()
+
+    hmdb_id_for_var = None
+    if hmdb_col is not None:
+        hmdb_id_for_var = (df.drop_duplicates("_interaction")
+                             .set_index("_interaction")[hmdb_col]
+                             .reindex(inters).astype(str))
+        var["hmdb_id"] = hmdb_id_for_var.to_numpy()
+
+    sub_cls, super_cls = _hmdb_classification(metab_for_var, hmdb_id_for_var)
+    var["classification"] = sub_cls
+    var["classification_super"] = super_cls
+    var["pathway_name"] = sub_cls
+    var["signaling"] = sub_cls
+
+    comm = AnnData(X=means_arr.copy(), obs=obs, var=var)
+    comm.layers["means"] = means_arr
+    comm.layers["pvalues"] = pvalues_arr
     comm.uns["mebocost_comm"] = True
     return comm
+
+
+def _hmdb_classification(
+    metab_for_var: pd.Series,
+    hmdb_for_var: Optional[pd.Series],
+) -> tuple[np.ndarray, np.ndarray]:
+    """Join HMDB sub_class / super_class onto the metabolite list.
+
+    Returns
+    -------
+    sub_cls, super_cls : two object arrays aligned to ``metab_for_var``.
+    Missing annotations become ``"Unclassified"``.
+    """
+    n = len(metab_for_var)
+    sub_default = np.array(["Unclassified"] * n, dtype=object)
+    super_default = np.array(["Unclassified"] * n, dtype=object)
+    try:
+        path = os.path.join(
+            os.path.dirname(__file__), "..", "external", "mebocost",
+            "data", "mebocost_db", "common",
+            "metabolite_annotation_HMDB_summary.tsv",
+        )
+        path = os.path.abspath(path)
+        if not os.path.exists(path):
+            return sub_default, super_default
+        ann = pd.read_csv(path, sep="\t", low_memory=False)
+    except Exception:
+        return sub_default, super_default
+
+    # The HMDB table has 'metabolite' (display name), 'sub_class', 'super_class'
+    name_to_sub = (ann.dropna(subset=["metabolite"])
+                      .drop_duplicates("metabolite")
+                      .set_index("metabolite"))
+    sub_by_name = name_to_sub["sub_class"].astype(str)
+    super_by_name = name_to_sub["super_class"].astype(str)
+    sub = metab_for_var.map(sub_by_name)
+    sup = metab_for_var.map(super_by_name)
+
+    if hmdb_for_var is not None and "HMDB_ID" in ann.columns:
+        id_to_sub = (ann.dropna(subset=["HMDB_ID"])
+                        .drop_duplicates("HMDB_ID")
+                        .set_index("HMDB_ID"))
+        sub_by_id = id_to_sub["sub_class"].astype(str)
+        super_by_id = id_to_sub["super_class"].astype(str)
+        sub = sub.fillna(hmdb_for_var.map(sub_by_id))
+        sup = sup.fillna(hmdb_for_var.map(super_by_id))
+
+    sub = sub.replace({"nan": np.nan}).fillna("Unclassified").astype(str)
+    sup = sup.replace({"nan": np.nan}).fillna("Unclassified").astype(str)
+    return sub.to_numpy(), sup.to_numpy()
 
 
 @register_function(

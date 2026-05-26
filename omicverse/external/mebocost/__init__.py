@@ -196,6 +196,24 @@ def run_mebocost(adata, *, group_key, species='human', condition_key=None,
     # ``type(sensor_type) == type([])`` check), so coerce tuples to list.
     sensor_type = list(sensor_type)
 
+    # MEBOCOST's permutation test uses multiprocessing.Pool with thread>1.
+    # Under newer pandas, fork-pickling an AnnData whose ``obs`` carries a
+    # CategoricalDtype column blows up in the worker with
+    # ``NotImplementedError`` from ``Categorical.__setstate__``. Cast
+    # categorical obs columns to str on a shallow copy of the AnnData so the
+    # worker receives a clean object. The user's original adata is not
+    # modified.
+    if thread > 1:
+        try:
+            cat_cols = [c for c in adata.obs.columns
+                        if str(adata.obs[c].dtype) == "category"]
+        except Exception:
+            cat_cols = []
+        if cat_cols:
+            adata = adata.copy()
+            for c in cat_cols:
+                adata.obs[c] = adata.obs[c].astype(str)
+
     def _run():
         obj = create_obj(
             adata=adata,
