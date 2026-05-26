@@ -742,13 +742,31 @@ def _make_sankey_ribbon(*, x0, x1, y0_src, y1_src, y0_dst, y1_dst, n_pts: int = 
 
 
 @register_function(
-    aliases=["perturb_ps_grid", "PS热图", "perturbation_score_heatmap"],
+    aliases=[
+        "perturb_ps_grid", "PS热图", "perturbation_score_heatmap",
+        "perturbation_inner_product_heatmap",
+    ],
     category="pl",
     description=(
-        "Perturbation Score (PS) on a 2-D grid — CellOracle's headline "
-        "figure. Red = perturbation promotes development along pseudotime; "
-        "blue = perturbation blocks development."
+        "Perturbation Score (PS) on a 2-D grid — pcolormesh of the raw "
+        "dot product between simulation flow and developmental gradient "
+        "(CellOracle's `plot_inner_product_on_grid` headline figure). "
+        "Green = perturbation promotes development along pseudotime; "
+        "pink = perturbation blocks it."
     ),
+    requires={"obsm": ["{embedding_name}"]},
+    auto_fix="none",
+    examples=[
+        "fig, ax = ov.pl.perturb_inner_product_on_grid(",
+        "    adata, result, pseudotime='Pseudotime',",
+        "    cluster_col='main_cluster', grid_size=30,",
+        ")",
+    ],
+    related=[
+        "single.PerturbResult.perturbation_score",
+        "pl.perturb_celloracle_layout",
+        "pl.perturb_development_layout",
+    ],
 )
 def perturb_inner_product_on_grid(
     adata,
@@ -944,13 +962,30 @@ def perturb_cell_quiver(
     aliases=[
         "perturb_markov_endpoints", "马尔可夫终点条形图",
         "perturbation_markov_endpoint_distribution",
+        "perturbation_lineage_redirection",
     ],
     category="pl",
     description=(
-        "Bar plot of the endpoint cluster distribution from a Markov walk "
-        "on `result.trajectory_shift`. Useful for showing where a perturbed "
-        "lineage ends up (e.g. Gata1 KO redirects Mk → GMP)."
+        "Bar plot of the endpoint cluster distribution from an n-step "
+        "Markov walk on `result.trajectory_shift`. Reveals where a "
+        "perturbed lineage ends up (e.g. Gata1 KO redirects Mk → GMP)."
     ),
+    requires={"obs": ["{cluster_col}"]},
+    auto_fix="none",
+    examples=[
+        "mep_cells = adata.obs_names[adata.obs['main_cluster'] == 'MEP'][:30]",
+        "fig, _ = ov.pl.perturb_markov_endpoints(",
+        "    result, adata=adata,",
+        "    start_cells=list(mep_cells),",
+        "    cluster_col='main_cluster',",
+        "    n_steps=15, n_walks_per_cell=50,",
+        ")",
+    ],
+    related=[
+        "single.PerturbResult.run_markov",
+        "single.PerturbResult.cluster_transitions",
+        "pl.perturb_sankey",
+    ],
 )
 def perturb_markov_endpoints(
     result,
@@ -1126,14 +1161,35 @@ def _build_oracle_adapter(adata, result, cluster_column_name=None):
     aliases=[
         "perturb_celloracle_layout", "CellOracle原版六面板",
         "perturbation_celloracle_development_module_layout",
+        "perturbation_score_official_layout",
     ],
     category="pl",
     description=(
         "**Run CellOracle's own** `Oracle_development_module."
         "visualize_development_module_layout_0` on a PerturbResult — "
-        "guarantees 1:1 output with the published Gata1-KO figure "
-        "(only available for `backend='cell_oracle'` results)."
+        "guarantees 1:1 output with the published Gata1-KO Paul15 figure. "
+        "For `backend='cell_oracle'` uses the cached Oracle; for any "
+        "other backend builds an Oracle-compatible adapter from "
+        "`result.delta_X`."
     ),
+    requires={
+        "obsm": ["{embedding_obsm_key}"],
+        "obs": ["{pseudotime_key}", "{cluster_column_name}"],
+    },
+    auto_fix="none",
+    examples=[
+        "fig, dev = ov.pl.perturb_celloracle_layout(",
+        "    adata, result,",
+        "    pseudotime_key='Pseudotime',",
+        "    cluster_column_name='louvain_annot',",
+        "    vm=0.02,",
+        ")",
+    ],
+    related=[
+        "single.perturb", "single.lineage_pseudotime",
+        "pl.perturb_inner_product_on_grid",
+        "pl.perturb_development_layout",
+    ],
 )
 def perturb_celloracle_layout(
     adata,
@@ -1150,8 +1206,8 @@ def perturb_celloracle_layout(
     vm: float = 0.02,
     s: float = 5.0,
     s_grid: float = 20.0,
-    scale_for_simulation: float = 30,
-    scale_for_pseudotime: float = 30,
+    scale_for_simulation: "float | str" = "auto",
+    scale_for_pseudotime: "float | str" = "auto",
     figsize=(15, 10),
 ):
     """Run CellOracle's own development-module pipeline on this
@@ -1231,6 +1287,26 @@ def perturb_celloracle_layout(
         dev.calculate_digitized_ip(n_bins=10)
     except Exception:
         pass
+
+    # Auto-scale per CellOracle's formula
+    # (90th-percentile flow norm / (plot diagonal × 0.0025)) so the arrows
+    # come out visually similar regardless of whether delta_X is in
+    # CellOracle's (large) or sct's (small) magnitude range.
+    def _auto_scale(flow_arr):
+        mask = ~oracle.mass_filter_simulation if hasattr(oracle, "mass_filter_simulation") else slice(None)
+        norms = np.linalg.norm(flow_arr[mask], axis=1)
+        norms = norms[norms > 0]
+        if not len(norms):
+            return 30.0
+        plot_diag = np.linalg.norm(
+            np.max(oracle.flow_grid, axis=0) - np.min(oracle.flow_grid, axis=0)
+        )
+        return float(np.percentile(norms, 90) / max(plot_diag * 0.0025, 1e-12))
+
+    if scale_for_simulation == "auto":
+        scale_for_simulation = _auto_scale(oracle.flow)
+    if scale_for_pseudotime == "auto":
+        scale_for_pseudotime = _auto_scale(gradient.ref_flow)
 
     # CellOracle's own composite figure — guaranteed 1:1
     plt.rcParams["figure.figsize"] = figsize

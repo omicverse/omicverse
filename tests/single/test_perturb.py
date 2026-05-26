@@ -246,15 +246,22 @@ def test_sctenifoldknk_backend_oe(monkeypatch, tiny_adata, fake_grn):
 
 
 def test_sctenifoldknk_backend_missing_raises(monkeypatch, tiny_adata):
-    """Without the stub, calling the backend should raise an ImportError."""
+    """If neither the system package nor the vendored copy is importable,
+    the backend should raise the optional-dependency error.
+    """
     from omicverse.single import perturb
 
     monkeypatch.delitem(sys.modules, "scTenifold", raising=False)
-    # blocking import: simulate the package not being installed
+    # Also clear the vendored copy so we test the fallback failure path.
+    for mod in list(sys.modules):
+        if mod.startswith("omicverse.external.scTenifold"):
+            monkeypatch.delitem(sys.modules, mod, raising=False)
     original_import = __import__
 
     def blocked(name, *args, **kwargs):
-        if name == "scTenifold" or name.startswith("scTenifold."):
+        if (name == "scTenifold" or name.startswith("scTenifold.")
+                or name == "omicverse.external.scTenifold"
+                or name.startswith("omicverse.external.scTenifold.")):
             raise ImportError(f"No module named '{name}'")
         return original_import(name, *args, **kwargs)
 

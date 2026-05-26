@@ -702,14 +702,36 @@ class PerturbResult:
 @register_function(
     aliases=[
         "lineage_pseudotime", "谱系特异性伪时", "lineage_specific_pseudotime",
+        "branch_pseudotime", "diffusion_pseudotime_per_lineage",
     ],
     category="single",
     description=(
-        "Lineage-specific pseudotime via CellOracle's "
-        "`Pseudotime_calculator`. Writes the result to "
-        "`adata.obs['Pseudotime']` so it can be plugged into "
-        "`ov.single.perturb` + downstream PS analyses."
+        "Lineage-specific diffusion pseudotime via CellOracle's "
+        "`Pseudotime_calculator`. Runs DPT separately per lineage (one "
+        "root cell each) and merges into a single `adata.obs['Pseudotime']` "
+        "that's monotonic on every branch — required input for the "
+        "perturbation-score downstream when the dataset has multiple "
+        "terminal cell types."
     ),
+    requires={"obsm": ["{obsm_key}"], "obs": ["{cluster_column_name}"]},
+    produces={"obs": ["Pseudotime"]},
+    auto_fix="none",
+    examples=[
+        "ov.single.lineage_pseudotime(",
+        "    adata,",
+        "    lineage_dictionary={",
+        "        'Lineage_ME': ['Ery_0','Ery_1',...,'MEP_0','Mk_0'],",
+        "        'Lineage_GM': ['GMP_0','GMP_1',...,'Mo_2'],",
+        "    },",
+        "    root_cells={'Lineage_ME': '1539', 'Lineage_GM': '2244'},",
+        "    obsm_key='X_draw_graph_fa',",
+        "    cluster_column_name='louvain_annot',",
+        ")",
+    ],
+    related=[
+        "single.perturb", "pl.perturb_celloracle_layout",
+        "single.PerturbResult.perturbation_score",
+    ],
 )
 def lineage_pseudotime(
     adata,
@@ -1055,18 +1077,29 @@ def _run_sctenifoldknk(
 def _try_import_sctenifoldknk():
     """Return the ``scTenifold`` top-level module.
 
-    The PyPI package is ``sctenifoldpy``; the import name is
-    ``scTenifold`` (mixed-case, with a capital T). The user-facing class
-    is ``scTenifold.scTenifoldKnk``.
+    Resolution order:
+      1. ``sys.modules['scTenifold']`` if already imported (respects
+         test fakes injected via ``sys.modules``).
+      2. System-installed ``scTenifold`` if importable.
+      3. Vendored copy at ``omicverse.external.scTenifold`` — bundled
+         so end-users don't need ``pip install sctenifoldpy``.
     """
+    import sys
+    if "scTenifold" in sys.modules:
+        return sys.modules["scTenifold"]
     try:
         import scTenifold  # type: ignore
         return scTenifold
-    except ImportError as exc:  # pragma: no cover - exercised only when missing
+    except ImportError:
+        pass
+    try:
+        from ..external import scTenifold as vendored_sct
+        return vendored_sct
+    except Exception as exc:  # pragma: no cover
         raise build_optional_dependency_error(
             feature="ov.single.perturb (backend='sctenifoldknk')",
             dependencies=("scTenifold",),
-            install_hint="pip install sctenifoldpy",
+            install_hint="pip install sctenifoldpy  # or use the vendored omicverse.external.scTenifold",
         ) from exc
 
 
