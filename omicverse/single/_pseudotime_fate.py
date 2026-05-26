@@ -49,7 +49,6 @@ import numpy as np
 import pandas as pd
 import scipy.sparse as sp
 import scipy.sparse.linalg as spla
-from scipy.special import logsumexp
 
 
 # -------------------------------------------------------------------- step 1
@@ -121,7 +120,9 @@ def _adaptive_affinity(
         s, e = indptr[i], indptr[i + 1]
         row = dvals[s:e]
         if row.size:
-            k_idx = min(int(ka), row.size - 1)
+            # 0-based: the ka-th NN distance is at index ka-1 in the
+            # sorted row. (np.sort(row)[ka] would be the (ka+1)-th NN.)
+            k_idx = max(0, min(int(ka) - 1, row.size - 1))
             sigma[i] = float(np.sort(row)[k_idx])
         else:
             sigma[i] = 1.0
@@ -155,7 +156,11 @@ def _top_schur_vectors(P: sp.csr_matrix, K: int) -> np.ndarray:
     K = max(2, min(K, P.shape[0] - 2))
     vals, vecs = spla.eigs(P.T.astype(np.float64), k=K, which='LM',
                             sigma=None, maxiter=1000, tol=1e-6)
-    # ARPACK can return complex pairs — split into real / imag.
+    # ARPACK can return complex pairs — split into real / imag. The
+    # conjugate partner at column i+1 holds the same information as i
+    # (v[i+1] ≈ conj(v[i])), so we mark it used to avoid appending a
+    # near-duplicate (real, imag) pair that would later evict a real
+    # Schur direction during the [:, :K] truncation.
     real_basis = []
     used = np.zeros(K, dtype=bool)
     for i in range(K):
@@ -168,6 +173,8 @@ def _top_schur_vectors(P: sp.csr_matrix, K: int) -> np.ndarray:
         else:
             real_basis.append(v.real)
             real_basis.append(v.imag)
+            if i + 1 < K:
+                used[i + 1] = True
     B = np.column_stack(real_basis)[:, :K]
     # Modified Gram-Schmidt
     Q, _ = np.linalg.qr(B)
@@ -426,11 +433,20 @@ def _solve_fate_probabilities(
     # Neumann series.
     X = np.zeros_like(R)
     delta = R.copy()
-    for _ in range(max_iter):
+    for _it in range(max_iter):
         X += delta
         delta = Q @ delta
         if np.max(np.abs(delta)) < tol:
             break
+    else:
+        import warnings
+        warnings.warn(
+            f"Neumann series did not converge in {max_iter} iterations "
+            f"(max |Δ| = {np.max(np.abs(delta)):.2e}). Fate "
+            "probabilities may be inaccurate — try increasing max_iter "
+            "or check that the biased kNN is well-connected.",
+            RuntimeWarning, stacklevel=3,
+        )
 
     out = np.zeros((n, len(terminal_groups)), dtype=np.float64)
     out[trans_idx] = X
@@ -500,7 +516,6 @@ class PseudotimeFate:
         scheme: Literal['hard', 'soft'] = 'hard',
         n_macrostates: int = 10,
         residency_threshold: float = 0.60,
-        forward_flow_threshold: float = 0.15,
         late_pt_quantile: float = 0.70,
         ka: int = 5,
         frac_to_keep: float = 0.3,
@@ -526,7 +541,6 @@ class PseudotimeFate:
         self.scheme = scheme
         self.n_macrostates = n_macrostates
         self.residency_threshold = residency_threshold
-        self.forward_flow_threshold = forward_flow_threshold
         self.late_pt_quantile = late_pt_quantile
         self.ka = ka
         self.frac_to_keep = frac_to_keep
@@ -544,6 +558,20 @@ class PseudotimeFate:
         self._dist = (adata.obsp[distance_key].tocsr()
                       if distance_key in adata.obsp else None)
         self.result: PseudotimeFateResult | None = None
+
+    def _prefix_from_pseudotime_key(self) -> str:
+        """Return the backend prefix used to name written adata keys.
+
+        Strips a *trailing* ``_pseudotime`` suffix only — using
+        ``str.replace`` here would corrupt keys that contain the
+        substring elsewhere (e.g. ``my_pseudotime_score`` →
+        ``my_score``) or leave non-conventional keys unchanged
+        (e.g. ``velocity_pt`` → full string as prefix).
+        """
+        suffix = "_pseudotime"
+        if self.pseudotime_key.endswith(suffix):
+            return self.pseudotime_key[:-len(suffix)]
+        return self.pseudotime_key
 
     # ------------------------------------------------------------------ public
     def fit(self, *, compute_fates: bool = True) -> PseudotimeFateResult:
@@ -836,7 +864,7 @@ class PseudotimeFate:
 
         # Wide form into adata.varm for downstream tooling.
         wide = df.pivot(index="gene", columns="lineage", values="corr").reindex(var_names)
-        prefix = self.pseudotime_key.replace("_pseudotime", "")
+        prefix = self._prefix_from_pseudotime_key()
         self.adata.varm[f"{prefix}_lineage_drivers"] = wide.values
         self.adata.uns[f"{prefix}_lineage_driver_columns"] = list(wide.columns)
         return df.reset_index(drop=True)
@@ -876,7 +904,7 @@ class PseudotimeFate:
         angles = np.linspace(0, 2 * np.pi, K, endpoint=False)
         verts = np.column_stack([np.cos(angles), np.sin(angles)])    # (K, 2)
         proj = F @ verts                                              # (n, 2)
-        prefix = self.pseudotime_key.replace("_pseudotime", "")
+        prefix = self._prefix_from_pseudotime_key()
         self.adata.obsm[f"{prefix}_X_fate_simplex"] = proj
         self.adata.uns[f"{prefix}_fate_simplex_names"] = names
         return proj
@@ -896,7 +924,7 @@ class PseudotimeFate:
         if self.result is None or self.result.fate_probabilities is None:
             raise RuntimeError("Call fit() first")
         import matplotlib.pyplot as plt
-        prefix = self.pseudotime_key.replace("_pseudotime", "")
+        prefix = self._prefix_from_pseudotime_key()
         key = f"{prefix}_X_fate_simplex"
         if key not in self.adata.obsm:
             self.compute_circular_projection()
@@ -1388,7 +1416,7 @@ class PseudotimeFate:
         tree_state_names = [_node_name(n) for n in node_list]
         tree_state_labels = [state_names[s] for s in tree_states]
 
-        prefix = self.pseudotime_key.replace('_pseudotime', '')
+        prefix = self._prefix_from_pseudotime_key()
         self.adata.obs[f'{prefix}_tree_states'] = pd.Categorical(tree_state_labels)
         self.adata.uns[f'{prefix}_tree_state_names'] = tree_state_names
         self.adata.uns[f'{prefix}_connectivities_tree'] = adj
@@ -1592,7 +1620,7 @@ class PseudotimeFate:
         from scipy.signal import savgol_filter
         if self.result is None:
             raise RuntimeError("Call fit() first")
-        prefix = self.pseudotime_key.replace('_pseudotime', '')
+        prefix = self._prefix_from_pseudotime_key()
         if f'{prefix}_tree_states' not in self.adata.obs.columns:
             self.compute_tree_structure()
 
@@ -1911,7 +1939,7 @@ class PseudotimeFate:
         if self.result is None or self.result.fate_probabilities is None:
             raise RuntimeError("Call fit() first")
         import pandas as pd
-        prefix = self.pseudotime_key.replace("_pseudotime", "")
+        prefix = self._prefix_from_pseudotime_key()
         lk = lineage_key or f"{prefix}_lineage"
         pk = pseudotime_key or self.pseudotime_key
         F = self.result.fate_probabilities
@@ -1996,7 +2024,7 @@ class PseudotimeFate:
         names = [str(self.adata.obs[self.groupby].iloc[c])
                  if self.groupby else f"L{j}"
                  for j, c in enumerate(self.result.terminal_cells)]
-        prefix = self.pseudotime_key.replace("_pseudotime", "")
+        prefix = self._prefix_from_pseudotime_key()
         coords = self.adata.obsm[basis]
         for j in range(n_lin):
             ax = axes.flat[j]
@@ -2133,7 +2161,7 @@ class PseudotimeFate:
 
     # ------------------------------------------------------------------ adata
     def _write_adata(self, res: PseudotimeFateResult) -> None:
-        prefix = self.pseudotime_key.replace('_pseudotime', '')
+        prefix = self._prefix_from_pseudotime_key()
         self.adata.obs[f'{prefix}_macrostate'] = pd.Categorical(
             res.macrostate_assignment.astype(str)
         )
