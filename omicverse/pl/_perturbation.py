@@ -698,12 +698,13 @@ def perturb_sankey(
 
 
 def _resolve_cluster_palette(adata, cluster_col, cats, cluster_palette=None):
-    """Pick a cluster colour palette consistent with what scanpy renders.
+    """Pick a cluster colour palette.
 
     Resolution order:
       1. explicit ``cluster_palette`` argument
-      2. ``adata.uns[f"{cluster_col}_colors"]`` if scanpy already plotted it
-      3. scanpy's ``vega_20_scanpy`` (the default for `sc.pl.umap`)
+      2. ``adata.uns[f"{cluster_col}_colors"]`` if the user already
+         plotted those clusters with a specific palette
+      3. ``omicverse.utils.pyomic_palette()`` — the package-wide default
       4. matplotlib ``tab20`` fallback
     """
     if cluster_palette is not None:
@@ -714,12 +715,14 @@ def _resolve_cluster_palette(adata, cluster_col, cats, cluster_palette=None):
         if len(colors) >= len(cats):
             return {c: colors[i] for i, c in enumerate(cats)}
     try:
-        from scanpy.plotting import palettes as _sc_palettes
-        pal = list(_sc_palettes.vega_20_scanpy)
-        return {c: pal[i % len(pal)] for i, c in enumerate(cats)}
+        from .. import utils as ov_utils
+        pal = list(ov_utils.pyomic_palette())
+        if pal:
+            return {c: pal[i % len(pal)] for i, c in enumerate(cats)}
     except Exception:  # pragma: no cover
-        cmap = plt.get_cmap("tab20")
-        return {c: cmap(i % 20) for i, c in enumerate(cats)}
+        pass
+    cmap = plt.get_cmap("tab20")
+    return {c: cmap(i % 20) for i, c in enumerate(cats)}
 
 
 def _make_sankey_ribbon(*, x0, x1, y0_src, y1_src, y0_dst, y1_dst, n_pts: int = 30):
