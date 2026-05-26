@@ -130,6 +130,51 @@ def test_es_method_runs(adata, signatures, method, engine):
     assert np.all(np.isfinite(score)), f"{method!r} ({engine}) produced non-finite values"
 
 
+def test_ucell_runs(adata):
+    """ov.es.ucell writes a finite score matrix in [0, 1] to obsm['score_ucell']."""
+    import omicverse as ov
+
+    a = adata.copy()
+    sigs = {
+        "sig_small": list(a.var_names[:5]),
+        "sig_with_neg": list(a.var_names[5:8]) + [g + "-" for g in a.var_names[8:10]],
+        "sig_with_miss": list(a.var_names[10:13]) + ["MISSING_GENE_X", "MISSING_GENE_Y"],
+    }
+    ov.es.ucell(a, signatures=sigs, max_rank=50)
+    assert "score_ucell" in a.obsm
+    df = a.obsm["score_ucell"]
+    assert df.shape == (a.n_obs, len(sigs))
+    arr = np.asarray(df, dtype=float)
+    assert np.all(np.isfinite(arr))
+    assert arr.min() >= 0.0 - 1e-12
+    assert arr.max() <= 1.0 + 1e-12
+
+
+def test_ucell_formula_against_hand_computation():
+    """Cross-check the UCell formula against a literal-formula computation on
+    a tiny hand-crafted dataset (parity with R UCell on synthetic data is
+    verified separately when R is available)."""
+    import omicverse as ov
+    import pandas as pd
+
+    # 1 cell, 6 genes. Expression: G1=5, G2=4, G3=3, G4=2, G5=1, G6=0.
+    # Descending ranks: G1=1, G2=2, G3=3, G4=4, G5=5, G6=6.
+    rng_expr = np.array([[5, 4, 3, 2, 1, 0]], dtype=float)
+    df = pd.DataFrame(rng_expr, index=["c0"], columns=[f"G{i}" for i in range(1, 7)])
+    sig = {"top3": ["G1", "G2", "G3"]}  # ranks (1, 2, 3) → sum = 6
+    out = ov.es.ucell(df, signatures=sig, max_rank=6)
+
+    # rank_sum=6, len=3, rank_sum_min=3*4/2=6, denom=3*6-6=12
+    # score = 1 - (6-6)/12 = 1.0
+    assert abs(float(out.iloc[0, 0]) - 1.0) < 1e-12
+
+    # Now test the bottom-3 → ranks (4, 5, 6) → sum = 15
+    # rank_sum_min=6, denom=12. score = 1 - (15-6)/12 = 1 - 0.75 = 0.25
+    sig2 = {"bot3": ["G4", "G5", "G6"]}
+    out2 = ov.es.ucell(df, signatures=sig2, max_rank=6)
+    assert abs(float(out2.iloc[0, 0]) - 0.25) < 1e-12
+
+
 def test_decoupler_dispatcher(adata, signatures):
     """The unified ``ov.es.decoupler(method=...)`` matches the direct call."""
     import omicverse as ov

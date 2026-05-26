@@ -61,6 +61,7 @@ from .._monitor import monitor as _monitor
 # The vendored numba CPU + torch GPU kernels live alongside them as
 # private helpers (`_func_<name>` / `_func_<name>_torch`).
 from ._aucell    import aucell
+from ._ucell     import ucell
 from ._gsea      import gsea
 from ._gsva      import gsva
 from ._mdt       import mdt
@@ -296,7 +297,7 @@ def query_set(
 
 
 __all__ = [
-    'aucell', 'gsea', 'gsva', 'mdt', 'mlm', 'ora',
+    'aucell', 'ucell', 'gsea', 'gsva', 'mdt', 'mlm', 'ora',
     'udt', 'ulm', 'viper', 'waggr', 'zscore',
     'decouple', 'decoupler', 'consensus', 'query_set',
     'signatures_to_net',
