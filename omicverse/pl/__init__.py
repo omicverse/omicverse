@@ -198,6 +198,7 @@ from ._perturbation import (
     perturb_inner_product_on_grid,
     perturb_development_layout,
     perturb_celloracle_layout,
+    perturb_markov_endpoints,
 )
 from ._density import add_density_contour, calculate_gene_density
 from ._plot1cell import plot1cell
@@ -463,4 +464,5 @@ __all__ = [
     "perturb_inner_product_on_grid",
     "perturb_development_layout",
     "perturb_celloracle_layout",
+    "perturb_markov_endpoints",
 ]

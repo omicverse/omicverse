@@ -142,7 +142,7 @@ from ._velo import (
 )
 from ._milo_dev import Milo
 from ._markers import find_markers, get_markers
-from ._perturb import PerturbResult, perturb
+from ._perturb import PerturbResult, perturb, lineage_pseudotime
 from ._dynamic_features import DynamicFeaturesResult, dynamic_features
 from ._cefcon import (
     convert_human_to_mouse_network,

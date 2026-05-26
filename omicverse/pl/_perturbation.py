@@ -941,6 +941,57 @@ def perturb_cell_quiver(
 
 
 @register_function(
+    aliases=[
+        "perturb_markov_endpoints", "马尔可夫终点条形图",
+        "perturbation_markov_endpoint_distribution",
+    ],
+    category="pl",
+    description=(
+        "Bar plot of the endpoint cluster distribution from a Markov walk "
+        "on `result.trajectory_shift`. Useful for showing where a perturbed "
+        "lineage ends up (e.g. Gata1 KO redirects Mk → GMP)."
+    ),
+)
+def perturb_markov_endpoints(
+    result,
+    adata,
+    *,
+    start_cells,
+    cluster_col: str,
+    n_steps: int = 15,
+    n_walks_per_cell: int = 50,
+    figsize=(5, 3),
+    color: str = "C3",
+    title: Optional[str] = None,
+    ax: Optional[Axes] = None,
+):
+    """One-call wrapper around `result.run_markov` that plots the endpoint
+    cluster distribution as a horizontal bar chart."""
+    walks = result.run_markov(
+        start_cells=list(start_cells), n_steps=n_steps,
+        n_walks_per_cell=n_walks_per_cell, adata=adata,
+    )
+    end_ix = walks.values.ravel()
+    end_clusters = adata.obs[cluster_col].iloc[end_ix]
+    counts = end_clusters.value_counts()
+    if ax is None:
+        fig, ax = plt.subplots(figsize=figsize)
+    else:
+        fig = ax.figure
+    counts.plot.barh(ax=ax, color=color, alpha=0.75, edgecolor="white")
+    ax.set_xlabel(f"# walks ending in cluster "
+                  f"({len(start_cells)} starts × {n_walks_per_cell} walks)")
+    ax.set_title(
+        title or f"Markov-walk endpoints ({result.target} {result.mode})",
+        fontsize=11,
+    )
+    for sp in ("top", "right"):
+        ax.spines[sp].set_visible(False)
+    fig.tight_layout()
+    return fig, ax
+
+
+@register_function(
     aliases=["perturb_volcano", "扰动火山图", "perturbation_volcano"],
     category="pl",
     description=(

@@ -699,6 +699,62 @@ class PerturbResult:
     ],
     auto_fix="escalate",
 )
+@register_function(
+    aliases=[
+        "lineage_pseudotime", "谱系特异性伪时", "lineage_specific_pseudotime",
+    ],
+    category="single",
+    description=(
+        "Lineage-specific pseudotime via CellOracle's "
+        "`Pseudotime_calculator`. Writes the result to "
+        "`adata.obs['Pseudotime']` so it can be plugged into "
+        "`ov.single.perturb` + downstream PS analyses."
+    ),
+)
+def lineage_pseudotime(
+    adata,
+    lineage_dictionary: dict,
+    root_cells: dict,
+    *,
+    obsm_key: str = "X_umap",
+    cluster_column_name: str = "leiden",
+    obs_key: str = "Pseudotime",
+):
+    """Compute lineage-specific DPT pseudotime via CellOracle.
+
+    Wraps :class:`celloracle.applications.Pseudotime_calculator` — runs
+    DPT separately on each lineage (root cell per lineage) so the
+    resulting :obs ``'Pseudotime'`` is monotonic along every branch.
+    Required for the Perturbation-Score downstream when the dataset
+    has multiple terminal cell types.
+
+    Parameters
+    ----------
+    lineage_dictionary
+        ``{lineage_name: [cluster_ids_in_lineage]}``.
+    root_cells
+        ``{lineage_name: cell_index_or_name}`` — the start cell for
+        each lineage.
+    """
+    try:
+        from celloracle.applications import Pseudotime_calculator
+    except ImportError as exc:  # pragma: no cover
+        raise build_optional_dependency_error(
+            feature="ov.single.lineage_pseudotime",
+            dependencies=("celloracle",),
+            install_hint="pip install celloracle",
+        ) from exc
+    pt = Pseudotime_calculator(
+        adata=adata, obsm_key=obsm_key,
+        cluster_column_name=cluster_column_name,
+    )
+    pt.set_lineage(lineage_dictionary=lineage_dictionary)
+    pt.set_root_cells(root_cells=root_cells)
+    pt.get_pseudotime_per_each_lineage()
+    adata.obs[obs_key] = pt.adata.obs["Pseudotime"].values
+    return adata
+
+
 def perturb(
     adata,
     target: str | Sequence[str],
