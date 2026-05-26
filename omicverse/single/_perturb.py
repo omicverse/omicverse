@@ -279,21 +279,26 @@ class PerturbResult:
     def delta_embedding(self, adata=None, *, embedding_name: str = "X_umap"):
         """Per-cell 2-D arrow vector on the embedding.
 
-        Computed from the (cell × cell) ``trajectory_shift``:
+        Replicates CellOracle's ``calculate_embedding_shift`` (and the
+        velocyto formulation it inherits): the per-cell displacement is
+        a probability-weighted sum of **unit** direction vectors to
+        every neighbour, not of raw coordinate differences. That keeps
+        the arrow magnitudes O(1) regardless of the embedding's scale
+        (UMAP vs PCA vs force-directed graph layout) and makes the PS
+        values comparable to CellOracle's published range.
 
-            Δemb[i] = Σ_j T[i,j] · (emb[j] − emb[i])
-
-        i.e. the expected displacement on the embedding after one step
-        of the cell-state Markov chain — what CellOracle's
-        ``calculate_embedding_shift`` returns.
+            Δemb[i] = Σ_j T[i,j] · ( (emb[j] − emb[i]) / ||emb[j] − emb[i]|| )
         """
         if self.trajectory_shift is None:
             self.compute_transition_prob(adata=adata, embedding_name=embedding_name)
         _, _, embedding, _ = _resolve_inputs(self, adata=adata,
                                              embedding_name=embedding_name)
         tp = np.asarray(self.trajectory_shift)
-        diffs = embedding[None, :, :] - embedding[:, None, :]  # (n,n,2)
-        return np.einsum("ij,ijk->ik", tp, diffs)
+        diffs = embedding[None, :, :] - embedding[:, None, :]  # (n, n, 2)
+        norms = np.linalg.norm(diffs, axis=-1, keepdims=True)
+        # Avoid 0/0 on the diagonal; the row probability is 0 there anyway
+        unit_vecs = np.where(norms > 1e-12, diffs / np.maximum(norms, 1e-12), 0.0)
+        return np.einsum("ij,ijk->ik", tp, unit_vecs)
 
     def perturbation_score(
         self,
@@ -1436,13 +1441,6 @@ def _compute_ps_grid(
         if mass[g_i] > 0:
             flow_grid[g_i] = (delta_emb[ix] * w[:, None]).sum(axis=0) / mass[g_i]
     keep = mass >= min_mass
-
-    # Normalise flow_grid to the same scale as ref_flow_grid (mean-L2 norm
-    # = 1) so PS = flow_grid · ref_flow_grid is in a CellOracle-comparable
-    # range ([-1, +1]-ish on a population basis).
-    fg_norms = np.linalg.norm(flow_grid, axis=1)
-    if fg_norms.mean() > 0:
-        flow_grid = flow_grid / fg_norms.mean()
 
     # CellOracle's PS = raw dot product per grid point
     ps_grid = (flow_grid * ref_flow_grid).sum(axis=1)
