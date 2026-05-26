@@ -353,10 +353,16 @@ def ucell(
     eng = resolve_engine(engine, has_torch_kernel=True)
 
     if eng == "gpu":
+        # GPU path uses ov.utils.gpuex.scipy.rankdata for the avg-tie
+        # ranking (batched, single searchsorted-based kernel) AND a
+        # matmul for the per-signature U-score — neither step touches
+        # the Python loop, so the speedup grows with both n_cells and
+        # n_signatures.
+        from ..utils.gpuex.scipy import rankdata as _gpu_rankdata
         for start in tqdm(range(0, n_obs, chunk_size), disable=not verbose):
             end = min(start + chunk_size, n_obs)
             chunk = mat[start:end].toarray() if is_sparse else np.asarray(mat[start:end])
-            ranks = sts.rankdata(-chunk, axis=1, method="average")
+            ranks = _gpu_rankdata(-chunk, axis=1, method="average")
             scores[start:end] = _ucell_gpu_score(
                 ranks, resolved, max_rank=max_rank, w_neg=w_neg,
             )

@@ -145,6 +145,7 @@ from .agent_errors import (
 from .agent_reporter import AgentEvent, EventLevel, Reporter, make_reporter
 from .context_compactor import ContextCompactor, estimate_tokens
 from .session_history import SessionHistory, HistoryEntry
+from . import gpuex  # noqa: F401  — ov.utils.gpuex.scipy.rankdata etc.
 from .harness import (
     HARNESS_EVENT_TYPES,
     STREAM_EVENT_TYPES,
