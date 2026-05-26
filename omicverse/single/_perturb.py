@@ -1211,7 +1211,7 @@ def _run_cell_oracle(
         gene_names=list(oracle.adata.var_names) if hasattr(oracle, "adata") else None,
         embedding=embedding,
         meta={"library": "celloracle", "n_propagation": n_propagation,
-              "n_cells": adata.n_obs},
+              "n_cells": adata.n_obs, "oracle": oracle},
     )
 
 
