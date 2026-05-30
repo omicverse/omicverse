@@ -831,38 +831,52 @@ def pca(  # noqa: PLR0912, PLR0913, PLR0915
     logg.info(f"    with {n_comps=}")
 
     if is_oom:
-        # For OOM, use IncrementalPCA — fully chunked, never materialises
+        # For OOM, route to anndataoom's chunked_pca. Critically: pass the
+        # ORIGINAL adata (NOT adata_comp = adata[:, mask_var]) so the
+        # ScaledBackedArray layer is reachable directly via isinstance —
+        # otherwise the SubsetBackedArray wrap defeats anndataoom's
+        # fast-paths (auto-materialise + implicit centering) and falls
+        # back to the densifying legacy chunked Halko. anndataoom reads
+        # `adata.var['highly_variable_features']` and column-subsets
+        # internally when `use_highly_variable=True`.
         from anndataoom import chunked_pca as _chunked_pca
         _layer = layer or "scaled"
-        if _layer not in adata_comp.layers:
+        if _layer not in adata.layers:
             raise ValueError(
                 f"OOM PCA requires layer {_layer!r} which is not present "
-                f"(available: {list(adata_comp.layers.keys())}). "
+                f"(available: {list(adata.layers.keys())}). "
                 "Run ov.pp.scale(adata) first, or pass an existing layer name."
             )
+        # mask_var has already been resolved by _handle_mask_var; True
+        # iff the caller wants HVG selection (the default when the
+        # column is present).
+        use_hvg = mask_var is not None
         X_pca, components, var_ratio = _chunked_pca(
-            adata_comp,
+            adata,
             layer=_layer,
             n_comps=n_comps,
             random_state=random_state if isinstance(random_state, int) else 0,
+            use_highly_variable=use_hvg,
         )
-        # Store results back into adata (not adata_comp, which may be a view)
+        # Store results back into adata.
         adata.obsm["X_pca"] = X_pca
         _key = f"{_layer}|original|X_pca"
         adata.obsm[_key] = X_pca
-        # Compute variance from variance_ratio. PCA ran on adata_comp (the
-        # HVG-subsetted view); for z-scored data, total variance ≈ number of
-        # *PCA-input* vars, not the original adata.n_vars.
-        total_var = float(adata_comp.n_vars)
+        # Variance is normalised by the effective n_vars seen by PCA —
+        # i.e. the number of HVGs if `use_hvg=True`, else adata.n_vars.
+        # `components.shape[1]` is the authoritative number.
+        effective_n_vars = components.shape[1]
+        total_var = float(effective_n_vars)
         adata.uns["pca"] = {
             "variance_ratio": var_ratio,
             "variance": var_ratio * total_var,
         }
-        # components has shape (n_comps, adata_comp.n_vars); store loadings at
-        # (adata.n_vars, n_comps). If PCA ran on an HVG subset, non-selected
+        # components has shape (n_comps, effective n_vars). Restore the
+        # full (adata.n_vars, n_comps) loadings matrix by scattering
+        # HVG rows back into their original positions; non-selected
         # genes get zero loadings (mirrors the CPU path).
-        loadings = components.T  # (adata_comp.n_vars, n_comps)
-        if mask_var is not None and adata_comp.n_vars != adata.n_vars:
+        loadings = components.T  # (effective n_vars, n_comps)
+        if use_hvg and effective_n_vars != adata.n_vars:
             pcs = np.zeros((adata.n_vars, loadings.shape[1]), dtype=loadings.dtype)
             pcs[mask_var] = loadings
         else:
