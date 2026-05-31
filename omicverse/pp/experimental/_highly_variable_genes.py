@@ -205,9 +205,32 @@ def _highly_variable_pearson_residuals(
             X_batch = np.array(X_batch, dtype=np.float64, order="F")
             calculate_res = partial(_calculate_res_dense, X_batch)
 
-        sums_genes = np.array(X_batch.sum(axis=0)).ravel()
-        sums_cells = np.array(X_batch.sum(axis=1)).ravel()
-        sum_total = np.sum(sums_genes)
+        # Consume the precompute that `ov.pp.normalize_total` stashed in
+        # adata.uns when present and shape-compatible. Saves a full sparse
+        # scan -- on TS-1M (1M cells × 60606 genes) that is the dominant
+        # cost of the preprocess pipeline and ~25--30% of total wall-clock.
+        # The per-batch path runs once per batch and can only reuse the
+        # precompute on the single-batch case (where the batch IS the
+        # full adata).
+        _pre = (
+            adata.uns.get("_pearson_precompute")
+            if (n_batches == 1
+                and X_batch.shape == (adata.shape[0], adata.shape[1]))
+            else None
+        )
+        if _pre is not None and (_pre.get("n_obs") != X_batch.shape[0]
+                                  or _pre.get("n_vars") != X_batch.shape[1]):
+            _pre = None  # stale (e.g. obs/var subset between normalize + HVG)
+        if _pre is not None:
+            sums_genes = np.asarray(_pre["sums_genes"], dtype=np.float64)
+            sums_cells = np.asarray(_pre["sums_cells"], dtype=np.float64)
+            sum_total = float(
+                _pre.get("sum_total", float(np.sum(sums_genes)))
+            )
+        else:
+            sums_genes = np.array(X_batch.sum(axis=0)).ravel()
+            sums_cells = np.array(X_batch.sum(axis=1)).ravel()
+            sum_total = np.sum(sums_genes)
 
         residual_gene_var = calculate_res(
             sums_genes=sums_genes,

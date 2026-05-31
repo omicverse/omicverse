@@ -774,6 +774,52 @@ def normalize_total(
 
     gene_subset = None
     counts_per_cell = axis_sum(x, axis=1)
+
+    # ── Side product for downstream Pearson HVG ───────────────────────
+    # `omicverse.pp.experimental._highly_variable_pearson_residuals` runs
+    # its own first pass over X (`layer='counts'`) to gather per-gene
+    # totals + per-cell totals + sum_total. On a 1M cells × 60606 genes
+    # matrix that is the dominant single cost of the preprocess pipeline
+    # (TS-1M: ~30% of 1874 s). We grab those quantities here as a side
+    # product of the existing scan and stash them in `adata.uns` so the
+    # HVG step can auto-skip its Pass 1. Same fusion that
+    # `anndataoom.chunked_normalize_total` does for the OOM backend.
+    # Only applies to the global (no-batch) case -- the per-batch HVG path
+    # needs per-batch sums that this scan does not split out.
+    _pre_x = x
+    if hasattr(_pre_x, "tocsr") and not isinstance(_pre_x, np.ndarray):
+        try:
+            # Try a sparse-native sum-axis-0 / squared-sum-axis-0; both
+            # are O(nnz) on a CSR / CSC. Fall back silently if the input
+            # is a backed type we cannot stream cheaply.
+            _sg = np.asarray(_pre_x.sum(axis=0)).ravel().astype(np.float64)
+            _sq = np.asarray(
+                _pre_x.multiply(_pre_x).sum(axis=0)
+            ).ravel().astype(np.float64)
+            _pearson_precompute = {
+                "sums_genes": _sg,
+                "sq_sums_genes": _sq,
+                "sum_total": float(_sg.sum()),
+                "n_obs": int(_pre_x.shape[0]),
+                "n_vars": int(_pre_x.shape[1]),
+            }
+        except Exception:
+            _pearson_precompute = None
+    else:
+        try:
+            _arr = np.asarray(_pre_x, dtype=np.float64)
+            _sg = _arr.sum(axis=0).ravel()
+            _sq = (_arr ** 2).sum(axis=0).ravel()
+            _pearson_precompute = {
+                "sums_genes": _sg,
+                "sq_sums_genes": _sq,
+                "sum_total": float(_sg.sum()),
+                "n_obs": int(_pre_x.shape[0]),
+                "n_vars": int(_pre_x.shape[1]),
+            }
+        except Exception:
+            _pearson_precompute = None
+
     if exclude_highly_expressed:
         counts_per_cell = np.ravel(counts_per_cell)
 
@@ -828,6 +874,27 @@ def normalize_total(
         if key_added is not None:
             # Save normalization factor (counts / target_sum), consistent with scanpy
             adata.obs[key_added] = counts_per_cell / target_sum
+        # Finalise the Pearson-HVG precompute: needs per-cell sums on the
+        # FULL (unfiltered) gene panel — that is what `axis_sum(x, axis=1)`
+        # produced before `exclude_highly_expressed` overwrote
+        # `counts_per_cell` with the filtered version. Recompute from
+        # `_pearson_precompute['sums_genes']` if available, else from the
+        # current `counts_per_cell` snapshot (which is right when there is
+        # no highly-expressed-gene exclusion).
+        if _pearson_precompute is not None:
+            # Per-cell sums on FULL panel = row marginals of the
+            # un-normalised X. The `counts_per_cell` we have here may be
+            # the filtered version; for the no-exclude case it is also
+            # the full-panel one. For the exclude case the precompute
+            # would have to recompute the full-panel row sums; we skip
+            # the precompute stash entirely in that branch rather than
+            # ship subtly wrong stats.
+            if not exclude_highly_expressed:
+                _pearson_precompute["sums_cells"] = np.asarray(
+                    counts_per_cell, dtype=np.float64
+                ).copy()
+                adata.uns["_pearson_precompute"] = _pearson_precompute
+            # else: caller will fall back to two-pass HVG.
         _set_obs_rep(
             adata, _normalize_data(x, counts_per_cell, target_sum), layer=layer
         )
