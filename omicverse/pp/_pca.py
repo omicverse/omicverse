@@ -870,7 +870,26 @@ def pca(  # noqa: PLR0912, PLR0913, PLR0915
         adata.varm["PCs"] = pcs
         return adata if copy else None
 
-    X = _get_obs_rep(adata_comp, layer=layer)
+    # Implicit-centered scale wrapper (anndataoom.CenteredSparseArray) ────
+    # ov.pp.scale(use_implicit_centering=True) stores the scaled matrix as
+    # a lazy wrapper in adata.uns['_scaled_implicit'] (anndata's layer
+    # registry rejects custom array types). Densify only the HVG slice
+    # the SVD will actually consume: at 1M cells × 2000 HVG that is ~8 GB
+    # instead of the 240 GB the full-panel dense scale would need.
+    X = None
+    _implicit = adata.uns.get('_scaled_implicit') if not is_oom else None
+    if _implicit is not None and layer in (None, 'scaled'):
+        try:
+            from anndataoom import CenteredSparseArray
+            if isinstance(_implicit, CenteredSparseArray):
+                if mask_var is not None:
+                    X = np.asarray(_implicit[:, mask_var])
+                else:
+                    X = np.asarray(_implicit.toarray())
+        except ImportError:
+            pass
+    if X is None:
+        X = _get_obs_rep(adata_comp, layer=layer)
 
     # Previously this block materialised X for a standalone rust/snapatac2
     # adata. Only AnnDataOOM is supported now, and the is_oom branch above

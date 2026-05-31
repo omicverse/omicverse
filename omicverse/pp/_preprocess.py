@@ -1060,7 +1060,8 @@ def highly_variable_genes(
     related=["normalize", "regress"]
 )
 @tracked("scale", "ov.pp.scale")
-def scale(adata, max_value=10, layers_add='scaled', to_sparse=False, **kwargs):
+def scale(adata, max_value=10, layers_add='scaled', to_sparse=False,
+          use_implicit_centering=False, **kwargs):
     """
     Scale the input AnnData object.
 
@@ -1073,6 +1074,18 @@ def scale(adata, max_value=10, layers_add='scaled', to_sparse=False, **kwargs):
             passing anything else raises ValueError.
         to_sparse: If True, convert the result to csr_matrix format. Default: False.
             Scaled data is 100% dense, so sparse storage only adds overhead.
+        use_implicit_centering: If True and the in-memory adata.X is sparse,
+            store the scaled matrix as a lazy ``CenteredSparseArray`` (anndataoom)
+            in ``adata.uns['_scaled_implicit']`` instead of materialising a dense
+            ``adata.layers['scaled']``. Trades a small dispatch hop in downstream
+            consumers (only ``ov.pp.pca`` knows how to read this layout) for
+            ``n_obs * n_vars * 4 bytes`` of avoided allocation -- at 1M cells x
+            60606 genes that is ~240 GB, the difference between OOM-killed and
+            completing under a typical 256 GB per-process RSS cap. ``ov.pp.pca``
+            densifies only the HVG-subset slice the SVD actually needs.
+            Default: False (preserves existing behavior). Ignored on the OOM
+            backend (which already uses a lazy ``ScaledBackedArray``) and on
+            GPU mode.
         **kwargs: Additional arguments passed to scaling functions.
 
     Returns:
@@ -1086,6 +1099,8 @@ def scale(adata, max_value=10, layers_add='scaled', to_sparse=False, **kwargs):
         >>> ov.pp.scale(adata, max_value=10)
         >>> # Scale data keeping dense format
         >>> ov.pp.scale(adata, max_value=10, to_sparse=False)
+        >>> # Lazy implicit centering for million-cell in-memory pipelines
+        >>> ov.pp.scale(adata, max_value=10, use_implicit_centering=True)
     """
     from ._qc import _is_oom
     if _is_oom(adata):
@@ -1105,6 +1120,45 @@ def scale(adata, max_value=10, layers_add='scaled', to_sparse=False, **kwargs):
         adata.uns["status"]["scaled"] = True
         note(backend=f"omicverse({settings.mode}) · oom")
         return
+    # Opt-in implicit-centered path: produce a CenteredSparseArray and
+    # store it in adata.uns['_scaled_implicit'] rather than densifying.
+    # Only runs when (a) caller asked for it, (b) we are on CPU mode, and
+    # (c) adata.X is sparse (the densification this avoids is exactly the
+    # sparse zero-centering step). zero_center defaults True in kwargs.
+    _zero_center = kwargs.get('zero_center', True)
+    if (use_implicit_centering
+            and (settings.mode == 'cpu' or settings.mode == 'cpu-gpu-mixed')
+            and _zero_center
+            and issparse(adata.X)):
+        try:
+            from anndataoom import CenteredSparseArray
+        except ImportError as exc:
+            raise ImportError(
+                "use_implicit_centering=True requires the anndataoom package "
+                "(>=0.1.7); install with `pip install anndataoom`."
+            ) from exc
+        X = adata.X.tocsr().astype(np.float32)
+        # Sparse-native E[X^2] − E[X]^2; matches scanpy / sklearn convention.
+        mean = np.asarray(X.mean(axis=0)).ravel().astype(np.float32)
+        ex2 = np.asarray(X.multiply(X).mean(axis=0)).ravel().astype(np.float32)
+        var = np.maximum(ex2 - mean * mean, 0.0)
+        std = np.sqrt(var).astype(np.float32)
+        wrapper = CenteredSparseArray(X, mean, std, max_value=max_value)
+        adata.uns['_scaled_implicit'] = wrapper
+        # Expose mean/std on adata.var (matches scale_anndata's behavior).
+        adata.var['mean'] = mean
+        adata.var['std'] = std
+        if 'status' not in adata.uns.keys():
+            adata.uns['status'] = {}
+        if 'status_args' not in adata.uns.keys():
+            adata.uns['status_args'] = {}
+        adata.uns['status']['scaled'] = True
+        adata.uns['status_args']['scaled'] = {'implicit': True,
+                                              'max_value': max_value}
+        add_reference(adata, 'scanpy', 'scaling with scanpy')
+        note(backend=f"omicverse({settings.mode}) · implicit")
+        return
+
     if settings.mode == 'cpu' or settings.mode == 'cpu-gpu-mixed':
         from ._scale import scale_anndata as scale
         adata_mock = scale(adata, copy=True, max_value=max_value, **kwargs)
@@ -1307,8 +1361,21 @@ def pca(adata, n_pcs=50, layer='scaled',inplace=True,**kwargs):
     """
     #if 'lognorm' not in adata.layers:
     #    adata.layers['lognorm'] = adata.X
+    # Implicit-centered scale: ov.pp.scale(use_implicit_centering=True) stores
+    # the lazy CenteredSparseArray in adata.uns['_scaled_implicit'] rather
+    # than a dense adata.layers['scaled'] (anndata's layer registry rejects
+    # custom array types). When the caller asks for layer='scaled' and the
+    # implicit wrapper is present, that counts as 'computed' — the deeper
+    # _pca.pca() picks it up via the same uns key and densifies only the
+    # HVG subset the SVD actually needs.
+    _has_implicit_scaled = (
+        layer == 'scaled' and '_scaled_implicit' in adata.uns
+    )
     if layer in adata.layers:
         X = adata.layers[layer]
+        key = f'{layer}|original'
+    elif _has_implicit_scaled:
+        X = adata.uns['_scaled_implicit']  # CenteredSparseArray
         key = f'{layer}|original'
     else:
         raise KeyError(f'Selected layer {layer} is not present. Compute it first!')
