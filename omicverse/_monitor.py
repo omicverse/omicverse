@@ -1,4 +1,6 @@
+import sys
 import time
+import textwrap
 import anndata
 import numpy as np
 import pandas as pd
@@ -38,6 +40,7 @@ class Style:
     YELLOW = "\033[33m"
     CYAN = "\033[36m"
     WHITE = "\033[37m"
+    RED = "\033[31m"
 
 class StructureWatcher:
     def __init__(self, adata, func_name="Unknown Function"):
@@ -104,14 +107,84 @@ class StructureWatcher:
         }
         return snapshot
 
-    def finish(self):
-        """Compares states and prints the formatted report."""
+    def finish(self, error=None):
+        """Compares states and prints the formatted report.
+
+        If ``error`` is not None the wrapped function raised before
+        returning; render a FAILED summary that embeds the exception
+        (type + message) instead of a success-styled box, so the failure
+        is unmistakable rather than masquerading as a 0.0s no-op.
+        """
         end_time = time.time()
         duration = round(end_time - self.start_time, 4)
+
+        if error is not None:
+            self._print_failure(duration, error)
+            return
+
         end_state = self._snapshot(self.adata)
-        
         self._print_report(self.start_state, end_state, duration)
         self._log_to_uns(self.start_state, end_state, duration)
+
+    # --- failure rendering -------------------------------------------------
+    def _emit_row(self, colored, visible, width, border):
+        """Print one box row, padding to ``width`` using the visible length."""
+        V = f"{border}│{Style.RESET}"
+        padding = " " * max(0, width - 2 - len(visible))
+        print(f"{V}{colored}{padding}{V}")
+
+    def _print_failure(self, duration, error):
+        """Render a red FAILED box that embeds the raised exception."""
+        if not _SHOW_MONITOR_OUTPUT:
+            return
+        # Only the top-level (outermost) call prints, matching success output.
+        if _MONITOR_NESTING_LEVEL > 0:
+            return
+
+        TL, H, TR = "╭", "─", "╮"
+        BL, BR = "╰", "╯"
+        width = 70
+        title = f" SUMMARY: {self.func_name} [FAILED] "
+        header_line = f"{TL}{H}{title}{H * (width - 3 - len(title))}{TR}"
+        footer_line = f"{BL}{H * (width - 2)}{BR}"
+
+        print(f"\n{Style.RED}{header_line}{Style.RESET}")
+
+        # Duration
+        self._emit_row(
+            f"  Duration: {Style.YELLOW}{duration}s{Style.RESET}",
+            f"  Duration: {duration}s", width, Style.RED,
+        )
+        # Status: which exception type was raised
+        etype = type(error).__name__
+        self._emit_row(
+            f"  Status:   {Style.BOLD}{Style.RED}✖ raised {etype}{Style.RESET}",
+            f"  Status:   ✖ raised {etype}", width, Style.RED,
+        )
+        # blank spacer
+        print(f"{Style.RED}│{Style.RESET}" + " " * (width - 2) + f"{Style.RED}│{Style.RESET}")
+        # ERROR header + rule
+        self._emit_row(f"  {Style.BOLD}{Style.RED}ERROR{Style.RESET}", "  ERROR", width, Style.RED)
+        self._emit_row(f"  {Style.DIM}─────{Style.RESET}", "  ─────", width, Style.RED)
+
+        # Embedded, word-wrapped exception message (capped so the box
+        # stays readable; full traceback still propagates to the caller).
+        msg = str(error).strip() or "(no message)"
+        lines = []
+        for para in msg.splitlines() or [msg]:
+            lines.extend(textwrap.wrap(para, width - 6) or [""])
+        truncated = len(lines) > 8
+        for line in lines[:8]:
+            self._emit_row(
+                f"  {Style.YELLOW}{line}{Style.RESET}", f"  {line}", width, Style.RED,
+            )
+        if truncated:
+            self._emit_row(
+                f"  {Style.DIM}… (truncated; see traceback above){Style.RESET}",
+                "  … (truncated; see traceback above)", width, Style.RED,
+            )
+
+        print(f"{Style.RED}{footer_line}{Style.RESET}")
 
     def _print_report(self, start, end, duration):
         # Check if monitor output is enabled
@@ -299,6 +372,14 @@ def monitor(func):
         finally:
             _MONITOR_NESTING_LEVEL -= 1
             if watcher:
-                watcher.finish()
+                # sys.exc_info()[1] is the exception currently propagating
+                # through this finally (None on the normal-return path).
+                # The exception is NOT swallowed — it re-raises after finish.
+                err = sys.exc_info()[1]
+                try:
+                    watcher.finish(error=err)
+                except Exception:
+                    # Monitoring must never mask the real error / result.
+                    pass
         return result
     return wrapper
