@@ -88,6 +88,75 @@ def test_all_standard_returns_view_slice():
     assert selector == slice(0, 1000)
 
 
+def test_load_centromeres_bundled():
+    cen38 = _cnv._load_centromeres("hg38")
+    cen19 = _cnv._load_centromeres("hg19")
+    assert cen38 and cen19
+    # chr8 centromere is ~45 Mb in both builds (sanity, from UCSC cytoBand)
+    assert 40_000_000 < cen38["chr8"] < 50_000_000
+    assert _cnv._load_centromeres("nonexistent_build") == {}
+
+
+def test_split_segments_by_arm_splits_and_tiles():
+    cen = _cnv._load_centromeres("hg38")
+    # one chr8 segment over rendered cols [0,200), bins uniformly spanning 0..90Mb
+    bin_starts = np.linspace(0, 90_000_000, 200)
+    out = _cnv._split_segments_by_arm([("chr8", 0, 200)], bin_starts, cen)
+    k = int((bin_starts < cen["chr8"]).sum())
+    assert out == [("chr8p", 0, k), ("chr8q", k, 200)]
+    # tiling preserved
+    assert out[0][1] == 0 and out[-1][2] == 200
+    assert sum(e - s for _, s, e in out) == 200
+
+
+def test_split_segments_by_arm_q_only_chromosome():
+    cen = _cnv._load_centromeres("hg38")
+    # all bins past the centromere -> single q-arm segment (acrocentric-like)
+    bin_starts = np.linspace(cen["chr14"] + 1, cen["chr14"] + 10_000_000, 50)
+    out = _cnv._split_segments_by_arm([("chr14", 0, 50)], bin_starts, cen)
+    assert out == [("chr14q", 0, 50)]
+
+
+def test_split_segments_by_arm_unknown_chrom_passthrough():
+    out = _cnv._split_segments_by_arm([("scaffoldX", 0, 10)], np.arange(10), {"chr1": 5})
+    assert out == [("scaffoldX", 0, 10)]
+
+
+def test_cnv_heatmap_split_arms_renders():
+    ad = pytest.importorskip("anndata")
+    matplotlib = pytest.importorskip("matplotlib")
+    matplotlib.use("Agg")
+    cnv_heatmap = _cnv.cnv_heatmap
+
+    # two chromosomes, 200 bins each; bin_meta gives genomic positions so the
+    # centromere split can land inside each chromosome.
+    n_cells = 10
+    per = 200
+    starts1 = np.linspace(0, 145_000_000, per)   # chr1 spans the centromere
+    starts8 = np.linspace(0, 145_000_000, per)   # chr8 spans the centromere
+    bin_meta = pd.DataFrame(
+        {
+            "chromosome": ["chr1"] * per + ["chr8"] * per,
+            "start": np.r_[starts1, starts8].astype(int),
+            "end": np.r_[starts1, starts8].astype(int) + 1,
+        }
+    )
+    X = np.zeros((n_cells, 2 * per), dtype="float32")
+    adata = ad.AnnData(X=np.zeros((n_cells, 5), dtype="float32"))
+    adata.obsm["X_cnv"] = X
+    adata.uns["cnv"] = {
+        "chr_pos": {"chr1": 0, "chr8": per},
+        "bin_meta": bin_meta,
+        "method": "infercnv",
+    }
+    fig, axes = cnv_heatmap(adata, backend="matplotlib", show=False,
+                            split_arms=True, genome="hg38")
+    assert set(axes) >= {"heatmap", "ideogram"}
+    # without arm split there would be 2 segments; with it, 4 (1p,1q,8p,8q)
+    fig2, _ = cnv_heatmap(adata, backend="matplotlib", show=False, split_arms=False)
+    assert fig is not None and fig2 is not None
+
+
 def test_matplotlib_backend_with_groupby_renders():
     # Regression for the `primary`->`groupby` NameError + scaffold tiling in the
     # real render path. Skips cleanly if heavy deps are unavailable.
