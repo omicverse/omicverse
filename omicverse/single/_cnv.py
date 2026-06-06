@@ -315,7 +315,7 @@ class CNV:
             kwargs["cutoff"] = _platform_cutoff[_p]
         elif platform is not None:
             raise ValueError(
-                "pass either platform= or cutoff=, not both (cutoff overrides)."
+                "pass either platform= or an explicit cutoff=, not both."
             )
 
         # inferCNV needs chromosome / start / end in adata.var.

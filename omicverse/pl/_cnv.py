@@ -135,13 +135,24 @@ def _build_chr_segments(
 _CENTROMERE_DIR = Path(__file__).parent / "_data"
 
 
-@functools.lru_cache(maxsize=4)
+_GENOME_ALIASES = {
+    "hg38": "hg38", "grch38": "hg38", "hg20": "hg38",
+    "hg19": "hg19", "grch37": "hg19",
+}
+
+
+@functools.lru_cache(maxsize=8)
 def _load_centromeres(genome: str) -> dict[str, int]:
     """Per-chromosome centromere bp for p/q arm splitting (empty if unknown).
 
-    Data vendored from UCSC ``cytoBand`` (see ``_data/README.md``).
+    Data vendored from UCSC ``cytoBand`` (see ``_data/README.md``). Only human
+    builds (hg38/GRCh38, hg19/GRCh37) are bundled; any other genome returns an
+    empty mapping so the caller falls back to whole-chromosome blocks.
     """
-    path = _CENTROMERE_DIR / f"centromere_{genome}.csv"
+    key = _GENOME_ALIASES.get(str(genome).strip().lower())
+    if key is None:
+        return {}
+    path = _CENTROMERE_DIR / f"centromere_{key}.csv"
     if not path.exists():
         return {}
     df = pd.read_csv(path)
@@ -399,7 +410,11 @@ def cnv_heatmap(
         if either is missing.
     genome : str, default 'hg38'
         Genome build for centromere coordinates when ``split_arms=True``
-        (``'hg38'`` or ``'hg19'``).
+        (``'hg38'``/``'GRCh38'`` or ``'hg19'``/``'GRCh37'``; only human builds
+        are bundled). **Must match your data** — pass the correct build, since
+        a mismatched human build mis-places arm boundaries and a non-human
+        build (e.g. mouse) is unknown so arms are silently skipped (whole
+        chromosomes drawn).
     backend : {'auto', 'marsilea', 'matplotlib'}
         ``'auto'`` picks marsilea when installed (recommended for clean
         categorical legends), else falls back to the matplotlib renderer.
