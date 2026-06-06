@@ -77,44 +77,57 @@ def _build_chr_segments(
     n_bins: int,
     *,
     standard_only: bool = True,
-) -> tuple[list[tuple[str, int, int]], slice]:
-    """Sorted [(chrom, start_bin, end_bin), ...] covering the plotted bin range.
+) -> tuple[list[tuple[str, int, int]], "slice | np.ndarray"]:
+    """Sorted [(chrom, start_bin, end_bin), ...] plus the column selector to render.
+
+    The returned segments ALWAYS tile [0, number-of-selected-columns) with no
+    holes: segment coordinates are rebased onto the compacted axis of exactly
+    the columns picked by the second return value. This holds even when
+    non-standard scaffolds / alt contigs are interleaved *between* standard
+    chromosomes — previously such interleaving left an uncovered hole in the
+    middle of the rendered range, so a chromosome past the gap rendered only
+    partially / shifted to one side.
 
     When ``standard_only`` is True (default), unplaced scaffolds / alt contigs
-    are dropped from the ideogram — they otherwise crowd the right edge of the
-    plot with thin segments labelled e.g. ``GL000220.1``. The second return
-    is the slice over X_cnv columns to render, aligned with the kept
-    chromosomes (contiguous if the kept set is contiguous in chr_pos, else a
-    boolean mask is used instead by the caller).
+    are dropped from BOTH the ideogram and the rendered columns. The second
+    return is a selector applied to the ``X_cnv`` columns: a ``slice`` when
+    nothing is dropped, else an integer index array of the kept columns.
     """
     pairs = sorted(chr_pos.items(), key=lambda kv: kv[1])
-    raw: list[tuple[str, int, int]] = []
+    spans: list[tuple[str, int, int]] = []
     for i, (chrom, start) in enumerate(pairs):
         end = pairs[i + 1][1] if i + 1 < len(pairs) else n_bins
-        raw.append((str(chrom), int(start), int(end)))
+        spans.append((str(chrom), int(start), int(end)))
 
     if not standard_only:
-        return raw, slice(0, n_bins)
+        return spans, slice(0, n_bins)
 
-    kept = [seg for seg in raw if _is_standard_chromosome(seg[0])]
+    kept = [sp for sp in spans if _is_standard_chromosome(sp[0])]
     if not kept:
-        return raw, slice(0, n_bins)
+        return spans, slice(0, n_bins)
 
-    # If the kept chromosomes are a contiguous prefix/run in raw (typical case
-    # — scaffolds come last), we can render the heatmap with a clean slice.
-    starts = [s for _, s, _ in kept]
-    ends = [e for _, _, e in kept]
-    contig_lo = min(starts)
-    contig_hi = max(ends)
-    contiguous = all(
-        seg[1] >= contig_lo and seg[2] <= contig_hi for seg in kept
-    )
-    if contiguous:
-        # Re-base segment positions to 0 so the heatmap axes start at 0.
-        rebased = [(c, s - contig_lo, e - contig_lo) for c, s, e in kept]
-        return rebased, slice(contig_lo, contig_hi)
-    # Non-contiguous (rare): caller will need to build a mask externally.
-    return kept, slice(0, n_bins)
+    # Compact to exactly the kept chromosomes' columns; rebase segment
+    # coordinates onto that compacted axis so segments tile [0, kept_width)
+    # with no holes (robust to interleaved non-standard scaffolds). The old
+    # min/max-envelope "contiguous" check was tautological and returned
+    # segments that did not tile the rendered columns when a scaffold sat
+    # between two standard chromosomes.
+    mask = np.zeros(int(n_bins), dtype=bool)
+    for _, s, e in kept:
+        mask[s:e] = True
+    col_index = np.flatnonzero(mask)
+
+    rebased: list[tuple[str, int, int]] = []
+    run = 0
+    for c, s, e in kept:
+        w = int(e - s)
+        rebased.append((c, run, run + w))
+        run += w
+    # Common case (nothing dropped): return a slice so the caller keeps a view
+    # of X_cnv instead of triggering a full-matrix copy via fancy indexing.
+    if col_index.size == n_bins:
+        return rebased, slice(0, n_bins)
+    return rebased, col_index
 
 
 def _draw_ideogram(
@@ -388,7 +401,7 @@ def cnv_heatmap(
         hm_ax.axvline(end, color="white", linewidth=0.4, alpha=0.7)
 
     # Group dividers — horizontal black lines + left-side labels.
-    if primary is not None and len(group_segs) > 1:
+    if groupby is not None and len(group_segs) > 1:
         for _, _, row_end in group_segs[:-1]:
             hm_ax.axhline(row_end, color="black", linewidth=0.8)
         for label, row_start, row_end in group_segs:

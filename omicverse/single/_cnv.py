@@ -80,7 +80,12 @@ def _check_dep(backend: str) -> None:
         "# inferCNV — reference-anchored CN matrix (uses non-tumour cells)",
         "cnv = ov.single.CNV(adata, method='infercnv')",
         "cnv.run(reference_key='cell_type', reference_cat=['T cell CD4', 'Macrophage'])",
-        "ov.pl.cnv_heatmap(adata, groupby='cnv_prediction')",
+        "ov.pl.cnv_heatmap(adata, groupby='cell_type')  # inferCNV cnv_prediction is NaN",
+        "",
+        "# inferCNV phase2/3 — HMM state calls + CNV regions + subclusters",
+        "cnv = ov.single.CNV(adata, method='infercnv')",
+        "cnv.run(reference_key='cell_type', reference_cat=['T cell CD4'], HMM=True)",
+        "ov.pl.cnv_heatmap(adata, groupby='cnv_subcluster')",
     ],
     related=["pl.cnv_heatmap", "pl.cnv_summary", "pl.cnv_umap"],
 )
@@ -163,6 +168,18 @@ class CNV:
             Stream progress logs from the underlying backend.
         **kwargs
             Forwarded to the backend (``CopykatConfig`` or ``InferCNVConfig``).
+            For ``method='infercnv'`` these reach ``InferCNVConfig`` verbatim
+            (R kwarg names preserved: ``HMM``, ``HMM_type``, ``mask_nonDE_genes``,
+            ``denoise``, ``analysis_mode``). Passing ``HMM=True`` (optionally
+            ``HMM_type='i6'|'i3'``) runs inferCNV phase 2/3 and additionally
+            writes ``obs['cnv_subcluster']``, ``obsm['X_cnv_hmm_states']``
+            (or ``'X_cnv_hmm_states_i3'``) and ``uns['cnv']['cnv_regions']``,
+            so ``ov.pl.cnv_heatmap(adata, groupby='cnv_subcluster')`` works.
+            Note: phase-3-only results (denoised matrix, Bayes posterior) are
+            NOT written back to AnnData — they stay on the returned
+            ``InferCNVResult`` (``cnv.result``). ``obs['cnv_prediction']``
+            remains NaN for inferCNV (it has no per-cell tumour/normal call;
+            threshold ``obs['cnv_score']`` yourself if you need one).
 
         Returns
         -------
