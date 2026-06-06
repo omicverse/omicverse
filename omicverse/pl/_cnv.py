@@ -138,6 +138,7 @@ _CENTROMERE_DIR = Path(__file__).parent / "_data"
 _GENOME_ALIASES = {
     "hg38": "hg38", "grch38": "hg38", "hg20": "hg38",
     "hg19": "hg19", "grch37": "hg19",
+    "mm10": "mm10", "grcm38": "mm10",
 }
 
 
@@ -145,8 +146,8 @@ _GENOME_ALIASES = {
 def _load_centromeres(genome: str) -> dict[str, int]:
     """Per-chromosome centromere bp for p/q arm splitting (empty if unknown).
 
-    Data vendored from UCSC ``cytoBand`` (see ``_data/README.md``). Only human
-    builds (hg38/GRCh38, hg19/GRCh37) are bundled; any other genome returns an
+    Data vendored under ``_data/`` (see its README + ``generate_centromeres.py``).
+    Bundled: hg38/GRCh38, hg19/GRCh37, mm10/GRCm38. Any other genome returns an
     empty mapping so the caller falls back to whole-chromosome blocks.
     """
     key = _GENOME_ALIASES.get(str(genome).strip().lower())
@@ -409,12 +410,12 @@ def cnv_heatmap(
         centromere table for ``genome``; falls back to whole-chromosome blocks
         if either is missing.
     genome : str, default 'hg38'
-        Genome build for centromere coordinates when ``split_arms=True``
-        (``'hg38'``/``'GRCh38'`` or ``'hg19'``/``'GRCh37'``; only human builds
-        are bundled). **Must match your data** — pass the correct build, since
-        a mismatched human build mis-places arm boundaries and a non-human
-        build (e.g. mouse) is unknown so arms are silently skipped (whole
-        chromosomes drawn).
+        Genome build for centromere coordinates when ``split_arms=True``.
+        Bundled: ``'hg38'``/``'GRCh38'``, ``'hg19'``/``'GRCh37'``,
+        ``'mm10'``/``'GRCm38'`` (add more via ``_data/generate_centromeres.py``).
+        **Must match your data** — a mismatched build mis-places arm boundaries,
+        and an unknown build is silently skipped (whole chromosomes drawn). Note
+        mouse (mm10) is telocentric, so its p arm is negligible.
     backend : {'auto', 'marsilea', 'matplotlib'}
         ``'auto'`` picks marsilea when installed (recommended for clean
         categorical legends), else falls back to the matplotlib renderer.
