@@ -146,6 +146,7 @@ from ._velo import (
     velocity_effect,
 )
 from ._milo_dev import Milo
+from ._augur import Augur
 from ._markers import find_markers, get_markers
 from ._perturb import PerturbResult, perturb, lineage_pseudotime
 from ._dynamic_features import DynamicFeaturesResult, dynamic_features
@@ -436,6 +437,7 @@ __all__ = [
     'Annotation',   # cell type annotation
     'AnnotationRef', # cell type annotation with reference
     'Milo',
+    'Augur',
     # Marker gene utilities
     'find_markers',
     'get_markers',
