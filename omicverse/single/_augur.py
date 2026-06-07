@@ -341,8 +341,8 @@ def _calculate_auc(
         if X_ct.shape[0] >= 1000 and var_quantile < 1.0:
             X_ct = _select_variance(X_ct, var_quantile, filter_negative_residuals=False)
 
-        rng = np.random.default_rng(seed)
         for subsample_idx in range(1, n_iter + 1):
+            rng = np.random.default_rng(seed)
 
             if augur_mode == "permute":
                 perm_rng = np.random.default_rng(subsample_idx)
