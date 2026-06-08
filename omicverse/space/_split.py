@@ -232,7 +232,34 @@ def split_purify(
     chunk_size: int = 50000,
     copy: bool = False,
 ):
-    """Purify spatial transcript counts with generic SPLIT inputs."""
+    """Purify spatial transcript counts with generic SPLIT inputs.
+
+    Parameters
+    ----------
+    adata
+        AnnData object containing raw counts.
+    deconvolution_weights
+        Deconvolution weights with shape `(n_obs, n_cell_types)`.
+    reference
+        Reference profile matrix in `(cell_type, gene)` format.
+    primary_cell_type
+        Optional primary labels; if `None`, inferred from max weight.
+    layer
+        Input count layer name. Use `None` or `"X"` for `adata.X`.
+    result_layer
+        Output layer name to store purified counts.
+    cells_to_purify
+        Optional list-like of cells to purify; unselected cells remain raw.
+    chunk_size
+        Internal block size for large matrices.
+    copy
+        If True, returns a copied object; otherwise operates in-place.
+
+    Returns
+    -------
+    AnnData or None
+        Updated AnnData when `copy=True`, else in-place with `None` return.
+    """
     target = adata.copy() if copy else adata
     inputs = _prepare_inputs(target, deconvolution_weights, reference, primary_cell_type, layer)
     weights = _identity_rows_for_unselected(_normalize_weights(inputs.weights), inputs.primary, cells_to_purify)
