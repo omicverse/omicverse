@@ -66,6 +66,7 @@ from ._tools import *
 from ._commot import create_communication_anndata,update_classification_from_database
 from ._tissue_zones import nmf_tissue_zones, TissueZones
 from ._deconvolution import Deconvolution,calculate_gene_signature
+from ._split import split_balance, split_purify, split_reassign_residuals, split_spatial_score
 
 _TORCH_DEPS = ("torch", "torch_geometric")
 
@@ -146,4 +147,8 @@ __all__ = [
     # Spatial deconvolution
     'Deconvolution',
     'calculate_gene_signature',
+    'split_purify',
+    'split_spatial_score',
+    'split_balance',
+    'split_reassign_residuals',
 ]
