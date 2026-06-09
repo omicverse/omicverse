@@ -40,6 +40,7 @@ from sklearn.utils import check_random_state
 from statsmodels.nonparametric.smoothers_lowess import lowess as _lowess_c
 
 from .._registry import register_function
+from ..pl._palette import sc_color as _sc_color
 
 # ---------------------------------------------------------------------------
 # Feature selection
@@ -59,23 +60,38 @@ def _select_random(mat, feature_perc=0.5, rng=None):
 
 
 def _select_variance(mat, var_quantile=0.5, filter_negative_residuals=False):
-    """Feature selection by variance (port of R ``select_variance``)."""
+    """Feature selection by variance (port of R ``select_variance``).
+
+    Computes standard deviations on sparse matrices without densifying;
+    only the surviving rows are converted to dense for loess fitting.
+    """
+    n_genes, n_cells = mat.shape
+
+    # Compute per-gene mean and std without full densification
     if sparse.issparse(mat):
-        mat_dense = mat.toarray()
+        means = np.asarray(mat.mean(axis=1)).flatten()
+        sq_means = np.asarray(mat.power(2).mean(axis=1)).flatten()
+        sds = np.sqrt(np.maximum(sq_means - means ** 2, 0) * n_cells / (n_cells - 1))
     else:
         mat_dense = np.asarray(mat, dtype=np.float64)
+        means = np.mean(mat_dense, axis=1)
+        sds = np.std(mat_dense, axis=1, ddof=1)
 
-    sds = np.std(mat_dense, axis=1, ddof=1)
     sds = np.where(np.isnan(sds), 0.0, sds)
-
     mask = sds > 0
-    mat_sub = mat_dense[mask, :]
-    del mat_dense
 
     if var_quantile >= 1.0 and not filter_negative_residuals:
-        return mat_sub
+        if sparse.issparse(mat):
+            return mat[mask, :]
+        return np.asarray(mat, dtype=np.float64)[mask, :]
 
-    means = np.mean(mat_sub, axis=1)
+    # Only densify the rows that pass the non-zero-SD filter
+    if sparse.issparse(mat):
+        mat_sub = mat[mask, :].toarray()
+    else:
+        mat_sub = np.asarray(mat, dtype=np.float64)[mask, :]
+
+    means = means[mask]
     sds_sub = sds[mask]
     cvs = means / sds_sub
 
@@ -103,8 +119,9 @@ def _select_variance(mat, var_quantile=0.5, filter_negative_residuals=False):
 
     if sparse.issparse(mat):
         result_indices = np.where(mask)[0][keep][keep_genes]
-        return mat[result_indices, :]
-    return mat_sub[keep, :][keep_genes, :]
+        return mat[result_indices, :], result_indices
+    result_indices = np.where(mask)[0][keep][keep_genes]
+    return mat_sub[keep, :][keep_genes, :], result_indices
 
 
 def _loess(x, y, span=0.75):
@@ -212,22 +229,25 @@ class _FastRandomForest:
 
 
 def _extract_input(input, meta, label_col, cell_type_col):
-    """Extract expression matrix (genes x cells), cell types, and labels."""
+    """Extract expression matrix (genes x cells), cell types, labels, and gene names."""
     if hasattr(input, "obs") and hasattr(input, "X"):
         meta = input.obs
         expr = input.X.T
         if sparse.issparse(expr):
             expr = expr.tocsr()
-        return expr, meta[cell_type_col].values, meta[label_col].values
+        gene_names = np.array(input.var_names.tolist())
+        return expr, meta[cell_type_col].values, meta[label_col].values, gene_names
     if isinstance(input, pd.DataFrame):
         expr = input.values
+        gene_names = np.array(input.columns.tolist())
     elif sparse.issparse(input) or isinstance(input, np.ndarray):
         expr = input
+        gene_names = np.array([f"gene_{i}" for i in range(expr.shape[0])])
     else:
         raise ValueError("Unsupported input type")
     if meta is None:
         raise ValueError("Must provide metadata if not supplying AnnData")
-    return expr, meta[cell_type_col].values, meta[label_col].values
+    return expr, meta[cell_type_col].values, meta[label_col].values, gene_names
 
 
 def _is_numeric(arr):
@@ -260,9 +280,10 @@ def _compute_classification_metrics(y_true, y_pred, y_prob, classes, multiclass)
             )
         else:
             pos_idx = np.where(classes == np.unique(y_true)[1])[0][0]
-            metrics["roc_auc"] = roc_auc_score(
+            auc_val = roc_auc_score(
                 y_true, y_prob[:, pos_idx], labels=classes,
             )
+            metrics["roc_auc"] = max(auc_val, 1 - auc_val)
     except ValueError:
         metrics["roc_auc"] = np.nan
     metrics["accuracy"] = np.mean(y_true == y_pred)
@@ -280,7 +301,6 @@ def _calculate_auc(
     min_cells=None,
     var_quantile=0.5,
     feature_perc=0.5,
-    n_threads=4,
     augur_mode="default",
     classifier="rf",
     rf_params=None,
@@ -301,7 +321,7 @@ def _calculate_auc(
     elif augur_mode == "permute" and n_subsamples < 100:
         n_subsamples = 500
 
-    expr, cell_types, labels = _extract_input(input, meta, label_col, cell_type_col)
+    expr, cell_types, labels, gene_names = _extract_input(input, meta, label_col, cell_type_col)
 
     if len(np.unique(labels)) < 2:
         raise ValueError(f"Need at least 2 labels, got {len(np.unique(labels))}")
@@ -328,6 +348,7 @@ def _calculate_auc(
         ct_mask = cell_types == ct
         y_ct = labels[ct_mask]
         X_ct = expr[:, ct_mask]
+        gene_idx = np.arange(X_ct.shape[0])
 
         if mode == "classification":
             min_count = min(np.sum(y_ct == lab) for lab in np.unique(y_ct))
@@ -339,10 +360,11 @@ def _calculate_auc(
             continue
 
         if X_ct.shape[0] >= 1000 and var_quantile < 1.0:
-            X_ct = _select_variance(X_ct, var_quantile, filter_negative_residuals=False)
+            X_ct, var_indices = _select_variance(X_ct, var_quantile, filter_negative_residuals=False)
+            gene_idx = gene_idx[var_indices]
 
         for subsample_idx in range(1, n_iter + 1):
-            rng = np.random.default_rng(seed)
+            rng = np.random.default_rng(seed + subsample_idx)
 
             if augur_mode == "permute":
                 perm_rng = np.random.default_rng(subsample_idx)
@@ -351,25 +373,35 @@ def _calculate_auc(
                 y_ct_iter = y_ct.copy()
 
             if n_subsamples < 1:
-                X_sub = (
-                    _select_random(X_ct, feature_perc, rng=rng)
-                    if X_ct.shape[0] >= 1000 and feature_perc < 1.0
-                    else X_ct
-                )
+                if X_ct.shape[0] >= 1000 and feature_perc < 1.0:
+                    n_keep = int(X_ct.shape[0] * feature_perc)
+                    keep = rng.choice(X_ct.shape[0], size=n_keep, replace=False)
+                    keep.sort()
+                    X_sub = X_ct[keep, :]
+                    sub_gene_idx = gene_idx[keep]
+                else:
+                    X_sub = X_ct
+                    sub_gene_idx = gene_idx
                 y_sub = y_ct_iter
             else:
                 subsample_idxs = _stratified_subsample(y_ct_iter, subsample_size, mode, rng)
                 y_sub = y_ct_iter[subsample_idxs]
-                X_feat = (
-                    _select_random(X_ct, feature_perc, rng=rng)
-                    if X_ct.shape[0] >= 1000 and feature_perc < 1.0
-                    else X_ct
-                )
+                if X_ct.shape[0] >= 1000 and feature_perc < 1.0:
+                    n_keep = int(X_ct.shape[0] * feature_perc)
+                    keep = rng.choice(X_ct.shape[0], size=n_keep, replace=False)
+                    keep.sort()
+                    X_feat = X_ct[keep, :]
+                    feat_gene_idx = gene_idx[keep]
+                else:
+                    X_feat = X_ct
+                    feat_gene_idx = gene_idx
                 X_sub = X_feat[:, subsample_idxs]
                 if sparse.issparse(X_sub):
                     X_sub = X_sub.toarray()
-                col_vars = np.var(X_sub, axis=0, ddof=1)
-                X_sub = X_sub[:, col_vars > 0]
+                col_vars = np.var(X_sub, axis=1, ddof=1)
+                var_mask = col_vars > 0
+                X_sub = X_sub[var_mask, :]
+                sub_gene_idx = feat_gene_idx[var_mask]
 
             if sparse.issparse(X_sub):
                 X_sub = X_sub.toarray()
@@ -386,7 +418,6 @@ def _calculate_auc(
                 X_train, X_test = X_df[train_idx], X_df[test_idx]
                 y_train, y_test = y_sub[train_idx], y_sub[test_idx]
 
-                np.random.seed(1)
                 if classifier == "rf":
                     model = _FastRandomForest(
                         n_estimators=rf_params["trees"],
@@ -435,7 +466,8 @@ def _calculate_auc(
                     for g_idx in range(X_df.shape[1]):
                         all_importances.append({
                             "cell_type": ct, "subsample_idx": subsample_idx,
-                            "fold": fold_idx + 1, "gene": f"gene_{g_idx}",
+                            "fold": fold_idx + 1,
+                            "gene": gene_names[sub_gene_idx[g_idx]],
                             "importance": importances[g_idx],
                         })
 
@@ -463,7 +495,7 @@ def _calculate_auc(
         "parameters": {
             "n_subsamples": n_subsamples, "subsample_size": subsample_size,
             "folds": folds, "min_cells": min_cells, "var_quantile": var_quantile,
-            "feature_perc": feature_perc, "n_threads": n_threads,
+            "feature_perc": feature_perc,
             "classifier": classifier,
             "rf_params": rf_params if classifier == "rf" else None,
             "lr_params": lr_params if classifier == "lr" else None,
@@ -579,17 +611,6 @@ def _calculate_differential_prioritization(
 # Plotting helpers  (omicverse style: sc_color, fontsize=14, clean spines)
 # ---------------------------------------------------------------------------
 
-# ov default 28-color categorical palette
-_sc_color = [
-    '#1F577B', '#A56BA7', '#E0A7C8', '#E069A6', '#941456',
-    '#FCBC10', '#EF7B77', '#279AD7', '#F0EEF0',
-    '#EAEFC5', '#7CBB5F', '#368650', '#A499CC', '#5E4D9A',
-    '#78C2ED', '#866017', '#9F987F', '#E0DFED',
-    '#01A0A7', '#75C8CC', '#F0D7BC', '#D5B26C', '#D5DA48',
-    '#B6B812', '#9DC3C3', '#A89C92', '#FEE00C', '#FEF2A1',
-]
-
-
 def _add_arrow(ax, coords, fontsize=12, x_label="UMAP1", y_label="UMAP2",
                arrow_scale=10, arrow_width=0.01):
     """Draw axis arrows at bottom-left corner (ov ``add_arrow`` pattern)."""
@@ -661,9 +682,10 @@ def _plot_lollipop(augur_results, *, top_n=None, figsize=(4, 6), fontsize=14,
     if title is not None:
         ax.set_title(title, fontsize=fontsize + 1, fontweight="bold")
     for i, (_, row) in enumerate(auc_df.iterrows()):
-        ax.text(row[metric_col] + 0.01, i, "%.3f" % row[metric_col],
+        ax.text(row[metric_col] + 0.01, row["cell_type"], "%.3f" % row[metric_col],
                 va="center", fontsize=fontsize - 4)
-    ax.set_xlim(0, auc_df[metric_col].max() * 1.15)
+    xmin = min(0, auc_df[metric_col].min())
+    ax.set_xlim(xmin, auc_df[metric_col].max() * 1.15)
     _apply_ov_style(ax, fontsize)
 
     if save:

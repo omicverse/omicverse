@@ -154,3 +154,36 @@ class TestAugur:
         params = augur.result["parameters"]
         assert params["feature_perc"] == 1.0
         assert params["var_quantile"] == 1.0
+
+    def test_run_differential(self, sample_adata, adata2):
+        """run_differential returns DataFrame with expected columns."""
+        import matplotlib.pyplot as plt
+
+        augur = ov.single.Augur(
+            sample_adata, label_col="label", cell_type_col="cell_type",
+        )
+        augur.run(n_subsamples=3, subsample_size=10, folds=2)
+        dp = augur.run_differential(adata2, n_subsamples=3, subsample_size=10,
+                                    folds=2, n_permutations=10)
+        assert isinstance(dp, pd.DataFrame)
+        for col in ("cell_type", "auc.x", "auc.y", "delta_auc", "pval", "padj"):
+            assert col in dp.columns
+        assert len(dp) > 0
+        plt.close("all")
+
+    def test_plot_scatterplot(self, sample_adata):
+        """plot_scatterplot returns a figure and axes."""
+        import matplotlib.pyplot as plt
+
+        augur1 = ov.single.Augur(
+            sample_adata, label_col="label", cell_type_col="cell_type", seed=42,
+        )
+        augur1.run(n_subsamples=3, subsample_size=10, folds=2)
+        augur2 = ov.single.Augur(
+            sample_adata.copy(), label_col="label", cell_type_col="cell_type", seed=99,
+        )
+        augur2.run(n_subsamples=3, subsample_size=10, folds=2)
+        fig, ax = augur1.plot_scatterplot(augur2)
+        assert fig is not None
+        assert ax is not None
+        plt.close("all")
