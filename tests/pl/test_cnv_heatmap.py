@@ -12,6 +12,9 @@ import numpy as np
 import pandas as pd
 import pytest
 
+matplotlib = pytest.importorskip("matplotlib")
+matplotlib.use("Agg")
+
 _cnv = pytest.importorskip("omicverse.pl._cnv")
 _build_chr_segments = _cnv._build_chr_segments
 
