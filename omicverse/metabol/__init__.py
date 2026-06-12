@@ -101,7 +101,7 @@ _LAZY_ATTRS: dict[str, tuple[str, str]] = {
     "plsda":                  ("._plsda", "plsda"),
     "opls_da":                ("._plsda", "opls_da"),
     "PLSDAResult":            ("._plsda", "PLSDAResult"),
-    # Pathway enrichment (scipy.stats + vendored gseapy)
+    # Pathway enrichment (scipy.stats + NumPy pre-ranked GSEA)
     "msea_ora":               ("._msea", "msea_ora"),
     "msea_gsea":              ("._msea", "msea_gsea"),
     "load_pathways":          ("._msea", "load_pathways"),

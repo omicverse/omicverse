@@ -24,7 +24,7 @@ import matplotlib.gridspec as gridspec
 from matplotlib.colors import LinearSegmentedColormap
 import networkx as nx
 
-from ..gseapy.plot import dotplot
+from ...bulk._enrich_plot import dotplot
 
 
 from pandas.api.types import is_numeric_dtype
@@ -3908,7 +3908,7 @@ class pyWGCNA(GeneExp):
 
         if type in ["GO", "KEGG"]:
             try:
-                from ..gseapy import enrichr
+                from ...bulk._ora import enrichr
                 enr = enrichr(gene_list=geneModule,
                                  gene_sets=sets,
                                  organism=self.species,

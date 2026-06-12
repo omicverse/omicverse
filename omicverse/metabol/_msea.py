@@ -5,9 +5,10 @@ Two enrichment flavours, both keyed off KEGG-compound pathway membership:
 1. **ORA** (over-representation analysis) — classic Fisher's-exact on
    a pre-selected hit list vs the background universe. Fast, no
    ranking needed.
-2. **GSEA-style** — full ranked-list enrichment via ``gseapy.prerank``.
+2. **GSEA-style** — full ranked-list enrichment via omicverse's own
+   single-process NumPy pre-ranked GSEA (``ov.bulk._gsea_numpy``).
    Uses the Welch-t statistic (or any user-supplied metric) as the
-   ranking; output schema matches ``gseapy.GSEA``.
+   ranking; the output schema matches the classic GSEA report.
 
 Both use the local pathway table at
 ``omicverse/metabol/data/kegg_pathways.csv`` by default, and translate
@@ -206,7 +207,7 @@ def msea_ora(
         'MSEA',
     ],
     category='metabolomics',
-    description='GSEA-style ranked enrichment of metabolites against KEGG pathways (vendored gseapy prerank backend).',
+    description='GSEA-style ranked enrichment of metabolites against KEGG pathways (NumPy pre-ranked GSEA backend).',
     examples=[
         "ov.metabol.msea_gsea(deg, stat_col='stat', n_perm=1000)",
     ],
@@ -226,7 +227,7 @@ def msea_gsea(
     seed: int = 0,
     mass_db: Optional[pd.DataFrame] = None,
 ) -> pd.DataFrame:
-    """GSEA-style ranked enrichment via ``gseapy.prerank``.
+    """GSEA-style ranked enrichment via omicverse's NumPy pre-ranked GSEA.
 
     Parameters
     ----------
@@ -253,16 +254,10 @@ def msea_gsea(
         Columns: ``Term``, ``NES``, ``NOM p-val``, ``FDR q-val``,
         ``ES``, ``Lead_genes`` (metabolites driving the enrichment).
     """
-    # Use the vendored gseapy that ships inside omicverse.external so we
-    # don't pin a separate top-level dependency (avoids version conflicts
-    # with other GSEA-using modules).
-    try:
-        from ..external.gseapy import prerank as _prerank
-    except ImportError as exc:  # pragma: no cover
-        raise ImportError(
-            "msea_gsea requires omicverse.external.gseapy — this should "
-            "be bundled with omicverse; reinstall if missing."
-        ) from exc
+    # omicverse's own single-process NumPy pre-ranked GSEA (no gseapy / no
+    # loky process pool that could dead-lock). Enrichment scores are identical
+    # to gseapy's (same Subramanian 2005 algorithm).
+    from ..bulk._gsea_numpy import prerank as _prerank
 
     if pathways is None:
         pathways = load_pathways()
@@ -285,9 +280,19 @@ def msea_gsea(
 
     result = _prerank(
         rnk=rnk, gene_sets=pathways, min_size=min_size, max_size=max_size,
-        permutation_num=n_perm, outdir=None, seed=seed, no_plot=True, verbose=False,
+        permutation_num=n_perm, seed=seed,
     )
-    out = result.res2d.reset_index(drop=True) if hasattr(result, "res2d") else pd.DataFrame()
+    if not hasattr(result, "res2d") or result.res2d.empty:
+        return pd.DataFrame()
+    # Map the NumPy backend's column names onto the gseapy-style schema this
+    # function has always returned (Term, ES, NES, NOM p-val, FDR q-val,
+    # Lead_genes) so downstream callers/plots are unchanged.
+    out = result.res2d.reset_index().rename(columns={
+        "es": "ES", "nes": "NES", "pval": "NOM p-val",
+        "fdr": "FDR q-val", "lead_genes": "Lead_genes",
+    })
+    keep = ["Term", "ES", "NES", "NOM p-val", "FDR q-val", "Lead_genes"]
+    out = out[[c for c in keep if c in out.columns]].reset_index(drop=True)
     return out
 
 

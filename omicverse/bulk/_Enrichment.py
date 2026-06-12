@@ -92,12 +92,11 @@ def geneset_enrichment(gene_list:list,pathways_dict:dict,
         Enrichment result table with statistics and derived plotting columns.
     """
     pathways_dict = _resolve_genesets(pathways_dict, organism)
-    from ..external.gseapy import enrichr
-    # ``background=None`` is now passed straight through to the bundled
-    # gseapy fork. Its ``Enrichr.enrich`` resolves a None background to the
-    # union of genes in ``pathways_dict`` (matches upstream gseapy's
-    # ``parse_background``), avoiding the brittle Ensembl BioMart MySQL
-    # query the previous default triggered.
+    from ._ora import enrichr
+    # omicverse's own single-process hypergeometric ORA (``_ora``). A
+    # ``background=None`` resolves to the union of genes in ``pathways_dict``
+    # (matches upstream gseapy's ``parse_background``), avoiding the brittle
+    # Ensembl BioMart MySQL query the previous default triggered.
     enr = enrichr(gene_list=gene_list,
                  gene_sets=pathways_dict,
                  organism=organism, # don't forget to set organism to the one you desired! e.g. Yeast
@@ -168,14 +167,15 @@ def geneset_enrichment_GSEA(gene_rnk:pd.DataFrame,pathways_dict:dict,
     ----------
         gene_rnk: Pre-ranked correlation table / pandas DataFrame (the GSEA ``.rnk`` input).
         pathways_dict: Gene sets — a dict, a ``.gmt``/``.txt`` path, or an Enrichr library name.
-        processes: Worker processes for the ``'gseapy'`` backend only (default 1).
+        processes: Deprecated/ignored (the NumPy backend is single-process).
         permutation_num: Permutations for the significance null. (1000)
         outdir: Output directory (kept for backward compatibility).
         format: Matplotlib figure format.
         seed: Random seed.
-        backend: ``'numpy'`` (default) — fast single-process pure-NumPy GSEA
-            (no multiprocessing dead-locks); or ``'gseapy'`` — the legacy
-            joblib/loky backend.
+        backend: ``'numpy'`` (default and only option) — fast single-process
+            pure-NumPy GSEA (no multiprocessing dead-locks). The legacy
+            ``'gseapy'`` backend has been removed; any other value warns and
+            falls back to NumPy.
         weight: Enrichment-score weighting exponent (1.0 = classic weighted GSEA).
         min_size, max_size: Keep gene sets whose matched size is in this range.
 
@@ -192,18 +192,16 @@ def geneset_enrichment_GSEA(gene_rnk:pd.DataFrame,pathways_dict:dict,
     match gseapy exactly (validated, ES Pearson r = 1.0).
     """
     pathways_dict = _resolve_genesets(pathways_dict, organism)
-    if backend == 'numpy':
-        from ._gsea_numpy import prerank as _prerank_numpy
-        return _prerank_numpy(gene_rnk, pathways_dict,
-                              permutation_num=permutation_num, weight=weight,
-                              min_size=min_size, max_size=max_size, seed=seed)
-    from ..external.gseapy import prerank
-    pre_res = prerank(rnk=gene_rnk, gene_sets=pathways_dict,
-                     processes=processes,
-                     permutation_num=permutation_num,
-                     outdir=outdir, format=format, seed=seed,
-                     min_size=min_size, max_size=max_size)
-    return pre_res
+    if backend != 'numpy':
+        import warnings
+        warnings.warn(
+            "The 'gseapy' GSEA backend has been removed (it relied on a "
+            "joblib/loky process pool that could dead-lock); using the "
+            "single-process NumPy backend instead.", stacklevel=2)
+    from ._gsea_numpy import prerank as _prerank_numpy
+    return _prerank_numpy(gene_rnk, pathways_dict,
+                          permutation_num=permutation_num, weight=weight,
+                          min_size=min_size, max_size=max_size, seed=seed)
 
 
 @register_function(
@@ -636,8 +634,7 @@ class pyGSEA(object):
         matplotlib.figure.Figure
             Figure containing the GSEA running score plot.
         """
-        from ..external.gseapy.plot import GSEAPlot
-        #from gseapy.plot import GSEAPlot
+        from ._enrich_plot import GSEAPlot
         terms = self.enrich_res.index
         g = GSEAPlot(
         rank_metric=self.pre_res.ranking, term=terms[term_num],figsize=figsize,cmap=cmap,
