@@ -2907,7 +2907,7 @@ class VIA:
         locallytrimmed_g.vs['color'] = [pal.get(i)[0:3] for i in scaled_hitting_times]
 
         self.group_color = [colors.to_hex(v) for v in locallytrimmed_g.vs['color']]  # based on ygb scale
-        viridis_cmap = cm.get_cmap('viridis_r')
+        viridis_cmap = plt.get_cmap('viridis_r')
 
         self.group_color_cmap = [colors.to_hex(v) for v in
                                  viridis_cmap(scaled_hitting_times / 1000)]  # based on ygb scale
