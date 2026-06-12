@@ -44,27 +44,47 @@ def _lcm_(cdf, idxs):
 
 
 def _touch_diffs_(part1, part2, touchpoints):
-    diff = np.abs((part2[touchpoints] - part1[touchpoints]))
+    diff = np.abs(part2[touchpoints] - part1[touchpoints])
     return diff.max(), diff
 
 
 def diptst(dat, is_hist=False, numt=1000):
-    """diptest with pval"""
-    # sample dip
+    """
+    diptest with pval.
+
+    Parameters
+    ----------
+    dat : array-like
+        One-dimensional sample values, or histogram bin counts when
+        ``is_hist=True``.
+    is_hist : bool
+        Whether ``dat`` is a histogram (equidistant bins).
+    numt : int
+        Number of uniform bootstrap samples. Default 1000 gives ~0.001
+        p-value resolution; 200 is sufficient for bimodality screening.
+
+    Returns
+    -------
+    d : float
+        Dip statistic.
+    pval : float or None
+        Approximate p-value from bootstrap.
+    indices : tuple
+        Modal interval indices.
+    """
     d, (_, idxs, left, _, right, _) = dip_fn(dat, is_hist)
 
     # simulate from null uniform
     unifs = np.random.uniform(size=numt * idxs.shape[0]).reshape([numt, idxs.shape[0]])
     unif_dips = np.apply_along_axis(dip_fn, 1, unifs, is_hist, True)
 
-    # count dips greater or equal to d, add 1/1 to prevent a pvalue of 0
     pval = (
         None
         if unif_dips.sum() == 0
         else (np.less(d, unif_dips).sum() + 1) / (float(numt) + 1.0)
     )
 
-    return (d, pval, (len(left) - 1, len(idxs) - len(right)))  # dip, pvalue  # indices
+    return (d, pval, (len(left) - 1, len(idxs) - len(right)))
 
 
 def dip_fn(dat, is_hist=False, just_dip=False):
@@ -77,10 +97,9 @@ def dip_fn(dat, is_hist=False, just_dip=False):
         idxs = np.arange(len(histogram))
     else:
         counts = collections.Counter(dat)
-        idxs = np.msort(list(counts.keys()))
+        idxs = np.sort(list(counts.keys()))
         histogram = np.array([counts[i] for i in idxs])
 
-    # check for case 1<N<4 or all identical values
     if len(idxs) <= 4 or idxs[0] == idxs[-1]:
         left = []
         right = [1]

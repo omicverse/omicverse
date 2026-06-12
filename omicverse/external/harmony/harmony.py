@@ -22,6 +22,7 @@ from sklearn.cluster import KMeans
 import logging
 from datetime import datetime
 from tqdm import tqdm
+from ..._optional import normalize_torch_device
 
 logger = logging.getLogger('harmonypy')
 logger.addHandler(logging.NullHandler())
@@ -53,10 +54,12 @@ def get_device(device=None):
     the standard CUDA > CPU fallback.
     """
     if device is not None:
-        return device if device == "mlx" else torch.device(device)
+        if device == "mlx":
+            return device
+        return normalize_torch_device(device)
 
     if torch.cuda.is_available():
-        return torch.device('cuda')
+        return normalize_torch_device("cuda")
     elif hasattr(torch.backends, 'mps') and torch.backends.mps.is_available():
         if _mlx_available():
             return "mlx"

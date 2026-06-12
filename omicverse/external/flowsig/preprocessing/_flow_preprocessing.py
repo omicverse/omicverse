@@ -132,6 +132,41 @@ def determine_spatially_flowing_vars(adata: sc.AnnData,
                                     library_key: str = None,
                                     n_perms: int = None,
                                     n_jobs: int = None):
+    try:
+        __import__("pkg_resources")
+    except ModuleNotFoundError:
+        import importlib.resources
+        import sys
+        import types
+        from importlib.metadata import PackageNotFoundError, distribution
+
+        module = types.ModuleType("pkg_resources")
+        module.DistributionNotFound = PackageNotFoundError
+
+        def get_distribution(name: str):
+            dist = distribution(name)
+            return types.SimpleNamespace(version=dist.version, project_name=dist.metadata["Name"])
+
+        def resource_filename(package_or_requirement: str, resource_name: str) -> str:
+            return str(importlib.resources.files(package_or_requirement).joinpath(resource_name))
+
+        def declare_namespace(_package_name: str) -> None:
+            return None
+
+        def require(*_requirements):
+            return []
+
+        def iter_entry_points(*_args, **_kwargs):
+            return iter(())
+
+        module.get_distribution = get_distribution
+        module.resource_filename = resource_filename
+        module.declare_namespace = declare_namespace
+        module.require = require
+        module.working_set = []
+        module.iter_entry_points = iter_entry_points
+        sys.modules["pkg_resources"] = module
+
     import squidpy as sq
     # Get the flow info
     flow_var_info = adata.uns[flowsig_network_key]['flow_var_info']

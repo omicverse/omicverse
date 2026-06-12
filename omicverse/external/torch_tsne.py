@@ -36,6 +36,8 @@ from typing import Optional
 import numpy as np
 import torch
 
+from .._optional import normalize_torch_device
+
 
 # ---------------------------------------------------------------------------
 # Perplexity-tuned Gaussian affinities
@@ -181,10 +183,7 @@ def tsne_gpu(
     proper Student-t long tails) at GPU speed. Z normaliser is estimated
     each iteration from ``z_sample_size`` random pairs.
     """
-    if device is None:
-        device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-    else:
-        device = torch.device(device)
+    device = normalize_torch_device(device)
 
     if isinstance(X, np.ndarray):
         X_t = torch.from_numpy(np.ascontiguousarray(X, dtype=np.float32)).to(device)

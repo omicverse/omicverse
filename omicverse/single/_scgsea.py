@@ -404,8 +404,7 @@ def pathway_enrichment(adata, pathways_dict,organism='Human',group_by='louvain',
         https://scanpy-tutorials.readthedocs.io/en/latest/pbmc3k.html#Gene-set-enrichment-analysis.
     """
 
-    #import gseapy as gp
-    from ..external.gseapy import enrichr
+    from ..bulk._ora import enrichr
     df_list = []
     cluster_list = []
     celltypes = sorted(adata.obs[group_by].unique())
@@ -468,7 +467,7 @@ def pathway_enrichment(adata, pathways_dict,organism='Human',group_by='louvain',
     enrich_res['logc']=np.log(enrich_res['Odds Ratio'])
     enrich_res['num']=[int(i.split('/')[0]) for i in enrich_res['Overlap']]
     enrich_res['fraction']=[int(i.split('/')[0])/int(i.split('/')[1]) for i in enrich_res['Overlap']]
-    add_reference(adata,'GSEApy','pathway enrichment analysis with gseapy')
+    add_reference(adata,'Enrichr','pathway over-representation analysis (hypergeometric test)')
     
     return enrich_res
 

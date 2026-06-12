@@ -26,6 +26,8 @@ import numpy as np
 import torch
 from scipy import sparse
 
+from .._optional import normalize_torch_device
+
 
 _CHUNK_CAP = 4096  # caps the (Q, N) distance buffer; 4096*1M*4B = 16 GB
 
@@ -72,6 +74,7 @@ def _chunked_knn_l2(X, k, device, chunk_size=None, include_self=True, return_ten
     indices : np.ndarray (N, k) int64
     distances : np.ndarray (N, k) float32
     """
+    device = normalize_torch_device(device, fallback_to_cpu=True)
     n_samples, n_features = X.shape
     Y = X if X.device == device else X.to(device, non_blocking=True)
     y_normsq = (Y * Y).sum(dim=1)  # (N,)
@@ -183,10 +186,7 @@ def pyg_knn_search(X, k=15, device="cuda", chunk_size=None, include_self=True, b
         chunk_size = int(chunk_size)
     if batch_size is not None:
         batch_size = int(batch_size)
-    if isinstance(device, str):
-        device = torch.device(device)
-    if device.type == "cuda" and not torch.cuda.is_available():
-        device = torch.device("cpu")
+    device = normalize_torch_device(device, fallback_to_cpu=True)
 
     if isinstance(X, np.ndarray):
         X_torch = torch.from_numpy(np.ascontiguousarray(X, dtype=np.float32))
@@ -232,10 +232,8 @@ class TorchKNNTransformer:
             )
         self.n_neighbors = n_neighbors
         self.metric = metric
-        if device == "auto":
-            self.device = "cuda" if torch.cuda.is_available() else "cpu"
-        else:
-            self.device = device
+        normalized_device = None if device == "auto" else device
+        self.device = normalize_torch_device(normalized_device, fallback_to_cpu=True)
 
     def fit(self, X, y=None):
         return self

@@ -17,6 +17,7 @@ import sklearn
 from .countdata import CountData
 from .sparsetools import rescale_rows
 from . import Colors, EMOJI
+from ..._optional import normalize_torch_device
 
 # Try to import torch for GPU acceleration
 try:
@@ -311,7 +312,7 @@ class TorchLinearClassifier(Classifier):
         if device == 'auto':
             if TORCH_AVAILABLE:
                 if torch.cuda.is_available():
-                    self.device = torch.device('cuda')
+                    self.device = normalize_torch_device("cuda")
                     device_name = f"CUDA ({torch.cuda.get_device_name(0)})"
                 elif hasattr(torch.backends, 'mps') and torch.backends.mps.is_available():
                     self.device = torch.device('mps')
@@ -326,7 +327,7 @@ class TorchLinearClassifier(Classifier):
             else:
                 raise RuntimeError("PyTorch not available. Install with: pip install torch")
         else:
-            self.device = torch.device(device)
+            self.device = normalize_torch_device(device)
             device_name = device
 
         sparse_status = "sparse tensors" if self.use_sparse else "dense tensors"
@@ -591,7 +592,7 @@ class TorchLinearSVMClassifier(Classifier):
 
         if device == 'auto':
             if torch.cuda.is_available():
-                self.device = torch.device('cuda')
+                self.device = normalize_torch_device("cuda")
                 device_name = f"CUDA ({torch.cuda.get_device_name(0)})"
             elif hasattr(torch.backends, 'mps') and torch.backends.mps.is_available():
                 self.device = torch.device('mps')
@@ -600,7 +601,7 @@ class TorchLinearSVMClassifier(Classifier):
                 self.device = torch.device('cpu')
                 device_name = "CPU"
         else:
-            self.device = torch.device(device)
+            self.device = normalize_torch_device(device)
             device_name = device
 
         if self.device.type == 'cuda' and not torch.cuda.is_available():

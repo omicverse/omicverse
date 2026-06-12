@@ -385,7 +385,7 @@ def plot_scatter(embedding: ndarray, labels: list, cmap='rainbow', s=5, alpha=0.
         color_dict = {}
         set_labels = list(set(labels))
         set_labels.sort(reverse=color_labels_reverse)#True) #used to be True until Feb 2024
-        palette = cm.get_cmap(cmap, len(set_labels))
+        palette = plt.get_cmap(cmap, len(set_labels))
         cmap_ = palette(range(len(set_labels)))
         for value, color in zip(set_labels,cmap_):
             color_dict[value] = color
@@ -1111,7 +1111,7 @@ def plot_differentiation_flow(via_object, idx: list = None, dpi=150, marker_line
             # assign each celltype a number
             color_dict[value] = index
 
-        palette = cm.get_cmap(cmap_sankey, len(color_dict.keys()))
+        palette = plt.get_cmap(cmap_sankey, len(color_dict.keys()))
         cmap_ = palette(range(len(color_dict.keys())))
         cmap_colors_dict_sankey = {}
         for key in majority_newcluster_population_dict:
@@ -1681,7 +1681,7 @@ def plot_atlas_view(hammerbundle_dict=None, via_object=None, alpha_bundle_factor
 
                 step = 1  # every step'th segment is plotted
 
-                cmap = matplotlib.cm.get_cmap(cmap)
+                cmap = plt.get_cmap(cmap)
 
                 if milestone_numeric_values is not None:
                     max_numerical_value = max(milestone_numeric_values)
@@ -2129,7 +2129,7 @@ def animate_atlas(hammerbundle_dict=None, via_object=None, linewidth_bundle=2, f
     :return: axis with bundled edges plotted
     '''
     import tqdm
-    cmap = matplotlib.cm.get_cmap(cmap)
+    cmap = plt.get_cmap(cmap)
     if show_sc_embedding:
         if sc_emb is None:
             sc_emb= via_object.embedding
@@ -2539,7 +2539,7 @@ def animate_streamplot(via_object, embedding, density_grid=1,
         n_true = len(set(color_labels))
         lin_col = np.linspace(0, 1, n_true)
         col = 0
-        cmap = matplotlib.cm.get_cmap(cmap_scatter)  # 'twilight' is nice too
+        cmap = plt.get_cmap(cmap_scatter)  # 'twilight' is nice too
         cmap = cmap(np.linspace(0.01, 0.80, n_true))  # .95
         # cmap = cmap(np.linspace(0.5, 0.95, n_true))
         for color, group in zip(lin_col, sorted(set(color_labels))):
@@ -2623,7 +2623,7 @@ def animate_streamplot(via_object, embedding, density_grid=1,
 
     # print('colors', colors)
     def update(frame_no):
-        cmap = matplotlib.cm.get_cmap(cmap_stream)
+        cmap = plt.get_cmap(cmap_stream)
         # cmap = cmap(np.linspace(0.1, 0.2, 100)) #darker portion
         cmap = cmap(np.linspace(0.8, 0.9, 100))  # lighter portion
         for i in range(len(lines)):
@@ -2889,7 +2889,7 @@ def get_gene_expression(via_object, gene_exp: pd.DataFrame, cmap: str = 'jet', d
     sc_pt = via_object.single_cell_pt_markov
 
     if cmap_dict is None:
-        palette = cm.get_cmap(cmap, n_terminal_states)
+        palette = plt.get_cmap(cmap, n_terminal_states)
         cmap_ = palette(range(n_terminal_states))
     else:
         cmap_ = cmap_dict
@@ -4070,7 +4070,7 @@ def plot_all_spatial_clusters(spatial_coords, true_label, via_labels, save_to:st
 
         set_labels = list(set(true_label))
         set_labels.sort(reverse=False)  # True)
-        palette = cm.get_cmap(cmap, len(set_labels))
+        palette = plt.get_cmap(cmap, len(set_labels))
         cmap_ = palette(range(len(set_labels)))
         for index, value in enumerate(set_labels):
             color_dict[value] = cmap_[index]
@@ -4199,7 +4199,7 @@ def animate_atlas_old(hammerbundle_dict=None, via_object=None, linewidth_bundle=
                       a_max=np.percentile(seg_len, 90))
     step = 1  # every step'th segment is plotted
 
-    cmap = matplotlib.cm.get_cmap(cmap)
+    cmap = plt.get_cmap(cmap)
     if milestone_numeric_values is not None:
         max_numerical_value = max(milestone_numeric_values)
         min_numerical_value = min(milestone_numeric_values)

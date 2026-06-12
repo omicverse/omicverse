@@ -4,6 +4,26 @@ import importlib
 from typing import Iterable
 
 
+def normalize_torch_device(device=None, *, prefer_cuda=True, fallback_to_cpu=False):
+    """Return a torch.device with bare CUDA normalized to the current index."""
+    import torch
+
+    if device is None:
+        device = "cuda" if prefer_cuda and torch.cuda.is_available() else "cpu"
+    if isinstance(device, int):
+        if not torch.cuda.is_available() and fallback_to_cpu:
+            return torch.device("cpu")
+        return torch.device("cuda", device)
+
+    device = torch.device(device)
+    if device.type == "cuda":
+        if not torch.cuda.is_available():
+            return torch.device("cpu") if fallback_to_cpu else device
+        if device.index is None:
+            return torch.device("cuda", torch.cuda.current_device())
+    return device
+
+
 def _normalize_dependencies(dependencies: Iterable[str]) -> tuple[str, ...]:
     normalized = []
     for dep in dependencies:

@@ -16,7 +16,6 @@ from typing import Union
 from mpmath import *
 mp.dps = 200
 import scipy.stats as stats
-import gseapy
 import copy
 from typing import Tuple
 from sklearn.cluster import KMeans
@@ -1606,7 +1605,8 @@ def enrichment_comparison(name:str, gtdata:anndata.AnnData, semisdata:anndata.An
     if (os.path.isdir(name + '/gseapygt')) == False:
         os.system('mkdir ' + name + '/gseapygt')
         
-    results = gseapy.enrichr(gene_list=gtdeg, gene_sets='GO_Biological_Process_2021',outdir=name + '/gseapygt')
+    from ....bulk._ora import enrichr
+    results = enrichr(gene_list=gtdeg, gene_sets='GO_Biological_Process_2021',outdir=name + '/gseapygt')
     f=open(name + '/gseapygt/GO_Biological_Process_2021.human.enrichr.reports.txt','r')
     lines=f.readlines()
     f.close()
@@ -1621,7 +1621,7 @@ def enrichment_comparison(name:str, gtdata:anndata.AnnData, semisdata:anndata.An
         gtps.append(p)
         gtdic[term] = p
 
-    results = gseapy.enrichr(gene_list=semideg, gene_sets='GO_Biological_Process_2021',outdir=name + '/gseapysemi')
+    results = enrichr(gene_list=semideg, gene_sets='GO_Biological_Process_2021',outdir=name + '/gseapysemi')
     f=open(name + '/gseapysemi/GO_Biological_Process_2021.human.enrichr.reports.txt','r')
     lines=f.readlines()
     f.close()

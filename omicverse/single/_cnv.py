@@ -77,10 +77,15 @@ def _check_dep(backend: str) -> None:
         "cnv.run()",
         "ov.pl.cnv_heatmap(adata)",
         "",
-        "# inferCNV — reference-anchored CN matrix (uses non-tumour cells)",
+        "# inferCNV — reference-anchored CN matrix (platform sets gene cutoff)",
         "cnv = ov.single.CNV(adata, method='infercnv')",
-        "cnv.run(reference_key='cell_type', reference_cat=['T cell CD4', 'Macrophage'])",
-        "ov.pl.cnv_heatmap(adata, groupby='cnv_prediction')",
+        "cnv.run(reference_key='cell_type', reference_cat=['T cell CD4', 'Macrophage'], platform='10x')",
+        "ov.pl.cnv_heatmap(adata, groupby='cell_type', split_arms=True)  # p/q arms",
+        "",
+        "# inferCNV phase2/3 — HMM state calls + CNV regions + subclusters",
+        "cnv = ov.single.CNV(adata, method='infercnv')",
+        "cnv.run(reference_key='cell_type', reference_cat=['T cell CD4'], platform='10x', HMM=True)",
+        "ov.pl.cnv_heatmap(adata, groupby='cnv_subcluster', split_arms=True)",
     ],
     related=["pl.cnv_heatmap", "pl.cnv_summary", "pl.cnv_umap"],
 )
@@ -138,6 +143,7 @@ class CNV:
         reference_key: Optional[str] = None,
         reference_cat: Union[str, Sequence[str], None] = None,
         exclude_chromosomes: Optional[Sequence[str]] = ("chrX", "chrY", "chrM"),
+        platform: Optional[str] = None,
         n_jobs: int = 1,
         verbose: bool = False,
         **kwargs: Any,
@@ -157,12 +163,33 @@ class CNV:
             Chromosomes to drop before CNV inference. Default skips sex +
             mitochondrial chromosomes, which carry biological signal that
             confounds the deviation from the genome-wide diploid baseline.
+        platform : {'10x', 'smartseq2'} or None
+            Sequencing platform for ``method='infercnv'``. Sets the gene-filter
+            ``cutoff`` (minimum mean expression) the way R inferCNV recommends:
+            ``'10x'`` → ``cutoff=0.1`` (sparse UMI), ``'smartseq2'`` →
+            ``cutoff=1.0`` (full-length). **Required for inferCNV** unless you
+            pass an explicit ``cutoff=`` — otherwise a ``ValueError`` is raised,
+            because the wrong cutoff silently over-/under-filters genes (e.g.
+            the SmartSeq2 default 1.0 drops ~3/4 of bins on 10x data, giving an
+            over-smoothed heatmap). Ignored by CopyKAT.
         n_jobs : int
             Parallel workers (CopyKAT only).
         verbose : bool
             Stream progress logs from the underlying backend.
         **kwargs
             Forwarded to the backend (``CopykatConfig`` or ``InferCNVConfig``).
+            For ``method='infercnv'`` these reach ``InferCNVConfig`` verbatim
+            (R kwarg names preserved: ``HMM``, ``HMM_type``, ``mask_nonDE_genes``,
+            ``denoise``, ``analysis_mode``). Passing ``HMM=True`` (optionally
+            ``HMM_type='i6'|'i3'``) runs inferCNV phase 2/3 and additionally
+            writes ``obs['cnv_subcluster']``, ``obsm['X_cnv_hmm_states']``
+            (or ``'X_cnv_hmm_states_i3'``) and ``uns['cnv']['cnv_regions']``,
+            so ``ov.pl.cnv_heatmap(adata, groupby='cnv_subcluster')`` works.
+            Note: phase-3-only results (denoised matrix, Bayes posterior) are
+            NOT written back to AnnData — they stay on the returned
+            ``InferCNVResult`` (``cnv.result``). ``obs['cnv_prediction']``
+            remains NaN for inferCNV (it has no per-cell tumour/normal call;
+            threshold ``obs['cnv_score']`` yourself if you need one).
 
         Returns
         -------
@@ -182,6 +209,7 @@ class CNV:
             reference_key=reference_key,
             reference_cat=reference_cat,
             exclude_chromosomes=exclude_chromosomes,
+            platform=platform,
             verbose=verbose,
             **kwargs,
         )
@@ -253,6 +281,7 @@ class CNV:
         reference_key: Optional[str],
         reference_cat: Union[str, Sequence[str], None],
         exclude_chromosomes: Optional[Sequence[str]],
+        platform: Optional[str],
         verbose: bool,
         **kwargs: Any,
     ) -> "CNV":
@@ -261,6 +290,33 @@ class CNV:
 
         if verbose:
             logging.getLogger("pyinfercnv").setLevel(logging.INFO)
+
+        # Resolve the gene-filter cutoff from `platform` (R inferCNV convention:
+        # 10x -> 0.1, SmartSeq2 -> 1.0). Require an explicit choice so the wrong
+        # default cannot silently over-/under-filter genes.
+        if "cutoff" not in kwargs:
+            if platform is None:
+                raise ValueError(
+                    "method='infercnv' requires platform='10x' or "
+                    "platform='smartseq2' (sets the gene-filter cutoff: "
+                    "10x->0.1, smartseq2->1.0), or an explicit cutoff=<float>. "
+                    "Pass one, e.g. cnv.run(..., platform='10x')."
+                )
+            _p = platform.lower().replace("-", "").replace("_", "").replace(" ", "")
+            _platform_cutoff = {
+                "10x": 0.1, "tenx": 0.1,
+                "smartseq2": 1.0, "smartseq": 1.0, "ss2": 1.0,
+            }
+            if _p not in _platform_cutoff:
+                raise ValueError(
+                    f"unknown platform {platform!r}; use '10x' or 'smartseq2', "
+                    "or pass an explicit cutoff=<float>."
+                )
+            kwargs["cutoff"] = _platform_cutoff[_p]
+        elif platform is not None:
+            raise ValueError(
+                "pass either platform= or an explicit cutoff=, not both."
+            )
 
         # inferCNV needs chromosome / start / end in adata.var.
         for col in ("chromosome", "start", "end"):

@@ -147,6 +147,7 @@ from ._heatmap_marsilea import (
 )
 from ._multi import embedding_multi
 from ._bulk import boxplot, plot_grouped_fractions, venn, volcano
+from ._upset import upset
 from ._space import (
     add_pie2spatial,
     add_pie_charts_to_spatial,
@@ -360,6 +361,7 @@ __all__ = [
     # @ _bulk
     "boxplot",
     "plot_grouped_fractions",
+    "upset",
     "venn",
     "volcano",
     # @ _space

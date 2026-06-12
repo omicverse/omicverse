@@ -93,7 +93,7 @@ rust = [
     "anndataoom>=0.1.0,<1.0",
 ]
 full = [
-  "dynamo-release",
+  "dynamo-release<=1.5.3",
   "squidpy",
   "s3fs>=2023.1.0",  # pin to avoid ancient s3fs pulled by squidpy→spatialdata→ome-zarr chain
   "tangram-sc",
@@ -376,6 +376,9 @@ exclude = [
   "tmp*",
   "Skill_Seekers*",
 ]
+
+[tool.setuptools.package-data]
+"omicverse.pl" = ["_data/*.csv"]
 
 [tool.pytest.ini_options]
 asyncio_mode = "auto"

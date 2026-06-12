@@ -28,6 +28,7 @@ from tqdm import tqdm
 import concurrent.futures  # Added for multithreading support
 import warnings
 
+from ..._optional import normalize_torch_device
 from . import fa2util
 
 
@@ -121,7 +122,7 @@ class ForceAtlas2:
                 if cuda_available:
                     if self.verbose:
                         print(f"✅ Using CUDA GPU acceleration: {torch.cuda.get_device_name(0)}")
-                    self.device = torch.device("cuda")
+                    self.device = normalize_torch_device("cuda")
                     self.torch_available = True
                 elif mps_available:
                     if self.verbose:

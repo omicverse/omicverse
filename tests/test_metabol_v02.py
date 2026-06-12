@@ -112,7 +112,6 @@ def test_msea_ora_finds_relevant_pathways_on_cachexia(cachexia_adata):
 
 @needs_network
 def test_msea_gsea_runs_and_returns_results(cachexia_adata):
-    pytest.importorskip("omicverse.external.gseapy")
     from omicverse.metabol import differential, msea_gsea, normalize, transform
 
     a = normalize(cachexia_adata, method="pqn")
@@ -120,8 +119,8 @@ def test_msea_gsea_runs_and_returns_results(cachexia_adata):
     deg = differential(a, method="welch_t", log_transformed=True)
     out = msea_gsea(deg, stat_col="stat", n_perm=200, seed=0)
     assert not out.empty
-    # vendored gseapy uses lowercase column names
-    assert any(c in out.columns for c in ("nes", "NES"))
+    # msea_gsea returns the classic GSEA schema (Term/ES/NES/NOM p-val/...)
+    assert "NES" in out.columns
 
 
 @needs_network

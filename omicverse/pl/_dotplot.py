@@ -510,12 +510,32 @@ def rank_genes_groups_df(
             return data[:, gi]
         return None
 
-    d = pd.DataFrame()
+    cols = {}
     for k in ['names', 'scores', 'logfoldchanges', 'pvals', 'pvals_adj']:
         if k in result:
             col = _extract(result[k], group, group_index)
             if col is not None:
-                d[k] = col
+                cols[k] = col
+    if cols:
+        lengths = {k: len(v) for k, v in cols.items()}
+        if "names" in lengths:
+            names_len = lengths["names"]
+            shorter = {k: v for k, v in lengths.items() if v < names_len}
+            if shorter:
+                raise ValueError(
+                    f"Inconsistent rank_genes_groups result lengths for group {group!r}: "
+                    f"{lengths}"
+                )
+            # Longer columns may come from a different full-gene result table (for
+            # example COSG markers paired with Scanpy p-values). Keep only columns
+            # that are safely aligned to the marker names.
+            cols = {k: v for k, v in cols.items() if len(v) == names_len}
+        elif len(set(lengths.values())) != 1:
+            raise ValueError(
+                f"Inconsistent rank_genes_groups result lengths for group {group!r}: "
+                f"{lengths}"
+            )
+    d = pd.DataFrame(cols)
 
     if log2fc_min is not None and 'logfoldchanges' in d.columns:
         d = d[d['logfoldchanges'].abs() > log2fc_min]

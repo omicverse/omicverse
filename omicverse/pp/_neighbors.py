@@ -33,6 +33,7 @@ import logging
 
 from ._compat import old_positionals
 from .._settings import EMOJI, Colors, settings as ov_settings
+from .._optional import normalize_torch_device
 from . import _connectivity
 from ._connectivity import (
     _get_indices_distances_from_sparse_matrix,
@@ -899,7 +900,7 @@ class Neighbors:
             from ..external.umap_pytorch.fuzzy_gpu import fuzzy_simplicial_set_gpu
             from scipy.sparse import coo_matrix
 
-            device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+            device = normalize_torch_device()
             print(f"   {Colors.CYAN}Using device: {Colors.BOLD}{device}{Colors.ENDC}")
 
             # Build the fuzzy simplicial set on device once. Convert to scipy
@@ -1034,7 +1035,7 @@ class Neighbors:
                 )
                 raise ImportError(msg) from e
 
-            device = 'cuda' if torch.cuda.is_available() else 'cpu'
+            device = normalize_torch_device()
             print(f"   {Colors.CYAN}💡 Using PyTorch Geometric KNN on {Colors.BOLD}{device}{Colors.ENDC}")
 
             transformer = TorchKNNTransformer(

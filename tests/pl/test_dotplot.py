@@ -91,3 +91,49 @@ def test_dotplot_does_not_warn_for_fixed_marsilea_versions(simple_adata, stub_ma
         )
 
     assert not [w for w in record if "marsilea 0.5.6" in str(w.message)]
+
+
+def test_rank_genes_groups_df_drops_unaligned_long_statistics():
+    adata = AnnData(np.zeros((4, 78)))
+    adata.uns["cell_type_roughly_cosg"] = {
+        "names": pd.DataFrame({"CMP": [f"g{i}" for i in range(50)]}),
+        "scores": pd.DataFrame({"CMP": np.arange(50, dtype=float)}),
+        "logfoldchanges": pd.DataFrame({"CMP": np.arange(50, dtype=float)}),
+        "pvals": pd.DataFrame({"CMP": np.arange(78, dtype=float)}),
+        "pvals_adj": pd.DataFrame({"CMP": np.arange(78, dtype=float)}),
+    }
+
+    df = dotplot_mod.rank_genes_groups_df(
+        adata,
+        "CMP",
+        key="cell_type_roughly_cosg",
+    )
+
+    assert df.shape == (50, 3)
+    assert df.columns.tolist() == ["names", "scores", "logfoldchanges"]
+
+
+def test_rank_genes_groups_df_rejects_statistics_shorter_than_names():
+    adata = AnnData(np.zeros((4, 5)))
+    adata.uns["bad_markers"] = {
+        "names": pd.DataFrame({"CMP": [f"g{i}" for i in range(5)]}),
+        "scores": pd.DataFrame({"CMP": np.arange(4, dtype=float)}),
+    }
+
+    with pytest.raises(ValueError, match="Inconsistent rank_genes_groups"):
+        dotplot_mod.rank_genes_groups_df(adata, "CMP", key="bad_markers")
+
+
+def test_rank_genes_groups_df_keeps_aligned_pvals():
+    adata = AnnData(np.zeros((4, 5)))
+    adata.uns["rank_genes_groups"] = {
+        "names": pd.DataFrame({"CMP": [f"g{i}" for i in range(5)]}),
+        "scores": pd.DataFrame({"CMP": np.arange(5, dtype=float)}),
+        "pvals": pd.DataFrame({"CMP": np.linspace(0.01, 0.05, 5)}),
+        "pvals_adj": pd.DataFrame({"CMP": np.linspace(0.02, 0.1, 5)}),
+    }
+
+    df = dotplot_mod.rank_genes_groups_df(adata, "CMP")
+
+    assert df.columns.tolist() == ["names", "scores", "pvals", "pvals_adj"]
+    np.testing.assert_allclose(df["pvals_adj"], np.linspace(0.02, 0.1, 5))

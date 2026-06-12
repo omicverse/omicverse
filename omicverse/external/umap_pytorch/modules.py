@@ -4,6 +4,8 @@ from sklearn.utils import check_random_state
 from umap.umap_ import fuzzy_simplicial_set
 import torch
 
+from ..._optional import normalize_torch_device
+
 # Try to import PyG KNN
 try:
     from ...pp.pyg_knn_implementation import pyg_knn_search
@@ -122,7 +124,7 @@ def get_umap_graph(X, n_neighbors=10, metric="cosine", random_state=None, use_py
             X_torch = torch.from_numpy(X_flat).float()
 
             # Determine device
-            device = 'cuda' if torch.cuda.is_available() else 'cpu'
+            device = normalize_torch_device()
 
             # Get KNN using PyG
             knn_indices, knn_dists = pyg_knn_search(
@@ -193,14 +195,13 @@ def get_umap_graph_gpu(X, n_neighbors=15, metric="euclidean", random_state=None,
         graph = get_umap_graph(X, n_neighbors=n_neighbors, metric=metric,
                                random_state=random_state, use_pyg=False)
         coo = graph.tocoo()
-        device_t = torch.device(device or ("cuda" if torch.cuda.is_available() else "cpu"))
+        device_t = normalize_torch_device(device)
         rows = torch.from_numpy(coo.row.astype('int64')).to(device_t)
         cols = torch.from_numpy(coo.col.astype('int64')).to(device_t)
         vals = torch.from_numpy(coo.data.astype('float32')).to(device_t)
         return rows, cols, vals, coo.shape[0]
 
-    if device is None:
-        device = "cuda" if torch.cuda.is_available() else "cpu"
+    device = normalize_torch_device(device)
 
     if isinstance(X, torch.Tensor):
         X_torch = X.float().contiguous()

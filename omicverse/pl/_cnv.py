@@ -13,7 +13,9 @@ Three functions, all reading the unified ``adata.obsm['X_cnv']`` /
 
 from __future__ import annotations
 
+import functools
 from collections.abc import Sequence
+from pathlib import Path
 from typing import Optional, Union
 
 import matplotlib.pyplot as plt
@@ -77,55 +79,144 @@ def _build_chr_segments(
     n_bins: int,
     *,
     standard_only: bool = True,
-) -> tuple[list[tuple[str, int, int]], slice]:
-    """Sorted [(chrom, start_bin, end_bin), ...] covering the plotted bin range.
+) -> tuple[list[tuple[str, int, int]], "slice | np.ndarray"]:
+    """Sorted [(chrom, start_bin, end_bin), ...] plus the column selector to render.
+
+    The returned segments ALWAYS tile [0, number-of-selected-columns) with no
+    holes: segment coordinates are rebased onto the compacted axis of exactly
+    the columns picked by the second return value. This holds even when
+    non-standard scaffolds / alt contigs are interleaved *between* standard
+    chromosomes — previously such interleaving left an uncovered hole in the
+    middle of the rendered range, so a chromosome past the gap rendered only
+    partially / shifted to one side.
 
     When ``standard_only`` is True (default), unplaced scaffolds / alt contigs
-    are dropped from the ideogram — they otherwise crowd the right edge of the
-    plot with thin segments labelled e.g. ``GL000220.1``. The second return
-    is the slice over X_cnv columns to render, aligned with the kept
-    chromosomes (contiguous if the kept set is contiguous in chr_pos, else a
-    boolean mask is used instead by the caller).
+    are dropped from BOTH the ideogram and the rendered columns. The second
+    return is a selector applied to the ``X_cnv`` columns: a ``slice`` when
+    nothing is dropped, else an integer index array of the kept columns.
     """
     pairs = sorted(chr_pos.items(), key=lambda kv: kv[1])
-    raw: list[tuple[str, int, int]] = []
+    spans: list[tuple[str, int, int]] = []
     for i, (chrom, start) in enumerate(pairs):
         end = pairs[i + 1][1] if i + 1 < len(pairs) else n_bins
-        raw.append((str(chrom), int(start), int(end)))
+        spans.append((str(chrom), int(start), int(end)))
 
     if not standard_only:
-        return raw, slice(0, n_bins)
+        return spans, slice(0, n_bins)
 
-    kept = [seg for seg in raw if _is_standard_chromosome(seg[0])]
+    kept = [sp for sp in spans if _is_standard_chromosome(sp[0])]
     if not kept:
-        return raw, slice(0, n_bins)
+        return spans, slice(0, n_bins)
 
-    # If the kept chromosomes are a contiguous prefix/run in raw (typical case
-    # — scaffolds come last), we can render the heatmap with a clean slice.
-    starts = [s for _, s, _ in kept]
-    ends = [e for _, _, e in kept]
-    contig_lo = min(starts)
-    contig_hi = max(ends)
-    contiguous = all(
-        seg[1] >= contig_lo and seg[2] <= contig_hi for seg in kept
-    )
-    if contiguous:
-        # Re-base segment positions to 0 so the heatmap axes start at 0.
-        rebased = [(c, s - contig_lo, e - contig_lo) for c, s, e in kept]
-        return rebased, slice(contig_lo, contig_hi)
-    # Non-contiguous (rare): caller will need to build a mask externally.
-    return kept, slice(0, n_bins)
+    # Compact to exactly the kept chromosomes' columns; rebase segment
+    # coordinates onto that compacted axis so segments tile [0, kept_width)
+    # with no holes (robust to interleaved non-standard scaffolds). The old
+    # min/max-envelope "contiguous" check was tautological and returned
+    # segments that did not tile the rendered columns when a scaffold sat
+    # between two standard chromosomes.
+    mask = np.zeros(int(n_bins), dtype=bool)
+    for _, s, e in kept:
+        mask[s:e] = True
+    col_index = np.flatnonzero(mask)
+
+    rebased: list[tuple[str, int, int]] = []
+    run = 0
+    for c, s, e in kept:
+        w = int(e - s)
+        rebased.append((c, run, run + w))
+        run += w
+    # Common case (nothing dropped): return a slice so the caller keeps a view
+    # of X_cnv instead of triggering a full-matrix copy via fancy indexing.
+    if col_index.size == n_bins:
+        return rebased, slice(0, n_bins)
+    return rebased, col_index
+
+
+_CENTROMERE_DIR = Path(__file__).parent / "_data"
+
+
+_GENOME_ALIASES = {
+    "hg38": "hg38", "grch38": "hg38", "hg20": "hg38",
+    "hg19": "hg19", "grch37": "hg19",
+    "mm10": "mm10", "grcm38": "mm10",
+}
+
+
+@functools.lru_cache(maxsize=8)
+def _load_centromeres(genome: str) -> dict[str, int]:
+    """Per-chromosome centromere bp for p/q arm splitting (empty if unknown).
+
+    Data vendored under ``_data/`` (see its README + ``generate_centromeres.py``).
+    Bundled: hg38/GRCh38, hg19/GRCh37, mm10/GRCm38. Any other genome returns an
+    empty mapping so the caller falls back to whole-chromosome blocks.
+    """
+    key = _GENOME_ALIASES.get(str(genome).strip().lower())
+    if key is None:
+        return {}
+    path = _CENTROMERE_DIR / f"centromere_{key}.csv"
+    if not path.exists():
+        return {}
+    df = pd.read_csv(path)
+    return {str(c): int(v) for c, v in zip(df["chromosome"], df["centromere"])}
+
+
+def _centromere_for(chrom: str, centromeres: dict[str, int]):
+    """Look up a chromosome's centromere, tolerating 'chr'-prefixed/bare names."""
+    c = str(chrom)
+    if c in centromeres:
+        return centromeres[c]
+    alt = c[3:] if c.startswith("chr") else f"chr{c}"
+    return centromeres.get(alt)
+
+
+def _split_segments_by_arm(
+    segments: Sequence[tuple[str, int, int]],
+    bin_starts: np.ndarray,
+    centromeres: dict[str, int],
+) -> list[tuple[str, int, int]]:
+    """Split each chromosome segment at its centromere into p/q arm segments.
+
+    ``segments`` are ``(chrom, start, end)`` in the *rendered* (compacted) column
+    space; ``bin_starts`` is the per-rendered-bin genomic start (same length /
+    order as the rendered columns). Segments whose chromosome has no known
+    centromere — or that fall entirely on one arm (e.g. acrocentric q-only) —
+    are returned as a single arm-labelled segment. The result still tiles
+    ``[0, width)`` with no holes.
+    """
+    out: list[tuple[str, int, int]] = []
+    for chrom, s, e in segments:
+        cen = _centromere_for(chrom, centromeres)
+        if cen is None:
+            out.append((chrom, s, e))
+            continue
+        starts = np.asarray(bin_starts[s:e])
+        n_p = int((starts < cen).sum())
+        if n_p <= 0:
+            out.append((f"{chrom}q", s, e))
+        elif n_p >= (e - s):
+            out.append((f"{chrom}p", s, e))
+        else:
+            out.append((f"{chrom}p", s, s + n_p))
+            out.append((f"{chrom}q", s + n_p, e))
+    return out
 
 
 def _draw_ideogram(
     ax: Axes,
     segments: Sequence[tuple[str, int, int]],
     *,
+    arm_segments: Sequence[tuple[str, int, int]] | None = None,
     height: float = 1.0,
     fontsize: int = 8,
     label_short: bool = True,
 ) -> None:
-    """Render an ideogram-style chromosome bar onto ``ax``."""
+    """Render an ideogram-style chromosome bar onto ``ax``.
+
+    ``segments`` are chromosome-level blocks (one rectangle + label each). When
+    ``arm_segments`` is given, a faint centromere tick is drawn at each p/q
+    boundary inside a chromosome and tiny ``p`` / ``q`` labels are placed,
+    without splitting the chromosome rectangle.
+    """
     total_width = segments[-1][2] - segments[0][1]
     ax.set_xlim(segments[0][1], segments[-1][2])
     ax.set_ylim(0, height)
@@ -159,6 +250,22 @@ def _draw_ideogram(
             fontsize=fontsize,
             color="white" if i % 2 else "black",
         )
+
+    # Centromere ticks + tiny p/q labels inside each chromosome (no split).
+    if arm_segments is not None:
+        chrom_ends = {e for _, _, e in segments}
+        for chrom, start, end in arm_segments:
+            if (end - start) / max(total_width, 1) < min_label_frac / 1.5:
+                continue
+            arm = chrom[-1] if chrom[-1:] in ("p", "q") else ""
+            if arm:
+                ax.text(
+                    (start + end) / 2, height * 0.5, arm,
+                    ha="center", va="center", fontsize=max(fontsize - 3, 4),
+                    color="0.25",
+                )
+            if end not in chrom_ends:  # internal centromere boundary
+                ax.axvline(end, color="0.2", linewidth=0.5, alpha=0.7)
 
 
 def _order_rows_by_group(
@@ -259,6 +366,8 @@ def cnv_heatmap(
     figsize: tuple[float, float] = (8.0, 4.5),
     cmap=_CNV_CMAP,
     standard_chromosomes_only: bool = True,
+    split_arms: bool = False,
+    genome: str = "hg38",
     backend: str = "auto",
     title: Optional[str] = None,
     show: bool = True,
@@ -293,6 +402,20 @@ def cnv_heatmap(
         Diverging colormap. Default is a blue/white/red palette.
     standard_chromosomes_only : bool, default True
         Drop unplaced scaffolds / alt contigs from the plot.
+    split_arms : bool, default False
+        Split each chromosome at its centromere into separate ``p`` / ``q`` arm
+        segments (labelled e.g. ``8p`` / ``8q``), so arm-level CNAs are
+        distinguishable. Requires per-bin genomic coordinates in
+        ``adata.uns['cnv']['bin_meta']`` (written by ``ov.single.CNV``) and a
+        centromere table for ``genome``; falls back to whole-chromosome blocks
+        if either is missing.
+    genome : str, default 'hg38'
+        Genome build for centromere coordinates when ``split_arms=True``.
+        Bundled: ``'hg38'``/``'GRCh38'``, ``'hg19'``/``'GRCh37'``,
+        ``'mm10'``/``'GRCm38'`` (add more via ``_data/generate_centromeres.py``).
+        **Must match your data** — a mismatched build mis-places arm boundaries,
+        and an unknown build is silently skipped (whole chromosomes drawn). Note
+        mouse (mm10) is telocentric, so its p arm is negligible.
     backend : {'auto', 'marsilea', 'matplotlib'}
         ``'auto'`` picks marsilea when installed (recommended for clean
         categorical legends), else falls back to the matplotlib renderer.
@@ -316,13 +439,33 @@ def cnv_heatmap(
     >>> ov.pl.cnv_heatmap(adata, groupby='cnv_prediction',
     ...                   annotations=['cell_type'])
     """
-    X, chr_pos, _ = _get_cnv_data(adata)
+    X, chr_pos, uns = _get_cnv_data(adata)
     n_cells, n_bins_total = X.shape
-    segments, col_slice = _build_chr_segments(
+    chrom_segments, col_slice = _build_chr_segments(
         chr_pos, n_bins_total, standard_only=standard_chromosomes_only
     )
     X = X[:, col_slice]
     n_bins = X.shape[1]
+
+    # Optionally compute p/q arm sub-segments (centromere split) for an arm
+    # annotation strip. Column GROUPING stays at the chromosome level, so the
+    # two arms of one chromosome render contiguously (no gap) and only different
+    # chromosomes are separated — the arm boundary is shown as a thin line /
+    # colour band inside each chromosome.
+    arm_segments = None
+    if split_arms:
+        bin_meta = uns.get("bin_meta")
+        centromeres = _load_centromeres(genome)
+        if (
+            bin_meta is not None
+            and centromeres
+            and len(bin_meta) == n_bins_total
+            and "start" in getattr(bin_meta, "columns", [])
+        ):
+            bm = bin_meta.iloc[col_slice]
+            arm_segments = _split_segments_by_arm(
+                chrom_segments, bm["start"].to_numpy(), centromeres
+            )
 
     # Annotation strip order: groupby first (so it visually anchors the row
     # ordering), then the rest of `annotations` (any duplicate removed).
@@ -353,7 +496,8 @@ def cnv_heatmap(
         return _cnv_heatmap_marsilea(
             adata,
             X_ord=X_ord,
-            segments=segments,
+            chrom_segments=chrom_segments,
+            arm_segments=arm_segments,
             row_order=row_order,
             strips=strips,
             max_value=max_value,
@@ -371,7 +515,7 @@ def cnv_heatmap(
     ideo_ax = fig.add_subplot(gs[0, 0])
     hm_ax = fig.add_subplot(gs[1, 0], sharex=ideo_ax)
 
-    _draw_ideogram(ideo_ax, segments)
+    _draw_ideogram(ideo_ax, chrom_segments, arm_segments=arm_segments)
 
     norm = Normalize(vmin=-max_value, vmax=max_value)
     hm_ax.imshow(
@@ -383,12 +527,19 @@ def cnv_heatmap(
         extent=(0, n_bins, n_cells, 0),
     )
 
-    # Chromosome dividers — thin grey vertical lines at each segment break.
-    for _, _, end in segments[:-1]:
-        hm_ax.axvline(end, color="white", linewidth=0.4, alpha=0.7)
+    # Chromosome dividers — thin white lines between different chromosomes only.
+    for _, _, end in chrom_segments[:-1]:
+        hm_ax.axvline(end, color="white", linewidth=0.6, alpha=0.8)
+    # Centromere dividers — faint dotted lines at the p/q boundary inside a
+    # chromosome (arm-split mode); the two arms stay contiguous (no gap).
+    if arm_segments is not None:
+        chrom_ends = {e for _, _, e in chrom_segments}
+        for _, _, end in arm_segments[:-1]:
+            if end not in chrom_ends:
+                hm_ax.axvline(end, color="0.45", linewidth=0.4, alpha=0.6, linestyle=(0, (1, 1)))
 
     # Group dividers — horizontal black lines + left-side labels.
-    if primary is not None and len(group_segs) > 1:
+    if groupby is not None and len(group_segs) > 1:
         for _, _, row_end in group_segs[:-1]:
             hm_ax.axhline(row_end, color="black", linewidth=0.8)
         for label, row_start, row_end in group_segs:
@@ -429,7 +580,8 @@ def _cnv_heatmap_marsilea(
     adata: AnnData,
     *,
     X_ord: np.ndarray,
-    segments: list[tuple[str, int, int]],
+    chrom_segments: list[tuple[str, int, int]],
+    arm_segments: list[tuple[str, int, int]] | None,
     row_order: np.ndarray,
     strips: list[str],
     max_value: float,
@@ -438,7 +590,13 @@ def _cnv_heatmap_marsilea(
     title: Optional[str],
     show: bool,
 ):
-    """Marsilea-backed heatmap with chromosome ideogram + multi-strip row annotations."""
+    """Marsilea-backed heatmap with chromosome ideogram + multi-strip row annotations.
+
+    Columns are grouped by CHROMOSOME (a thin separator between different
+    chromosomes, original-API style). When ``arm_segments`` is given, a p/q
+    colour band is drawn inside each chromosome so the two arms stay contiguous
+    (no inter-arm gap) while the centromere boundary remains visible.
+    """
     import marsilea as ma
     import marsilea.plotter as mp
 
@@ -446,14 +604,12 @@ def _cnv_heatmap_marsilea(
 
     n_cells, n_bins = X_ord.shape
 
-    # Build a per-bin "which chromosome" array for the top strip.
+    # Per-bin chromosome (drives grouping, alternating colour strip, labels).
     chrom_per_bin = np.empty(n_bins, dtype=object)
-    for chrom, start, end in segments:
+    for chrom, start, end in chrom_segments:
         chrom_per_bin[start:end] = chrom.replace("chr", "")
-    # Stable, perceptually-uniform alternation that matches the matplotlib
-    # ideogram: even-indexed chromosomes light grey, odd-indexed dark.
     ideo_palette: dict[str, str] = {}
-    for i, (chrom, _, _) in enumerate(segments):
+    for i, (chrom, _, _) in enumerate(chrom_segments):
         ideo_palette[chrom.replace("chr", "")] = "#d8d8d8" if i % 2 == 0 else "#444444"
 
     h = ma.Heatmap(
@@ -466,15 +622,30 @@ def _cnv_heatmap_marsilea(
         label="CN (log ratio)",
     )
 
-    # Top: chromosome ideogram as a colour strip + chunk labels for each chrom.
+    # Arm band (closest to the heatmap): p/q two-tone inside each chromosome.
+    if arm_segments is not None:
+        arm_per_bin = np.empty(n_bins, dtype=object)
+        for chrom, start, end in arm_segments:
+            arm_per_bin[start:end] = chrom[-1] if chrom[-1:] in ("p", "q") else "·"
+        h.add_top(
+            mp.Colors(arm_per_bin, palette={"p": "#c9c9c9", "q": "#7a7a7a", "·": "#ffffff"},
+                      label="arm"),
+            size=0.10,
+            pad=0.0,
+            legend=True,
+        )
+
+    # Chromosome alternating colour strip + chunk labels.
     h.add_top(
         mp.Colors(chrom_per_bin, palette=ideo_palette),
-        size=0.18,
+        size=0.16,
         pad=0.0,
         legend=False,
     )
-    chunk_labels = [c.replace("chr", "") for c, _, _ in segments]
-    h.group_cols(chrom_per_bin, order=chunk_labels)
+    chunk_labels = [c.replace("chr", "") for c, _, _ in chrom_segments]
+    # Group by chromosome with a thin separator (original-API style): arms of
+    # the same chromosome stay together; only different chromosomes are split.
+    h.group_cols(chrom_per_bin, order=chunk_labels, spacing=0.006)
     h.add_top(
         mp.Chunk(chunk_labels, fill_colors=None, fontsize=8, rotation=0),
         size=0.12,

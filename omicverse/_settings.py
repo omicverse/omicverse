@@ -1,4 +1,5 @@
 from ._registry import register_function
+from ._optional import normalize_torch_device
 
 class omicverseConfig:
 
@@ -294,7 +295,7 @@ def get_optimal_device(prefer_gpu=True, verbose=False):
     
     # Check devices in priority order
     if torch.cuda.is_available():
-        device = torch.device("cuda")
+        device = normalize_torch_device("cuda")
         if verbose:
             print(f"Using CUDA device: {torch.cuda.get_device_name()}")
             print(f"{Colors.GREEN}✅ Using built-in torch_pca for GPU-accelerated PCA{Colors.ENDC}")
@@ -315,9 +316,9 @@ def get_optimal_device(prefer_gpu=True, verbose=False):
                 print(f"{Colors.WARNING}⚠️ MLX not installed - install with: pip install mlx{Colors.ENDC}")
         return device
     
-    if hasattr(torch.version, 'hip') and torch.version.hip is not None:
+    if hasattr(torch.version, 'hip') and torch.version.hip is not None and torch.cuda.is_available():
         # ROCm available
-        device = torch.device("cuda")  # ROCm uses cuda interface
+        device = normalize_torch_device("cuda")  # ROCm uses cuda interface
         if verbose:
             print("Using AMD ROCm device")
         return device

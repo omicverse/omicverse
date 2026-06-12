@@ -447,10 +447,12 @@ class PerturbResult:
     ) -> pd.DataFrame:
         """Enrichr over the top-``n`` perturbed genes.
 
-        Uses ``gseapy.enrichr`` against any Enrichr library
+        Uses omicverse's local hypergeometric over-representation test
+        (:func:`omicverse.bulk._ora.enrichr`) against any Enrichr library
         (``GO_Biological_Process_2023``, ``KEGG_2021_Human``,
-        ``Reactome_2022``, …).  Genes are ranked by ``|Z|`` if present
-        (sctenifoldknk) or by ``|delta|`` (cell_oracle) — pass
+        ``Reactome_2022``, …) — the library is downloaded and cached, then
+        tested offline (no Enrichr web API). Genes are ranked by ``|Z|`` if
+        present (sctenifoldknk) or by ``|delta|`` (cell_oracle) — pass
         ``rank_by=`` to override.
 
         Returns
@@ -459,20 +461,13 @@ class PerturbResult:
             Enrichr terms with ``Term``, ``P-value``, ``Adjusted P-value``,
             ``Combined Score``, ``Genes`` columns. Empty if no enrichment.
         """
-        try:
-            import gseapy
-        except ImportError as exc:  # pragma: no cover
-            raise build_optional_dependency_error(
-                feature="PerturbResult.pathway_enrichment",
-                dependencies=("gseapy",),
-                install_hint="pip install gseapy",
-            ) from exc
+        from ..bulk._ora import enrichr
         genes = self._ranked_genes(top_n=top_n, by=rank_by)
         if not genes:
             return pd.DataFrame()
         if isinstance(gene_sets, str):
             gene_sets = [gene_sets]
-        enr = gseapy.enrichr(
+        enr = enrichr(
             gene_list=genes,
             gene_sets=gene_sets,
             organism=organism,

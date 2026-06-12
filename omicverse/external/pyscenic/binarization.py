@@ -40,7 +40,7 @@ def derive_threshold(
     def isbimodal(data, method):
         if method == "hdt":
             # Use Hartigan's dip statistic to decide if distribution deviates from unimodality.
-            _, pval, _ = diptst(np.msort(data))
+            _, pval, _ = diptst(data)
             return (pval is not None) and (pval <= 0.05)
         else:
             # Compare Bayesian Information Content of two Gaussian Mixture Models.

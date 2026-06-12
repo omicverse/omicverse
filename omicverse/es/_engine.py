@@ -21,6 +21,8 @@ from typing import Literal, Optional
 
 import numpy as np
 
+from .._optional import normalize_torch_device
+
 def _torch_available() -> bool:
     try:
         import torch  # noqa: F401
@@ -41,7 +43,7 @@ def torch_device(prefer: str = 'cuda'):
     """Return a torch.device handle, falling back to CPU when needed."""
     import torch
     if prefer == 'cuda' and torch.cuda.is_available():
-        return torch.device('cuda')
+        return normalize_torch_device("cuda")
     return torch.device('cpu')
 
 # ────────────────────────────────────────────────────────────────────

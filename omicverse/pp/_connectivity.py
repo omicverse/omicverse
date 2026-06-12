@@ -6,6 +6,7 @@ from typing import TypeVar
 import numpy as np
 from numpy.typing import NDArray
 from scipy import sparse
+from .._optional import normalize_torch_device
 
 SpBase = sparse.spmatrix | sparse.sparray  # noqa: TID251
 """Only use when you directly convert it to a known subclass."""
@@ -305,10 +306,7 @@ def umap_gpu_optimized(
     import torch
     from ..external.umap_pytorch.fuzzy_gpu import fuzzy_simplicial_set_gpu
 
-    if device is None:
-        device = "cuda" if torch.cuda.is_available() else "cpu"
-    if not isinstance(device, torch.device):
-        device = torch.device(device)
+    device = normalize_torch_device(device)
     knn_i = torch.as_tensor(knn_indices, dtype=torch.long, device=device)
     knn_d = torch.as_tensor(knn_dists, dtype=torch.float32, device=device)
 
