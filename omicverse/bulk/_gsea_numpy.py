@@ -31,6 +31,17 @@ import numpy as np
 import pandas as pd
 
 
+def _progress_iter(iterable, total=None, desc="", enabled=True):
+    """Wrap an iterable in a tqdm bar when available and ``enabled``."""
+    if not enabled:
+        return iterable
+    try:
+        from tqdm.auto import tqdm
+        return tqdm(iterable, total=total, desc=desc, leave=False)
+    except Exception:
+        return iterable
+
+
 class PrerankResult:
     """gseapy-compatible result container.
 
@@ -123,6 +134,7 @@ def prerank(
     max_size: int = 500,
     seed: int = 0,
     verbose: bool = False,
+    progress: bool = True,
     **_ignored,
 ) -> PrerankResult:
     """Run pre-ranked GSEA on a ranked gene list (single process, NumPy).
@@ -159,7 +171,9 @@ def prerank(
 
     # --- observed ES for every retained gene set ---
     observed = []  # (term, es, peak, hit_pos, RES, matched, geneset_size)
-    for term, members in gene_sets.items():
+    for term, members in _progress_iter(
+            gene_sets.items(), total=len(gene_sets),
+            desc="GSEA: scoring gene sets", enabled=progress):
         uniq = set(map(str, members))
         idx = np.fromiter((pos_of[g] for g in uniq if g in pos_of),
                           dtype=np.int64)
@@ -182,9 +196,19 @@ def prerank(
         return PrerankResult(ranking, empty, {})
 
     # --- permutation null, one batched computation per distinct gene-set size ---
+    # A random size-k gene set is just the genes holding the k smallest keys of
+    # a random vector. We draw ONE random key matrix and argsort it ONCE; every
+    # size then slices the first k columns of that shared ordering. This avoids
+    # rebuilding a (permutation_num x n) random matrix for each distinct size —
+    # the dominant cost on big libraries (GO/Reactome have hundreds of sizes).
+    sizes = sorted({rec[5] for rec in observed})
+    keys = rng.random((permutation_num, n), dtype=np.float32)
+    order = np.argsort(keys, axis=1).astype(np.int32, copy=False)
+    del keys
     null_by_size: Dict[int, np.ndarray] = {}
-    for k in sorted({rec[5] for rec in observed}):
-        pos = _sample_positions(n, k, permutation_num, rng)
+    for k in _progress_iter(sizes, total=len(sizes),
+                            desc="GSEA: permutation null", enabled=progress):
+        pos = np.sort(order[:, :k], axis=1)
         null_by_size[k] = _es_null_batch(pos, weights[pos], n, k)
         if verbose:
             print(f"   null for size {k} done")

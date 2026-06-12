@@ -160,7 +160,8 @@ def geneset_enrichment_GSEA(gene_rnk:pd.DataFrame,pathways_dict:dict,
                      permutation_num:int=1000,
                      outdir:str='./enrichr_gsea', format:str='png', seed:int=112,
                      organism:str='Human', backend:str='numpy',
-                     weight:float=1.0, min_size:int=15, max_size:int=500)->dict:
+                     weight:float=1.0, min_size:int=15, max_size:int=500,
+                     progress:bool=True)->dict:
     r"""Pre-ranked GSEA on a ranked gene list.
 
     Parameters
@@ -201,7 +202,8 @@ def geneset_enrichment_GSEA(gene_rnk:pd.DataFrame,pathways_dict:dict,
     from ._gsea_numpy import prerank as _prerank_numpy
     return _prerank_numpy(gene_rnk, pathways_dict,
                           permutation_num=permutation_num, weight=weight,
-                          min_size=min_size, max_size=max_size, seed=seed)
+                          min_size=min_size, max_size=max_size, seed=seed,
+                          progress=progress)
 
 
 @register_function(
@@ -276,10 +278,25 @@ def geneset_plot_multi(enr_dict: Dict[str, pd.DataFrame], colors_dict: Dict[str,
                                axis=0,verbose=0,#label_kws={'rotation':45,'horizontalalignment':'left'},
                                 orientation='right')
     if ax==None:
-        fig, ax = plt.subplots(figsize=figsize) 
+        fig, ax = plt.subplots(figsize=figsize)
     else:
         ax=ax
     #plt.figure(figsize=figsize)
+    # PyComplexHeatmap >=1.8 renamed ``legend_gap`` -> ``legend_hgap``/
+    # ``legend_vgap``; on those versions the old name is not consumed and
+    # leaks into ``ax.scatter`` ("unexpected keyword argument 'legend_gap'").
+    # Pick whichever name the installed version actually accepts.
+    import inspect as _inspect
+    _dot_params = set()
+    for _c in DotClustermapPlotter.__mro__:
+        if '__init__' in _c.__dict__:
+            _dot_params.update(_inspect.signature(_c.__init__).parameters)
+    if 'legend_hgap' in _dot_params:
+        _legend_gap_kws = {'legend_hgap': 10}
+    elif 'legend_gap' in _dot_params:
+        _legend_gap_kws = {'legend_gap': 10}
+    else:
+        _legend_gap_kws = {}
     cm = DotClustermapPlotter(data=enr_all, x='fraction',y='Term1',value='logp',c='logp',s='num',
                               cmap=cmap,
                               row_cluster=True,#col_cluster=True,#hue='Group',
@@ -296,7 +313,7 @@ def geneset_plot_multi(enr_dict: Dict[str, pd.DataFrame], colors_dict: Dict[str,
                               spines=False,
                               row_split=enr_all.Type,# row_split_gap=1,
                               #col_split=df_col.Group,col_split_gap=0.5,
-                              verbose=1,legend_gap=10,
+                              verbose=1,**_legend_gap_kws,
                               #dot_legend_marker='*',
                               xlabel='Fractions of genes',xlabel_side="bottom",
                               xlabel_kws=dict(labelpad=8,fontweight='normal',fontsize=fontsize+2),
@@ -466,10 +483,10 @@ class pyGSE(object):
     
     
     def plot_enrichment(self,num:int=10,node_size:list=[5,10,15],
-                        cax_loc:int=2,cax_fontsize:int=12,
+                        cax_loc:list=[2,0.55,0.5,0.02],cax_fontsize:int=12,
                         fig_title:str='',fig_xlabel:str='Fractions of genes',
-                        figsize:tuple=(2,4),cmap:str='YlGnBu',text_knock:int=2,text_maxsize:int=20)->matplotlib.axes._axes.Axes:
-        
+                        figsize:tuple=(2,4),cmap:str='YlGnBu',text_knock:int=2,text_maxsize:int=20,**kwargs)->matplotlib.axes._axes.Axes:
+
         """Plot the gene set enrichment result.
         
         Parameters
@@ -487,8 +504,11 @@ class pyGSE(object):
         -------
             A matplotlib.axes.Axes object.
         """
-        return geneset_plot(self.enrich_res,num,node_size,cax_loc,cax_fontsize,
-                            fig_title,fig_xlabel,figsize,cmap,text_knock,text_maxsize)
+        return geneset_plot(self.enrich_res,num=num,node_size=node_size,
+                            cax_loc=cax_loc,cax_fontsize=cax_fontsize,
+                            fig_title=fig_title,fig_xlabel=fig_xlabel,
+                            figsize=figsize,cmap=cmap,text_knock=text_knock,
+                            text_maxsize=text_maxsize,**kwargs)
     
 @register_function(
     aliases=["GSEA分析", "pyGSEA", "gene_set_enrichment", "基因集富集分析"],
@@ -540,7 +560,8 @@ class pyGSEA(object):
                  processes:int=1,permutation_num:int=1000,
                  outdir:str='./enrichr_gsea',cutoff:float=0.5,
                  organism:str='Human',backend:str='numpy',
-                 weight:float=1.0,min_size:int=15,max_size:int=500) -> None:
+                 weight:float=1.0,min_size:int=15,max_size:int=500,
+                 progress:bool=True) -> None:
         """Initialize pyGSEA with ranked genes and pathway libraries.
 
         Parameters
@@ -569,8 +590,9 @@ class pyGSEA(object):
         self.weight=weight
         self.min_size=min_size
         self.max_size=max_size
-    
-    
+        self.progress=progress
+
+
     def enrichment(self,format:str='png', pval=0.05,seed:int=112)->pd.DataFrame:
         """Run GSEA and return filtered enrichment results.
 
@@ -594,7 +616,8 @@ class pyGSEA(object):
                                            self.processes,self.permutation_num,
                                            self.outdir,format,seed,
                                            backend=self.backend,weight=self.weight,
-                                           min_size=self.min_size,max_size=self.max_size)
+                                           min_size=self.min_size,max_size=self.max_size,
+                                           progress=getattr(self,'progress',True))
         self.pre_res=pre_res
         enrich_res=pre_res.res2d[pre_res.res2d['fdr']<pval]
         enrich_res['logp']=-np.log10(enrich_res['fdr']+0.0001)
@@ -649,11 +672,11 @@ class pyGSEA(object):
     
     
     def plot_enrichment(self,num:int=10,node_size:list=[5,10,15],
-                        cax_loc:int=2,cax_fontsize:int=12,
+                        cax_loc:list=[2,0.55,0.5,0.02],cax_fontsize:int=12,
                         fig_title:str='',fig_xlabel:str='Fractions of genes',
                         figsize:tuple=(2,4),cmap:str='YlGnBu',
-                        text_knock:int=2,text_maxsize:int=20)->matplotlib.axes._axes.Axes:
-        
+                        text_knock:int=2,text_maxsize:int=20,**kwargs)->matplotlib.axes._axes.Axes:
+
         """Plot top GSEA terms as bubble enrichment chart.
 
         Parameters
@@ -684,5 +707,8 @@ class pyGSEA(object):
         matplotlib.axes.Axes
             Axis containing the enrichment bubble plot.
         """
-        return geneset_plot(self.enrich_res,num,node_size,cax_loc,cax_fontsize,
-                            fig_title,fig_xlabel,figsize,cmap,text_knock,text_maxsize)
+        return geneset_plot(self.enrich_res,num=num,node_size=node_size,
+                            cax_loc=cax_loc,cax_fontsize=cax_fontsize,
+                            fig_title=fig_title,fig_xlabel=fig_xlabel,
+                            figsize=figsize,cmap=cmap,text_knock=text_knock,
+                            text_maxsize=text_maxsize,**kwargs)
