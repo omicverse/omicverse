@@ -1048,7 +1048,7 @@ def plot_sc_pb(ax, fig, embedding, prob, ti, cmap_name: str = 'plasma', scatter_
     vmin = np.percentile(prob,vmin)
     print('setting vmin to', vmin)
     # vmax=1
-    cmap = matplotlib.cm.get_cmap(cmap_name)
+    cmap = plt.get_cmap(cmap_name)
     # norm = matplotlib.colors.Normalize(vmin=0, vmax=np.max(prob))
     if scatter_size is None:
         scatter_size = 3 if embedding.shape[0] > 10000 else 10
