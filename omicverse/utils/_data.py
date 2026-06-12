@@ -575,7 +575,15 @@ def geneset_prepare(geneset_path,organism='Human',auto_download=True):
         }
         stem = os.path.splitext(os.path.basename(file_path))[0]
         resolved = None
-        if stem in known:
+        # Reuse a previously downloaded copy under ./genesets/ instead of
+        # re-fetching on every call. Both standard (download_pathway_database
+        # -> .txt) and Enrichr (.gmt) caches land here.
+        for ext in ('.txt', '.gmt'):
+            cand = os.path.join('./genesets', f'{stem}{ext}')
+            if os.path.exists(cand):
+                resolved = cand
+                break
+        if resolved is None and stem in known:
             print(f"   - Geneset '{stem}' missing locally; auto-downloading "
                   f"via ov.utils.download_pathway_database()...")
             download_pathway_database()
