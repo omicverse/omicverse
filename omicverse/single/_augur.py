@@ -31,7 +31,7 @@ from anndata import AnnData
 from matplotlib.axes import Axes
 from matplotlib.figure import Figure
 from scipy import sparse
-from scipy.stats import norm as _norm, pearsonr as _pearsonr
+from scipy.stats import norm as _norm
 from sklearn.linear_model import LogisticRegression
 from sklearn.metrics import roc_auc_score
 from sklearn.model_selection import KFold, StratifiedKFold
@@ -296,6 +296,26 @@ def _compute_classification_metrics(y_true, y_pred, y_prob, classes, multiclass)
     return metrics
 
 
+def _lin_ccc(y_true, y_pred):
+    """Lin's concordance correlation coefficient.
+
+    This is the regression/RNA-velocity metric used by the reference R Augur —
+    it measures agreement with the 45° identity line (accuracy + precision),
+    not merely linear correlation as Pearson's r does. Equal to Pearson's r
+    only when the two series share the same mean and variance.
+    """
+    x = np.asarray(y_true, dtype=float)
+    y = np.asarray(y_pred, dtype=float)
+    if x.size < 2:
+        return np.nan
+    mx, my = x.mean(), y.mean()
+    sxy = ((x - mx) * (y - my)).mean()
+    denom = x.var() + y.var() + (mx - my) ** 2  # population variance (ddof=0)
+    if denom == 0:                              # both constant and equal
+        return 1.0
+    return 2.0 * sxy / denom
+
+
 def _calculate_auc(
     input,
     meta=None,
@@ -460,11 +480,11 @@ def _calculate_auc(
                             "estimate": estimate,
                         })
                 else:
-                    r_val = _pearsonr(y_test.astype(float), y_pred.astype(float))[0]
+                    ccc_val = _lin_ccc(y_test, y_pred)
                     all_results.append({
                         "cell_type": ct, "subsample_idx": subsample_idx,
                         "fold": fold_idx + 1, "metric": "ccc",
-                        "estimator": "standard", "estimate": r_val,
+                        "estimator": "standard", "estimate": ccc_val,
                     })
 
                 if classifier == "rf":
