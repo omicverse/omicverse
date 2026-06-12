@@ -142,7 +142,7 @@ class TestAugur:
         augur = ov.single.Augur(
             sample_adata, label_col="label", cell_type_col="cell_type",
         )
-        with pytest.raises(RuntimeError, match="Run .run()"):
+        with pytest.raises(RuntimeError, match=r"Run \.run\(\)"):
             augur.plot_lollipop()
 
     def test_velocity_mode(self, sample_adata):
@@ -157,8 +157,6 @@ class TestAugur:
 
     def test_run_differential(self, sample_adata, adata2):
         """run_differential returns DataFrame with expected columns."""
-        import matplotlib.pyplot as plt
-
         augur = ov.single.Augur(
             sample_adata, label_col="label", cell_type_col="cell_type",
         )
@@ -169,7 +167,6 @@ class TestAugur:
         for col in ("cell_type", "auc.x", "auc.y", "delta_auc", "pval", "padj"):
             assert col in dp.columns
         assert len(dp) > 0
-        plt.close("all")
 
     def test_plot_scatterplot(self, sample_adata):
         """plot_scatterplot returns a figure and axes."""
@@ -184,6 +181,46 @@ class TestAugur:
         )
         augur2.run(n_subsamples=3, subsample_size=10, folds=2)
         fig, ax = augur1.plot_scatterplot(augur2)
+        assert fig is not None
+        assert ax is not None
+        plt.close("all")
+
+    def test_plot_umap(self, sample_adata):
+        """plot_umap returns a figure and axes with X_umap in obsm."""
+        import matplotlib.pyplot as plt
+
+        rng = np.random.default_rng(42)
+        sample_adata.obsm["X_umap"] = rng.standard_normal((sample_adata.n_obs, 2))
+        augur = ov.single.Augur(
+            sample_adata, label_col="label", cell_type_col="cell_type",
+        )
+        augur.run(n_subsamples=3, subsample_size=10, folds=2)
+        fig, ax = augur.plot_umap()
+        assert fig is not None
+        assert ax is not None
+        plt.close("all")
+
+    def test_plot_differential_prioritization(self, sample_adata):
+        """plot_differential_prioritization runs on synthetic dp results."""
+        import matplotlib.pyplot as plt
+
+        augur = ov.single.Augur(
+            sample_adata, label_col="label", cell_type_col="cell_type",
+        )
+        augur.run(n_subsamples=3, subsample_size=10, folds=2)
+
+        # Build synthetic differential results (avoids slow permute run)
+        auc_df = augur.result["AUC"].copy()
+        dp = pd.DataFrame({
+            "cell_type": auc_df["cell_type"],
+            "auc.x": auc_df["auc"],
+            "auc.y": auc_df["auc"] + np.array([0.1, -0.1, 0.05]),
+            "delta_auc": np.array([0.1, -0.1, 0.05]),
+            "pval": np.array([0.01, 0.03, 0.5]),
+            "padj": np.array([0.03, 0.05, 0.5]),
+            "z": np.array([2.5, -2.1, 0.5]),
+        })
+        fig, ax = augur.plot_differential_prioritization(dp)
         assert fig is not None
         assert ax is not None
         plt.close("all")

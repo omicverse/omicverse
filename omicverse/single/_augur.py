@@ -200,10 +200,11 @@ class _FastRandomForest:
     def predict(self, X):
         if self.mode == "classification":
             votes = np.array([tree.predict(X) for tree in self.trees])
+            cls_to_idx = {cls: i for i, cls in enumerate(self.classes_)}
             result = np.empty(X.shape[0], dtype=self.classes_.dtype)
             for i in range(X.shape[0]):
                 counts = np.bincount(
-                    [np.where(self.classes_ == v)[0][0] for v in votes[:, i]]
+                    [cls_to_idx[v] for v in votes[:, i]]
                 )
                 result[i] = self.classes_[np.argmax(counts)]
             return result
@@ -273,13 +274,18 @@ def _stratified_subsample(y, subsample_size, mode, rng):
 
 def _compute_classification_metrics(y_true, y_pred, y_prob, classes, multiclass):
     metrics = {}
+    unique_test = np.unique(y_true)
+    if len(unique_test) < 2:
+        metrics["roc_auc"] = np.nan
+        metrics["accuracy"] = np.mean(y_true == y_pred)
+        return metrics
     try:
         if multiclass:
             metrics["roc_auc"] = roc_auc_score(
                 y_true, y_prob, multi_class="ovr", average="macro", labels=classes,
             )
         else:
-            pos_idx = np.where(classes == np.unique(y_true)[1])[0][0]
+            pos_idx = np.where(classes == unique_test[1])[0][0]
             auc_val = roc_auc_score(
                 y_true, y_prob[:, pos_idx], labels=classes,
             )
@@ -423,17 +429,17 @@ def _calculate_auc(
                         n_estimators=rf_params["trees"],
                         max_features=rf_params["mtry"],
                         min_samples_split=rf_params.get("min_n", 2) or 2,
-                        random_state=1,
+                        random_state=seed + subsample_idx * folds + fold_idx,
                         mode=mode,
                     )
                     model.fit(X_train, y_train)
                 elif classifier == "lr":
                     penalty_val = lr_params.get("penalty", 1.0)
-                    if isinstance(penalty_val, str) or penalty_val is None:
+                    if isinstance(penalty_val, str) or penalty_val is None or penalty_val <= 0:
                         penalty_val = 1.0
                     model = LogisticRegression(
                         penalty="l1", solver="saga", C=1.0 / penalty_val,
-                        max_iter=1000, random_state=1,
+                        max_iter=1000, random_state=seed + subsample_idx * folds + fold_idx,
                     )
                     model.fit(X_train, y_train)
                 else:
@@ -463,6 +469,12 @@ def _calculate_auc(
 
                 if classifier == "rf":
                     importances = model.feature_importances_
+                elif classifier == "lr":
+                    importances = np.abs(model.coef_).mean(axis=0)
+                else:
+                    importances = None
+
+                if importances is not None:
                     for g_idx in range(X_df.shape[1]):
                         all_importances.append({
                             "cell_type": ct, "subsample_idx": subsample_idx,
@@ -532,7 +544,6 @@ def _bh_correction(pvalues):
 
 def _draw_mean_aucs(permuted_aucs, n_permutations, n_intervals):
     """Draw mean AUCs from permuted results."""
-    rng = np.random.default_rng(42)
     results: list[dict] = []
     for perm_idx in range(1, n_permutations + 1):
         rng_inner = np.random.default_rng(perm_idx)
@@ -560,19 +571,23 @@ def _calculate_differential_prioritization(
     n_subsamples=50, n_permutations=1000,
 ):
     """Statistical test for differential prioritization."""
-    obs1 = augur1["AUC"].copy()
-    obs2 = augur2["AUC"].copy()
+    key = "AUC" if "AUC" in augur1 else "CCC"
+    metric = "roc_auc" if key == "AUC" else "ccc"
+    col = "auc" if key == "AUC" else "ccc"
+
+    obs1 = augur1[key].copy()
+    obs2 = augur2[key].copy()
     permuted_res1 = permuted1["results"].copy()
     permuted_res2 = permuted2["results"].copy()
 
     n_intervals = permuted_res1["subsample_idx"].max() // 50
 
     perm_auc1 = (
-        permuted_res1[permuted_res1["metric"] == "roc_auc"]
+        permuted_res1[permuted_res1["metric"] == metric]
         .groupby(["cell_type", "subsample_idx"])["estimate"].mean().reset_index()
     )
     perm_auc2 = (
-        permuted_res2[permuted_res2["metric"] == "roc_auc"]
+        permuted_res2[permuted_res2["metric"] == metric]
         .groupby(["cell_type", "subsample_idx"])["estimate"].mean().reset_index()
     )
 
@@ -580,7 +595,7 @@ def _calculate_differential_prioritization(
     rnd2 = _draw_mean_aucs(perm_auc2, n_permutations, n_intervals)
 
     delta = obs1.merge(obs2, on="cell_type", suffixes=(".x", ".y"))
-    delta["delta_auc"] = delta["auc.y"] - delta["auc.x"]
+    delta["delta_auc"] = delta[f"{col}.y"] - delta[f"{col}.x"]
 
     rnd = rnd1.merge(rnd2, on=["cell_type", "permutation_idx"], suffixes=(".x", ".y"))
     rnd["delta_rnd"] = rnd["mean.y"] - rnd["mean.x"]
@@ -603,7 +618,7 @@ def _calculate_differential_prioritization(
     pvals = pd.DataFrame(pvals_list)
     pvals["padj"] = _bh_correction(pvals["pval"].values)
 
-    result = delta[["cell_type", "auc.x", "auc.y", "delta_auc"]].merge(pvals, on="cell_type")
+    result = delta[["cell_type", f"{col}.x", f"{col}.y", "delta_auc"]].merge(pvals, on="cell_type")
     return result.dropna(subset=["pval"]).reset_index(drop=True)
 
 
@@ -685,7 +700,9 @@ def _plot_lollipop(augur_results, *, top_n=None, figsize=(4, 6), fontsize=14,
         ax.text(row[metric_col] + 0.01, row["cell_type"], "%.3f" % row[metric_col],
                 va="center", fontsize=fontsize - 4)
     xmin = min(0, auc_df[metric_col].min())
-    ax.set_xlim(xmin, auc_df[metric_col].max() * 1.15)
+    xmax = auc_df[metric_col].max()
+    x_range = max(xmax - xmin, 1e-6)
+    ax.set_xlim(xmin - 0.05 * x_range, xmax + 0.15 * x_range)
     _apply_ov_style(ax, fontsize)
 
     if save:
@@ -741,7 +758,7 @@ def _plot_umap(input, augur_results, *, mode="default", cell_type_col="cell_type
     else:
         fig = ax.figure
 
-    cmap = plt.cm.get_cmap(palette) if isinstance(palette, str) else palette
+    cmap = matplotlib.colormaps[palette] if isinstance(palette, str) else palette
     scatter = ax.scatter(
         umap_coords[:, 0], umap_coords[:, 1], c=cell_auc, cmap=cmap,
         s=point_size, alpha=alpha, edgecolors="none", rasterized=True, **kwargs,
@@ -864,11 +881,13 @@ def _plot_scatterplot(augur1, augur2, *, top_n=None, figsize=(5, 5), point_size=
                       fontsize=14, show=None, save=None, return_fig=None, ax=None,
                       **kwargs):
     """Compare two Augur results as a scatterplot (ov style)."""
-    if "AUC" not in augur1 or "AUC" not in augur2:
-        raise ValueError("Both results must contain 'AUC' key")
-    auc1, auc2 = augur1["AUC"].copy(), augur2["AUC"].copy()
-    df = auc1.merge(auc2, on="cell_type", suffixes=(".x", ".y"))
-    df["delta"] = df["auc.y"] - df["auc.x"]
+    key = "AUC" if "AUC" in augur1 else "CCC"
+    if key not in augur2:
+        raise ValueError(f"Both results must contain '{key}' key")
+    col = "auc" if key == "AUC" else "ccc"
+    r1, r2 = augur1[key].copy(), augur2[key].copy()
+    df = r1.merge(r2, on="cell_type", suffixes=(".x", ".y"))
+    df["delta"] = df[f"{col}.y"] - df[f"{col}.x"]
     df["abs_delta"] = df["delta"].abs()
     labels = (
         df if top_n is None
@@ -886,24 +905,26 @@ def _plot_scatterplot(augur1, augur2, *, top_n=None, figsize=(5, 5), point_size=
         matplotlib.colors.TwoSlopeNorm(vmin=-delta_range, vcenter=0, vmax=delta_range)
         if delta_range > 0 else None
     )
+    cx, cy = f"{col}.x", f"{col}.y"
+    label = "AUC" if key == "AUC" else "CCC"
     scatter = ax.scatter(
-        df["auc.x"], df["auc.y"], c=df["delta"], cmap="coolwarm", norm=norm,
+        df[cx], df[cy], c=df["delta"], cmap="coolwarm", norm=norm,
         s=point_size, edgecolors="black", linewidths=0.3, **kwargs,
     )
-    lim_min = min(df["auc.x"].min(), df["auc.y"].min()) - 0.02
-    lim_max = max(df["auc.x"].max(), df["auc.y"].max()) + 0.02
+    lim_min = min(df[cx].min(), df[cy].min()) - 0.02
+    lim_max = max(df[cx].max(), df[cy].max()) + 0.02
     ax.plot([lim_min, lim_max], [lim_min, lim_max], linestyle="dotted",
             color="gray", linewidth=0.8)
     if len(labels) > 0:
         for _, row in labels.iterrows():
-            ax.annotate(row["cell_type"], (row["auc.x"], row["auc.y"]),
+            ax.annotate(row["cell_type"], (row[cx], row[cy]),
                         fontsize=fontsize - 6, ha="left", va="bottom",
                         arrowprops=dict(arrowstyle="-", color="gray", linewidth=0.3))
     cbar = plt.colorbar(scatter, ax=ax, fraction=0.046, pad=0.04)
-    cbar.set_label(r"$\Delta$ AUC", fontsize=fontsize - 2)
+    cbar.set_label(f"$\\Delta$ {label}", fontsize=fontsize - 2)
     cbar.outline.set_visible(False)
-    ax.set_xlabel("AUC 1", fontsize=fontsize)
-    ax.set_ylabel("AUC 2", fontsize=fontsize)
+    ax.set_xlabel(f"{label} 1", fontsize=fontsize)
+    ax.set_ylabel(f"{label} 2", fontsize=fontsize)
     ax.set_xlim(lim_min, lim_max)
     ax.set_ylim(lim_min, lim_max)
     ax.set_aspect("equal")
@@ -931,12 +952,20 @@ def _plot_differential_prioritization(
     if condition2_color is None:
         condition2_color = _sc_color[5]   # orange
 
-    required = ["cell_type", "auc.x", "auc.y", "pval", "z"]
+    # Detect AUC vs CCC columns
+    if "auc.x" in results.columns:
+        cx, cy = "auc.x", "auc.y"
+    elif "ccc.x" in results.columns:
+        cx, cy = "ccc.x", "ccc.y"
+    else:
+        raise ValueError("Results must contain 'auc.x'/'auc.y' or 'ccc.x'/'ccc.y' columns")
+
+    required = ["cell_type", cx, cy, "pval", "z"]
     missing = [c for c in required if c not in results.columns]
     if missing:
         raise ValueError(f"Results missing required columns: {missing}")
 
-    df = results.dropna(subset=["auc.x", "auc.y"]).copy()
+    df = results.dropna(subset=[cx, cy]).copy()
     df["color_group"] = "n.s."
     df.loc[(df["pval"] < pval_threshold) & (df["z"] > 0), "color_group"] = "condition 2"
     df.loc[(df["pval"] < pval_threshold) & (df["z"] <= 0), "color_group"] = "condition 1"
@@ -956,22 +985,23 @@ def _plot_differential_prioritization(
     for group, clr in color_map.items():
         mask = df["color_group"] == group
         if mask.any():
-            ax.scatter(df.loc[mask, "auc.x"], df.loc[mask, "auc.y"],
+            ax.scatter(df.loc[mask, cx], df.loc[mask, cy],
                        c=clr, s=point_size, label=group if group != "n.s." else "n.s.",
                        edgecolors="none", alpha=0.8, **kwargs)
 
-    lim_min = min(df["auc.x"].min(), df["auc.y"].min()) - 0.02
-    lim_max = max(df["auc.x"].max(), df["auc.y"].max()) + 0.02
+    lim_min = min(df[cx].min(), df[cy].min()) - 0.02
+    lim_max = max(df[cx].max(), df[cy].max()) + 0.02
     ax.plot([lim_min, lim_max], [lim_min, lim_max], linestyle="dotted",
             color="gray", linewidth=0.8)
     if top_n > 0 and len(labels) > 0:
         for _, row in labels.iterrows():
-            ax.annotate(row["cell_type"], (row["auc.x"], row["auc.y"]),
+            ax.annotate(row["cell_type"], (row[cx], row[cy]),
                         fontsize=fontsize - 6, ha="left", va="bottom",
                         arrowprops=dict(arrowstyle="-", color="gray", linewidth=0.3))
 
-    ax.set_xlabel("AUC 1", fontsize=fontsize)
-    ax.set_ylabel("AUC 2", fontsize=fontsize)
+    label = "AUC" if cx.startswith("auc") else "CCC"
+    ax.set_xlabel(f"{label} 1", fontsize=fontsize)
+    ax.set_ylabel(f"{label} 2", fontsize=fontsize)
     ax.set_xlim(lim_min, lim_max)
     ax.set_ylim(lim_min, lim_max)
     ax.set_aspect("equal")
