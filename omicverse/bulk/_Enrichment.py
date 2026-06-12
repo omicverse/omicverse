@@ -251,86 +251,64 @@ def geneset_plot_multi(enr_dict: Dict[str, pd.DataFrame], colors_dict: Dict[str,
 
     Returns
     -------
-    matplotlib.axes.Axes
-        Axis containing the multi-group enrichment visualization.
+    marsilea.SizedHeatmap
+        The rendered Marsilea dot-heatmap board (call ``.save(path)`` or access
+        ``.figure`` to export). Rows are pathway terms; dot size = gene count,
+        dot colour = -log10 adjusted-p; rows are split/coloured by group.
     """
-    from PyComplexHeatmap import HeatmapAnnotation,DotClustermapPlotter,anno_label,anno_simple,AnnotationBase
+    # Rendered with Marsilea (PyComplexHeatmap was dropped here): a sized
+    # dot-heatmap where each row is a pathway term, dot **size** encodes the
+    # gene count (``num``) and dot **colour** the significance
+    # (``logp`` = -log10 adjusted-p). Rows are split & colour-coded by their
+    # source group (``Type``); a side bar shows the gene ``fraction``.
+    import marsilea as ma
+    import marsilea.plotter as mp
+
     for key in enr_dict.keys():
-        enr_dict[key]['Type']=key
-    enr_all=pd.concat([enr_dict[i].iloc[:num] for i in enr_dict.keys()],axis=0)
-    enr_all['Term']=[plot_text_set(i.split('(')[0],text_knock=text_knock,text_maxsize=text_maxsize) for i in enr_all.Term.tolist()]
-    enr_all.index=enr_all.Term
-    enr_all = enr_all.loc[~enr_all.index.duplicated(keep='first')]  # some GO term exist in multi category(BP/CC/MF)
-    enr_all['Term1']=[i for i in enr_all.index.tolist()]
+        enr_dict[key]['Type'] = key
+    enr_all = pd.concat([enr_dict[i].iloc[:num] for i in enr_dict.keys()], axis=0)
+    enr_all['Term'] = [plot_text_set(i.split('(')[0], text_knock=text_knock,
+                                     text_maxsize=text_maxsize)
+                       for i in enr_all.Term.tolist()]
+    enr_all.index = enr_all.Term
+    # some GO terms exist in multiple categories (BP/CC/MF) — keep the first
+    enr_all = enr_all.loc[~enr_all.index.duplicated(keep='first')]
+    enr_all['Term1'] = list(enr_all.index)
     del enr_all['Term']
 
-    colors=colors_dict
+    # group order follows enr_dict insertion order
+    type_order = [k for k in enr_dict.keys() if k in set(enr_all['Type'])]
+    enr_all['Type'] = pd.Categorical(enr_all['Type'], categories=type_order,
+                                     ordered=True)
+    enr_all = enr_all.sort_values('Type')
 
-    left_ha = HeatmapAnnotation(
-                          label=anno_label(enr_all.Type, merge=True,rotation=0,colors=colors,relpos=(1,0.8)),
-                          Category=anno_simple(enr_all.Type,cmap='Set1',
-                                           add_text=False,legend=False,colors=colors),
-                           axis=0,verbose=0,label_kws={'rotation':45,'horizontalalignment':'left','visible':False})
-    right_ha = HeatmapAnnotation(
-                              label=anno_label(enr_all.Term1, merge=True,rotation=0,relpos=(0,0.5),arrowprops=dict(visible=True),
-                                               colors=enr_all.assign(color=enr_all.Type.map(colors)).set_index('Term1').color.to_dict(),
-                                              fontsize=fontsize,luminance=0.8,height=2),
-                               axis=0,verbose=0,#label_kws={'rotation':45,'horizontalalignment':'left'},
-                                orientation='right')
-    if ax==None:
-        fig, ax = plt.subplots(figsize=figsize)
-    else:
-        ax=ax
-    #plt.figure(figsize=figsize)
-    # PyComplexHeatmap >=1.8 renamed ``legend_gap`` -> ``legend_hgap``/
-    # ``legend_vgap``; on those versions the old name is not consumed and
-    # leaks into ``ax.scatter`` ("unexpected keyword argument 'legend_gap'").
-    # Pick whichever name the installed version actually accepts.
-    import inspect as _inspect
-    _dot_params = set()
-    for _c in DotClustermapPlotter.__mro__:
-        if '__init__' in _c.__dict__:
-            _dot_params.update(_inspect.signature(_c.__init__).parameters)
-    if 'legend_hgap' in _dot_params:
-        _legend_gap_kws = {'legend_hgap': 10}
-    elif 'legend_gap' in _dot_params:
-        _legend_gap_kws = {'legend_gap': 10}
-    else:
-        _legend_gap_kws = {}
-    cm = DotClustermapPlotter(data=enr_all, x='fraction',y='Term1',value='logp',c='logp',s='num',
-                              cmap=cmap,
-                              row_cluster=True,#col_cluster=True,#hue='Group',
-                              #cmap={'Group1':'Greens','Group2':'OrRd'},
-                              vmin=-1*np.log10(0.1),vmax=-1*np.log10(1e-10),
-                              #colors={'Group1':'yellowgreen','Group2':'orange'},
-                              #marker={'Group1':'*','Group2':'$\\ast$'},
-                              show_rownames=True,show_colnames=False,row_dendrogram=False,
-                              col_names_side='top',row_names_side='right',
-                              xticklabels_kws={'labelrotation': 30, 'labelcolor': 'blue','labelsize':fontsize},
-                              #yticklabels_kws={'labelsize':10},
-                              #top_annotation=col_ha,left_annotation=left_ha,right_annotation=right_ha,
-                              left_annotation=left_ha,right_annotation=right_ha,
-                              spines=False,
-                              row_split=enr_all.Type,# row_split_gap=1,
-                              #col_split=df_col.Group,col_split_gap=0.5,
-                              verbose=1,**_legend_gap_kws,
-                              #dot_legend_marker='*',
-                              xlabel='Fractions of genes',xlabel_side="bottom",
-                              xlabel_kws=dict(labelpad=8,fontweight='normal',fontsize=fontsize+2),
-                              # xlabel_bbox_kws=dict(facecolor=facecolor)
-                             )
-    tesr=plt.gcf().axes
-    for ax in plt.gcf().axes:
-        if hasattr(ax, 'get_xlabel'):
-            if ax.get_xlabel() == 'Fractions of genes':  # 假设 colorbar 有一个特定的标签
-                cbar = ax
-                cbar.grid(False)
-            if ax.get_ylabel() == 'logp':  # 假设 colorbar 有一个特定的标签
-                cbar = ax
-                cbar.tick_params(labelsize=fontsize+2)
-                cbar.set_ylabel(r'$−Log_{10}(P_{adjusted})$',fontsize=fontsize+2)
-                cbar.grid(False)
-    return ax
+    size_m = enr_all['num'].to_numpy(dtype=float).reshape(-1, 1)
+    color_m = enr_all['logp'].to_numpy(dtype=float).reshape(-1, 1)
+    types = enr_all['Type'].astype(str).to_numpy()
+    terms = enr_all['Term1'].tolist()
+    fractions = enr_all['fraction'].to_numpy(dtype=float)
+
+    height = max(figsize[1], 0.32 * len(enr_all))
+    h = ma.SizedHeatmap(
+        size=size_m, color=color_m, cmap=cmap,
+        vmin=-1 * np.log10(0.1), vmax=-1 * np.log10(1e-10),
+        sizes=(20, 200), width=max(figsize[0] * 0.4, 0.6), height=height,
+        color_legend_kws=dict(title=r'$-Log_{10}(P_{adjusted})$'),
+        size_legend_kws=dict(title='Gene number'),
+    )
+    # category colour strip + split rows by group
+    h.add_left(mp.Colors(types, palette=colors_dict, label='Category'),
+               size=0.2, pad=0.05)
+    h.group_rows(types, order=type_order, spacing=0.015)
+    # gene fraction as a side bar, then the term names
+    h.add_right(mp.Numbers(fractions, color='#c2c2c2', label=fig_xlabel,
+                           show_value=False), size=0.8, pad=0.05)
+    h.add_right(mp.Labels(terms, fontsize=fontsize), pad=0.05)
+    if fig_title:
+        h.add_title(top=fig_title, pad=0.1)
+    h.add_legends(side='right', pad=0.1)
+    h.render(figure=ax.figure if ax is not None else None)
+    return h
 
 @register_function(
     aliases=["富集分析可视化", "geneset_plot", "enrichment_plot", "通路富集图", "pathway_plot"],

@@ -86,3 +86,22 @@ def test_geneset_enrichment_uses_local_ora():
                                      pvalue_threshold=0.5, pvalue_type="raw")
     assert "logp" in enr.columns and "fraction" in enr.columns
     assert (enr["P-value"] < 0.5).all()
+
+
+def test_geneset_plot_multi_returns_marsilea():
+    import matplotlib
+    matplotlib.use("Agg")
+    import omicverse as ov
+    import marsilea as ma
+
+    universe, gene_sets, query1 = _synthetic(seed=0)
+    _, _, query2 = _synthetic(seed=5)
+    e1 = ov.bulk.geneset_enrichment(list(query1), gene_sets,
+                                    pvalue_threshold=1.0, pvalue_type="raw")
+    e2 = ov.bulk.geneset_enrichment(list(query2), gene_sets,
+                                    pvalue_threshold=1.0, pvalue_type="raw")
+    h = ov.bulk.geneset_plot_multi({"A": e1, "B": e2},
+                                   {"A": "#1f77b4", "B": "#ff7f0e"}, num=5)
+    # PyComplexHeatmap was dropped here — the panel is now a Marsilea board
+    assert isinstance(h, ma.SizedHeatmap)
+    assert h.figure is not None
