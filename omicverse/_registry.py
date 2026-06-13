@@ -74,6 +74,26 @@ class FunctionRegistry:
         self._registry: Dict[str, Dict[str, Any]] = {}
         self._function_map: Dict[Callable, str] = {}  # Maps functions to their primary keys
         self._categories: Dict[str, List[str]] = {}  # Category to function mapping
+        self._hydrated: bool = False  # Whether full module hydration has run
+
+    def _ensure_hydrated(self) -> None:
+        """Force-import OmicVerse submodules once so queries see all functions.
+
+        The registry is populated lazily through ``@register_function`` import
+        side effects, so a fresh process that only did ``import omicverse`` sees
+        a near-empty registry. Run the export hydration pass on first query and
+        memoize it. The flag is set *before* hydrating to guard against
+        re-entrancy if a submodule import triggers another query.
+        """
+        if self._hydrated:
+            return
+        self._hydrated = True
+        try:
+            _hydrate_registry_for_export()
+        except Exception:
+            # Never let a hydration hiccup break a lookup — partial registry is
+            # still better than crashing the query path.
+            pass
 
     def _store_entry(
         self,
@@ -624,6 +644,7 @@ class FunctionRegistry:
         List[Dict[str, Any]]
             List of matching function entries, sorted by relevance
         """
+        self._ensure_hydrated()
         query_lower = query.lower()
         results = []
         

@@ -90,11 +90,19 @@ class RegistryScanner:
         runtime.
         """
 
-        if getattr(_global_registry, "_registry", None):
+        # A partially-populated registry (e.g. just the handful of functions
+        # whose modules happened to import at ``import omicverse`` time) must
+        # NOT skip full hydration — otherwise every lookup only ever sees those
+        # few. Gate on a *hydration-done* memo, not on emptiness.
+        if getattr(_global_registry, "_hydrated", False):
             return
 
         try:
-            _hydrate_registry_for_export()
+            ensure = getattr(_global_registry, "_ensure_hydrated", None)
+            if callable(ensure):
+                ensure()
+            else:
+                _hydrate_registry_for_export()
         except Exception:
             logger.warning(
                 "Failed to hydrate the runtime registry via full package import",
