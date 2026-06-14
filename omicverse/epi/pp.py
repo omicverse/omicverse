@@ -97,9 +97,137 @@ def qc(adata, tresh: Optional[dict] = None, **kwargs):
 def add_tile_matrix(adata, *, bin_size: int = 500, **kwargs):
     r"""Bin the genome into ``bin_size`` windows and count per-cell insertions.
 
-    Wraps :func:`epione.pp.add_tile_matrix`. The tile matrix lands in ``adata.X``.
+    The tile matrix lands in ``adata.X``.
+
+    Note: This function includes a fix for a shape mismatch bug in epione
+    where both ``adata.X`` and ``adata.var`` assignments fail because anndata
+    validates each against the other's current shape (both are 0 when starting
+    from a fragment-only AnnData). The fix uses internal ``_var`` and ``_X``
+    attributes to bypass shape validation. See GitHub issue #840.
     """
-    return epione_module("pp").add_tile_matrix(adata, bin_size=bin_size, **kwargs)
+    import gzip
+    import numpy as np
+    import pandas as pd
+    import scipy.sparse as sp
+
+    def _tile_grid(chrom_sizes, bin_size):
+        """Return (chrom_offsets, total_tiles, tile_labels)."""
+        offsets = {}
+        labels = []
+        base = 0
+        for chrom, length in chrom_sizes.items():
+            offsets[chrom] = base
+            n = (int(length) + bin_size - 1) // bin_size
+            for i in range(n):
+                labels.append(f"{chrom}:{i*bin_size}-{(i+1)*bin_size - 1}")
+            base += n
+        return offsets, base, labels
+
+    def _open_fragment_file(path):
+        """Return an iterator yielding (chrom, start, end, barcode, count)
+        tuples from a fragments.tsv[.gz] file.
+        """
+        path = str(path)
+        opener = gzip.open if path.endswith(".gz") else open
+        fh = opener(path, "rt")
+        try:
+            for line in fh:
+                if not line or line.startswith("#"):
+                    continue
+                parts = line.rstrip("\n").split("\t")
+                if len(parts) < 4:
+                    continue
+                chrom = parts[0]
+                try:
+                    start = int(parts[1])
+                    end = int(parts[2])
+                except ValueError:
+                    continue
+                bc = parts[3]
+                cnt = int(parts[4]) if len(parts) >= 5 and parts[4].isdigit() else 1
+                yield chrom, start, end, bc, cnt
+        finally:
+            fh.close()
+
+    if "files" not in adata.uns or "fragments" not in adata.uns["files"]:
+        raise ValueError("adata.uns['files']['fragments'] missing — "
+                         "run epi.pp.import_fragments first")
+    if "reference_sequences" not in adata.uns:
+        raise ValueError("adata.uns['reference_sequences'] missing")
+
+    fragment_file = adata.uns["files"]["fragments"]
+    chrom_sizes = dict(adata.uns["reference_sequences"])
+
+    counting_strategy = kwargs.get("counting_strategy", "paired-insertion")
+    chrM = kwargs.get("chrM", ("chrM", "M", "chrMT", "MT"))
+    verbose = kwargs.get("verbose", True)
+
+    chrom_offsets, n_tiles, tile_labels = _tile_grid(chrom_sizes, bin_size)
+
+    barcodes = list(adata.obs_names)
+    bc_to_idx = {b: i for i, b in enumerate(barcodes)}
+    n_cells = len(barcodes)
+
+    if verbose:
+        print(f"building tile matrix: {n_cells:,} cells x {n_tiles:,} tiles "
+              f"({bin_size} bp bins, strategy={counting_strategy})")
+
+    rows, cols, data = [], [], []
+    chrM_set = set(chrM)
+    for chrom, start, end, bc, cnt in _open_fragment_file(fragment_file):
+        if bc not in bc_to_idx:
+            continue
+        if chrom in chrM_set or chrom not in chrom_offsets:
+            continue
+        i = bc_to_idx[bc]
+        base = chrom_offsets[chrom]
+        t1 = base + start // bin_size
+        t2 = base + (end - 1) // bin_size
+
+        if counting_strategy == "insertion":
+            rows.append(i)
+            cols.append(t1)
+            data.append(cnt)
+            if t2 != t1:
+                rows.append(i)
+                cols.append(t2)
+                data.append(cnt)
+        elif counting_strategy == "paired-insertion":
+            rows.append(i)
+            cols.append(t1)
+            data.append(cnt)
+            if t2 != t1:
+                rows.append(i)
+                cols.append(t2)
+                data.append(cnt)
+        elif counting_strategy == "fragment":
+            for t in range(t1, t2 + 1):
+                rows.append(i)
+                cols.append(t)
+                data.append(cnt)
+        else:
+            raise ValueError(f"unknown counting_strategy={counting_strategy!r}")
+
+    X = sp.coo_matrix(
+        (data, (rows, cols)),
+        shape=(n_cells, n_tiles), dtype=np.int32,
+    ).tocsr()
+    X.sum_duplicates()
+
+    # FIX (#840): Use internal attributes to bypass anndata shape validation.
+    # epione's original code tries `adata.X = X` first, which fails because
+    # anndata validates X shape against the current var length (0 columns).
+    # Setting `adata.var = var_df` first also fails for the same reason
+    # (anndata validates var length against the current X columns = 0).
+    # The solution is to use internal `_var` and `_X` attributes directly.
+    var_df = pd.DataFrame(index=pd.Index(tile_labels, name="tile", dtype=str))
+    adata._var = var_df
+    adata._X = X
+
+    if verbose:
+        print(f"tile matrix nnz={X.nnz:,}")
+
+    return adata
 
 
 def select_features(adata, n_features: int = 500_000, **kwargs):
