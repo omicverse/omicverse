@@ -86,8 +86,10 @@ def test_utils_plot_wrapper_warns_and_delegates(monkeypatch):
 
     assert calls == [("plot_set", (1,), {"dpi": 120})]
     assert caught
-    assert "will be removed in omicverse 2.2" in str(caught[0].message)
-    assert "ov.pl.plot_set" in str(caught[0].message)
+    dep_warnings = [w for w in caught if issubclass(w.category, DeprecationWarning)]
+    assert dep_warnings, f"Expected DeprecationWarning, got: {[w.category.__name__ for w in caught]}"
+    assert "will be removed in omicverse 2.2" in str(dep_warnings[0].message)
+    assert "ov.pl.plot_set" in str(dep_warnings[0].message)
 
 
 def test_utils_scatterplot_wrapper_warns_and_delegates(monkeypatch):
@@ -130,7 +132,9 @@ def test_utils_scatterplot_wrapper_warns_and_delegates(monkeypatch):
 
     assert calls == [("embedding", ("adata",), {"basis": "X_umap"})]
     assert caught
-    assert "ov.pl.embedding" in str(caught[0].message)
+    dep_warnings = [w for w in caught if issubclass(w.category, DeprecationWarning)]
+    assert dep_warnings, f"Expected DeprecationWarning, got: {[w.category.__name__ for w in caught]}"
+    assert "ov.pl.embedding" in str(dep_warnings[0].message)
 
 
 def test_utils_venn_wrapper_warns_and_delegates(monkeypatch):
@@ -156,4 +160,6 @@ def test_utils_venn_wrapper_warns_and_delegates(monkeypatch):
 
     assert calls == [("venny4py", (), {"sets": {"A": {1}}})]
     assert caught
-    assert "ov.pl.venn" in str(caught[0].message)
+    dep_warnings = [w for w in caught if issubclass(w.category, DeprecationWarning)]
+    assert dep_warnings, f"Expected DeprecationWarning, got: {[w.category.__name__ for w in caught]}"
+    assert "ov.pl.venn" in str(dep_warnings[0].message)
