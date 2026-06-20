@@ -67,6 +67,16 @@ from ._commot import create_communication_anndata,update_classification_from_dat
 from ._tissue_zones import nmf_tissue_zones, TissueZones
 from ._deconvolution import Deconvolution,calculate_gene_signature
 from ._split import split_balance, split_purify, split_reassign_residuals, split_spatial_score
+from ._spata2 import (
+    spata2_extract_variables,
+    spata2_get_coords,
+    spata2_identify_outliers,
+    spata2_join_variables,
+    spata2_pixels_to_unit,
+    spata2_remove_outliers,
+    spata2_tissue_outline,
+    spata2_unit_to_pixels,
+)
 
 _TORCH_DEPS = ("torch", "torch_geometric")
 
@@ -151,4 +161,12 @@ __all__ = [
     'split_spatial_score',
     'split_balance',
     'split_reassign_residuals',
+    'spata2_get_coords',
+    'spata2_extract_variables',
+    'spata2_join_variables',
+    'spata2_tissue_outline',
+    'spata2_identify_outliers',
+    'spata2_remove_outliers',
+    'spata2_pixels_to_unit',
+    'spata2_unit_to_pixels',
 ]
