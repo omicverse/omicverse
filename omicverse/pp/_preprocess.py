@@ -657,7 +657,7 @@ def preprocess(
     adata, mode='shiftlog|pearson', 
     target_sum=50*1e4, n_HVGs=2000,
     organism='human', no_cc=False,batch_key=None,
-    identify_robust=True):
+    identify_robust=True, exclude_highly_expressed=None):
     """
     Preprocesses the AnnData object adata using either a scanpy or 
     a pearson residuals workflow for size normalization
@@ -674,8 +674,12 @@ def preprocess(
         size normalization using scanpy's experimental.pp.normalize_pearson_residuals() function. 
         target_sum: The target total count after normalization.
         n_HVGs: the number of HVGs to select.
-        organism: The organism of the data. It can be either 'human' or 'mouse'. 
+        organism: The organism of the data. It can be either 'human' or 'mouse'.
         no_cc: Whether to remove cc-correlated genes from HVGs.
+        identify_robust: Whether to filter to robust genes before normalization.
+        exclude_highly_expressed: Whether to exclude highly expressed genes
+            when computing the size factor in shiftlog normalization. If
+            ``None``, preserves the existing backend defaults.
 
     Returns:
         adata: The preprocessed data matrix.
@@ -741,6 +745,12 @@ def preprocess(
         print(f"{EMOJI['done']} Robust gene identification completed successfully.")
     method_list = mode.split('|')
     print(f"{Colors.CYAN}Begin size normalization: {method_list[0]} and HVGs selection {method_list[1]}{Colors.ENDC}")
+    if exclude_highly_expressed is None:
+        normalize_exclude_highly_expressed = (
+            is_oom or settings.mode == 'cpu' or settings.mode == 'cpu-gpu-mixed'
+        )
+    else:
+        normalize_exclude_highly_expressed = exclude_highly_expressed
     if is_oom:
         # Out-of-memory path — lazy transforms, no full materialisation
         from anndataoom import (
@@ -752,7 +762,7 @@ def preprocess(
         chunked_normalize_total(
             adata,
             target_sum=target_sum,
-            exclude_highly_expressed=True,
+            exclude_highly_expressed=normalize_exclude_highly_expressed,
             max_fraction=0.2,
         )
         chunked_log1p(adata)
@@ -783,7 +793,7 @@ def preprocess(
             normalize_total(
                 adata,
                 target_sum=target_sum,
-                exclude_highly_expressed=True,
+                exclude_highly_expressed=normalize_exclude_highly_expressed,
                 max_fraction=0.2,
             )
             log1p(adata)
@@ -826,7 +836,12 @@ def preprocess(
         import rapids_singlecell as rsc
         data_load_start = time.time()
         if method_list[0] == 'shiftlog': # Size normalization + scanpy batch aware HVGs selection
-            rsc.pp.normalize_total(adata, target_sum=target_sum)
+            rsc.pp.normalize_total(
+                adata,
+                target_sum=target_sum,
+                exclude_highly_expressed=normalize_exclude_highly_expressed,
+                max_fraction=0.2,
+            )
             rsc.pp.log1p(adata)
         elif method_list[0] == 'pearson':
             # Perason residuals workflow
@@ -891,6 +906,7 @@ def preprocess(
     adata.uns['status']['preprocess']=True
     adata.uns['status_args']['preprocess']={
         'mode':mode, 'target_sum':target_sum, 'n_HVGs':n_HVGs,
+        'exclude_highly_expressed': normalize_exclude_highly_expressed,
         'organism':organism,
     }
     add_reference(adata,'scanpy','size normalization with scanpy')

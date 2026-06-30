@@ -1735,82 +1735,80 @@ class cNMF():
         result_dict['top_genes'] = top_genes
         return result_dict
 
-    def get_results_rfc(self,adata,result_dict,use_rep='STAGATE',cNMF_threshold=0.5):
-        import pandas as pd
-        if result_dict['usage_norm'].columns[0] in adata.obs.columns:
-            #remove the columns if they already exist
-            #remove columns name starts with 'cNMF'
-            adata.obs = adata.obs.loc[:,~adata.obs.columns.str.startswith('cNMF')]
-        adata.obs = pd.merge(left=adata.obs, right=result_dict['usage_norm'], 
-                             how='left', left_index=True, right_index=True)
-        adata.var = pd.merge(left=adata.var,right=result_dict['gep_scores'].loc[adata.var.index],
-                             how='left', left_index=True, right_index=True)
-        
-        import numpy as np
-        import pandas as pd
-        import matplotlib.pyplot as plt
-        from sklearn.tree import DecisionTreeClassifier
-        from sklearn.ensemble import RandomForestClassifier
-        from sklearn.model_selection import train_test_split
+    def _align_results_to_adata(self, adata, result_dict):
+        usage = result_dict['usage_norm']
+        gep_scores = result_dict['gep_scores']
 
-        new_array = []
-        class_array = []
-        for i in range(1, result_dict['usage_norm'].shape[1] + 1):
-            data = adata[adata.obs[f'cNMF_{i}'] > cNMF_threshold].obsm[use_rep].toarray()
-            new_array.append(data)
-            class_array.append(np.full(data.shape[0], i))
+        if not adata.obs_names.is_unique:
+            raise ValueError("adata.obs_names must be unique before mapping cNMF results.")
+        if not usage.index.is_unique:
+            raise ValueError("result_dict['usage_norm'].index must be unique before mapping cNMF results.")
+        if not adata.var_names.is_unique:
+            raise ValueError("adata.var_names must be unique before mapping cNMF gene scores.")
+        if not gep_scores.index.is_unique:
+            raise ValueError("result_dict['gep_scores'].index must be unique before mapping cNMF gene scores.")
 
-        new_array = np.concatenate(new_array, axis=0)
-        class_array = np.concatenate(class_array)
+        missing_cells = adata.obs_names.difference(usage.index)
+        if len(missing_cells) > 0:
+            n_missing = len(missing_cells)
+            noun = "cell" if n_missing == 1 else "cells"
+            examples = ", ".join(map(str, missing_cells[:5]))
+            raise ValueError(
+                "adata.obs_names must all be present in result_dict['usage_norm'].index "
+                f"before mapping cNMF results. Missing {n_missing} {noun}; "
+                f"examples: {examples}"
+            )
 
-        Xtrain, Xtest, Ytrain, Ytest = train_test_split(new_array,class_array,test_size=0.3)
-        clf = DecisionTreeClassifier(random_state=0)
-        rfc = RandomForestClassifier(random_state=0)
-        clf = clf.fit(Xtrain,Ytrain)
-        rfc = rfc.fit(Xtrain,Ytrain)
-        #查看模型效果
-        score_c = clf.score(Xtest,Ytest)
-        score_r = rfc.score(Xtest,Ytest)
-        #打印最后结果
-        print("Single Tree:",score_c)
-        print("Random Forest:",score_r)
+        missing_genes = adata.var_names.difference(gep_scores.index)
+        if len(missing_genes) > 0:
+            n_missing = len(missing_genes)
+            noun = "gene" if n_missing == 1 else "genes"
+            examples = ", ".join(map(str, missing_genes[:5]))
+            raise ValueError(
+                "adata.var_names must all be present in result_dict['gep_scores'].index "
+                f"before mapping cNMF gene scores. Missing {n_missing} {noun}; "
+                f"examples: {examples}"
+            )
 
-        adata.obs['cNMF_cluster_rfc']=[str(i) for i in rfc.predict(adata.obsm[use_rep])]
-        adata.obs['cNMF_cluster_clf']=[str(i) for i in clf.predict(adata.obsm[use_rep])]
-        print('cNMF_cluster_rfc is added to adata.obs')
-        print('cNMF_cluster_clf is added to adata.obs')
+        generated_obs_columns = {'cNMF_cluster', 'cNMF_cluster_rfc', 'cNMF_cluster_clf'}
+        cNMF_columns = adata.obs.columns.astype(str).str.match(r'^cNMF_\d+$')
+        stale_columns = adata.obs.columns[cNMF_columns | adata.obs.columns.isin(generated_obs_columns)]
+        if len(stale_columns) > 0:
+            adata.obs = adata.obs.drop(columns=stale_columns)
+
+        usage = usage.reindex(adata.obs_names)
+        gep_scores = gep_scores.reindex(adata.var_names)
+        stale_gene_score_columns = [
+            column
+            for column in adata.var.columns
+            if isinstance(column, (int, np.integer)) and column >= 1
+        ]
+        adata.var = adata.var.drop(columns=stale_gene_score_columns)
+        for column in usage.columns:
+            adata.obs[column] = usage[column].to_numpy()
+        for column in gep_scores.columns:
+            adata.var[column] = gep_scores[column].to_numpy()
+        return usage
 
     def get_results(self,adata,result_dict):
-        import pandas as pd
-        if result_dict['usage_norm'].columns[0] in adata.obs.columns:
-            #remove the columns if they already exist
-            #remove columns name starts with 'cNMF'
-            adata.obs = adata.obs.loc[:,~adata.obs.columns.str.startswith('cNMF')]
-        adata.obs = pd.merge(left=adata.obs, right=result_dict['usage_norm'], 
-                             how='left', left_index=True, right_index=True)
-        adata.var = pd.merge(left=adata.var,right=result_dict['gep_scores'].loc[adata.var.index],
-                             how='left', left_index=True, right_index=True)
-        df=adata.obs[result_dict['usage_norm'].columns].copy()
+        usage = self._align_results_to_adata(adata, result_dict)
+        print('gene scores are added to adata.var')
+        df=adata.obs[usage.columns].copy()
         max_topic = df.idxmax(axis=1)
         # 将结果添加到DataFrame中
         adata.obs['cNMF_cluster'] = max_topic
         print('cNMF_cluster is added to adata.obs')
-        print('gene scores are added to adata.var')
 
     def get_results_rfc(self,adata,result_dict,use_rep='STAGATE',cNMF_threshold=0.5):
-        import pandas as pd
-        if result_dict['usage_norm'].columns[0] in adata.obs.columns:
-            #remove the columns if they already exist
-            #remove columns name starts with 'cNMF'
-            adata.obs = adata.obs.loc[:,~adata.obs.columns.str.startswith('cNMF')]
-        adata.obs = pd.merge(left=adata.obs, right=result_dict['usage_norm'], 
-                             how='left', left_index=True, right_index=True)
-        adata.var = pd.merge(left=adata.var,right=result_dict['gep_scores'].loc[adata.var.index],
-                             how='left', left_index=True, right_index=True)
+        """
+        Map cNMF results to ``adata`` and train RFC/decision-tree cluster labels.
+
+        This replaces existing cNMF usage and generated cNMF cluster columns,
+        including ``cNMF_cluster`` from ``get_results``.
+        """
+        self._align_results_to_adata(adata, result_dict)
 
         import numpy as np
-        import pandas as pd
-        import matplotlib.pyplot as plt
         from sklearn.tree import DecisionTreeClassifier
         from sklearn.ensemble import RandomForestClassifier
         from sklearn.model_selection import train_test_split
@@ -1818,9 +1816,18 @@ class cNMF():
         new_array = []
         class_array = []
         for i in range(1, result_dict['usage_norm'].shape[1] + 1):
-            data = adata[adata.obs[f'cNMF_{i}'] > cNMF_threshold].obsm[use_rep].toarray()
+            data = adata[adata.obs[f'cNMF_{i}'] > cNMF_threshold].obsm[use_rep]
+            data = data.toarray() if hasattr(data, "toarray") else np.asarray(data)
+            if data.shape[0] == 0:
+                continue
             new_array.append(data)
             class_array.append(np.full(data.shape[0], i))
+
+        if len(new_array) < 2:
+            raise ValueError(
+                "At least two cNMF factors must have cells above cNMF_threshold "
+                "to train cNMF random forest classifiers."
+            )
 
         new_array = np.concatenate(new_array, axis=0)
         class_array = np.concatenate(class_array)
@@ -1837,8 +1844,10 @@ class cNMF():
         print("Single Tree:",score_c)
         print("Random Forest:",score_r)
 
-        adata.obs['cNMF_cluster_rfc']=[str(i) for i in rfc.predict(adata.obsm[use_rep])]
-        adata.obs['cNMF_cluster_clf']=[str(i) for i in clf.predict(adata.obsm[use_rep])]
+        prediction_data = adata.obsm[use_rep]
+        prediction_data = prediction_data.toarray() if hasattr(prediction_data, "toarray") else np.asarray(prediction_data)
+        adata.obs['cNMF_cluster_rfc']=[str(i) for i in rfc.predict(prediction_data)]
+        adata.obs['cNMF_cluster_clf']=[str(i) for i in clf.predict(prediction_data)]
         print('cNMF_cluster_rfc is added to adata.obs')
         print('cNMF_cluster_clf is added to adata.obs')
 

@@ -41,13 +41,14 @@ jobs:
     - name: Install dependencies
       run: |
         uv venv .venv --python ${{ matrix.python-version }}
-        # Run CI on numpy>=2 (omicverse core supports it) and keep jax on the
+        # Run CI on numpy>=2,<2.5 (omicverse core supports numpy 2, while numba
+        # has not yet accepted numpy 2.5) and keep jax on the
         # 0.6.x line. On py3.11/3.12 the resolver otherwise pulls jax 0.10.x
         # (transitively via mellon), which is broken against numpy 2.4.x
         # (`np.dtypes.StringDType`) and crashes test collection. jax 0.6.2 is
         # the version py3.10 already resolved + passed with, on numpy 2.2.6.
-        uv pip install --python .venv/bin/python 'numpy>=2' 'jax<0.7' 'jaxlib<0.7' flake8 torch tensorboard mellon torch_geometric POT wget lifelines boltons ctxcore ktplotspy leidenalg datashader graphtools phate python-dotplot metatime pydeseq2 bioservices tomli wandb munch datasets
-        uv pip install --python .venv/bin/python -e ".[tests,mcp]" 'numpy>=2' 'jax<0.7' 'jaxlib<0.7'
+        uv pip install --python .venv/bin/python 'numpy>=2,<2.5' 'jax<0.7' 'jaxlib<0.7' flake8 torch tensorboard mellon torch_geometric POT wget lifelines boltons ctxcore ktplotspy leidenalg datashader graphtools phate python-dotplot metatime pydeseq2 bioservices tomli wandb munch datasets
+        uv pip install --python .venv/bin/python -e ".[tests,mcp]" 'numpy>=2,<2.5' 'jax<0.7' 'jaxlib<0.7'
     - name: Lint with flake8
       run: |
         source .venv/bin/activate

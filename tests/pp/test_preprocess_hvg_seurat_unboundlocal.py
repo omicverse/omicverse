@@ -95,3 +95,55 @@ def test_preprocess_shiftlog_modes_do_not_raise_unboundlocal(hvg_method):
         f"preprocess(mode='shiftlog|{hvg_method}') selected {n_hvg} HVGs; "
         f"expected ~200 from `n_HVGs=200`"
     )
+
+
+def test_preprocess_shiftlog_can_disable_high_expression_exclusion():
+    """Expose Scanpy's high-expression exclusion switch through preprocess.
+
+    With exclusion enabled, the size factor is computed from non-excluded
+    genes and then applied to the whole matrix, so a dominant gene can exceed
+    ``log1p(target_sum)``. Disabling exclusion restores the usual row-sum bound.
+    """
+    import omicverse as ov
+
+    target_sum = 10000
+    adata_without_exclusion = _synthetic_counts_adata()
+    adata_without_exclusion.X = adata_without_exclusion.X.toarray()
+    adata_without_exclusion.X[0, 0] = 1000
+    adata_without_exclusion.X[0, 1:] = 1
+    adata_without_exclusion.layers["counts"] = sp.csr_matrix(
+        adata_without_exclusion.X.astype(np.float32)
+    )
+    adata_with_exclusion = _synthetic_counts_adata()
+    adata_with_exclusion.X = adata_without_exclusion.X.copy()
+    adata_with_exclusion.layers["counts"] = adata_without_exclusion.layers[
+        "counts"
+    ].copy()
+
+    ov.pp.preprocess(
+        adata_with_exclusion,
+        mode="shiftlog|pearson",
+        n_HVGs=200,
+        target_sum=target_sum,
+        identify_robust=False,
+        no_cc=False,
+    )
+
+    ov.pp.preprocess(
+        adata_without_exclusion,
+        mode="shiftlog|pearson",
+        n_HVGs=200,
+        target_sum=target_sum,
+        exclude_highly_expressed=False,
+        identify_robust=False,
+        no_cc=False,
+    )
+
+    assert float(adata_with_exclusion.X.max()) > np.log1p(target_sum)
+    assert float(adata_without_exclusion.X.max()) <= np.log1p(target_sum) + 1e-4
+    assert (
+        adata_without_exclusion.uns["status_args"]["preprocess"][
+            "exclude_highly_expressed"
+        ]
+        is False
+    )

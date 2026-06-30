@@ -86,8 +86,9 @@ def test_utils_plot_wrapper_warns_and_delegates(monkeypatch):
 
     assert calls == [("plot_set", (1,), {"dpi": 120})]
     assert caught
-    assert "will be removed in omicverse 2.2" in str(caught[0].message)
-    assert "ov.pl.plot_set" in str(caught[0].message)
+    messages = [str(warning.message) for warning in caught]
+    assert any("will be removed in omicverse 2.2" in message for message in messages)
+    assert any("ov.pl.plot_set" in message for message in messages)
 
 
 def test_utils_scatterplot_wrapper_warns_and_delegates(monkeypatch):
