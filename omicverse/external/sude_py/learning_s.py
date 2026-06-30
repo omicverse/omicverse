@@ -538,8 +538,8 @@ def _learning_s_torch(X_samp, k1, get_knn, rnn, id_samp, no_dims, initialize, ag
         D_squared = torch.clamp(D_squared, min=0.0)
 
         # GPU-accelerated element-wise operations
-        Q1 = 1 / (1 + torch.log1p(D_squared) + eps)
-        QQ1 = 1 / (1 + D_squared + eps)
+        Q1 = 1 / (1 + torch.log1p(D_squared))
+        QQ1 = 1 / (1 + D_squared)
         Q1.fill_diagonal_(0) 
         Q = Q1 / (torch.sum(Q1) + eps)  # 因为对角线已经是0，所以不需要再减去 N
         
