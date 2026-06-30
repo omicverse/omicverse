@@ -3413,7 +3413,12 @@ class pyWGCNA(GeneExp):
         print(f"{BOLD}{OKBLUE}Saving WGCNA as {self.name}.p{ENDC}")
 
         picklefile = open(self.outputPath + self.name + '.p', 'wb')
-        pickle.dump(self, picklefile)
+        try:
+            import dill
+            dill.dump(self, picklefile)
+        except ImportError:
+            import pickle
+            pickle.dump(self, picklefile)
         picklefile.close()
 
     def getDatTraits(self, metaData):

@@ -73,7 +73,7 @@ def plot_heatmap(
         else adata[:, var_names].X
     )
     if issparse(X):
-        X = X.A
+        X = X.toarray()
     df = pd.DataFrame(X[np.argsort(time)], columns=var_names)
 
     if n_convolve is not None:
@@ -583,6 +583,7 @@ def set_colors_for_categorical_obs(adata, value_to_plot, palette=None):
             colors_list = [to_hex(x) for x in cmap(np.linspace(0, 1, length))]
 
         else:
+            from collections import abc
             # check if palette is an array of length n_obs
             if isinstance(palette, (list, np.ndarray)) or is_categorical(palette):
                 if len(adata.obs[value_to_plot]) == len(palette):

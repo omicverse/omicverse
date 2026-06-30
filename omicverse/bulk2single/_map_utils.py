@@ -63,11 +63,11 @@ def create_st(generate_sc_data, generate_sc_meta, spot_num, cell_num, gene_num, 
             #meta = meta.append(row, ignore_index=True)
 
     if marker_used:
-        import scanpy as sc
-        adata = sc.AnnData(sc.T)
+        import scanpy as scp
+        adata = scp.AnnData(sc.T)
 
         adata.obs = sc_ct[['Cell_type']]
-        sc.tl.rank_genes_groups(adata, 'Cell_type', method='wilcoxon')
+        scp.tl.rank_genes_groups(adata, 'Cell_type', method='wilcoxon')
         marker_df = pd.DataFrame(adata.uns['rank_genes_groups']['names']).head(gene_num)
         marker_array = np.array(marker_df)
         marker_array = np.ravel(marker_array)
@@ -484,10 +484,10 @@ class DFRunner:
         if marker_used:
             print('select top %d marker genes of each cell type...' % top_marker_num)
 
-            sc = sc.AnnData(self.sc_test.T)
-            sc.obs = self.cell_type[['Cell_type']]
-            sc.tl.rank_genes_groups(sc, 'Cell_type', method='wilcoxon')
-            marker_df = pd.DataFrame(sc.uns['rank_genes_groups']['names']).head(top_marker_num)
+            scdata = sc.AnnData(self.sc_test.T)
+            scdata.obs = self.cell_type[['Cell_type']]
+            sc.tl.rank_genes_groups(scdata, 'Cell_type', method='wilcoxon')
+            marker_df = pd.DataFrame(scdata.uns['rank_genes_groups']['names']).head(top_marker_num)
             marker_array = np.array(marker_df)
             marker_array = np.ravel(marker_array)
             marker_array = np.unique(marker_array)

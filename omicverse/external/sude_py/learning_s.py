@@ -523,6 +523,9 @@ def _learning_s_torch(X_samp, k1, get_knn, rnn, id_samp, no_dims, initialize, ag
     warm_step = 10
     preGrad_torch = torch.zeros((N, no_dims), device=device)
     
+    # 设定一个极小值 eps，用于防止除以零和 log(0)
+    eps = 1e-12
+
     for epoch in tqdm(range(1, T_epoch + 1), desc=f"Training epochs (Torch-{device.upper()})", unit="epoch"):
         if epoch <= warm_step:
             alpha = max_alpha
@@ -532,16 +535,25 @@ def _learning_s_torch(X_samp, k1, get_knn, rnn, id_samp, no_dims, initialize, ag
         
         # GPU-accelerated distance computation
         D_squared = _compute_full_pairwise_distances_torch(Y_torch, device)
-        
+        D_squared = torch.clamp(D_squared, min=0.0)
+
         # GPU-accelerated element-wise operations
-        Q1 = 1 / (1 + torch.log(1 + D_squared))
-        QQ1 = 1 / (1 + D_squared)
-        Q = Q1 / (torch.sum(Q1) - N)
+        Q1 = 1 / (1 + torch.log1p(D_squared) + eps)
+        QQ1 = 1 / (1 + D_squared + eps)
+        Q1.fill_diagonal_(0) 
+        Q = Q1 / (torch.sum(Q1) + eps)  # 因为对角线已经是0，所以不需要再减去 N
         
         # GPU-accelerated matrix operations
         ProMatY = 4 * (P_torch - Q) * Q1 * QQ1
-        diag_sum = torch.diag(torch.sum(ProMatY, dim=0))
+        ProMatY.fill_diagonal_(0) # 确保对角线不产生自排斥力
+        diag_sum = torch.sum(ProMatY, dim=0)
         grad = (torch.diag(diag_sum) - ProMatY) @ Y_torch
+
+        # 如果梯度的 L2 范数超过阈值，则等比缩放梯度
+        grad_norm = torch.norm(grad)
+        max_grad_norm = 5.0 * N # 阈值可根据数据调整，通常与 N 相关
+        if grad_norm > max_grad_norm:
+            grad = grad * (max_grad_norm / grad_norm)
         
         # Update embedding
         Y_torch = Y_torch - alpha * (grad + (epoch - 1) / (epoch + 2) * preGrad_torch)

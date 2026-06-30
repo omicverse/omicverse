@@ -1899,6 +1899,7 @@ def umap(
             try:
                 print(f"{EMOJI['gpu']} Using RAPIDS GPU UMAP...")
                 import rapids_singlecell as rsc
+                kwargs.pop("gamma", None)
                 rsc.tl.umap(adata, **kwargs)
                 add_reference(adata, 'umap', 'UMAP with RAPIDS')
                 note(backend=f"omicverse({settings.mode}) · rapids")

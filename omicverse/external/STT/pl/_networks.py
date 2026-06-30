@@ -222,8 +222,8 @@ class NetworkPlot(object):
         if isinstance(state_colors, list) and not len(state_colors) == n:
             raise ValueError("Mistmatch between nstates and nr. state_colors (%u vs %u)" % (n, len(state_colors)))
         try:
-            from pyemma.util import types as _types
-            colorscales = _types.ensure_ndarray(state_colors, ndim=1, kind='numeric')
+            import numpy as np
+            colorscales = np.array([int(c.replace('#', '0x'), 16) for c in state_colors], dtype=float)
             colorscales /= colorscales.max()
             state_colors = [_plt.cm.binary(int(256.0 * colorscales[i])) for i in range(n)]
         except AssertionError:
@@ -298,8 +298,10 @@ class NetworkPlot(object):
         # nothing to do
         elif self.xpos is not None and self.ypos is not None:
             return _np.array([self.xpos, self.ypos]), 0
-        from pyemma.plots._ext.fruchterman_reingold import _fruchterman_reingold
-        best_pos = _fruchterman_reingold(G, pos=initpos, dim=2, hold_dim=holddim)
+        import networkx as nx
+        import numpy as np
+        best_pos_dict = nx.spring_layout(G, pos=initpos, dim=2, fixed=holddim)
+        best_pos = np.array([best_pos_dict[i] for i in range(len(best_pos_dict))])
 
         # rescale fixed to user settings and balance the other coordinate
         if self.xpos is not None:

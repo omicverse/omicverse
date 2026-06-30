@@ -176,8 +176,8 @@ class RegressionBackgroundDetectionTechPyroModel(PyroModule):
         }
 
     def forward(self, x_data, idx, batch_index, label_index, extra_categoricals):
-        obs2sample = one_hot(batch_index, self.n_batch)
-        obs2label = one_hot(label_index, self.n_factors)
+        obs2sample = one_hot(batch_index, self.n_batch).float()
+        obs2label = one_hot(label_index, self.n_factors).float()
         if self.n_extra_categoricals is not None:
             obs2extra_categoricals = torch.cat(
                 [
@@ -284,7 +284,7 @@ class RegressionBackgroundDetectionTechPyroModel(PyroModule):
         with obs_plate:
             pyro.sample(
                 "data_target",
-                dist.GammaPoisson(concentration=alpha, rate=alpha / mu),
+                dist.GammaPoisson(concentration=alpha, rate=alpha / mu).to_event(1),
                 # dist.NegativeBinomial(total_count=total_count, logits=logits),
                 obs=x_data,
             )

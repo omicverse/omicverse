@@ -247,7 +247,7 @@ class LocationModelWTAMultiExperimentHierarchicalGeneLevel(PyroModule):
     def forward(self, x_data, neg_data, n_nuclei, idx, batch_index):
         self.n_neg_probes = neg_data.shape[1]
 
-        obs2sample = one_hot(batch_index, self.n_batch)
+        obs2sample = one_hot(batch_index, self.n_batch).float()
 
         obs_plate = self.create_plates(x_data, neg_data, n_nuclei, idx, batch_index)
 
@@ -428,7 +428,7 @@ class LocationModelWTAMultiExperimentHierarchicalGeneLevel(PyroModule):
             k = "detection_y_s"
             detection_y_s = pyro.sample(
                 k,
-                dist.Gamma(obs2sample @ detection_hyp_prior_alpha, beta),
+                dist.Gamma(obs2sample @ detection_hyp_prior_alpha, beta).to_event(1),
             )  # (self.n_obs, 1)
 
             if (
@@ -484,7 +484,7 @@ class LocationModelWTAMultiExperimentHierarchicalGeneLevel(PyroModule):
             with obs_plate:
                 pyro.sample(
                     "data_target",
-                    dist.GammaPoisson(concentration=alpha, rate=alpha / mu),
+                    dist.GammaPoisson(concentration=alpha, rate=alpha / mu).to_event(1),
                     obs=torch.concat([neg_data, x_data], axis=1),
                 )
 

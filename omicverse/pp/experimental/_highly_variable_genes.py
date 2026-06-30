@@ -178,6 +178,11 @@ def _highly_variable_pearson_residuals(
         X_batch_prefilter = _get_obs_rep(adata_subset_prefilter, layer=layer)
         if is_rust:
             X_batch_prefilter = X_batch_prefilter[:]
+        # ========== 新增：剔除细胞总计数=0 ==========
+        nonzero_cells = np.ravel(X_batch_prefilter.sum(axis=1)) > 0
+        adata_subset_prefilter = adata_subset_prefilter[nonzero_cells, :]
+        X_batch_prefilter = X_batch_prefilter[nonzero_cells, :]
+        # ===========================================
         # Filter out zero genes
         nonzero_genes = np.ravel(X_batch_prefilter.sum(axis=0)) != 0
         adata_subset = adata_subset_prefilter[:, nonzero_genes]

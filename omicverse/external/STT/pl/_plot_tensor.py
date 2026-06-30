@@ -60,23 +60,22 @@ def plot_tensor_single(adata, adata_aggr = None, state = 'joint',
             velo[cell_id_filtered,:,:] = 0
     adata_aggr_copy = adata_aggr.copy()
     adata_copy = adata.copy()
-    adata_aggr = adata_aggr_copy[:,adata_aggr.uns['gene_subset']]
+    adata_aggr = adata_aggr_copy[:,adata_aggr.uns['gene_subset']].copy()
     gene_select = [x in adata.uns['gene_subset'] for x in adata.var_names]
-    adata = adata_copy[:,gene_select]
-    #print(adata)
+    adata = adata_copy[:,gene_select].copy()
         
     if state == 'spliced':
         adata.layers['vs'] = velo[:,gene_select,1]
-        scv.tl.velocity_graph(adata, vkey = 'vs', xkey = 'Ms',n_jobs = n_jobs)
+        scv.tl.velocity_graph(adata, vkey = 'vs', xkey = 'Ms',n_jobs = n_jobs,show_progress_bar=False)
         scv.pl.velocity_embedding_stream(adata, vkey = 'vs', basis=basis, color=color, title = title+','+'Spliced',color_map = color_map, size = size, alpha = alpha, ax = ax, show = show,**kwargs)
     if state == 'unspliced':
         adata.layers['vu'] = velo[:,gene_select,0]
-        scv.tl.velocity_graph(adata, vkey = 'vu', xkey = 'Mu',n_jobs = n_jobs)
+        scv.tl.velocity_graph(adata, vkey = 'vu', xkey = 'Mu',n_jobs = n_jobs,show_progress_bar=False)
         scv.pl.velocity_embedding_stream(adata, vkey = 'vu',basis=basis, color=color, title = title+','+'Unspliced',color_map = color_map, size = size, alpha = alpha, ax = ax, show = show,**kwargs)
     if state == 'joint':
         print("check that the input includes aggregated object")
         #adata_aggr.layers['vj'] = np.concatenate((velo[:,gene_select,0],velo[:,gene_select,1]),axis = 1)
-        scv.tl.velocity_graph(adata_aggr, vkey = 'vj', xkey = 'Ms',n_jobs = n_jobs)
+        scv.tl.velocity_graph(adata_aggr, vkey = 'vj', xkey = 'Ms',n_jobs = n_jobs,show_progress_bar=False)
         scv.pl.velocity_embedding_stream(adata_aggr, vkey = 'vj',basis=basis, color=color, 
         title = title+','+'Joint',color_map = color_map, size = size, 
         alpha = alpha, ax = ax, show = show, density =density,**kwargs)
@@ -208,7 +207,7 @@ def plot_pathway(adata,figsize = (10,10),fontsize = 12,cmp='Set2',size = 20):
     fig, ax = plt.subplots(figsize = figsize)
     c_labels = adata.uns['pathway_labels']
     num_clusters = max(c_labels)+1
-    cmap = plt.cm.get_cmap(cmp, num_clusters)
+    cmap = plt.get_cmap(cmp, num_clusters)
 
     # Map the labels to colors using the colormap
     colors = cmap(c_labels/ num_clusters)

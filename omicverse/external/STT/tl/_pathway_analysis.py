@@ -22,7 +22,7 @@ def optimal_kmeans(data, k_range):
     final_labels = kmeans.fit_predict(data)
     return final_labels
 
-def compute_pathway(adata,adata_aggr,pathway,gene_num = 3,n_components=10):
+def compute_pathway(adata,adata_aggr,pathway,gene_num = 3,n_components=10,n_jobs=10):
     """
     Compute tensor similarities among pathways
 
@@ -70,8 +70,8 @@ def compute_pathway(adata,adata_aggr,pathway,gene_num = 3,n_components=10):
     idx = 0
     vj_graph_array = np.zeros((len(key_gene_list), adata_aggr.n_obs**2))
     for (key, gene_select, gene_pathway) in key_gene_list:
-        adata_aggr_select = adata_aggr[:,gene_pathway]
-        scv.tl.velocity_graph(adata_aggr_select, vkey = 'vj', xkey = 'Ms', n_jobs = -1)
+        adata_aggr_select = adata_aggr[:,gene_pathway].copy()
+        scv.tl.velocity_graph(adata_aggr_select, vkey = 'vj', xkey = 'Ms', n_jobs = n_jobs, show_progress_bar = False)
         adata_aggr.uns['vj_graph_'+key] = adata_aggr_select.uns['vj_graph']
         vj_graph_array[idx,] = adata_aggr_select.uns['vj_graph'].toarray().reshape(-1) 
         idx += 1

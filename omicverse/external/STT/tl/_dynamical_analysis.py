@@ -385,6 +385,8 @@ def dynamical_iteration(adata, n_states=None, n_states_seq=None,
     adata.layers['velo'] = adata.obsm['tensor_v_aver'][:,:,1]
     
     if return_aggr_obj:
+        if sc_object_aggr.is_view:
+            sc_object_aggr = sc_object_aggr.copy()
         sc_object_aggr.obs['entropy'] = adata.obs['entropy'].values
         sc_object_aggr.obs['speed'] = adata.obs['speed'].values
         sc_object_aggr.obs['attractor'] = adata.obs['attractor'].values

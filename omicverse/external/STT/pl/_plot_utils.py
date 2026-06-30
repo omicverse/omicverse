@@ -333,15 +333,15 @@ def infer_lineage(sc_object,si=0,sf=1,method = 'MPFT',
     -------
     None
     """
-    import pyemma.msm as msm
+    from deeptime.markov.msm import MarkovStateModel
     K = sc_object.obsm['rho'].shape[1]
     centers = sc_object.uns['land_out']['cluster_centers']
 
     
 
     P_hat = sc_object.uns['da_out']['P_hat']
-    M = msm.markov_model(P_hat)
-    mu_hat = M.pi
+    M = MarkovStateModel(P_hat)
+    mu_hat = M.stationary_distribution
 
     if ax == None:
         fig,ax= plt.subplots(1,1,figsize=(4,4))
@@ -373,9 +373,7 @@ def infer_lineage(sc_object,si=0,sf=1,method = 'MPFT',
         
         if isinstance(sf,int):
             sf = list(map(int, str(sf)))
-        import pyemma.msm as msm
-        
-        tpt = msm.tpt(M, si, sf)
+        tpt = M.reactive_flux(si, sf)
         Fsub = tpt.major_flux(fraction=flux_fraction)
         Fsubpercent = 100.0 * Fsub / tpt.total_flux
         

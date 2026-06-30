@@ -180,7 +180,7 @@ class Bulk2Single:
         if method=='scaden':
             CellFractionPrediction=ScadenDeconvolution(sc_ref,
                            self.bulk_data.T, sep=sep,
-                           batch_size=batch_size, epochs=epochs, scaler=scaler)
+                           batch_size=batch_size, epochs=epochs)#, scaler=scaler)
         elif method=='tape':
             SignatureMatrix, CellFractionPrediction = \
                 Deconvolution(sc_ref, self.bulk_data.T, sep=sep, scaler=scaler,

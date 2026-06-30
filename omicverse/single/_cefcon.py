@@ -238,7 +238,7 @@ def load_human_prior_interaction_network(dataset: str = 'nichenet',
     ],
     related=["single.load_human_prior_interaction_network", "single.pyCEFCON", "single.mouse_hsc_nestorowa16"]
 )
-def convert_human_to_mouse_network(net: pd.DataFrame,server_name='asia'):
+def convert_human_to_mouse_network(net: pd.DataFrame):
     """Convert a human-symbol interaction network to mouse symbols.
 
     Parameters
@@ -253,62 +253,60 @@ def convert_human_to_mouse_network(net: pd.DataFrame,server_name='asia'):
     pandas.DataFrame
         Converted mouse interaction edge table.
     """
-    global biomart_install
+    global gseapy_install
     try:
-        import biomart
-        biomart_install=True
+        from gseapy import Biomart
+        gseapy_install=True
     except ImportError:
         raise ImportError(
-            'Please install the biomart: `pip install -U biomart`.'
+            'Please install the gseapy: `pip install -U gseapy`.'
             )
 
 
     print('Convert genes of the prior interaction network to mouse gene symbols:')
     with tqdm(total=10, desc='Processing', miniters=1) as outer_bar:
         outer_bar.update()
-        if server_name!='asia':
-        # Set up connection to server
-            for name in ['ensembldb', 'asia', 'useast', 'martdb']:
-                try:
-                    server = biomart.BiomartServer(
-                        f'http://{name}.ensembl.org/biomart/')
-                    print(f'Server \'http://{name}.ensembl.org/biomart/\' is OK')
-                    break
-                except Exception as e:
-                    print(f'404 Client Error: Not Found for url: http://{name}.ensembl.org/biomart//martservice')
-        else:
-            server = biomart.BiomartServer(
-                        f'http://asia.ensembl.org/biomart/')
-            print(f'Server \'http://asia.ensembl.org/biomart/\' is OK')
 
-        human_dataset = server.datasets['hsapiens_gene_ensembl']
-        outer_bar.update()
-        mouse_dataset = server.datasets['mmusculus_gene_ensembl']
+        bm = None
+        try:
+            bm = Biomart()
+            print(f'Server is OK')
+        except Exception as e:
+            print(f"Connect failed!")
+
+        human_dataset_name = 'hsapiens_gene_ensembl'
+        mouse_dataset_name = 'mmusculus_gene_ensembl'
         outer_bar.update()
 
         human_attributes = ['ensembl_gene_id', 'hgnc_symbol']
-        mouse_attributes = ['ensembl_gene_id', 'mgi_symbol']  # 'external_gene_name'
+        mouse_attributes = ['ensembl_gene_id', 'mgi_symbol']
         to_homolog_attribute = 'mmusculus_homolog_ensembl_gene'
 
-        # Map gene symbol to ensembl ID of query species
-        query = human_dataset.search({'attributes': human_attributes})
-        query = query.raw.data.decode('ascii').split('\n')[:-1]
-        query = pd.DataFrame([d.split('\t') for d in query], columns=['human_ensembl_id', 'hgnc_symbol'])
+        # ========== 第一段查询：人 Ensembl ID + symbol
+        df_human = bm.query(
+            dataset=human_dataset_name,
+            attributes=human_attributes
+        )
+        df_human.columns = ['human_ensembl_id', 'hgnc_symbol']
         outer_bar.update(2)
 
-        # Map ensembl IDs between two species
-        from2to = human_dataset.search({'attributes': ['ensembl_gene_id', to_homolog_attribute]})
-        from2to = from2to.raw.data.decode('ascii').split('\n')[:-1]
-        from2to = pd.DataFrame([d.split('\t') for d in from2to], columns=['human_ensembl_id', 'mouse_ensembl_id'])
-        from2to = from2to.merge(query, how='outer', on='human_ensembl_id')
+        # ========== 第二段查询：人ID → 小鼠同源ID
+        df_homolog = bm.query(
+            dataset=human_dataset_name,
+            attributes=['ensembl_gene_id', to_homolog_attribute]
+        )
+        df_homolog.columns = ['human_ensembl_id', 'mouse_ensembl_id']
+        from2to = df_homolog.merge(df_human, how='outer', on='human_ensembl_id')
         outer_bar.update()
 
-        # Map ensembl ID to gene symbol of target species
-        target = mouse_dataset.search({'attributes': mouse_attributes})
-        target = target.raw.data.decode('ascii').split('\n')[:-1]
-        target = pd.DataFrame([d.split('\t') for d in target], columns=['mouse_ensembl_id', 'mgi_symbol'])
-        target = target.merge(from2to, how='outer', on='mouse_ensembl_id')
-        outer_bar.update()
+        # ========== 第三段查询：小鼠Ensembl ID → mgi_symbol
+        df_mouse = bm.query(
+            dataset=mouse_dataset_name,
+            attributes=mouse_attributes
+        )
+        df_mouse.columns = ['mouse_ensembl_id', 'mgi_symbol']
+        target = df_mouse.merge(from2to, how='outer', on='mouse_ensembl_id')
+        outer_bar.update(2)
 
         # Gene mapper of the network
         query_genes = np.unique(net.loc[:, ['from', 'to']].astype(str))

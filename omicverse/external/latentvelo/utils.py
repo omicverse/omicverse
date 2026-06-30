@@ -219,11 +219,11 @@ def standard_clean_recipe(adata, spliced_key = 'spliced', unspliced_key = 'unspl
         spliced_all_size_factors = spliced_library_sizes/spliced_median_library_sizes
         unspliced_all_size_factors = unspliced_library_sizes/unspliced_median_library_sizes
         
-        adata.layers[spliced_key] = adata.layers[spliced_key]/spliced_all_size_factors
-        adata.layers[unspliced_key] = adata.layers[unspliced_key]/unspliced_all_size_factors
+        inv_sf = (1.0 / np.asarray(spliced_all_size_factors).ravel())
+        inv_unsf = (1.0 / np.asarray(unspliced_all_size_factors).ravel())
 
-        #adata.layers[spliced_key] = adata.layers[spliced_key].tocsr()
-        #adata.layers[unspliced_key] = adata.layers[unspliced_key].tocsr()
+        adata.layers[spliced_key] = scp.sparse.diags(inv_sf) @ adata.layers[spliced_key]
+        adata.layers[unspliced_key] = scp.sparse.diags(inv_unsf) @ adata.layers[unspliced_key]
         
         adata.obs['spliced_size_factor'] = spliced_library_sizes #spliced_all_size_factors
         adata.obs['unspliced_size_factor'] = unspliced_library_sizes #unspliced_all_size_factors
@@ -231,7 +231,8 @@ def standard_clean_recipe(adata, spliced_key = 'spliced', unspliced_key = 'unspl
     adata.X = scp.sparse.csr_matrix(adata.layers[spliced_key].copy())
     
     if n_top_genes != None:
-        scv.pp.filter_genes_dispersion(adata, n_top_genes = n_top_genes, subset=False)
+        # scv.pp.filter_genes_dispersion(adata, n_top_genes = n_top_genes, subset=False)
+        sc.experimental.pp.highly_variable_genes(adata, flavor="pearson_residuals", n_top_genes=n_top_genes, subset=False)
         
         if retain_genes == None and 'highly_variable' in adata.var.columns.values:
             print('Choosing top '+str(n_top_genes) + ' genes')
@@ -787,49 +788,53 @@ def batch_func(func, inputs, num_outputs, split_size = 500):
         inputs_i = []
         for input in inputs:
             #print(type(input), input.shape)
-            if input==None or input == (None, None) or input == (None, None, None) or input == (None, None, None, None) or type(input) == int or type(input) == float or (type(input) != tuple and len(input.shape)) == 1:
+            # 1. 检查是否为 None、标量或一维数组
+            if input is None:
                 inputs_i.append(input)
-            elif type(input) == tuple:
-                #print(input)
-                if len(input) == 2:
+            elif isinstance(input, (int, float)):
+                inputs_i.append(input)
+            elif not isinstance(input, tuple) and hasattr(input, 'shape') and len(input.shape) == 1:
+                inputs_i.append(input)
+                
+            # 2. 检查是否为 tuple
+            elif isinstance(input, tuple):
+                # 如果元组里全是 None，直接追加
+                if all(x is None for x in input):
+                    inputs_i.append(input)
+                elif len(input) == 2:
                     inputs_i.append((input[0][i-split_size:i], input[1][i-split_size:i]))
                 elif len(input) == 3:
-                    if input[:2] == (None, None):
+                    if input[0] is None and input[1] is None:
                         inputs_i.append(input)
-                    elif input[0] != None and input[1] != None and input[2] == None:
+                    elif input[0] is not None and input[1] is not None and input[2] is None:
                         inputs_i.append((input[0][i-split_size:i], input[1][i-split_size:i], None))
-                    elif input[0] != None and input[1] == None and input[2] != None:
+                    elif input[0] is not None and input[1] is None and input[2] is not None:
                         inputs_i.append((input[0][i-split_size:i], None, input[2][i-split_size:i]))
                     else:
                         inputs_i.append((input[0][i-split_size:i], input[1][i-split_size:i], input[2][i-split_size:i]))
                 elif len(input) == 4:
-                    #print(input)
-                    if input == (None, None, None, None):
-                        inputs_i.append(input)
-                    elif input[:3] == (None, None, None) and input[3] != None:
+                    if input[0] is None and input[1] is None and input[2] is None and input[3] is not None:
                         inputs_i.append((None, None, None, input[3][i-split_size:i]))
-                        #elif input[0] != None and input[1] != None and input[2] == None:
-                        #    #print(input)
-                        #    inputs_i.append((input[0][i-split_size:i], input[1][i-split_size:i], None, None))
-
-                    elif input[:2] == (None, None) and input[2] != None and input[3] != None:
+                    elif input[0] is None and input[1] is None and input[2] is not None and input[3] is not None:
                         inputs_i.append((None, None, input[2][i-split_size:i], input[3][i-split_size:i]))
-                        
-                    elif input[0] != None and input[1] != None and input[2] == None and input[3] == None:
+                    elif input[0] is not None and input[1] is not None and input[2] is None and input[3] is None:
                         inputs_i.append((input[0][i-split_size:i], input[1][i-split_size:i], None, None))
-                      
-                    elif input[0] != None and input[1] != None and input[2] != None and input[3] == None:
+                    elif input[0] is not None and input[1] is not None and input[2] is not None and input[3] is None:
                         inputs_i.append((input[0][i-split_size:i], input[1][i-split_size:i], input[2][i-split_size:i], None))
-                        
-                    elif input[0] != None and input[1] != None and input[2] == None and input[3] != None:
+                    elif input[0] is not None and input[1] is not None and input[2] is None and input[3] is not None:
                         inputs_i.append((input[0][i-split_size:i], input[1][i-split_size:i], None, input[3][i-split_size:i]))
                     else:
                         inputs_i.append((input[0][i-split_size:i], input[1][i-split_size:i], input[2][i-split_size:i], input[3][i-split_size:i]))
-            elif input.shape[0] != input.shape[1]:
-                inputs_i.append(input[i-split_size:i])
+                        
+            # 3. 处理带有 shape 属性的矩阵/数组
+            elif hasattr(input, 'shape'):
+                if input.shape[0] != input.shape[1]:
+                    inputs_i.append(input[i-split_size:i])
+                else:
+                    inputs_i.append(sparse_mx_to_torch_sparse_tensor(normalize(input[i-split_size:i, i-split_size:i])).to(device))
             else:
-                inputs_i.append(sparse_mx_to_torch_sparse_tensor(normalize(input[i-split_size:i, i-split_size:i])).to(device))
-            
+                inputs_i.append(input)
+
         outputs_i = func(*inputs_i)
         if type(outputs_i) != tuple:
             outputs_i = tuple((outputs_i,))
