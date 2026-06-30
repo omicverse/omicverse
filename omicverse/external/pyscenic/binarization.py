@@ -1,6 +1,6 @@
 # coding=utf-8
 
-from multiprocessing import Pool
+from joblib import Parallel, delayed
 from typing import Mapping, Optional
 
 import numpy as np
@@ -114,15 +114,15 @@ def binarize(
             )
             thrs = list(results)
         else:
-            with Pool(processes=num_workers) as p:
-                results = p.imap(_derive_threshold_task, tasks)
-                results = tqdm(
-                    results,
+            results = Parallel(n_jobs=num_workers)(
+                delayed(_derive_threshold_task)(task) for task in tqdm(
+                    tasks,
                     total=len(tasks),
                     desc="Deriving AUC thresholds",
                     disable=not use_tqdm,
                 )
-                thrs = list(results)
+            )
+            thrs = list(results)
         if not thrs:
             return pd.Series(index=auc_mtx.columns, dtype=float)
         names, values = zip(*thrs)
