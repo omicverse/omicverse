@@ -92,7 +92,11 @@ def spata2_get_coords(
         obs = None
 
     if obs is not None:
-        df = df.join(obs)
+        overlap = obs.columns.intersection(df.columns)
+        if len(overlap) > 0:
+            obs = obs.drop(columns=list(overlap))
+        if obs.shape[1] > 0:
+            df = df.join(obs)
     return df
 
 
@@ -102,6 +106,8 @@ def _matrix_for_variables(
     layer: str | None,
     use_raw: bool,
 ) -> tuple[Any, pd.Index]:
+    if use_raw and layer is not None:
+        raise ValueError("`layer` and `use_raw=True` cannot be used together.")
     if use_raw:
         if adata.raw is None:
             raise ValueError("use_raw=True requires adata.raw.")
@@ -194,20 +200,23 @@ def spata2_tissue_outline(
     unique_coords, unique_idx = np.unique(coords, axis=0, return_index=True)
 
     if unique_coords.shape[0] < 3:
-        hull_coords = unique_coords[np.lexsort((unique_coords[:, 1], unique_coords[:, 0]))]
+        hull_idx = np.lexsort((unique_coords[:, 1], unique_coords[:, 0]))
+        hull_coords = unique_coords[hull_idx]
     else:
         try:
             hull = ConvexHull(unique_coords)
-            hull_coords = unique_coords[hull.vertices]
+            hull_idx = hull.vertices
+            hull_coords = unique_coords[hull_idx]
         except QhullError:
-            hull_coords = unique_coords[np.lexsort((unique_coords[:, 1], unique_coords[:, 0]))]
+            hull_idx = np.lexsort((unique_coords[:, 1], unique_coords[:, 0]))
+            hull_coords = unique_coords[hull_idx]
 
     outline = pd.DataFrame(hull_coords, columns=[x, y])
     outline.index.name = "vertex"
 
     if write_key is not None:
         adata.uns[write_key] = outline.copy()
-        adata.uns[f"{write_key}_source_obs"] = adata.obs_names.to_numpy()[unique_idx].tolist()
+        adata.uns[f"{write_key}_source_obs"] = adata.obs_names.to_numpy()[unique_idx[hull_idx]].tolist()
 
     return outline
 

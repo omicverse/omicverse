@@ -52,6 +52,23 @@ def test_spata2_get_coords_reads_spatial_coordinates():
     assert coords.loc["spot_2", "barcode"] == "spot_2"
 
 
+def test_spata2_get_coords_include_obs_drops_conflicting_obs_columns():
+    adata = make_spatial_adata()
+    adata.obs["barcode"] = [f"obs_barcode_{idx}" for idx in range(adata.n_obs)]
+    adata.obs["x"] = -1.0
+    adata.obs["y"] = -2.0
+
+    coords = space.spata2_get_coords(adata, include_obs=True)
+
+    assert list(coords.columns).count("barcode") == 1
+    assert list(coords.columns).count("x") == 1
+    assert list(coords.columns).count("y") == 1
+    assert coords.loc["spot_2", "barcode"] == "spot_2"
+    assert coords.loc["spot_2", "x"] == 1.0
+    assert coords.loc["spot_2", "y"] == 0.0
+    assert "region" in coords.columns
+
+
 def test_spata2_extract_variables_from_obs_and_expression():
     adata = make_spatial_adata()
 
@@ -71,6 +88,15 @@ def test_spata2_extract_variables_supports_sparse_layers():
     assert values["GeneB"].tolist() == [0.0, 2.0, 2.0, 4.0, 6.0, 0.0]
 
 
+def test_spata2_extract_variables_rejects_layer_with_raw():
+    adata = make_spatial_adata()
+    adata.layers["scaled"] = sparse.csr_matrix(adata.X * 2.0)
+    adata.raw = adata
+
+    with pytest.raises(ValueError, match="layer.*use_raw"):
+        space.spata2_extract_variables(adata, "GeneB", layer="scaled", use_raw=True)
+
+
 def test_spata2_join_variables_combines_coords_and_values():
     adata = make_spatial_adata()
 
@@ -88,6 +114,19 @@ def test_spata2_tissue_outline_writes_hull_to_uns():
     assert {"x", "y"} == set(outline.columns)
     assert len(outline) >= 3
     assert "spata2_tissue_outline" in adata.uns
+
+
+def test_spata2_tissue_outline_source_obs_matches_hull_vertices():
+    adata = make_spatial_adata()
+
+    outline = space.spata2_tissue_outline(adata)
+    source_obs = adata.uns["spata2_tissue_outline_source_obs"]
+    source_idx = adata.obs_names.get_indexer(source_obs)
+    source_coords = adata.obsm["spatial"][source_idx, :2]
+
+    assert len(source_obs) == len(outline)
+    np.testing.assert_allclose(source_coords, outline[["x", "y"]].to_numpy())
+    assert "spot_4" not in source_obs
 
 
 def test_spata2_identify_and_remove_outliers():
