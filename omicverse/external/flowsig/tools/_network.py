@@ -1,434 +1,389 @@
-from typing import List, Tuple, Optional
-import networkx as nx
-from scipy.sparse import issparse
-import numpy as np
-import random as rm
-#from causaldag import unknown_target_igsp, gsp
-#from causaldag import partial_correlation_suffstat, partial_correlation_test, MemoizedCI_Tester
-#from causaldag import gauss_invariance_suffstat, gauss_invariance_test, MemoizedInvarianceTester
-#from graphical_models import DAG
-from sklearn.utils import safe_mask
-from timeit import default_timer as timer
 from functools import reduce
-from joblib import Parallel, delayed
+from timeit import default_timer as timer
+from typing import List, Optional, Sequence
+
 import anndata as ad
-import warnings
-warnings.filterwarnings('ignore')
+import numpy as np
+from joblib import Parallel, delayed
+from scipy.sparse import issparse
 
-# Define the sampling step functions where we input the initial list of permutations
-def run_gsp(adata: ad.AnnData,
-            flowsig_expr_key: str,
-            flow_vars: List[str],
-            use_spatial: bool = False,
-            block_key: str = None,
-            alpha: float = 1e-3,
-            seed: int = 0):
-    from causaldag import gsp
-    from causaldag import partial_correlation_suffstat, partial_correlation_test, MemoizedCI_Tester
-    # Reseed the random number generator
-    np.random.seed(seed) # Set the seed for reproducibility reasons
 
-    samples = adata.obsm[flowsig_expr_key].copy()
+def _as_flow_matrix(adata: ad.AnnData, flow_expr_key: str) -> np.ndarray:
+    """Extract a dense, numeric flow-expression matrix in the parent process."""
+    if flow_expr_key not in adata.obsm:
+        raise ValueError(f"adata.obsm does not contain flow_expr_key={flow_expr_key!r}.")
 
-    # Get the number of samples for each dataframe  
-    num_samples = samples.shape[0]
+    samples = adata.obsm[flow_expr_key]
+    if issparse(samples):
+        samples = samples.toarray()
+    samples = np.asarray(samples)
 
-    # Subsample WITHIN blocks replacement
+    if samples.ndim != 2:
+        raise ValueError(
+            f"adata.obsm[{flow_expr_key!r}] must be a two-dimensional matrix."
+        )
+    if samples.shape[0] != adata.n_obs:
+        raise ValueError(
+            f"adata.obsm[{flow_expr_key!r}] has {samples.shape[0]} rows, "
+            f"but adata has {adata.n_obs} observations."
+        )
+    if not np.issubdtype(samples.dtype, np.number):
+        raise ValueError(f"adata.obsm[{flow_expr_key!r}] must contain numeric values.")
+
+    return samples
+
+
+def _indices_by_block(labels: np.ndarray) -> List[np.ndarray]:
+    """Return observation indices grouped by their spatial block label."""
+    labels = np.asarray(labels)
+    if labels.ndim != 1:
+        raise ValueError("Spatial block labels must be one-dimensional.")
+    if labels.size == 0:
+        raise ValueError("Spatial block labels cannot be empty.")
+
+    _, inverse = np.unique(labels, return_inverse=True)
+    return [np.flatnonzero(inverse == block) for block in range(inverse.max() + 1)]
+
+
+def _resample_matrix(
+    samples: np.ndarray,
+    rng: np.random.Generator,
+    indices_by_blocks: Optional[Sequence[np.ndarray]] = None,
+) -> np.ndarray:
+    """Bootstrap rows globally or within each supplied spatial block."""
+    if indices_by_blocks is None:
+        return samples[rng.integers(0, samples.shape[0], size=samples.shape[0])]
+
     resampled = samples.copy()
+    for indices in indices_by_blocks:
+        indices = np.asarray(indices, dtype=int)
+        if indices.size == 0:
+            continue
+        sampled_indices = rng.choice(indices, size=indices.size, replace=True)
+        resampled[indices] = samples[sampled_indices]
+    return resampled
 
-    # If we want to do block bootstrapping (for spatial data),
-    # we divide the data by spatially-seprated clusters and then resample within
-    # the clusters
-    if use_spatial:
 
-        # Define the blocks for spatial block bootstrapping
-        #block_clusters = sorted(adata.obs[block_key].unique().tolist())
-        adata.obs[block_key]=adata.obs[block_key].astype('category')
-        block_clusters = adata.obs[block_key].cat.categories.tolist()
-        
+def _drop_zero_std_columns(
+    matrices: Sequence[np.ndarray],
+) -> tuple[np.ndarray, List[np.ndarray]]:
+    """Keep features with non-zero standard deviation in every matrix."""
+    nonzero_masks = [np.std(matrix, axis=0) > 0 for matrix in matrices]
+    keep = np.flatnonzero(reduce(np.logical_and, nonzero_masks))
+    if keep.size == 0:
+        raise ValueError("No flow variables have non-zero variance in this bootstrap.")
+    return keep, [matrix[:, keep] for matrix in matrices]
 
-        for block in block_clusters:
-            block_indices = np.where(adata.obs[block_key] == block)[0] # Sample only those cells within the block
-            
-            block_subsamples = np.random.choice(block_indices, len(block_indices))
-            resampled[block_indices, :] = samples[safe_mask(samples, block_subsamples), :]
 
-    else:
-        # Subsample with replacement
-        subsamples = np.random.choice(num_samples, num_samples)
+def _learn_gsp(samples: np.ndarray, alpha: float) -> np.ndarray:
+    from causaldag import gsp
+    from causaldag import (
+        MemoizedCI_Tester,
+        partial_correlation_suffstat,
+        partial_correlation_test,
+    )
 
-        resampled = samples[safe_mask(samples, subsamples), :]
+    nodes = set(range(samples.shape[1]))
+    obs_suffstat = partial_correlation_suffstat(samples, invert=True)
+    ci_tester = MemoizedCI_Tester(
+        partial_correlation_test, obs_suffstat, alpha=alpha
+    )
+    est_dag = gsp(nodes, ci_tester, nruns=20)
+    return est_dag.cpdag().to_amat()[0]
 
-    # We need to subset the gene expression matrices for ligands with non-zero standard deviation in BOTH cases
-    resampled_std = resampled.std(0)
 
-    nonzero_flow_vars_indices = resampled_std.nonzero()[0]
+def _learn_utigsp(
+    control_samples: np.ndarray,
+    perturbed_samples: Sequence[np.ndarray],
+    alpha: float,
+    alpha_inv: float,
+) -> tuple[np.ndarray, Sequence[set[int]]]:
+    from causaldag import (
+        MemoizedCI_Tester,
+        MemoizedInvarianceTester,
+        gauss_invariance_suffstat,
+        gauss_invariance_test,
+        partial_correlation_suffstat,
+        partial_correlation_test,
+        unknown_target_igsp,
+    )
 
-    # Subset based on the ligands with zero std in both cases
-    considered_flow_vars = list([flow_vars[ind] for ind in nonzero_flow_vars_indices])
-    
-    nodes = set(considered_flow_vars)
+    nodes = set(range(control_samples.shape[1]))
+    obs_suffstat = partial_correlation_suffstat(control_samples, invert=True)
+    invariance_suffstat = gauss_invariance_suffstat(
+        control_samples, list(perturbed_samples)
+    )
+    ci_tester = MemoizedCI_Tester(
+        partial_correlation_test, obs_suffstat, alpha=alpha
+    )
+    invariance_tester = MemoizedInvarianceTester(
+        gauss_invariance_test, invariance_suffstat, alpha=alpha_inv
+    )
+    setting_list = [dict(known_interventions=[]) for _ in perturbed_samples]
 
-    resampled = resampled[:, nonzero_flow_vars_indices]
+    est_dag, est_targets_list = unknown_target_igsp(
+        setting_list,
+        nodes,
+        ci_tester,
+        invariance_tester,
+        nruns=20,
+    )
+    est_icpdag = est_dag.interventional_cpdag(
+        est_targets_list, cpdag=est_dag.cpdag()
+    )
+    return est_icpdag.to_amat()[0], est_targets_list
 
-    ### RunGSP using partial correlation  
 
-    # Form sufficient statistics using partial correlation (assumes linear Gaussian model)
-    obs_suffstat = partial_correlation_suffstat(resampled, invert=True)
+def run_gsp(
+    samples: np.ndarray,
+    use_spatial: bool = False,
+    indices_by_blocks: Optional[Sequence[np.ndarray]] = None,
+    alpha: float = 1e-3,
+    seed: int = 0,
+):
+    """Run one observational GSP bootstrap using serialization-safe inputs."""
+    if use_spatial and indices_by_blocks is None:
+        raise ValueError("Spatial block indices are required when use_spatial=True.")
 
-    # Create conditional independence tester and invariance tester
-    ci_tester = MemoizedCI_Tester(partial_correlation_test, obs_suffstat, alpha=alpha)
+    rng = np.random.default_rng(seed)
+    resampled = _resample_matrix(
+        samples,
+        rng,
+        indices_by_blocks=indices_by_blocks if use_spatial else None,
+    )
+    keep, (resampled,) = _drop_zero_std_columns([resampled])
+    adjacency_cpdag = _learn_gsp(resampled, alpha)
 
-    ## Run UT-IGSP by considering all possible initial permutations
-    est_dag = gsp(nodes,
-                    ci_tester,
-                    nruns=20)
-    
-    # Convert to CPDAG, which contains directed arcs and undirected edgse
-    est_cpdag = est_dag.cpdag()
-    adjacency_cpdag = est_cpdag.to_amat()[0]
+    return {
+        "nonzero_flow_vars_indices": keep,
+        "adjacency_cpdag": adjacency_cpdag,
+    }
 
-    return {'nonzero_flow_vars_indices':nonzero_flow_vars_indices,
-            'adjacency_cpdag':adjacency_cpdag}
 
-def run_utigsp(adata: ad.AnnData,
-                condition_key: str,
-                control_key: str,
-                flowsig_expr_key: str,
-                flow_vars: List[str],
-                use_spatial: bool = False,
-                block_key: str = None,
-                alpha: float = 1e-3,
-                alpha_inv: float = 1e-3,
-                seed: int = 0):
+def run_utigsp(
+    control_samples: np.ndarray,
+    perturbed_samples: Sequence[np.ndarray],
+    use_spatial: bool = False,
+    indices_by_blocks_control: Optional[Sequence[np.ndarray]] = None,
+    indices_by_blocks_perturbed: Optional[Sequence[Sequence[np.ndarray]]] = None,
+    alpha: float = 1e-3,
+    alpha_inv: float = 1e-3,
+    seed: int = 0,
+):
+    """Run one interventional GSP bootstrap using serialization-safe inputs."""
+    if use_spatial and (
+        indices_by_blocks_control is None or indices_by_blocks_perturbed is None
+    ):
+        raise ValueError("Spatial block indices are required when use_spatial=True.")
 
-    # Reseed the random number generator
-    from causaldag import unknown_target_igsp
-    from causaldag import partial_correlation_suffstat, partial_correlation_test, MemoizedCI_Tester
-    from causaldag import gauss_invariance_suffstat, gauss_invariance_test, MemoizedInvarianceTester
-    np.random.seed(seed) # Set the seed for reproducibility reasons
+    rng = np.random.default_rng(seed)
+    control_resampled = _resample_matrix(
+        control_samples,
+        rng,
+        indices_by_blocks_control if use_spatial else None,
+    )
+    perturbed_resampled = [
+        _resample_matrix(
+            samples,
+            rng,
+            indices_by_blocks_perturbed[index] if use_spatial else None,
+        )
+        for index, samples in enumerate(perturbed_samples)
+    ]
 
-    adata_control = adata[adata.obs[condition_key] == control_key]
-    control_samples = adata_control.obsm[flowsig_expr_key] # Define the control data
-    
-    adata_perturbed = adata[adata.obs[condition_key] != control_key]
-    perturbed_keys = [cond for cond in adata.obs[condition_key].unique() if cond != control_key]
-    perturbed_samples = [adata_perturbed[adata_perturbed.obs[condition_key] == cond].obsm[flowsig_expr_key] for cond in perturbed_keys] # Get the perturbed data
-    perturbed_resampled = []
+    keep, matrices = _drop_zero_std_columns(
+        [control_resampled, *perturbed_resampled]
+    )
+    control_resampled, *perturbed_resampled = matrices
+    adjacency_cpdag, targets = _learn_utigsp(
+        control_resampled, perturbed_resampled, alpha, alpha_inv
+    )
+    perturbed_targets_indices = [
+        keep[np.asarray(sorted(target_set), dtype=int)] for target_set in targets
+    ]
 
-    if use_spatial:
+    return {
+        "nonzero_flow_vars_indices": keep,
+        "adjacency_cpdag": adjacency_cpdag,
+        "perturbed_targets_indices": perturbed_targets_indices,
+    }
 
-        control_resampled = control_samples.copy()
-        
-        # Define the blocks for bootstrapping
-        adata_control.obs[block_key]=adata_control.obs[block_key].astype('category')
-        block_clusters_control = adata_control.obs[block_key].cat.categories.tolist()
 
-        for block in block_clusters_control:
-
-            block_indices = np.where(adata_control.obs[block_key] == block)[0] # Sample only those cells within the block
-            
-            block_subsamples = np.random.choice(block_indices, len(block_indices))
-            control_resampled[block_indices, :] = control_samples[safe_mask(control_samples, block_subsamples), :]
-
-        for i, pert in enumerate(perturbed_keys):
-
-            pert_resampled = perturbed_samples[i].copy()
-
-            adata_pert = adata_perturbed[adata_perturbed.obs[condition_key] == pert]
-
-            adata_pert.obs[block_key]=adata_pert.obs[block_key].astype('category')
-            block_clusters_pert = adata_pert.obs[block_key].cat.categories.tolist()
-
-            #block_clusters_pert = sorted(adata_pert.obs[block_key].unique().tolist())
-
-            for block in block_clusters_pert:
-
-                block_indices = np.where(adata_pert.obs[block_key] == block)[0] # Sample only those cells within the block
-                
-                block_subsamples = np.random.choice(block_indices, len(block_indices))
-                pert_resampled[block_indices, :] = pert_resampled[safe_mask(pert_resampled, block_subsamples), :]
-
-            perturbed_resampled.append(pert_resampled)
-
-    else:
-
-        # Just sub-sample across all cells per condition
-        num_samples_control = control_samples.shape[0]
-        num_samples_perturbed = [sample.shape[0] for sample in perturbed_samples]
-
-        # Subsample with replacement
-        subsamples_control = np.random.choice(num_samples_control, num_samples_control)
-        subsamples_perturbed = [np.random.choice(num_samples, num_samples) for num_samples in num_samples_perturbed]
-        
-        control_resampled = control_samples[safe_mask(control_samples, subsamples_control), :]
-
-        for i in range(len(perturbed_samples)):
-            num_subsamples = subsamples_perturbed[i]
-            perturbed_sample = perturbed_samples[i]
-
-            resampled = perturbed_sample[safe_mask(num_subsamples, num_subsamples), :]
-            perturbed_resampled.append(resampled)
-
-    # We need to subset the gene expression matrices for ligands with non-zero standard deviation in BOTH cases
-    control_resampled_std = control_resampled.std(0)
-    perturbed_resampled_std = [sample.std(0) for sample in perturbed_resampled]
-
-    nonzero_flow_vars_indices_control = control_resampled_std.nonzero()[0]
-    nonzero_flow_vars_indices_perturbed = [resampled_std.nonzero()[0] for resampled_std in perturbed_resampled_std]
-
-    nonzero_flow_vars_indices = reduce(np.intersect1d, (nonzero_flow_vars_indices_control, *nonzero_flow_vars_indices_perturbed))
-
-    # Subset based on the ligands with zero std in both cases
-    considered_flow_vars = list([flow_vars[ind] for ind in nonzero_flow_vars_indices])
-    
-    nodes = set(considered_flow_vars)
-
-    control_resampled = control_resampled[:, nonzero_flow_vars_indices]
-
-    for i, resampled in enumerate(perturbed_resampled):
-
-        perturbed_resampled[i] = resampled[:, nonzero_flow_vars_indices]
-
-    ### Run UT-IGSP using partial correlation  
-
-    # Form sufficient statistics using partial correlation (assumes linear Gaussian model)
-    obs_suffstat = partial_correlation_suffstat(control_resampled, invert=True)
-    invariance_suffstat = gauss_invariance_suffstat(control_resampled, perturbed_resampled)
-
-    ci_tester = MemoizedCI_Tester(partial_correlation_test, obs_suffstat, alpha=alpha)
-    invariance_tester = MemoizedInvarianceTester(gauss_invariance_test, invariance_suffstat, alpha=alpha_inv)
-
-    # Assume unknown interventions for UT-IGSP
-    setting_list = [dict(known_interventions=[]) for _ in perturbed_resampled]
-
-    # Run UT-IGSP by considering all possible initial permutations
-    est_dag, est_targets_list = unknown_target_igsp(setting_list,
-                                                        nodes,
-                                                        ci_tester,
-                                                        invariance_tester,
-                                                        nruns=20)
-
-    est_icpdag = est_dag.interventional_cpdag(est_targets_list, cpdag=est_dag.cpdag())
-
-    adjacency_cpdag = est_icpdag.to_amat()[0]
-    
-    perturbed_targets_list = []
-    
-    for i in range(len(est_targets_list)):
-        targets_list = list(est_targets_list[i])
-        targets_ligand_indices = [flow_vars.index(considered_flow_vars[target]) for target in targets_list]
-        perturbed_targets_list.append(targets_ligand_indices)
-
-    return {'nonzero_flow_vars_indices':nonzero_flow_vars_indices,
-            'adjacency_cpdag':adjacency_cpdag,
-            'perturbed_targets_indices':perturbed_targets_list}
-
-def learn_intercellular_flows(adata: ad.AnnData,
-                        condition_key: str = None,
-                        control_key: str = None, 
-                        flowsig_key: str = 'flowsig_network',
-                        flow_expr_key: str = 'X_flow',
-                        use_spatial: Optional[bool] = False,
-                        block_key: Optional[bool] = None,
-                        n_jobs: int = 1,
-                        n_bootstraps: int = 100,
-                        alpha_ci: float = 1e-3,
-                        alpha_inv: float = 1e-3):
+def learn_intercellular_flows(
+    adata: ad.AnnData,
+    condition_key: str = None,
+    control_key: str = None,
+    flowsig_key: str = "flowsig_network",
+    flow_expr_key: str = "X_flow",
+    use_spatial: Optional[bool] = False,
+    block_key: Optional[str] = None,
+    n_jobs: int = 1,
+    n_bootstraps: int = 100,
+    alpha_ci: float = 1e-3,
+    alpha_inv: float = 1e-3,
+):
     """
-    Learn the causal signaling network from cell-type-ligand expression constructed
-    from scRNA-seq and a base network derived from cell-cell communication inference.
+    Learn a causal intercellular signaling network by bootstrap aggregation.
 
-    This method splits the cell-type-ligand expression into control and perturbed
-    samples (one sample for each perturbed condition). We then use UT-IGSP [Squires2020]
-    and partial correlation testing to learn the causal signaling DAG and the list of 
-    perturbed (intervention) targets.
-    
-    The base network is also used as a list of initial node permutations for DAG learning.
-    To overcome the DAG assumption, as cell-cell communication networks are not necessarily
-    DAGS, we use bootstrap aggregation to cover as many possible causal edges and the list
-    of node permutations is constructed from all possible DAG subsets of the base network.
-    Each boostrap sample is generated by sampling with replacement.
+    The public API and output schema are retained for compatibility. Parallel
+    workers receive only NumPy matrices and integer indices; the AnnData object
+    is read and mutated exclusively in the parent process.
 
     Parameters
     ----------
     adata
-        The annotated dataframe (typically from Scanpy) of the single-cell data.
-        Must contain constructed flow expression matrices and knowledge of
-        possible cellular flow variables.
-
-    condition_key 
-        The label in adata.obs which we use to partition the data.
-
+        Annotated data containing flow expressions and FlowSig variable metadata.
+    condition_key
+        Observation column separating control and perturbed conditions.
     control_key
-        The category in adata.obs[condition_key] that specifies which cells belong 
-        to the control condition, which is known in causal inference as the observational 
-        data.
-
+        Control value in ``adata.obs[condition_key]``.
     flowsig_key
-        The label for which output will be stored in adata.uns
-
+        Key in ``adata.uns`` containing FlowSig metadata and receiving results.
     flow_expr_key
-        The label for which the augmente dflow expression expression is stored in adata.obsm
-
+        Key in ``adata.obsm`` containing the flow-expression matrix.
     use_spatial
-        Boolean for whether or not we are analysing spatial data, and thus need to use
-        block bootstrapping rather than normal bootstrapping, where we resample across all
-        cells.
-
+        Whether to bootstrap observations within spatial blocks.
     block_key
-        The label that specfies from which observation key we use to construct (hopefully)
-        spatially correlated blocks used for block bootstrapping to learn spatially resolved
-        cellular flows. These blocks can be simply just dividing the tissue into rougly
-        equally spaced tissue regions, or can be based on tissue annotation (e.g. organ, cell type).
-    
+        Observation column defining spatial blocks.
     n_jobs
-        Number of CPU cores that are used during bootstrap aggregation. If n_jobs > 1, jobs
-        are submitted in parallel using multiprocessing
-
-    n_boostraps
-        Number of bootstrap samples to generate for causal DAG learning.
-
+        Number of joblib worker processes.
+    n_bootstraps
+        Number of bootstrap samples.
     alpha_ci
-        The significance level used to test for conditional independence
-    
+        Conditional-independence significance level.
     alpha_inv
-        The significance level used to test for conditional invariance.
-
-    Returns
-    -------
-    flow_vars
-        The list of cell-type-ligand pairs used during causal structure learning,
-        stored in adata.uns[flowsig_key]['flow_vars'].
-
-    adjacency
-        The weighted adjacency matrix encoding a bagged CPDAG,
-        where weights are determined from bootstrap aggregation. Stored in 
-        adata.uns[flowsig_key]['adjacency']
-
-    perturbed_targets
-        The list of inferred perturbed targets, as determined by conditional invariance
-        testing and their bootstrapped probability of perturbations. Stored in
-        adata.uns[flowsig_key]['perturbed_targets']
-
-    References
-    ----------
-
-    .. [Squires2020] Squires, C., Wang, Y., & Uhler, C. (2020, August). Permutation-based
-     causal structure learning with unknown intervention targets. In Conference on
-     Uncertainty in Artificial Intelligence (pp. 1039-1048). PMLR.
-
+        Conditional-invariance significance level.
     """
+    if not isinstance(n_bootstraps, int) or n_bootstraps < 1:
+        raise ValueError("n_bootstraps must be an integer greater than or equal to 1.")
+    if not isinstance(n_jobs, int) or n_jobs == 0:
+        raise ValueError("n_jobs must be a non-zero integer.")
+    if flowsig_key not in adata.uns:
+        raise ValueError(f"adata.uns does not contain flowsig_key={flowsig_key!r}.")
+    if "flow_var_info" not in adata.uns[flowsig_key]:
+        raise ValueError(
+            f"adata.uns[{flowsig_key!r}] does not contain 'flow_var_info'."
+        )
 
-    # Extract the control and perturbed samples
+    samples = _as_flow_matrix(adata, flow_expr_key)
+    flow_vars = list(adata.uns[flowsig_key]["flow_var_info"].index)
+    if len(flow_vars) != samples.shape[1]:
+        raise ValueError(
+            "The number of flow variables does not match the columns in the "
+            f"flow-expression matrix ({len(flow_vars)} != {samples.shape[1]})."
+        )
 
-    # Initialise the results
-    flowsig_network_results = {}
+    block_labels = None
+    if use_spatial:
+        if block_key is None:
+            raise ValueError("block_key must be provided when use_spatial=True.")
+        if block_key not in adata.obs:
+            raise ValueError(f"adata.obs does not contain block_key={block_key!r}.")
+        block_labels = np.asarray(adata.obs[block_key])
+        if block_labels.shape[0] != samples.shape[0]:
+            raise ValueError("Spatial block labels must match the number of observations.")
 
-    if condition_key is not None: # If there is more than one condition, then we use UT-IGSP with a control vs perturbed condition
+    if condition_key is not None:
+        if condition_key not in adata.obs:
+            raise ValueError(
+                f"adata.obs does not contain condition_key={condition_key!r}."
+            )
+        if control_key is None:
+            raise ValueError(
+                "control_key must be provided when condition_key is specified."
+            )
 
-        conditions = adata.obs[condition_key].unique().tolist()        
-        perturbed_keys = [cond for cond in conditions if cond != control_key]
+        condition_labels = np.asarray(adata.obs[condition_key])
+        if condition_labels.shape[0] != samples.shape[0]:
+            raise ValueError("Condition labels must match the number of observations.")
+        conditions = list(adata.obs[condition_key].unique())
+        if control_key not in conditions:
+            raise ValueError(
+                f"control_key={control_key!r} is not present in "
+                f"adata.obs[{condition_key!r}]."
+            )
+        perturbed_keys = [condition for condition in conditions if condition != control_key]
+        if not perturbed_keys:
+            raise ValueError("At least one perturbed condition is required.")
 
-        flow_vars = list(adata.uns[flowsig_key]['flow_var_info'].index)
+        control_mask = condition_labels == control_key
+        control_samples = samples[control_mask]
+        perturbed_samples = [
+            samples[condition_labels == condition] for condition in perturbed_keys
+        ]
+        control_blocks = (
+            _indices_by_block(block_labels[control_mask]) if use_spatial else None
+        )
+        perturbed_blocks = (
+            [
+                _indices_by_block(block_labels[condition_labels == condition])
+                for condition in perturbed_keys
+            ]
+            if use_spatial
+            else None
+        )
 
-        # Randomly shuffle to edges to generate initial permutations for initial DAGs
-        bagged_adjacency = np.zeros((len(flow_vars), len(flow_vars)))
-        bagged_perturbed_targets = [np.zeros(len(flow_vars)) for key in perturbed_keys]
-
+        print(f"starting computations on {n_jobs} cores")
         start = timer()
-
-        print(f'starting computations on {n_jobs} cores')
-
-
-        args = [(adata,
-                condition_key,
-                control_key,
-                flow_expr_key,
-                flow_vars,
+        bootstrap_results = Parallel(n_jobs=n_jobs, prefer="processes")(
+            delayed(run_utigsp)(
+                control_samples,
+                perturbed_samples,
                 use_spatial,
-                block_key,
+                control_blocks,
+                perturbed_blocks,
                 alpha_ci,
                 alpha_inv,
-                boot) for boot in range(n_bootstraps)]
-                                
-        bootstrap_results = Parallel(n_jobs=n_jobs)(delayed(run_utigsp)(*arg) for arg in args)
+                bootstrap,
+            )
+            for bootstrap in range(n_bootstraps)
+        )
+        print(f"elapsed time: {timer() - start}")
 
-        end = timer()
-
-        print(f'elapsed time: {end - start}')
-
-        # Sum the results for UT-IGSP with initial permutations
-        for res in bootstrap_results:
-
-            nz_indices = res['nonzero_flow_vars_indices']
-            adjacency = res['adjacency_cpdag']
-            pert_indices = res['perturbed_targets_indices']
-            
-            # Update the bagged adjacency
-            bagged_adjacency[np.ix_(nz_indices, nz_indices)] += adjacency
-
-            # Update the intervention targets
-            for i in range(len(pert_indices)):
-
-                nonzero_pert_indices = pert_indices[i]
-                perturbed_targets = bagged_perturbed_targets[i]
-                perturbed_targets[nonzero_pert_indices] += 1
-                bagged_perturbed_targets[i] = perturbed_targets
-
-        # Average the adjacencies
-        bagged_adjacency /= float(n_bootstraps)
-
-        # Average the intervened targets
-        for i in range(len(pert_indices)):
-
-            perturbed_targets = bagged_perturbed_targets[i]
-            perturbed_targets /= float(n_bootstraps) # Average the results
-            bagged_perturbed_targets[i] = perturbed_targets
-
-        flowsig_network_results =  {'flow_vars': flow_vars,
-                'adjacency': bagged_adjacency,
-                'perturbed_targets': bagged_perturbed_targets}
-
-    else: # Else we have no perturbation and we will use GSP
-
-        flow_vars = list(adata.uns[flowsig_key]['flow_var_info'].index)
-
-        # Randomly shuffle to edges to generate initial permutations for initial DAGs
         bagged_adjacency = np.zeros((len(flow_vars), len(flow_vars)))
+        bagged_perturbed_targets = [
+            np.zeros(len(flow_vars)) for _ in perturbed_keys
+        ]
+        for result in bootstrap_results:
+            keep = result["nonzero_flow_vars_indices"]
+            bagged_adjacency[np.ix_(keep, keep)] += result["adjacency_cpdag"]
+            for index, targets in enumerate(result["perturbed_targets_indices"]):
+                bagged_perturbed_targets[index][targets] += 1
 
-        start = timer()
-
-        print(f'starting computations on {n_jobs} cores')
-
-        args = [(adata, 
-                flow_expr_key,
-                flow_vars,
-                use_spatial,
-                block_key,
-                alpha_ci,
-                boot) for boot in range(n_bootstraps)]
-                            
-        bootstrap_results = Parallel(n_jobs=n_jobs)(delayed(run_gsp)(*arg) for arg in args)
-
-        end = timer()
-
-        print(f'elapsed time: {end - start}')
-
-        # Sum the results for UT-IGSP with initial permutations
-        for res in bootstrap_results:
-
-            nz_indices = res['nonzero_flow_vars_indices']
-            adjacency = res['adjacency_cpdag']
-
-            # Update the bagged adjacency
-            bagged_adjacency[np.ix_(nz_indices, nz_indices)] += adjacency
-
-        # Average the adjacencies
         bagged_adjacency /= float(n_bootstraps)
+        bagged_perturbed_targets = [
+            targets / float(n_bootstraps) for targets in bagged_perturbed_targets
+        ]
+        network_results = {
+            "flow_vars": flow_vars,
+            "adjacency": bagged_adjacency,
+            "perturbed_targets": bagged_perturbed_targets,
+        }
+    else:
+        indices_by_blocks = _indices_by_block(block_labels) if use_spatial else None
 
-        flowsig_network_results = {'flow_vars': flow_vars,
-                                    'adjacency': bagged_adjacency}
+        print(f"starting computations on {n_jobs} cores")
+        start = timer()
+        bootstrap_results = Parallel(n_jobs=n_jobs, prefer="processes")(
+            delayed(run_gsp)(
+                samples,
+                use_spatial,
+                indices_by_blocks,
+                alpha_ci,
+                bootstrap,
+            )
+            for bootstrap in range(n_bootstraps)
+        )
+        print(f"elapsed time: {timer() - start}")
 
-    # Store the results
-    adata.uns[flowsig_key]['network'] = flowsig_network_results
+        bagged_adjacency = np.zeros((len(flow_vars), len(flow_vars)))
+        for result in bootstrap_results:
+            keep = result["nonzero_flow_vars_indices"]
+            bagged_adjacency[np.ix_(keep, keep)] += result["adjacency_cpdag"]
+        bagged_adjacency /= float(n_bootstraps)
+        network_results = {
+            "flow_vars": flow_vars,
+            "adjacency": bagged_adjacency,
+        }
+
+    adata.uns[flowsig_key]["network"] = network_results
