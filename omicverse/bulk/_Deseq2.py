@@ -564,8 +564,9 @@ class pyDEG(object):
                 - `limma`: limma-voom pipeline via the vendored pure-Python
                   `pylimma` port (voom mean-variance modelling + eBayes;
                   R-parity tested; no R needed).
-                - `edgepy`: legacy edgeR-style GLM-LRT via the `inmoose`
-                  package (requires `pip install inmoose`).
+                - `edgepy`: edgeR classic GLM likelihood-ratio test (glmFit +
+                  glmLRT) via the vendored pure-Python `pyedger` port
+                  (no R / inmoose needed).
                 - `ttest`: independent two-sample t-test.
                 - `wilcox`: Wilcoxon rank-sum test (not implemented).
             alpha: The threshold of p-value.
@@ -732,63 +733,49 @@ class pyDEG(object):
             
         
         elif method == 'edgepy':
-            try:
-                from inmoose.data.pasilla import pasilla
-                from inmoose.edgepy import DGEList, glmLRT, topTags
-                from patsy import dmatrix
-            except:
-                raise ImportError('Please install inmoose: `pip install inmoose`')
-            print(f"⏰ Start to create DGEList...")
-            anno1=pd.DataFrame(
-                index=group1+group2
-            )
-            anno1['condition']=['treatment' for i in group1]+['control' for i in group2]
-            var=pd.DataFrame(index=self.data.index)
-            var.index.name='gene_id'
+            # edgeR **classic GLM likelihood-ratio test** (glmFit + glmLRT) via
+            # the vendored pure-Python pyedger port — no inmoose / R needed.
+            # (For the quasi-likelihood F-test, use method='edger'.) This
+            # replaces the old inmoose.edgepy path and now reports the GLM's
+            # own logFC instead of a raw pseudo-count mean ratio.
+            from ..external import pyedger as _edger
+            print("⏰ Start edgeR GLM likelihood-ratio test (pyedger)...")
+            counts = self.data[group1 + group2]
+            groups = ['treatment'] * len(group1) + ['control'] * len(group2)
+            # control < treatment alphabetically → control is the reference
+            # level, so coef 'treatment' tests treatment vs control.
+            y = _edger.calcNormFactors(_edger.DGEList(counts, group=groups))
+            _edger.estimateDisp(y)
+            fit = _edger.glmFit(y)
+            lrt = _edger.glmLRT(fit, coef='treatment')
+            tab = lrt.table                       # gene-ordered: logFC/logCPM/LR/PValue
 
-            # build a DGEList object
-            dge_list = DGEList(
-                counts=self.data[group1+group2].values, 
-                samples=anno1, 
-                group_col="condition", 
-                genes=var
-            )
-            design1 = dmatrix("~condition", data=anno1)
-            dge_list.estimateGLMCommonDisp(design=design1)
-            fit = dge_list.glmFit(design=design1)
-            lrt = glmLRT(fit)
-            lrt.index=var.index
+            pvalue = tab['PValue'].to_numpy()
+            print("⏰ Start to calculate qvalue...")
+            qvalue = multipletests(np.nan_to_num(np.array(pvalue), nan=1.0), alpha=alpha,
+                                   method=multipletests_method, is_sorted=False,
+                                   returnsorted=False)[1]
+            g1_mean = self.data[group1].mean(axis=1)
+            g2_mean = self.data[group2].mean(axis=1)
 
-            #	log2FoldChange	lfcSE	logCPM	stat	pvalue		
-            # 
-            pvalue=lrt['pvalue'].values.reshape(-1)
-            qvalue = multipletests(np.nan_to_num(np.array(pvalue),0), alpha=0.5, 
-                               method=multipletests_method, is_sorted=False, returnsorted=False)
-            
-            g1_mean=self.data[group1].mean(axis=1)
-            g2_mean=self.data[group2].mean(axis=1)
-            g=(g2_mean+g1_mean)/2
-            g=g.loc[g>0].min()
-            fold=(g1_mean+g)/(g2_mean+g)
-            print(f"⏰ Start to calculate qvalue...")
-
-            result = pd.DataFrame({'pvalue':pvalue,'qvalue':qvalue[1],'FoldChange':fold})
-            result['MaxBaseMean']=np.max([g1_mean,g2_mean],axis=0)
-            result['BaseMean']=(g1_mean+g2_mean)/2
-            result['log2(BaseMean)']=np.log2((g1_mean+g2_mean)/2)
-            result['log2FC'] = np.log2(result['FoldChange'])
-            result['abs(log2FC)'] = abs(result['log2FC'])
-            result['size']  =np.abs(result['log2FC'])/10
-            result=result.loc[~result['pvalue'].isnull()]
+            result = pd.DataFrame({'pvalue': pvalue, 'qvalue': qvalue},
+                                  index=self.data.index)
+            result['log2FC'] = tab['logFC'].to_numpy()        # edgeR logFC is log2
+            result['abs(log2FC)'] = result['log2FC'].abs()
+            result['BaseMean'] = (g1_mean + g2_mean) / 2
+            result['MaxBaseMean'] = np.max([g1_mean, g2_mean], axis=0)
+            result['log2(BaseMean)'] = np.log2(result['BaseMean'] + 1)
+            result['logCPM'] = tab['logCPM'].to_numpy()
+            result['LR'] = tab['LR'].to_numpy()
+            result['size'] = result['abs(log2FC)'] / 10
+            result = result.loc[~result['pvalue'].isnull()]
             result['-log(pvalue)'] = -np.log10(result['pvalue'])
             result['-log(qvalue)'] = -np.log10(result['qvalue'])
-            #max mean of between each value in group1 and group2
-            #result=result[result['padj']<alpha]
-            result['sig']='normal'
+            result['sig'] = 'normal'
             result.loc[(result['qvalue'] < alpha) & (result['log2FC'] > 0), 'sig'] = 'up'
             result.loc[(result['qvalue'] < alpha) & (result['log2FC'] < 0), 'sig'] = 'down'
-            self.result=result
-            print(f"✅ Differential expression analysis completed.")
+            self.result = result
+            print("✅ Differential expression analysis completed.")
             return result
 
         elif method == 'edger':
