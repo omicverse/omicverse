@@ -2102,6 +2102,17 @@ def leiden(
     leiden clustering
     '''
     random_state = resolve_random_state(random_state)
+    # A length-1 list/tuple resolution (seen from agent-generated code) would
+    # otherwise crash the torch GPU path with an opaque index TypeError
+    # (issue #877) and confuse scanpy / RAPIDS too. Normalise to a scalar.
+    if isinstance(resolution, (list, tuple)):
+        if len(resolution) != 1:
+            raise ValueError(
+                "ov.pp.leiden expects a single resolution value, got a "
+                f"{type(resolution).__name__} of length {len(resolution)}: "
+                f"{resolution!r}"
+            )
+        resolution = resolution[0]
     if settings.mode == 'cpu':
         print(f"{EMOJI['cpu']} Using Scanpy CPU Leiden...")
         from ._leiden import leiden as _leiden

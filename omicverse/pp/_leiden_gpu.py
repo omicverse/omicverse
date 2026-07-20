@@ -278,6 +278,38 @@ def _choose_graph_local(adata, obsp_key, neighbors_key):
     return adata.obsp[obsp_name]
 
 
+def _coerce_resolution(resolution):
+    """Return ``resolution`` as a plain Python ``float``.
+
+    Programmatic / agent-generated callers sometimes pass a length-1
+    container (e.g. ``resolution=[1.0]``). Left as-is, the downstream
+    ``resolution * tensor`` in the local-move becomes Python **list
+    repetition**, which calls ``tensor.__index__()`` and raises the opaque
+    ``TypeError: only integer tensors of a single element can be converted
+    to an index`` (issue #877). Unwrap single-element containers; reject
+    multi-element ones with a clear message.
+    """
+    if isinstance(resolution, bool):  # avoid True/False sneaking through as 1/0
+        raise ValueError(f"ov.pp.leiden resolution must be a number, got {resolution!r}")
+    if isinstance(resolution, (int, float)):
+        return float(resolution)
+    if isinstance(resolution, (list, tuple)):
+        if len(resolution) != 1:
+            raise ValueError(
+                "ov.pp.leiden expects a single resolution value, got a "
+                f"{type(resolution).__name__} of length {len(resolution)}: "
+                f"{resolution!r}"
+            )
+        return _coerce_resolution(resolution[0])
+    # numpy / torch scalar or single-element array → float() handles these
+    try:
+        return float(resolution)
+    except (TypeError, ValueError) as exc:
+        raise ValueError(
+            f"ov.pp.leiden resolution must be a single number, got {resolution!r}"
+        ) from exc
+
+
 def leiden_gpu_sparse_multilevel(
     adata,
     resolution: float = 1.0,
@@ -322,6 +354,7 @@ def leiden_gpu_sparse_multilevel(
     -------
     None (modifies ``adata`` in place; see ``key_added``).
     """
+    resolution = _coerce_resolution(resolution)
     dev = _pick_device(device)
 
     # Small-N fast path: at small N the multilevel loop's thousands of
