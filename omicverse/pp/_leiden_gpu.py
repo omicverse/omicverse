@@ -301,7 +301,18 @@ def _coerce_resolution(resolution):
                 f"{resolution!r}"
             )
         return _coerce_resolution(resolution[0])
-    # numpy / torch scalar or single-element array → float() handles these
+    # numpy / torch scalar or single-element array/tensor. ``.item()`` unwraps
+    # a single element on numpy 1.x AND 2.x (numpy 2 removed the implicit
+    # float(size-1 array) conversion) and on torch; multi-element raises.
+    item = getattr(resolution, "item", None)
+    if callable(item):
+        try:
+            return float(item())
+        except Exception as exc:  # multi-element array/tensor, or non-numeric
+            raise ValueError(
+                "ov.pp.leiden expects a single resolution value, got "
+                f"{resolution!r}"
+            ) from exc
     try:
         return float(resolution)
     except (TypeError, ValueError) as exc:
