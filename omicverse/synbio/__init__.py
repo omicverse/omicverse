@@ -137,6 +137,7 @@ _LAZY_ATTRS: dict[str, tuple[str, str]] = {
     "view_construct":        ("._seqview", "view_construct"),
     "plot_sequence_logo":    ("._seqview", "plot_sequence_logo"),
     "plot_rna_structure":    ("._seqview", "plot_rna_structure"),
+    "plot_pegrna":           ("._seqview", "plot_pegrna"),
     # ---- pathway thermodynamics & retrosynthesis -------------------------
     "reaction_dg":           ("._thermo", "reaction_dg"),
     "max_min_driving_force": ("._thermo", "max_min_driving_force"),

@@ -187,6 +187,75 @@ def plot_sequence_logo(sequences: Sequence[str], alphabet: str = "auto",
     return fig, ax
 
 
+@register_function(
+    aliases=["plot_pegrna", "pegRNA图", "先导编辑图", "pegrna_map", "prime_edit_plot",
+             "引导编辑图", "pegRNA可视化"],
+    category="synthetic_biology",
+    description="pegRNA 可视化:在靶位点上画出 spacer(原型间隔)、切口(nick)、PBS、RT 模板(RTT,含编辑)、编辑位点与 PE3 二级切口,直观展示一次 prime editing 设计。Draw a pegRNA (spacer / nick / PBS / RTT / edit / PE3 nick) on the target locus.",
+    examples=[
+        "peg = ov.synbio.prime_editing_design(locus, edit_pos=60, ref='A', alt='G')[0]",
+        "ov.synbio.plot_pegrna(locus, peg, edit_pos=60)",
+    ],
+    related=["synbio.prime_editing_design", "synbio.view_primers", "synbio.view_construct"],
+    requires={},
+    produces={},
+)
+def plot_pegrna(locus: str, pegrna, edit_pos: int, ax=None,
+                figure_width: float = 9):
+    """Draw a pegRNA's components on *locus* (SnapGene-style feature map).
+
+    Shows the protospacer (strand arrow), the Cas9 nick, the primer-binding
+    site (PBS) and RT template (RTT, which carries the edit), the edit position,
+    and — if present — the PE3 secondary-nick guide."""
+    dfv = _dfv("plot_pegrna")
+    t = locus.upper().replace("U", "T")
+    sp = pegrna.spacer.upper()
+    strand = 1 if pegrna.strand == "+" else -1
+    s0 = t.find(sp) if strand == 1 else t.find(_revcomp(sp))
+    nick = int(pegrna.nick_position)
+    pbs_len, rtt_len = len(pegrna.pbs), len(pegrna.rtt)
+
+    feats = []
+    if s0 >= 0:
+        feats.append(dfv.GraphicFeature(
+            start=s0, end=s0 + len(sp), strand=strand,
+            color=_FEATURE_COLORS["primer"], label="spacer"))
+    # PBS binds just 5' of the nick on the nicked strand; RTT (the edit) 3' of it
+    if strand == 1:
+        feats.append(dfv.GraphicFeature(start=max(0, nick - pbs_len), end=nick,
+                     strand=0, color="#FBB4AE", label="PBS"))
+        feats.append(dfv.GraphicFeature(start=nick, end=nick + rtt_len, strand=0,
+                     color="#B3CDE3", label="RTT (edit)"))
+    else:
+        feats.append(dfv.GraphicFeature(start=nick, end=nick + pbs_len, strand=0,
+                     color="#FBB4AE", label="PBS"))
+        feats.append(dfv.GraphicFeature(start=max(0, nick - rtt_len), end=nick,
+                     strand=0, color="#B3CDE3", label="RTT (edit)"))
+    feats.append(dfv.GraphicFeature(start=nick - 1, end=nick + 1, strand=0,
+                 color=_FEATURE_COLORS["terminator"], label="nick"))
+    feats.append(dfv.GraphicFeature(start=edit_pos, end=edit_pos + 1, strand=0,
+                 color=_FEATURE_COLORS["promoter"], label=f"edit {pegrna.edit}"))
+    pe3 = getattr(pegrna, "pe3_nick", None)
+    if pe3 and pe3.get("spacer"):
+        p = pe3["spacer"].upper()
+        q0 = t.find(p)
+        if q0 < 0:
+            q0 = t.find(_revcomp(p))
+        if q0 >= 0:
+            feats.append(dfv.GraphicFeature(
+                start=q0, end=q0 + len(p), strand=-strand,
+                color="#FDCDAC", label="PE3 nick"))
+
+    record = dfv.GraphicRecord(sequence_length=len(t), features=feats)
+    if ax is None:
+        ax, _ = record.plot(figure_width=figure_width)
+    else:
+        record.plot(ax=ax)
+    ax.set_title(f"pegRNA on target ({pegrna.strand} strand, "
+                 f"PBS{pbs_len}/RTT{rtt_len})", fontsize=11)
+    return ax
+
+
 def _pairs_from_dotbracket(structure: str):
     """Return the list of (i, j) base pairs from a dot-bracket string."""
     stack, pairs = [], []
