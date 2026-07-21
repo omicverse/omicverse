@@ -61,6 +61,25 @@ def doubletfinder(
             "Install it with `pip install pydoubletfinder`."
         ) from exc
 
+    # Reuse omicverse's chunked-GPU exact kNN for the pANN neighbour search when
+    # a GPU is present. DoubletFinder's default pANN uses a full O(N^2) distance
+    # matrix (OOMs at ~1e5 cells); the injected kNN is bit-identical and O(N·k).
+    # Guarded with inspect so an older pydoubletfinder without the hook still works.
+    import inspect as _inspect
+    _extra = {}
+    try:
+        import torch as _torch
+        if _torch.cuda.is_available() and "knn_fn" in _inspect.signature(DoubletFinder.run).parameters:
+            from .pyg_knn_implementation import pyg_knn_search as _pyg_knn
+
+            def _knn_fn(X, n_neighbors):
+                idx, dist = _pyg_knn(X, k=int(n_neighbors), device="cuda",
+                                     include_self=True)
+                return dist, idx
+            _extra["knn_fn"] = _knn_fn
+    except Exception:
+        _extra = {}
+
     def _run_one(sub: anndata.AnnData) -> tuple[np.ndarray, np.ndarray]:
         """Return (predicted_doublet, pANN) for a single (sub-)AnnData.
 
@@ -69,7 +88,7 @@ def doubletfinder(
         """
         df = DoubletFinder(sub, random_state=random_state)
         if pK is None:
-            df.param_sweep(PCs=PCs, n_top_genes=n_top_genes)
+            df.param_sweep(PCs=PCs, n_top_genes=n_top_genes, **_extra)
             df.summarize_sweep()
             df.find_pK()
             pK_use = df.optimal_pK
@@ -82,7 +101,7 @@ def doubletfinder(
         df.run(
             pN=pN, pK=pK_use, nExp=nExp,
             annotations=homotypic_annotations if homotypic_annotations in sub.obs.columns else None,
-            PCs=PCs, n_top_genes=n_top_genes,
+            PCs=PCs, n_top_genes=n_top_genes, **_extra,
         )
         # Robust lookup — if pydoubletfinder changes its column naming we want
         # a clear message, not a bare StopIteration.

@@ -71,6 +71,31 @@ def scdblfinder(
             "Install it with `pip install pyscdblfinder`."
         ) from exc
 
+    # Reuse omicverse's chunked-GPU exact kNN when a GPU is available: results
+    # stay bit-identical to exact sklearn (same neighbour sets) while scaling to
+    # 1e5–1e6 cells (sklearn's exact kNN is O(N^2) and dominates on big atlases).
+    # Only passed if the installed pyscdblfinder exposes the knn_fn hook.
+    import inspect as _inspect
+    _knn_fn = None
+    _extra = {}
+    try:
+        import torch as _torch
+        if _torch.cuda.is_available() and "knn_fn" in _inspect.signature(ScDblFinder.run).parameters:
+            from .pyg_knn_implementation import pyg_knn_search as _pyg_knn
+
+            def _knn_fn(X, n_neighbors):
+                idx, dist = _pyg_knn(X, k=int(n_neighbors), device="cuda",
+                                     include_self=True)
+                return dist, idx  # pyscdblfinder expects (dist, idx)
+
+            _extra["knn_fn"] = _knn_fn
+            # NB: we deliberately keep the exact (sklearn randomized) PCA rather
+            # than torch.pca_lowrank — the GPU SVD is a randomized approximation
+            # that perturbs the embedding and shifts a few borderline calls. The
+            # GPU kNN alone keeps results bit-identical to the CPU path.
+    except Exception:
+        _extra = {}
+
     def _run_one(sub: anndata.AnnData) -> tuple[np.ndarray, np.ndarray]:
         # When `dbr` is explicit, every batch shares it (user's intent). When
         # inferred from `dbr_per1k`, compute it per-batch from `sub.n_obs` so
@@ -89,6 +114,7 @@ def scdblfinder(
             nrounds=nrounds,
             max_depth=max_depth,
             clusters=clusters if (clusters is not None and clusters in sub.obs.columns) else None,
+            **_extra,
             verbose=False,
         )
         cls = sdf.adata.obs["scDblFinder_class"].values

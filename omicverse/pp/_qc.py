@@ -436,15 +436,25 @@ def mads_test(meta, cov, nmads=5, lt=None, batch_key=None):
 _CE_MT_PREFIXES = ('ctc-', 'nduo-', 'ctb-')
 
 
+# Minimum pyscdblfinder that ships the O(N·k) kNN doublet features. Earlier
+# releases (<=0.1.0) built a full N×N distance matrix in the neighbour step,
+# which needs ~N²·8 bytes (≈125 GB at 100k cells) and thrashes swap — the
+# process shows near-zero CPU and never finishes on large atlases (issue #848).
+_MIN_PYSCDBLFINDER = "0.2.0"
+
+
 def _resolve_doublets_method(method: str) -> str:
     """Resolve a doublets_method string, falling back gracefully when the
-    requested backend's package is not installed.
+    requested backend's package is missing or too old.
 
     `scdblfinder` (default) requires `pyscdblfinder`; if it's missing we
     print a single-line install hint and fall back to `scrublet` (which
-    has lazy imports of its own and is broadly available). Other methods
-    pass through unchanged — their wrappers raise their own ImportError
-    with installation instructions.
+    has lazy imports of its own and is broadly available). If an outdated
+    pyscdblfinder (<0.2.0) is installed we also fall back to `scrublet`,
+    because those versions stall for hours with near-zero CPU on large
+    datasets (issue #848) — the pipeline should finish rather than hang.
+    Other methods pass through unchanged — their wrappers raise their own
+    ImportError with installation instructions.
     """
     if method == 'scdblfinder':
         try:
@@ -456,7 +466,25 @@ def _resolve_doublets_method(method: str) -> str:
             )
             print(
                 f"   {Colors.CYAN}💡 Install with: "
-                f"`pip install pyscdblfinder` to use the new default.{Colors.ENDC}"
+                f"`pip install \"pyscdblfinder>={_MIN_PYSCDBLFINDER}\"` "
+                f"to use the new default.{Colors.ENDC}"
+            )
+            return 'scrublet'
+        # Version read from distribution metadata (not pyscdblfinder.__version__,
+        # which 0.2.0 ships stale as '0.1.0'); helper lives in utils so other
+        # optional backends can reuse the same gate.
+        from ..utils._versions import version_at_least
+        ok, ver = version_at_least('pyscdblfinder', _MIN_PYSCDBLFINDER)
+        if ver is not None and not ok:
+            print(
+                f"   {Colors.WARNING}⚠️  pyscdblfinder {ver} has a known "
+                f"large-dataset stall (near-zero CPU for hours on ~100k+ "
+                f"cells; issue #848); falling back to 'scrublet'.{Colors.ENDC}"
+            )
+            print(
+                f"   {Colors.CYAN}💡 Upgrade with: "
+                f"`pip install -U \"pyscdblfinder>={_MIN_PYSCDBLFINDER}\"` "
+                f"to use scdblfinder on large data.{Colors.ENDC}"
             )
             return 'scrublet'
     return method
@@ -1766,10 +1794,16 @@ def qc_gpu(adata, mode='seurat',
     cells_before_final = adata.shape[0]
     genes_before_final = adata.shape[1]
     
-    rsc.pp.filter_cells(adata, min_counts=min_genes)
-    rsc.pp.filter_cells(adata, max_counts=max_genes_ratio*adata.shape[1])
-    rsc.pp.filter_genes(adata, min_counts=min_cells)
-    rsc.pp.filter_genes(adata, max_counts=max_cells_ratio*adata.shape[0])
+    # NB: filter on *cells-per-gene* / *genes-per-cell*, not total UMI counts.
+    # Using min_counts/max_counts here (the old bug, #862) dropped highly
+    # expressed marker genes — e.g. with max_cells_ratio=1 any gene whose total
+    # UMIs exceed n_cells (S100A8, LYZ, FCGR3B, ...) was removed. rapids-singlecell
+    # exposes min_genes/max_genes/min_cells/max_cells separately, matching the CPU
+    # path's _filter_cells_impl / _filter_genes_impl.
+    rsc.pp.filter_cells(adata, min_genes=min_genes)
+    rsc.pp.filter_cells(adata, max_genes=int(max_genes_ratio*adata.shape[1]))
+    rsc.pp.filter_genes(adata, min_cells=min_cells)
+    rsc.pp.filter_genes(adata, max_cells=int(max_cells_ratio*adata.shape[0]))
     
     cells_final_filtered = cells_before_final - adata.shape[0]
     genes_final_filtered = genes_before_final - adata.shape[1]
@@ -1786,6 +1820,14 @@ def qc_gpu(adata, mode='seurat',
                 f"Unknown doublets_method={doublets_method!r}; "
                 "expected 'scrublet', 'sccomposite', 'doubletfinder', or 'scdblfinder'."
             )
+        # scrublet runs on the GPU (rapids-singlecell); the other backends are
+        # CPU/NumPy tools (pyscdblfinder / pydoubletfinder / sccomposite) that
+        # cannot consume the cupy matrix qc_gpu put on the GPU — feeding it in
+        # flips the orientation and returns one value per *gene*, causing
+        # "Length of values (n_genes) does not match length of index (n_cells)"
+        # (issue #866). Move the matrix back to host memory for those.
+        if doublets_method != 'scrublet':
+            rsc.get.anndata_to_CPU(adata)
         if doublets_method=='scrublet':
             print(f"   {Colors.GREEN}{EMOJI['start']} Running GPU-accelerated scrublet...{Colors.ENDC}")
             rsc.pp.scrublet(adata, random_state=1234,batch_key=batch_key)

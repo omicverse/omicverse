@@ -76,6 +76,7 @@ dependencies = [
     'requests>=2.0',
     'transformers>=0.30',
     'marsilea!=0.5.6',
+    'legendkit>=0.5.0',
     #'wandb',
     'openai>=1.0',
     'omicverse-skills>=0.3.0',
@@ -355,6 +356,48 @@ mol-dock = [
   "gemmi>=0.7; python_version >= '3.10'",    # structure I/O (meeko dependency)
 ]
 
+# Synthetic-biology stack for ``ov.synbio`` — a three-layer design stack:
+# metabolic networks (A), protein/enzyme design (B), DNA (C). Install via:
+#   pip install omicverse[synbio]
+# All imports are lazy and gated behind actionable ImportErrors, so
+# ``import omicverse`` never requires any of these. GPU protein models
+# (ESMFold via transformers, ESM-2 via fair-esm, ProteinMPNN via runtime
+# git-clone) use the existing torch dependency and download weights to
+# ``~/.omicverse/synbio_weights`` (OMICOS_SYNBIO_WEIGHTS to relocate).
+synbio = [
+  # Layer A — constraint-based metabolic modelling (CPU, free GLPK solver)
+  "cobra>=0.26",                                # COBRApy — GEM I/O, FBA/FVA/pFBA, deletions
+  "optlang>=1.7",                               # LP/MILP modelling layer (GLPK backend)
+  "straindesign>=1.11",                         # exact OptKnock/RobustKnock/MCS strain design (MILP)
+  # Layer C — DNA design (CPU)
+  "dnachisel>=3.2",                             # codon optimisation + sequence constraints
+  "primer3-py>=2.0",                            # PCR primer design
+  # Layer B — protein language / structure models (GPU-capable; torch already required)
+  "fair-esm>=2.0",                              # ESM-2 / ESM-1v embeddings & variant effects
+  "transformers>=4.30; python_version >= '3.10'",  # ESMFold (facebook/esmfold_v1), no openfold
+  "biotite>=1.0; python_version >= '3.10'",     # structure parsing helpers
+  "biopython>=1.80",                            # sequence I/O, restriction, GenBank, assembly
+  "dna_features_viewer>=3.1",                   # primer / construct / plasmid maps
+  "logomaker>=0.8",                             # sequence logos
+  # Regulatory / RNA layer
+  "ViennaRNA>=2.5",                             # RNA secondary structure, RBS/accessibility
+  # Real SOTA method backends (chosen via method=)
+  "ostir>=1.1",                                 # rbs_strength(method='ostir') — open RBS Calculator v2
+  "omegaconf>=2.1",                             # stability_ddg(method='thermompnn') config
+  "pytorch-lightning>=1.9",                     # stability_ddg(method='thermompnn') model loading
+  "gdown>=4.6",                                 # enzyme_function(method='clean') — fetch CLEAN weights
+  "equilibrator-api>=0.6",                      # reaction_dg(method='equilibrator') — component-contribution ΔG
+  "rdkit>=2024.3",                              # enzyme_kcat(method='dlkcat') substrate graphs (NumPy-2 compatible)
+  "rs3>=0.0.18",                                # design_grnas(method='rs3') — Rule Set 3 on-target (needs lightgbm==3.3.5)
+  # NOTE: equilibrator-api pulls pyarrow>=21 + libcst; if pip tries to build them
+  # from source, install with a Rust toolchain on PATH and force wheels:
+  #   pip install --only-binary=pyarrow,libcst equilibrator-api
+  # First use downloads a ~2 GB component-contribution cache.
+  # NOTE: method='ostir' also needs the ViennaRNA CLI binary (RNAfold) on PATH:
+  #   conda install -c bioconda viennarna
+  # ThermoMPNN weights are auto-cloned from github on first use.
+]
+
 
 [project.urls]
 Github = 'https://github.com/Starlitnightly/omicverse'
@@ -379,6 +422,7 @@ exclude = [
 
 [tool.setuptools.package-data]
 "omicverse.pl" = ["_data/*.csv"]
+"omicverse.synbio" = ["external/*.fasta", "external/cfd/*.pkl"]
 
 [tool.pytest.ini_options]
 asyncio_mode = "auto"

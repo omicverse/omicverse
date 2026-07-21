@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from pathlib import Path
 from typing import Sequence, Mapping, Literal, Union, Optional, Tuple, Dict
 import numpy as np
 import pandas as pd
@@ -162,7 +163,7 @@ def dotplot(
     
     Returns:
         If `return_fig` is True, returns the figure object.
-        If `show` is False, returns axes dictionary.
+        If `show` is False, returns the rendered Marsilea board.
     """
     marsilea_version = getattr(ma, "__version__", "")
     if marsilea_version.startswith("0.5.6"):
@@ -462,11 +463,19 @@ def dotplot(
     if dendrogram:
         m.add_dendrogram("right", pad=0.1)
     
+    if title:
+        m.add_title(top=title, pad=0.2, fontsize=fontsize + 1, fontweight="bold")
+
     # Add legends
     m.add_legends(box_padding=2)
     
     # Render the plot
-    fig = m.render()
+    m.render()
+    fig = m.figure
+
+    if save not in (None, False):
+        save_path = Path(save) if isinstance(save, str) else Path("dotplot.png")
+        fig.savefig(save_path, bbox_inches="tight", pad_inches=0.1)
     
     if return_fig:
         return fig
@@ -632,7 +641,7 @@ def rank_genes_groups_dotplot(
     
     Returns:
         If `return_fig` is True, returns the figure object.
-        If `show` is False, returns axes dictionary.
+        If `show` is False, returns the rendered Matplotlib figure.
     
     Examples:
         >>> # Basic usage with top genes
@@ -751,23 +760,24 @@ def rank_genes_groups_dotplot(
             title = values_to_plot.replace("_", " ").replace("pvals", "p-value")
 
     # Create the plot
+    if title is not None and "colorbar_title" not in kwds:
+        kwds["colorbar_title"] = title
+
     _pl = dotplot(
         adata,
         var_names,
         groupby,
         dot_color_df=values_df,
+        show=show,
+        save=save,
+        # This wrapper has historically needed the rendered Figure in order
+        # to preserve its default and ``show=False`` return behaviour.
         return_fig=True,
         gene_symbols=gene_symbols,
         preserve_dict_order=True,
         **kwds,
     )
-    
-    if title is not None and "colorbar_title" not in kwds:
-        _pl.legend(colorbar_title=title)
-    
-    if return_fig:
-        return _pl
-    elif not show:
+    if return_fig or not show:
         return _pl
     return None
 

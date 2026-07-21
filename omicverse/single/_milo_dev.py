@@ -453,7 +453,7 @@ class Milo:
 
         """
         import patsy
-        from inmoose import edgepy
+        from ..external import pyedger as _edger
         try:
             sample_adata = mdata["milo"]
         except KeyError:
@@ -525,40 +525,39 @@ class Milo:
             # Keep as patsy DesignMatrix (don't convert to array)
             model_matrix = patsy.dmatrix(design_formula, design_df)
 
-            # Create DGEList object
-            dge = edgepy.DGEList(
-                counts=count_mat[keep_nhoods, :][:, keep_smp]
-            )
+            # Design matrix as a plain ndarray for pyedger.
+            X = np.asarray(model_matrix, dtype=float)
+            Y = count_mat[keep_nhoods, :][:, keep_smp]
 
-            # Apply TMM normalization (critical for accurate DA testing)
+            # edgeR TMM normalization factors. pyedger's DGEList applies the
+            # effective library size (lib.size * norm.factors) internally — the
+            # same way Bioconductor edgeR / miloR do — so we pass the TMM
+            # factors as norm_factors rather than pre-multiplying lib sizes.
             _log_info("Calculating TMM normalization factors...")
-            tmm_factors = calcNormFactors(
-                count_mat[keep_nhoods, :][:, keep_smp],
-                method="TMM"
-            )
+            tmm_factors = calcNormFactors(Y, method="TMM")
             _log_info(f"TMM factors: {tmm_factors}")
+            # ``group`` is only required to satisfy pyedger's API; with an
+            # explicit ``design`` the dispersion is estimated from the design
+            # matrix (GLM path), not the group, so a placeholder is fine.
+            dge = _edger.DGEList(
+                counts=Y,
+                norm_factors=np.asarray(tmm_factors, dtype=float),
+                group=np.zeros(Y.shape[1]),
+            )
 
-            # CRITICAL: edgepy may not automatically use norm.factors
-            # In edgeR, effective library size = lib_size * norm_factors
-            # We need to manually set the effective library sizes
-            original_lib_sizes = dge.samples['lib_size'].values
-            effective_lib_sizes = original_lib_sizes * tmm_factors
-            _log_info(f"Original lib_sizes: {original_lib_sizes}")
-            _log_info(f"Effective lib_sizes: {effective_lib_sizes}")
-
-            # Update lib_size to effective library sizes
-            dge.samples['lib_size'] = effective_lib_sizes
-            # Keep norm_factors for reference (but edgepy won't use it)
-            dge.samples['norm_factors'] = tmm_factors
-
-            # Estimate dispersion using edgepy's methods
-            dge = dge.estimateGLMCommonDisp(design=model_matrix)
-            dge = dge.estimateGLMTagwiseDisp(design=model_matrix)
-
-            # Fit GLM QLF
-            # Note: edgepy doesn't support robust=True
-            # See: https://github.com/inmanjm/inmoose/issues/
-            fit = dge.glmQLFit(design=model_matrix, robust=False)
+            # Dispersion + quasi-likelihood GLM against the design — exactly the
+            # engine miloR::testNhoods wraps (edgeR estimateDisp -> glmQLFit ->
+            # glmQLFTest), via the pure-Python pyedger port. No inmoose / R.
+            # Note: pyedger's design-based dispersion uses trend_method='none'
+            # and robust QL moderation is not yet implemented (robust=False),
+            # which also matches the previous inmoose behaviour. R-parity vs
+            # Bioconductor edgeR (same options) is pinned in
+            # tests/single/test_milo_pyedger_parity.py.
+            _edger.estimateDisp(dge, design=X, trend_method="none", robust=False)
+            # legacy=False is edgeR 4.x's (and miloR's) default bias-adjusted QL
+            # workflow; it tracks Bioconductor edgeR's F/PValue much more
+            # closely than the classic legacy=True path.
+            fit = _edger.glmQLFit(dge, design=X, robust=False, legacy=False)
 
             # Test
             if model_contrasts is not None:
@@ -610,34 +609,22 @@ class Milo:
                     _log_warning(f"Contrast vector: {contrast_vector}")
                     _log_warning("⚠ Contrast does not sum to 0")
 
-                # Reshape to column vector for edgepy
-                contrast_matrix = contrast_vector.reshape(-1, 1)
-
-                # Perform test with contrast
-                # This correctly tests the difference: test_group - control_group
-                result = edgepy.glmQLFTest(fit, contrast=contrast_matrix)
-                res = edgepy.topTags(result, n=np.inf, sort_by="none")
+                # Perform test with contrast — tests the difference
+                # test_group − control_group (pyedger accepts a 1-D contrast).
+                res_obj = _edger.glmQLFTest(fit, contrast=contrast_vector)
             else:
-                # Test last coefficient
+                # Test the last coefficient (0-based index).
                 n_coef = model_matrix.shape[1]
-                result = edgepy.glmQLFTest(fit, coef=n_coef-1)  # Python uses 0-based indexing
-                res = edgepy.topTags(result, n=np.inf, sort_by="none")
+                res_obj = _edger.glmQLFTest(fit, coef=n_coef - 1)
 
-            # Convert to DataFrame if not already
-            if not isinstance(res, pd.DataFrame):
-                res = pd.DataFrame(res)
-
-            # edgepy returns different column names than edgeR
-            # Rename columns to match pertpy/Milo expected format
-            column_mapping = {
-                'log2FoldChange': 'logFC',  # edgepy uses this name
-                'pvalue': 'PValue',          # If lowercase exists
-            }
-
-            # Apply column renaming
-            for old_col, new_col in column_mapping.items():
-                if old_col in res.columns:
-                    res.rename(columns={old_col: new_col}, inplace=True)
+            # pyedger returns a result object whose ``.table`` is in nhood order
+            # with edgeR column names (logFC, logCPM, F, PValue). Add the
+            # non-spatial BH FDR (Milo's graph SpatialFDR is computed below).
+            res = res_obj.table.copy()
+            from statsmodels.stats.multitest import multipletests
+            _pv = res["PValue"].to_numpy(dtype=float)
+            res["FDR"] = multipletests(np.nan_to_num(_pv, nan=1.0),
+                                       method="fdr_bh")[1]
 
         elif solver == "batchglm":
             raise NotImplementedError("batchglm solver is not yet implemented")
@@ -646,7 +633,7 @@ class Milo:
         res.index = sample_adata.var_names[keep_nhoods]
 
         # Debug: print column names
-        _log_info(f"edgepy result columns: {list(res.columns)}")
+        _log_info(f"edgeR (pyedger) result columns: {list(res.columns)}")
 
         if any(col in sample_adata.var.columns for col in res.columns):
             sample_adata.var = sample_adata.var.drop(res.columns, axis=1)

@@ -149,3 +149,4 @@ from ._metabolism import (
     metabolism_compass,
 )
 from ._signatures import load_signatures_from_file, predefined_signatures
+from ._crossspecies import saturn_frog_zebrafish

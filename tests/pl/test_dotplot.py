@@ -3,6 +3,8 @@ import pandas as pd
 import pytest
 import warnings
 from anndata import AnnData
+from matplotlib.figure import Figure
+import matplotlib.pyplot as plt
 
 import omicverse.pl._dotplot as dotplot_mod
 
@@ -15,9 +17,14 @@ class _StubAnnotation:
 
 
 class _StubSizedHeatmap:
+    instances = []
+
     def __init__(self, *args, **kwargs):
         self.args = args
         self.kwargs = kwargs
+        self.figure = object()
+        self.title_calls = []
+        self.__class__.instances.append(self)
 
     def add_top(self, *args, **kwargs):
         return None
@@ -34,11 +41,16 @@ class _StubSizedHeatmap:
     def add_legends(self, *args, **kwargs):
         return None
 
+    def add_title(self, *args, **kwargs):
+        self.title_calls.append((args, kwargs))
+        return None
+
     def group_cols(self, *args, **kwargs):
         return None
 
     def render(self):
-        return object()
+        # Marsilea renders in place and exposes the result as ``.figure``.
+        return None
 
 
 @pytest.fixture
@@ -91,6 +103,61 @@ def test_dotplot_does_not_warn_for_fixed_marsilea_versions(simple_adata, stub_ma
         )
 
     assert not [w for w in record if "marsilea 0.5.6" in str(w.message)]
+
+
+def test_dotplot_honors_title_and_returns_rendered_figure(simple_adata, stub_marsilea):
+    _StubSizedHeatmap.instances.clear()
+    fig = dotplot_mod.dotplot(
+        simple_adata,
+        ["g1", "g2"],
+        groupby="cell_type",
+        title="Marker genes",
+        return_fig=True,
+    )
+
+    assert fig is _StubSizedHeatmap.instances[0].figure
+    assert _StubSizedHeatmap.instances[0].title_calls == [
+        ((), {"top": "Marker genes", "pad": 0.2, "fontsize": 13, "fontweight": "bold"})
+    ]
+
+
+def test_dotplot_pdf_export(simple_adata, tmp_path):
+    output = tmp_path / "dotplot.pdf"
+    fig = dotplot_mod.dotplot(
+        simple_adata,
+        ["g1", "g2"],
+        groupby="cell_type",
+        title="Marker genes",
+        save=str(output),
+        return_fig=True,
+    )
+
+    assert isinstance(fig, Figure)
+    assert output.read_bytes().startswith(b"%PDF")
+    assert any(text.get_text() == "Marker genes" for ax in fig.axes for text in ax.texts)
+    plt.close(fig)
+
+
+def test_rank_dotplot_preserves_figure_return(simple_adata, monkeypatch):
+    rendered_figure = object()
+    captured = {}
+
+    def fake_dotplot(*args, **kwargs):
+        captured.update(kwargs)
+        return rendered_figure
+
+    monkeypatch.setattr(dotplot_mod, "dotplot", fake_dotplot)
+
+    result = dotplot_mod.rank_genes_groups_dotplot(
+        simple_adata,
+        var_names=["g1", "g2"],
+        groups=["cell_type"],
+        groupby="cell_type",
+        show=False,
+    )
+
+    assert result is rendered_figure
+    assert captured["return_fig"] is True
 
 
 def test_rank_genes_groups_df_drops_unaligned_long_statistics():

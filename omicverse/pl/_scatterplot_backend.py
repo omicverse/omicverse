@@ -2,6 +2,7 @@ import collections.abc as cabc
 from copy import copy
 from numbers import Integral
 from itertools import combinations, product
+from pathlib import Path
 import matplotlib
 from typing import (
     Collection,
@@ -601,17 +602,13 @@ def embedding(
                 multi_panel=bool(grid),
             )
         elif colorbar_loc is not None:
-            # scvelo-style inset colorbar — `inset_axes` puts a 2 %-wide /
-            # 30 %-tall bar at the panel's lower-right corner inside the
-            # axes, so it never widens the panel footprint and the bar
-            # itself stays slim regardless of figure size. Inset children
-            # follow the parent ax automatically when set_position is
-            # called, so we don't need _flow_layout_panels to drag them.
+            # Native Matplotlib inset colorbar. Do not use axes_grid1 here:
+            # its locator interacts badly with PDF tight-bbox export when a
+            # colourbar contains rasterised artists.
             from matplotlib.ticker import MaxNLocator
-            from mpl_toolkits.axes_grid1.inset_locator import inset_axes as _inset_axes
 
-            cax1 = _inset_axes(
-                ax, width="2%", height="30%", loc='lower right', borderpad=0,
+            cax1 = ax.inset_axes(
+                [0.98, 0.0, 0.02, 0.30], transform=ax.transAxes,
             )
             # Register the inset so _flow_layout_panels measures its
             # tightbbox in Pass 1 — ax.get_tightbbox excludes children, so
@@ -633,7 +630,13 @@ def embedding(
     if return_fig is True:
         return fig
     axs = axs if grid else ax
-    savefig_or_show(basis, show=show, save=save)
+    if save not in (None, False):
+        save_path = Path(save) if isinstance(save, str) else Path(f"{basis}.png")
+        bbox_inches = None if save_path.suffix.lower() == ".pdf" else "tight"
+        fig.savefig(save_path, bbox_inches=bbox_inches, pad_inches=0.1)
+    should_show = settings.autoshow if show is None else show
+    if should_show:
+        pl.show()
     if show is False:
         return axs
 
@@ -813,10 +816,10 @@ def _flow_layout_panels(fig, axs, panel_colorbars=None, gap=0.3, margin=0.3):
         ]
         it['ax'].set_position(new_pos_norm)
 
-        # Drag the panel's colorbar along by re-applying the same
-        # (figure-normalised) offset it had from the panel pre-move.
+        # Native inset colorbars follow their parent panel automatically.
+        # Only legacy figure-coordinate axes need their position rewritten.
         cb_ax = it['cb_ax']
-        if cb_ax is not None:
+        if cb_ax is not None and cb_ax.get_axes_locator() is None:
             ap = it['ax_pos_pre']
             cp = it['cb_pos_pre']
             # offset of cb origin from panel origin, normalised by panel size

@@ -37,7 +37,7 @@ _SCHEMA = {
 }
 
 
-@pytest.mark.parametrize("method", ["edger", "limma"])
+@pytest.mark.parametrize("method", ["edger", "limma", "edgepy"])
 def test_backend_schema_and_recovery(deg_counts, method):
     g1, g2 = ["s0", "s1", "s2"], ["s3", "s4", "s5"]
     dds = ov.bulk.pyDEG(deg_counts.copy())
