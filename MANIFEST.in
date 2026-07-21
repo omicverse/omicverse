@@ -6,7 +6,7 @@ include setup.cfg
 include requirements.txt
 include requirements-latest.txt
 
-recursive-include omicverse *.py *.pyi *.json *.txt *.yaml *.yml *.csv *.tsv *.md *.ipynb *.html *.css *.js *.png *.jpg *.jpeg *.svg *.ico *.db *.npz *.gz
+recursive-include omicverse *.py *.pyi *.json *.txt *.yaml *.yml *.csv *.tsv *.md *.ipynb *.html *.css *.js *.png *.jpg *.jpeg *.svg *.ico *.db *.npz *.gz *.fasta *.pkl
 include omicverse/external/scMulan/utils/meta_info.pt
 
 prune .git
