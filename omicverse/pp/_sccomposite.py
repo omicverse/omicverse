@@ -173,44 +173,42 @@ def MLE_rna(data, n=3, p=0.7, lr=0.001, tolerance = 15):
 
     return theta, alpha, beta, decay, l, singlet_rate
 
+def _gamma_log_pdf(data, alpha, beta):
+    """log density of Gamma(concentration=alpha, rate=beta) at ``data`` — the
+    torch/GPU equivalent of ``log(scipy.stats.gamma.pdf(data, alpha, scale=1/beta))``."""
+    return (alpha * torch.log(beta) + (alpha - 1.0) * torch.log(data)
+            - beta * data - torch.lgamma(alpha))
+
+
+def _poisson_log_pmf(k0, theta):
+    """log Poisson(theta) pmf at integer ``k0`` (torch)."""
+    kk = torch.as_tensor(float(k0), device=theta.device, dtype=theta.dtype)
+    return kk * torch.log(theta) - theta - torch.lgamma(kk + 1.0)
+
+
 def log_joint_one_k_rna(data, theta, alpha, beta, decay, k0):
     '''
-    k0 starts from 0, same interpretation as the k0 in the derivation
+    k0 starts from 0, same interpretation as the k0 in the derivation.
+    Pure torch — stays on the (GPU) device of ``data`` (no scipy / CPU round-trip).
     '''
-    alpha = alpha.to('cpu').detach().numpy()
-    beta = beta.to('cpu').detach().numpy()
-    data = data.to('cpu').numpy()
-    theta = theta.to('cpu').detach().numpy()
-    decay = decay.to('cpu').detach().numpy()
-    alpha = alpha*(1+k0/(1+np.exp(-decay)))
+    alpha_k = alpha * (1.0 + k0 / (1.0 + torch.exp(-decay)))
+    log_conditional = _gamma_log_pdf(data, alpha_k, beta)      # (n_cells, n_genes)
+    return log_conditional.sum(dim=1) + _poisson_log_pmf(k0, theta)
 
-    log_conditional = np.log(gamma.pdf(data, alpha, loc=0, scale=1/beta))
-    sum_gene = np.sum(log_conditional, axis = 1)
-    log_joint = sum_gene + np.log(poisson.pmf(k0, theta))
-
-    return log_joint
 
 def prob_k0_rna(data, theta, alpha, beta, decay, k0, k=3):
-    # Check if float128 is supported, otherwise fall back to float64
-    try:
-        np.dtype('float128')
-        float_type = np.float128
-    except TypeError:
-        float_type = np.float64
+    """Posterior probability that each cell has exactly ``k0`` multiplet copies.
 
-    log_joint_k0 = log_joint_one_k_rna(data, theta, alpha, beta, decay, k0)
-
-    one_ks = np.ones((data.shape[0], k), dtype=float_type)
-    for i in np.arange(k):
-        one_ks[:, i] = log_joint_one_k_rna(data, theta, alpha, beta, decay, i)
-
-    logsumexp_ks = special.logsumexp(one_ks, axis=1)
-    log_prob = log_joint_k0 - logsumexp_ks
-    log_prob = log_prob.astype(float_type)
-    prob = np.exp(log_prob, dtype=float_type)
-
-
-    return prob
+    Torch/GPU + numerically-stable ``logsumexp`` over the ``k`` mixture terms —
+    no scipy, no float128, no per-cell Python loop.
+    """
+    stacked = torch.stack(
+        [log_joint_one_k_rna(data, theta, alpha, beta, decay, i) for i in range(k)],
+        dim=1,
+    )                                                          # (n_cells, k)
+    logsumexp_ks = torch.logsumexp(stacked, dim=1)             # (n_cells,)
+    prob = torch.exp(stacked[:, k0] - logsumexp_ks)
+    return prob.detach().to("cpu").numpy()
 
 def reliability_rna(data, theta, alpha, beta, decay, k=3):
 
@@ -218,35 +216,31 @@ def reliability_rna(data, theta, alpha, beta, decay, k=3):
     Evaluate the reliability of each cell and predict whether they will be single or double
     '''
     prob_singlet = prob_k0_rna(data, theta, alpha, beta, decay, 0, k)
-    prob_doublet = 1-prob_singlet
-    pred = np.where(prob_doublet > 0.5, True, False)
+    pred = prob_singlet <= 0.5                     # doublet if P(doublet) > 0.5
 
-    alpha = alpha.to('cpu').detach().numpy()
-    beta = beta.to('cpu').detach().numpy()
-    data = data.to('cpu').numpy()
-    theta = theta.to('cpu').detach().numpy()
-    decay = decay.to('cpu').detach().numpy()
+    # Per-feature log conditionals for k0=0..k-1, reduced with an INCREMENTAL
+    # log-sum-exp so the old (n_cells, n_genes, k) array is never allocated
+    # (that 3-D array OOM'd at ~1e5 cells). Stays on the device of ``data``.
+    def _lc(i):
+        alpha_k = alpha * (1.0 + i / (1.0 + torch.exp(-decay)))
+        return _gamma_log_pdf(data, alpha_k, beta)              # (n_cells, n_genes)
 
-    one_ks = np.ones((data.shape[0], data.shape[1], k))
-    for i in np.arange(k):
-        alpha_k = alpha*(1+i/(1+np.exp(-decay)))
-        one_ks[:,:,i] = np.log(gamma.pdf(data,  alpha_k, loc=0, scale=1/beta))
+    lc0 = _lc(0)
+    run_max = lc0.clone()
+    run_sum = torch.ones_like(lc0)                              # exp(lc0 - run_max) = 1
+    for i in range(1, k):
+        lc = _lc(i)
+        new_max = torch.maximum(run_max, lc)
+        run_sum = run_sum * torch.exp(run_max - new_max) + torch.exp(lc - new_max)
+        run_max = new_max
+    logsumexp_k = run_max + torch.log(run_sum)                  # (n_cells, n_genes)
+    reliability = (1.0 - torch.exp(lc0 - logsumexp_k)).detach().to("cpu").numpy()
 
-
-
-
-    reliability = 1 - (np.exp(one_ks[:,:,0]-special.logsumexp(one_ks, axis = 2)))
-    #probability of doublets predicted by individual feature
-
-
-    #if individual feature prediction result is the same as result by all features,
-    #then record as 1. otherwise record as 0
-    #then, calculate proportion of features that can individually provide correct prediction
-    reliability[pred,:]=np.where(reliability[pred,:] > 0.5, 1, 0) #predicted doublets
-    reliability[list(map(operator.not_, pred)),:]=\
-    np.where(reliability[list(map(operator.not_, pred)),:] < 0.5, 1, 0)
-
-    reliability = np.sum(reliability, axis = 1)/data.shape[1]
+    # If a feature's individual call matches the all-feature call, record 1;
+    # the per-cell consistency is the fraction of features that agree.
+    reliability[pred, :] = np.where(reliability[pred, :] > 0.5, 1, 0)
+    reliability[~pred, :] = np.where(reliability[~pred, :] < 0.5, 1, 0)
+    reliability = np.sum(reliability, axis=1) / data.shape[1]
 
     result = np.zeros((2, data.shape[0]))
     result[0,:] = reliability
@@ -326,7 +320,9 @@ def composite_rna(adata, multiomics = False,
     """
     global dev
     if torch.cuda.is_available():
-        dev = "cuda:0"
+        # Respect the device pinned via ov.settings.cpu_gpu_mixed_init(devices=...)
+        # (torch.cuda.set_device) rather than hard-coding GPU 0.
+        dev = f"cuda:{torch.cuda.current_device()}"
     else:
         dev = "cpu"
     device = torch.device(dev)

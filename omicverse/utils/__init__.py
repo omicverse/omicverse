@@ -121,6 +121,7 @@ from ._sample_metadata_alignment import (
 )
 from ._metabolights import load_metabolights
 from ._seed import set_seed
+from ._versions import installed_version, version_lt, version_at_least
 from ._ovagent_lookup import (
     RegistryScanner,
     initialize_skill_registry,

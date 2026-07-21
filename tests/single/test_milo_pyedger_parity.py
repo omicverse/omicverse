@@ -87,6 +87,7 @@ def test_milo_pyedger_matches_bioconductor_edger():
 def test_milo_da_nhoods_runs_without_inmoose(monkeypatch):
     """End-to-end: the milo workflow must run its DA test with no inmoose
     importable (proves the engine no longer depends on it)."""
+    pytest.importorskip("mudata")  # milo.load builds a MuData object
     import builtins
     import scanpy as sc
     from anndata import AnnData
