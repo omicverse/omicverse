@@ -45,12 +45,40 @@ def ensure_proteinmpnn() -> str:
     return root
 
 
-def _run_cli(args: List[str]) -> subprocess.CompletedProcess:
+def _run_cli(args: List[str], device: Optional[str] = None) -> subprocess.CompletedProcess:
+    """Run the ProteinMPNN CLI.
+
+    ProteinMPNN's script has no ``--device`` flag — it picks
+    ``cuda:0`` iff ``torch.cuda.is_available()``.  We steer it with
+    ``CUDA_VISIBLE_DEVICES``: empty string forces CPU.  ProteinMPNN is light and
+    fast, so on any GPU failure (typically a CUDA OOM when heavy ESM/ESMFold
+    models already occupy the card) we transparently retry on CPU.
+    """
+    from ._device import is_cuda
+
     repo = ensure_proteinmpnn()
     cmd = [sys.executable, os.path.join(repo, "protein_mpnn_run.py"), *args]
-    env = dict(os.environ)
-    return subprocess.run(cmd, check=True, capture_output=True, text=True,
-                          cwd=repo, env=env)
+    base_env = dict(os.environ)
+    want_gpu = device is None or is_cuda(device)
+
+    env = dict(base_env)
+    if not want_gpu:
+        env["CUDA_VISIBLE_DEVICES"] = ""  # force CPU
+    try:
+        return subprocess.run(cmd, check=True, capture_output=True, text=True,
+                              cwd=repo, env=env)
+    except subprocess.CalledProcessError as exc:
+        if want_gpu:  # retry on CPU (fast) before giving up
+            cpu_env = dict(base_env)
+            cpu_env["CUDA_VISIBLE_DEVICES"] = ""
+            try:
+                return subprocess.run(cmd, check=True, capture_output=True,
+                                      text=True, cwd=repo, env=cpu_env)
+            except subprocess.CalledProcessError as exc2:
+                exc = exc2
+        raise RuntimeError(
+            "ProteinMPNN 运行失败:\n" + (exc.stderr or exc.stdout or str(exc))[-1500:]
+        ) from exc
 
 
 def _parse_fasta(path: str) -> List[Dict[str, object]]:
@@ -96,6 +124,7 @@ def design_sequences(
     from ._device import resolve_device, is_cuda
 
     dev = resolve_device(device)
+    pdb_path = os.path.abspath(pdb_path)
     out_dir = tempfile.mkdtemp(prefix="ovsynbio_mpnn_")
     args = [
         "--pdb_path", pdb_path,
@@ -105,9 +134,7 @@ def design_sequences(
         "--seed", str(seed),
         "--batch_size", "1",
     ]
-    if not is_cuda(dev):
-        args += ["--device", "cpu"]
-    _run_cli(args)
+    _run_cli(args, device=dev)
     base = os.path.splitext(os.path.basename(pdb_path))[0]
     fa = os.path.join(out_dir, "seqs", f"{base}.fa")
     return _parse_fasta(fa)
@@ -132,6 +159,7 @@ def unconditional_log_probs(
     from ._device import resolve_device, is_cuda
 
     dev = resolve_device(device)
+    pdb_path = os.path.abspath(pdb_path)
     out_dir = tempfile.mkdtemp(prefix="ovsynbio_mpnnprob_")
     args = [
         "--pdb_path", pdb_path,
@@ -140,9 +168,7 @@ def unconditional_log_probs(
         "--seed", str(seed),
         "--batch_size", "1",
     ]
-    if not is_cuda(dev):
-        args += ["--device", "cpu"]
-    _run_cli(args)
+    _run_cli(args, device=dev)
     prob_dir = os.path.join(out_dir, "unconditional_probs_only")
     npz = None
     for f in os.listdir(prob_dir):
@@ -174,6 +200,7 @@ def score_sequences(
     from ._device import resolve_device, is_cuda
 
     dev = resolve_device(device)
+    pdb_path = os.path.abspath(pdb_path)
     out_dir = tempfile.mkdtemp(prefix="ovsynbio_mpnnscore_")
     args = [
         "--pdb_path", pdb_path,
@@ -182,9 +209,7 @@ def score_sequences(
         "--seed", str(seed),
         "--batch_size", "1",
     ]
-    if not is_cuda(dev):
-        args += ["--device", "cpu"]
-    _run_cli(args)
+    _run_cli(args, device=dev)
     base = os.path.splitext(os.path.basename(pdb_path))[0]
     score_dir = os.path.join(out_dir, "score_only")
     # ProteinMPNN writes <base>_pdb.npz for the native sequence
