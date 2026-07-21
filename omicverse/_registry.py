@@ -1096,6 +1096,7 @@ def _hydrate_registry_for_export() -> None:
         "omicverse.space",
         "omicverse.metabol",
         "omicverse.mol",
+        "omicverse.synbio",
         "omicverse.protein",
         "omicverse.genetics",
         "omicverse.airr",
@@ -1142,6 +1143,13 @@ def _hydrate_registry_for_export() -> None:
         import omicverse.mol as _mol  # noqa: F401
 
         _mol._hydrate_registry()
+    except Exception:
+        pass
+    # And ov.synbio — its __init__ is lazy too.
+    try:
+        import omicverse.synbio as _synbio  # noqa: F401
+
+        _synbio._hydrate_registry()
     except Exception:
         pass
 
