@@ -94,13 +94,13 @@ def stability_ddg(
         ddg_map = run_thermompnn(pdb, chain=chain or "A", device=dev)
         rows = []
         if mutations is None:
-            for (pos, alt), val in ddg_map.items():
-                rows.append((None, None, pos, alt, float(val)))
+            for (pos, alt), (val, wt) in ddg_map.items():
+                rows.append((f"{wt}{pos}{alt}", wt, pos, alt, float(val)))
         else:
             for m in mutations:
                 wt, pos, alt = _parse_mut(m)
                 if (pos, alt) in ddg_map:
-                    rows.append((m, wt, pos, alt, float(ddg_map[(pos, alt)])))
+                    rows.append((m, wt, pos, alt, float(ddg_map[(pos, alt)][0])))
         df = pd.DataFrame(rows, columns=["mutation", "wt", "pos", "mut", "ddg"])
         return df.sort_values("ddg", ascending=False).reset_index(drop=True)
 

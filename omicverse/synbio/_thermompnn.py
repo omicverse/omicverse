@@ -74,8 +74,8 @@ def run_thermompnn(pdb_path: str, chain: str = "A",
                    device: Optional[str] = None) -> Dict[Tuple[int, str], float]:
     """Run ThermoMPNN site-saturation inference on *pdb_path*.
 
-    Returns ``{(position_1based, mut_aa): ddG}`` where positive ΔΔG is
-    destabilising."""
+    Returns ``{(position_1based, mut_aa): (ddG, wildtype_aa)}`` where positive
+    ΔΔG is destabilising."""
     import pandas as pd
     from ._device import resolve_device, is_cuda
 
@@ -103,6 +103,8 @@ def run_thermompnn(pdb_path: str, chain: str = "A",
         raise RuntimeError(
             "ThermoMPNN 推理失败:\n" + (proc.stderr or proc.stdout)[-1500:])
     df = pd.read_csv(csv)
-    # ThermoMPNN position is 0-based over the parsed chain sequence.
-    return {(int(r["position"]) + 1, str(r["mutation"])): float(r["ddG_pred"])
+    # ThermoMPNN position is 0-based over the parsed chain sequence; keep the
+    # wildtype residue so callers can build proper mutation strings.
+    return {(int(r["position"]) + 1, str(r["mutation"])):
+            (float(r["ddG_pred"]), str(r["wildtype"]))
             for _, r in df.iterrows()}
