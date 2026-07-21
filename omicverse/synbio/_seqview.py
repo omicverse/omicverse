@@ -256,6 +256,62 @@ def plot_pegrna(locus: str, pegrna, edit_pos: int, ax=None,
     return ax
 
 
+@register_function(
+    aliases=["plot_binding_sites", "结合位点图", "靶向图", "binding_map",
+             "siRNA图", "反义位点图", "guide_map", "靶点图"],
+    category="synthetic_biology",
+    description="靶向试剂结合位点图:把 siRNA / 反义寡核苷酸 / Cas13 crRNA / gRNA 在靶转录本上的结合窗口画成注释箭头,一眼看清各试剂打在哪里。Map siRNA / ASO / Cas13 crRNA / guide binding sites onto a target transcript.",
+    examples=[
+        "si = ov.synbio.sirna_design(mrna); aso = ov.synbio.aso_design(mrna)",
+        "ov.synbio.plot_binding_sites(mrna, sirnas=si, asos=aso)",
+    ],
+    related=["synbio.sirna_design", "synbio.aso_design", "synbio.design_cas13_guides",
+             "synbio.crispr_regulation"],
+    requires={},
+    produces={},
+)
+def plot_binding_sites(transcript: str, sirnas=None, asos=None,
+                       cas13_guides=None, guides=None, guide_len: int = 20,
+                       ax=None, figure_width: float = 9,
+                       title: str = "binding sites on target"):
+    """Draw where antisense / guide reagents bind on *transcript*.
+
+    Pass the result lists directly — ``sirnas`` (:class:`SiRNA`), ``asos``
+    (:class:`ASO`), ``cas13_guides`` (:class:`Cas13Guide`) or generic ``guides``
+    (objects with ``.start`` / ``.strand``, e.g. CRISPRi RegGuides). Each is
+    drawn as a coloured, labelled feature at its binding window."""
+    dfv = _dfv("plot_binding_sites")
+    t = transcript.upper().replace("U", "T")
+    feats = []
+    for i, s in enumerate(sirnas or []):
+        feats.append(dfv.GraphicFeature(
+            start=s.position, end=s.position + len(s.sense), strand=-1,
+            color="#F0894A", label=f"siRNA{i + 1}"))
+    for i, a in enumerate(asos or []):
+        feats.append(dfv.GraphicFeature(
+            start=a.position, end=a.position + len(a.aso), strand=-1,
+            color="#B39DDB", label=f"ASO{i + 1}"))
+    for i, g in enumerate(cas13_guides or []):
+        feats.append(dfv.GraphicFeature(
+            start=g.position, end=g.position + len(g.spacer), strand=+1,
+            color="#2C7FB8", label=f"crRNA{i + 1}"))
+    for i, g in enumerate(guides or []):
+        st = 1 if getattr(g, "strand", "+") == "+" else -1
+        feats.append(dfv.GraphicFeature(
+            start=int(g.start), end=int(g.start) + guide_len, strand=st,
+            color="#7DBF6A", label=f"gRNA{i + 1}"))
+    if not feats:
+        raise ValueError("没有可画的结合位点(传入 sirnas/asos/cas13_guides/guides 之一)。")
+
+    record = dfv.GraphicRecord(sequence_length=len(t), features=feats)
+    if ax is None:
+        ax, _ = record.plot(figure_width=figure_width)
+    else:
+        record.plot(ax=ax)
+    ax.set_title(f"{title} ({len(t)} nt, {len(feats)} sites)", fontsize=11)
+    return ax
+
+
 def _pairs_from_dotbracket(structure: str):
     """Return the list of (i, j) base pairs from a dot-bracket string."""
     stack, pairs = [], []
