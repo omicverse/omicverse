@@ -9,6 +9,7 @@ and only then choose thresholds. omicverse computes the metrics
 """
 from __future__ import annotations
 
+from numbers import Real
 from typing import Optional, Sequence, Union
 
 import numpy as np
@@ -26,6 +27,44 @@ _DEFAULT_METRICS = [
     (["pct_counts_hb"], "Hb %", None, None),
     (["doublet_score"], "Doublet score", None, None),
 ]
+_UMI_METRICS = {"nUMIs", "total_counts"}
+_GENE_METRICS = {"detected_genes", "n_genes_by_counts"}
+
+
+def _validate_clip_at(value, name: str) -> Optional[float]:
+    if value is None:
+        return None
+    if isinstance(value, (bool, np.bool_)) or not isinstance(value, Real):
+        raise ValueError(f"{name} must be a positive numeric value or None.")
+    value = float(value)
+    if not np.isfinite(value) or value <= 0:
+        raise ValueError(f"{name} must be a positive numeric value or None.")
+    return value
+
+
+def _metric_clip_at(
+    col: str,
+    *,
+    umi_clip_at: Optional[float],
+    gene_clip_at: Optional[float],
+) -> Optional[float]:
+    if col in _UMI_METRICS:
+        return umi_clip_at
+    if col in _GENE_METRICS:
+        return gene_clip_at
+    return None
+
+
+def _clip_values(values, clip_at: Optional[float]):
+    if clip_at is None:
+        return values
+    return values.clip(upper=clip_at)
+
+
+def _label_with_clip(label: str, clip_at: Optional[float]) -> str:
+    if clip_at is None:
+        return label
+    return f"{label} (clipped at {clip_at:g})"
 
 
 def _resolve_metrics(adata, metrics):
@@ -63,6 +102,7 @@ def _resolve_metrics(adata, metrics):
     examples=[
         "ov.pl.qc(adata)",
         "ov.pl.qc(adata, tresh={'mito_perc': 0.13, 'nUMIs': 800, 'detected_genes': 500})",
+        "ov.pl.qc(adata, umi_clip_at=50000, gene_clip_at=8000)",
         "ov.pl.qc(adata, batch_key='sample', kind='violin')",
     ],
     related=["pp.qc_metrics", "pp.qc"],
@@ -80,6 +120,8 @@ def qc(
     figsize: Optional[tuple] = None,
     color: str = "#4C72B0",
     palette: Optional[Sequence[str]] = None,
+    umi_clip_at: Optional[float] = None,
+    gene_clip_at: Optional[float] = None,
 ):
     """Plot QC-metric distributions to guide threshold choice.
 
@@ -106,6 +148,14 @@ def qc(
     log
         Log-scale the metric axis. ``'auto'`` logs counts metrics
         (UMIs/genes) but not percentages.
+    umi_clip_at
+        Upper clip for plotted UMI/count metrics (``nUMIs`` and
+        ``total_counts`` fallback). Clipping is display-only and does not
+        modify ``adata.obs`` or QC/filtering thresholds.
+    gene_clip_at
+        Upper clip for plotted gene-count metrics (``detected_genes`` and
+        ``n_genes_by_counts`` fallback). Clipping is display-only and does
+        not modify ``adata.obs`` or QC/filtering thresholds.
     ncols, figsize, color, palette
         Layout / styling controls.
 
@@ -115,6 +165,8 @@ def qc(
     """
     import matplotlib.pyplot as plt
 
+    umi_clip_at = _validate_clip_at(umi_clip_at, "umi_clip_at")
+    gene_clip_at = _validate_clip_at(gene_clip_at, "gene_clip_at")
     resolved = _resolve_metrics(adata, metrics)
     if not resolved:
         raise ValueError(
@@ -142,12 +194,20 @@ def qc(
 
     for ax, (col, label, key, direction) in zip(axes, resolved):
         vals = adata.obs[col].astype(float)
+        clip_at = _metric_clip_at(
+            col,
+            umi_clip_at=umi_clip_at,
+            gene_clip_at=gene_clip_at,
+        )
+        plot_label = _label_with_clip(label, clip_at)
+        plot_vals = _clip_values(vals, clip_at)
         do_log = (log is True) or (log == "auto" and direction == "min")
 
         if kind == "violin":
             if groups:
                 data = [adata.obs.loc[adata.obs[batch_key] == g, col]
-                        .astype(float).dropna().values for g in groups]
+                        .astype(float).pipe(_clip_values, clip_at).dropna().values
+                        for g in groups]
                 parts = ax.violinplot(data, showmedians=True, widths=0.85)
                 ax.set_xticks(range(1, len(groups) + 1))
                 ax.set_xticklabels(groups, rotation=90, fontsize=7)
@@ -155,25 +215,26 @@ def qc(
                     for pc, c in zip(parts["bodies"], palette):
                         pc.set_facecolor(c); pc.set_alpha(0.75)
             else:
-                parts = ax.violinplot(vals.dropna().values, showmedians=True)
+                parts = ax.violinplot(plot_vals.dropna().values, showmedians=True)
                 for pc in parts["bodies"]:
                     pc.set_facecolor(color); pc.set_alpha(0.8)
                 ax.set_xticks([])
-            ax.set_ylabel(label)
+            ax.set_ylabel(plot_label)
             if do_log:
                 ax.set_yscale("log")
         else:  # histogram
             if groups:
                 for g, c in zip(groups, palette):
                     gv = adata.obs.loc[adata.obs[batch_key] == g, col].astype(float).dropna()
+                    gv = _clip_values(gv, clip_at)
                     ax.hist(gv, bins=bins, histtype="step", color=c,
                             label=str(g), linewidth=1.2,
                             log=do_log if False else False, density=True)
                 if len(groups) <= 12:
                     ax.legend(fontsize=6, frameon=False)
             else:
-                ax.hist(vals.dropna(), bins=bins, color=color, alpha=0.85)
-            ax.set_xlabel(label)
+                ax.hist(plot_vals.dropna(), bins=bins, color=color, alpha=0.85)
+            ax.set_xlabel(plot_label)
             ax.set_ylabel("density" if groups else "cells")
             if do_log:
                 ax.set_xscale("log")
@@ -185,7 +246,7 @@ def qc(
                 t = t * 100.0  # tresh is a fraction; pct col is 0-100
             line = ax.axhline if kind == "violin" else ax.axvline
             line(t, color="red", linestyle="--", linewidth=1.2)
-        ax.set_title(label, fontsize=10)
+        ax.set_title(plot_label, fontsize=10)
 
     for ax in axes[n:]:
         ax.set_visible(False)

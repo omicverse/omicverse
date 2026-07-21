@@ -26,6 +26,9 @@ All methods share one entry point — :class:`CrossSpecies` (and the
   Self-Assembling Manifold), vendored under ``omicverse.external.samap``.
 * ``method='saturn'`` — **SATURN** (ESM2 protein-embedding macrogenes),
   vendored under ``omicverse.external.saturn``.
+* ``method='camex'`` — **CAMEX** (heterogeneous GNN over a many-to-many
+  homology graph; native **multi-species (>2)** integration + annotation),
+  vendored under ``omicverse.external.camex``.
 
 The ortholog *preprocessing* (align + concat + normalize/HVG/scale/PCA) lives in
 :func:`omicverse.tl.cross_species_align`.
@@ -344,7 +347,7 @@ def _collapse_duplicate_vars(adata: anndata.AnnData, how: str = "sum") -> anndat
 # method values that route to the ortholog route (one-to-one orthologs +
 # ov.single.batch_correction). Anything not 'samap'/'saturn' is treated as an
 # ortholog backend and forwarded to batch_correction as its ``methods=``.
-_HOMOLOGY_METHODS = {"samap", "saturn"}
+_HOMOLOGY_METHODS = {"samap", "saturn", "camex"}
 
 
 @register_function(
@@ -385,6 +388,10 @@ class CrossSpecies:
         * ``'saturn'`` — **SATURN** (ESM2 protein-embedding macrogenes). Needs
           ``embedding_paths=``; see
           :func:`omicverse.external.saturn._run.run_saturn`.
+        * ``'camex'`` — **CAMEX** (heterogeneous GNN on a many-to-many homology
+          graph; supports >2 species + annotation transfer). Builds the
+          many-to-many homology from BioMart automatically (or pass
+          ``homology=``); see :func:`omicverse.external.camex._run.run_camex`.
     ref_species, batch_key, orthology_type, n_top_genes, n_pcs, target_sum,
     host, cache_dir, use_cache
         Ortholog-route settings (forwarded to :func:`ov.tl.cross_species_align`).
@@ -444,6 +451,8 @@ class CrossSpecies:
             self._fit_samap()
         elif m == "saturn":
             self._fit_saturn()
+        elif m == "camex":
+            self._fit_camex()
         else:
             self._fit_ortholog()
         return self
@@ -487,6 +496,35 @@ class CrossSpecies:
             self.adata = res
         self.adata.uns.setdefault("cross_species", {})["method"] = "saturn"
 
+    def _fit_camex(self) -> None:
+        from ..external.camex._run import run_camex
+
+        kw = dict(self.kwargs)
+        ref_index = kw.pop("ref_index", 0)
+        if self.ref_species is not None:
+            norm = [_normalize_species(s) for s in self.species]
+            if _normalize_species(self.ref_species) in norm:
+                ref_index = norm.index(_normalize_species(self.ref_species))
+        ref_species = self.species[ref_index]
+
+        # Many-to-many homology (BioMart) linking the reference species to each
+        # other — CAMEX exploits the full homolog graph, not just 1:1 orthologs.
+        homology = kw.pop("homology", None)
+        if homology is None:
+            homology = {}
+            for sp in self.species:
+                if _normalize_species(sp) == _normalize_species(ref_species):
+                    continue
+                ort = get_orthologs(ref_species, sp, orthology_type="all",
+                                    host=self.host, cache_dir=self.cache_dir,
+                                    use_cache=self.use_cache)
+                homology[(ref_species, sp)] = ort[["source_symbol", "target_symbol"]]
+
+        self.adata = run_camex(self.adatas, self.species, homology=homology,
+                               ref_index=ref_index, label_col=kw.pop("label_col", "cell_type"),
+                               **kw)
+        self.adata.uns.setdefault("cross_species", {})["method"] = "camex"
+
     def save(self, path: str) -> str:
         """Persist this run (config + integrated AnnData + model) to ``path``
         via :func:`omicverse.io.save` (pickle, cloudpickle fallback)."""
@@ -510,6 +548,7 @@ class CrossSpecies:
         "adata = ov.single.cross_species_integrate([a1,a2], ['human','mouse'], method='scVI')",
         "adata = ov.single.cross_species_integrate([zeb,frog], ['zebrafish','frog'], method='samap', ids=['zf','fr'], proteomes=..., blast_maps='maps/')",
         "adata = ov.single.cross_species_integrate([zeb,frog], ['zebrafish','frog'], method='saturn', embedding_paths=...)",
+        "adata = ov.single.cross_species_integrate([a1,a2,a3], ['human','mouse','zebrafish'], method='camex')  # multi-species",
     ],
     related=["single.CrossSpecies", "single.get_orthologs", "tl.cross_species_align"],
 )

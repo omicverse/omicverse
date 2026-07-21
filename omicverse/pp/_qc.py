@@ -1820,6 +1820,14 @@ def qc_gpu(adata, mode='seurat',
                 f"Unknown doublets_method={doublets_method!r}; "
                 "expected 'scrublet', 'sccomposite', 'doubletfinder', or 'scdblfinder'."
             )
+        # scrublet runs on the GPU (rapids-singlecell); the other backends are
+        # CPU/NumPy tools (pyscdblfinder / pydoubletfinder / sccomposite) that
+        # cannot consume the cupy matrix qc_gpu put on the GPU — feeding it in
+        # flips the orientation and returns one value per *gene*, causing
+        # "Length of values (n_genes) does not match length of index (n_cells)"
+        # (issue #866). Move the matrix back to host memory for those.
+        if doublets_method != 'scrublet':
+            rsc.get.anndata_to_CPU(adata)
         if doublets_method=='scrublet':
             print(f"   {Colors.GREEN}{EMOJI['start']} Running GPU-accelerated scrublet...{Colors.ENDC}")
             rsc.pp.scrublet(adata, random_state=1234,batch_key=batch_key)

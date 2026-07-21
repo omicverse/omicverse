@@ -646,6 +646,23 @@ def svg(adata,mode='prost',n_svgs=3000,target_sum=50*1e4,platform="visium",
     elif mode=='pearsonr':
         from ..pp import preprocess
         bdata=adata.copy()
+        # Pearson-residual HVG selection normalizes each spot by its total count,
+        # so all-zero spots (common in Visium HD nucleus/cell segmentation, where
+        # some segments capture no reads) trigger a `division by zero` (issue #860).
+        # `bdata` is a throwaway copy used only to pick genes — its result is mapped
+        # back to `adata` by gene name — so dropping empty spots here does not touch
+        # the returned object's cells.
+        import numpy as _np
+        import scipy.sparse as _spp
+        _counts = bdata.X
+        _cell_sums = _np.asarray(
+            _counts.sum(axis=1)).ravel() if _spp.issparse(_counts) else _np.asarray(_counts).sum(axis=1)
+        _nonzero = _cell_sums > 0
+        if not _nonzero.all():
+            n_drop = int((~_nonzero).sum())
+            print(f"   ⚠️ Dropping {n_drop} all-zero spot(s) before Pearson-residual "
+                  f"SVG selection (issue #860); returned AnnData is unchanged.")
+            bdata = bdata[_nonzero].copy()
         bdata=preprocess(bdata,mode='shiftlog|pearson',n_HVGs=n_svgs,target_sum=target_sum)
         adata.var['space_variable_features'] = False
         both_genes = list(set(adata.var_names) & set(bdata.var_names))
