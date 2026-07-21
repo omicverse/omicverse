@@ -162,21 +162,27 @@ class OffTarget:
     produces={},
 )
 def offtarget_search(spacer: str, background: str, max_mismatches: int = 4,
-                     pam: str = "NGG") -> List[OffTarget]:
+                     pam: str = "NGG", method: str = "cfd") -> List[OffTarget]:
     """Find and score potential off-target sites for *spacer* in *background*.
 
-    A seed-weighted mismatch model: mismatches in the PAM-proximal seed
-    (last ~10 nt) are penalised far more than distal ones — the CFD/CRISPOR
-    principle. Returns hits with ≤ ``max_mismatches`` mismatches, ranked by
-    predicted cutting likelihood (``cfd`` in [0,1])."""
-    import re
+    ``method='cfd'`` (default) uses the **real Doench-2016 CFD** scoring tables
+    (vendored from CRISPOR) — the field-standard off-target metric.
+    ``method='seed'`` is a dependency-free seed-weighted approximation.
+    Returns hits with ≤ ``max_mismatches`` mismatches, ranked by predicted
+    cutting likelihood (``cfd`` in [0,1]; PAM-proximal seed mismatches hurt most).
+    """
+    if method not in ("cfd", "seed"):
+        raise ValueError(f"method must be one of ['cfd', 'seed'], got {method!r}")
     sp = spacer.upper().replace("U", "T")
     L = len(sp)
     bg = background.upper().replace("U", "T")
     rx = _pam_regex(pam)
 
-    # position weights: PAM-proximal (3') end weighted heavily.
-    weights = [0.2 + 0.8 * (i / (L - 1)) for i in range(L)]  # 0.2..1.0 toward PAM
+    cfd_fn = None
+    if method == "cfd":
+        from ._cfd import cfd_score
+        cfd_fn = cfd_score
+    weights = [0.2 + 0.8 * (i / (L - 1)) for i in range(L)]  # seed model fallback
 
     hits: List[OffTarget] = []
     for strand, s in (("+", bg), ("-", _revcomp(bg))):
@@ -188,10 +194,12 @@ def offtarget_search(spacer: str, background: str, max_mismatches: int = 4,
             mism = [j for j in range(L) if cand[j] != sp[j]]
             if len(mism) > max_mismatches:
                 continue
-            # CFD-style: product of per-mismatch retention (1 - weight*penalty)
-            cfd = 1.0
-            for j in mism:
-                cfd *= max(0.0, 1.0 - weights[j] * 0.75)
+            if cfd_fn is not None:                 # real Doench-2016 CFD
+                cfd = cfd_fn(sp, cand, pam_seq[-2:])
+            else:                                  # seed-weighted approximation
+                cfd = 1.0
+                for j in mism:
+                    cfd *= max(0.0, 1.0 - weights[j] * 0.75)
             hits.append(OffTarget(site=cand, start=i, strand=strand,
                                   mismatches=len(mism), cfd=float(cfd)))
     hits.sort(key=lambda h: h.cfd, reverse=True)

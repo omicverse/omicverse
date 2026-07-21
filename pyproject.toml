@@ -413,7 +413,7 @@ exclude = [
 
 [tool.setuptools.package-data]
 "omicverse.pl" = ["_data/*.csv"]
-"omicverse.synbio" = ["external/*.fasta"]
+"omicverse.synbio" = ["external/*.fasta", "external/cfd/*.pkl"]
 
 [tool.pytest.ini_options]
 asyncio_mode = "auto"
