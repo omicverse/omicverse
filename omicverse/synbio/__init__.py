@@ -72,6 +72,11 @@ _LAZY_ATTRS: dict[str, tuple[str, str]] = {
     "design_primers":        ("._codon", "design_primers"),
     "CodonResult":           ("._codon", "CodonResult"),
     "PrimerPair":            ("._codon", "PrimerPair"),
+    # ---- visualisation ---------------------------------------------------
+    "view_structure":            ("._plot", "view_structure"),
+    "plot_variant_effect":       ("._plot", "plot_variant_effect"),
+    "plot_enzyme_yield_response": ("._plot", "plot_enzyme_yield_response"),
+    "plot_production_envelope":  ("._plot", "plot_production_envelope"),
     # ---- device helper (handy for users) ---------------------------------
     "resolve_device":        ("._device", "resolve_device"),
 }
@@ -79,7 +84,7 @@ _LAZY_ATTRS: dict[str, tuple[str, str]] = {
 # submodules that carry @register_function decorators
 _REGISTRY_SUBMODULES = (
     "._gem", "._strain", "._ec", "._structure", "._design", "._variant",
-    "._stability", "._kcat", "._function", "._embed", "._codon",
+    "._stability", "._kcat", "._function", "._embed", "._codon", "._plot",
 )
 
 
