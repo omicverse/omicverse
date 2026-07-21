@@ -74,6 +74,7 @@ _LAZY_MODULES = {
     'single',
     'bulk2single',
     'pp',
+    'tl',
     'space',
     'pl',
     'utils',

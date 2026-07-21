@@ -44,8 +44,32 @@ def test_saturn_vendored_imports():
     assert callable(run.run_saturn)
 
 
-def test_backends_exposed_in_single():
+def test_backends_exposed_via_method():
+    """SAMap/SATURN are reached through the unified CrossSpecies method= API,
+    not standalone functions."""
     import omicverse as ov
-    assert callable(ov.single.samap_integrate)
-    assert callable(ov.single.saturn_integrate)
     assert callable(ov.single.cross_species_integrate)
+    assert isinstance(ov.single.CrossSpecies, type)
+    # no standalone per-method functions
+    assert not hasattr(ov.single, "samap_integrate")
+    assert not hasattr(ov.single, "saturn_integrate")
+    # method routing is wired (constructing does not run anything heavy)
+    from omicverse.single._cross_species import _HOMOLOGY_METHODS
+    assert {"samap", "saturn"} <= _HOMOLOGY_METHODS
+
+
+def test_crossspecies_save_load(tmp_path):
+    """CrossSpecies persists via ov.io.save / ov.io.load."""
+    import numpy as np
+    import anndata as ad
+    import omicverse as ov
+
+    cs = ov.single.CrossSpecies(
+        [ad.AnnData(np.ones((5, 3))), ad.AnnData(np.ones((4, 3)))],
+        ["human", "mouse"], method="harmony")
+    cs.adata = ad.AnnData(np.zeros((3, 2)))
+    p = str(tmp_path / "cs.pkl")
+    cs.save(p)
+    cs2 = ov.single.CrossSpecies.load(p)
+    assert cs2.method == "harmony" and cs2.species == ["human", "mouse"]
+    assert cs2.adata.shape == (3, 2)

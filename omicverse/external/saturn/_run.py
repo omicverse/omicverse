@@ -79,8 +79,9 @@ def run_saturn(
     device: str = "cuda",
     work_dir: str = "./saturn_work",
     centroids_init_path: Optional[str] = None,
+    return_model: bool = False,
     **kw,
-) -> "sc.AnnData":
+):
     """Run the SATURN cross-species integration pipeline programmatically.
 
     Parameters
@@ -410,4 +411,6 @@ def run_saturn(
 
     # Expose the SATURN embedding in obsm (X already holds it).
     adata.obsm["X_saturn"] = adata.X.copy()
+    if return_model:
+        return adata, metric_model
     return adata

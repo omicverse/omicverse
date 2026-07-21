@@ -17,15 +17,18 @@ Workflow
    ortholog space, concatenate on the shared genes, and run a batch-integration
    backend *across species*.
 
-By default only **one-to-one** orthologs are used: they give an unambiguous
-shared gene axis, which is the conservative, widely-used choice for
-ortholog-based cross-species integration. For many-to-many homology / very
-large evolutionary distances, two heavier backends are vendored under
-``omicverse.external`` and exposed here:
+All methods share one entry point — :class:`CrossSpecies` (and the
+:func:`cross_species_integrate` convenience wrapper) — selected via ``method=``:
 
-* :func:`samap_integrate` — **SAMap** (reciprocal-BLAST gene-homology graph +
-  Self-Assembling Manifold).
-* :func:`saturn_integrate` — **SATURN** (ESM2 protein-embedding macrogenes).
+* ortholog route (default): one-to-one Ensembl orthologs + omicverse's
+  :func:`batch_correction` backends (``'harmony'``, ``'scVI'``, ...).
+* ``method='samap'`` — **SAMap** (reciprocal-BLAST gene-homology graph +
+  Self-Assembling Manifold), vendored under ``omicverse.external.samap``.
+* ``method='saturn'`` — **SATURN** (ESM2 protein-embedding macrogenes),
+  vendored under ``omicverse.external.saturn``.
+
+The ortholog *preprocessing* (align + concat + normalize/HVG/scale/PCA) lives in
+:func:`omicverse.tl.cross_species_align`.
 """
 from __future__ import annotations
 
@@ -338,173 +341,197 @@ def _collapse_duplicate_vars(adata: anndata.AnnData, how: str = "sum") -> anndat
     return out
 
 
+# method values that route to the ortholog route (one-to-one orthologs +
+# ov.single.batch_correction). Anything not 'samap'/'saturn' is treated as an
+# ortholog backend and forwarded to batch_correction as its ``methods=``.
+_HOMOLOGY_METHODS = {"samap", "saturn"}
+
+
+@register_function(
+    aliases=["跨物种整合类", "CrossSpecies", "cross species class", "跨物种整合对象"],
+    category="single",
+    description="Cross-species single-cell integration (orthologs / SAMap / SATURN) with save/load",
+    examples=[
+        "cs = ov.single.CrossSpecies([a1, a2], ['human','mouse'], method='scVI').fit()",
+        "cs = ov.single.CrossSpecies([zeb, frog], ['zebrafish','frog'], method='saturn', embedding_paths=...).fit()",
+        "ov.io.save(cs, 'run.pkl'); cs = ov.io.load('run.pkl')",
+    ],
+    related=["single.cross_species_integrate", "tl.cross_species_align", "io.save"],
+)
+class CrossSpecies:
+    """Cross-species single-cell integration with pluggable methods.
+
+    One object, one ``method=`` — dispatches to the ortholog route or to a
+    vendored homology-aware backend, and can be persisted with
+    :func:`omicverse.io.save` / :func:`omicverse.io.load` (e.g. to reuse a
+    trained SATURN model).
+
+    Parameters
+    ----------
+    adatas
+        One ``AnnData`` per species (**raw counts**, gene *symbols* as
+        ``var_names``).
+    species
+        Species name per entry of ``adatas`` (same order).
+    method
+        Integration backend:
+
+        * **ortholog route** (one-to-one Ensembl orthologs, then
+          :func:`batch_correction`): ``'harmony'`` (default), ``'scVI'``,
+          ``'Concord'``, ``'cca'``, ``'combat'``, ``'scanorama'``, ...
+        * ``'samap'`` — **SAMap** (reciprocal-BLAST homology graph). Needs
+          ``proteomes=`` and ``blast_maps=`` (and ``ids=`` short species IDs);
+          see :func:`omicverse.external.samap._run.samap_integrate`.
+        * ``'saturn'`` — **SATURN** (ESM2 protein-embedding macrogenes). Needs
+          ``embedding_paths=``; see
+          :func:`omicverse.external.saturn._run.run_saturn`.
+    ref_species, batch_key, orthology_type, n_top_genes, n_pcs, target_sum,
+    host, cache_dir, use_cache
+        Ortholog-route settings (forwarded to :func:`ov.tl.cross_species_align`).
+    **kwargs
+        Backend-specific arguments — extra ``batch_correction`` kwargs for the
+        ortholog route, or ``proteomes``/``blast_maps``/``ids``/``embedding_paths``
+        for SAMap / SATURN.
+
+    Attributes
+    ----------
+    adata : the integrated ``AnnData`` (after :meth:`fit`).
+    model : a trained backend model when the method exposes one (e.g. SATURN),
+        else ``None``.
+    """
+
+    def __init__(
+        self,
+        adatas: Sequence[anndata.AnnData],
+        species: Sequence[str],
+        *,
+        method: str = "harmony",
+        ref_species: Optional[str] = None,
+        batch_key: str = "species",
+        orthology_type: str = "one2one",
+        n_top_genes: int = 2000,
+        n_pcs: int = 50,
+        target_sum: float = 1e4,
+        host: str = "https://www.ensembl.org",
+        cache_dir: Optional[str] = "data/orthologs",
+        use_cache: bool = True,
+        **kwargs,
+    ):
+        if len(adatas) != len(species):
+            raise ValueError("`adatas` and `species` must have the same length.")
+        if len(adatas) < 2:
+            raise ValueError("Need at least two datasets to integrate across species.")
+        self.adatas = list(adatas)
+        self.species = list(species)
+        self.method = method
+        self.ref_species = ref_species
+        self.batch_key = batch_key
+        self.orthology_type = orthology_type
+        self.n_top_genes = n_top_genes
+        self.n_pcs = n_pcs
+        self.target_sum = target_sum
+        self.host = host
+        self.cache_dir = cache_dir
+        self.use_cache = use_cache
+        self.kwargs = dict(kwargs)
+        self.adata = None
+        self.model = None
+
+    def fit(self) -> "CrossSpecies":
+        """Run the integration; populate ``self.adata`` (and ``self.model``)."""
+        m = str(self.method).lower()
+        if m == "samap":
+            self._fit_samap()
+        elif m == "saturn":
+            self._fit_saturn()
+        else:
+            self._fit_ortholog()
+        return self
+
+    # ``run`` kept as an alias for backwards habit / readability.
+    run = fit
+
+    def _fit_ortholog(self) -> None:
+        from ..tl import cross_species_align
+        from ._batch import batch_correction
+
+        adata = cross_species_align(
+            self.adatas, self.species, ref_species=self.ref_species,
+            batch_key=self.batch_key, orthology_type=self.orthology_type,
+            n_top_genes=self.n_top_genes, n_pcs=self.n_pcs,
+            target_sum=self.target_sum, host=self.host,
+            cache_dir=self.cache_dir, use_cache=self.use_cache)
+        adata.uns.setdefault("cross_species", {})["method"] = self.method
+        batch_correction(adata, batch_key=self.batch_key, methods=self.method,
+                         n_pcs=self.n_pcs, **self.kwargs)
+        add_reference(adata, "cross-species",
+                      "cross-species integration via one-to-one Ensembl orthologs")
+        self.adata = adata
+
+    def _fit_samap(self) -> None:
+        from ..external.samap._run import samap_integrate as _samap
+
+        kw = dict(self.kwargs)
+        ids = kw.pop("ids", self.species)
+        ensembl_species = kw.pop("ensembl_species", self.species)
+        self.adata = _samap(self.adatas, ids, ensembl_species, **kw)
+        self.adata.uns.setdefault("cross_species", {})["method"] = "samap"
+
+    def _fit_saturn(self) -> None:
+        from ..external.saturn._run import run_saturn as _saturn
+
+        res = _saturn(self.adatas, self.species, return_model=True, **self.kwargs)
+        if isinstance(res, tuple):
+            self.adata, self.model = res
+        else:
+            self.adata = res
+        self.adata.uns.setdefault("cross_species", {})["method"] = "saturn"
+
+    def save(self, path: str) -> str:
+        """Persist this run (config + integrated AnnData + model) to ``path``
+        via :func:`omicverse.io.save` (pickle, cloudpickle fallback)."""
+        from ..io import save as _save
+        _save(self, path)
+        return path
+
+    @classmethod
+    def load(cls, path: str) -> "CrossSpecies":
+        """Load a run previously written by :meth:`save` (``ov.io.load``)."""
+        from ..io import load as _load
+        return _load(path)
+
+
 @register_function(
     aliases=["跨物种整合", "cross_species_integrate", "cross species integration",
-             "跨物种数据整合", "SAMap alternative"],
+             "跨物种数据整合"],
     category="single",
-    description="Integrate single-cell datasets across species via one-to-one orthologs",
+    description="Integrate single-cell datasets across species (orthologs / SAMap / SATURN)",
     examples=[
-        "adata = ov.single.cross_species_integrate([adata_hs, adata_mm], ['human','mouse'])",
         "adata = ov.single.cross_species_integrate([a1,a2], ['human','mouse'], method='scVI')",
+        "adata = ov.single.cross_species_integrate([zeb,frog], ['zebrafish','frog'], method='samap', ids=['zf','fr'], proteomes=..., blast_maps='maps/')",
+        "adata = ov.single.cross_species_integrate([zeb,frog], ['zebrafish','frog'], method='saturn', embedding_paths=...)",
     ],
-    related=["single.get_orthologs", "single.map_var_to_orthologs", "single.batch_correction"],
+    related=["single.CrossSpecies", "single.get_orthologs", "tl.cross_species_align"],
 )
 def cross_species_integrate(
     adatas: Sequence[anndata.AnnData],
     species: Sequence[str],
     *,
-    ref_species: Optional[str] = None,
-    batch_key: str = "species",
     method: str = "harmony",
-    orthology_type: str = "one2one",
-    n_top_genes: int = 2000,
-    n_pcs: int = 50,
-    target_sum: float = 1e4,
-    preprocess: bool = True,
-    host: str = "https://www.ensembl.org",
-    cache_dir: Optional[str] = "data/orthologs",
-    use_cache: bool = True,
-    **integration_kwargs,
+    **kwargs,
 ) -> anndata.AnnData:
-    """Integrate multiple single-cell datasets **across species**.
+    """Integrate single-cell datasets **across species**.
 
-    Every dataset is mapped onto the reference species' gene symbols via
-    one-to-one Ensembl orthologs, restricted to the genes shared by all
-    datasets, concatenated with a ``species`` batch label, and integrated with
-    one of omicverse's :func:`batch_correction` backends.
-
-    Parameters
-    ----------
-    adatas
-        One ``AnnData`` per species, with **raw counts** in ``.X`` and gene
-        *symbols* as ``var_names``.
-    species
-        Species name for each entry of ``adatas`` (same length/order).
-    ref_species
-        Species whose gene symbols become the common axis. Defaults to
-        ``species[0]``.
-    batch_key
-        ``obs`` column written with the species label and used as the
-        integration batch.
-    method
-        Integration backend forwarded to :func:`batch_correction`
-        (``"harmony"``, ``"scVI"``, ``"Concord"``, ``"cca"``, ...).
-    orthology_type
-        Forwarded to :func:`get_orthologs` (default ``"one2one"``).
-    n_top_genes, n_pcs, target_sum
-        Standard HVG / PCA / normalization settings applied when
-        ``preprocess=True``.
-    preprocess
-        When ``True`` (default) run normalize → log1p → HVG(batch-aware) →
-        scale → PCA on the concatenated object before integration. Set
-        ``False`` if ``adatas`` are already jointly preprocessed.
-    host, cache_dir, use_cache
-        Forwarded to :func:`get_orthologs`.
-    **integration_kwargs
-        Extra keyword arguments for the chosen :func:`batch_correction` method.
+    Thin wrapper over :class:`CrossSpecies`: pick the backend with ``method=``
+    (ortholog backends such as ``'scVI'``/``'harmony'``, or ``'samap'`` /
+    ``'saturn'``), fit, and return the integrated ``AnnData``. Use
+    :class:`CrossSpecies` directly if you also need the trained model or
+    save/load. See :class:`CrossSpecies` for all parameters.
 
     Returns
     -------
     anndata.AnnData
-        The integrated object. ``.uns['cross_species']`` records the reference
-        species, the ortholog count, and the method; the integrated embedding is
-        stored by :func:`batch_correction` (e.g. ``obsm['X_pca_harmony']``).
+        The integrated object (``.uns['cross_species']`` records the method and,
+        for the ortholog route, the reference species and ortholog count).
     """
-    import scanpy as sc
-
-    if len(adatas) != len(species):
-        raise ValueError("`adatas` and `species` must have the same length.")
-    if len(adatas) < 2:
-        raise ValueError("Need at least two datasets to integrate across species.")
-    if ref_species is None:
-        ref_species = species[0]
-
-    aligned: List[anndata.AnnData] = []
-    for ad, sp in zip(adatas, species):
-        a = ad.copy()
-        if _normalize_species(sp) != _normalize_species(ref_species):
-            a = map_var_to_orthologs(
-                a, sp, ref_species, orthology_type=orthology_type,
-                host=host, cache_dir=cache_dir, use_cache=use_cache)
-        a.var_names_make_unique()
-        a.obs[batch_key] = str(sp)
-        aligned.append(a)
-
-    common = set(aligned[0].var_names)
-    for a in aligned[1:]:
-        common &= set(a.var_names)
-    common = sorted(common)
-    if not common:
-        raise ValueError(
-            "No shared one-to-one orthologs across the datasets — check that "
-            "var_names are gene symbols and the species names are correct.")
-
-    aligned = [a[:, common].copy() for a in aligned]
-    adata = anndata.concat(aligned, join="inner", index_unique="-")
-    adata.obs[batch_key] = adata.obs[batch_key].astype("category")
-    adata.uns["cross_species"] = {
-        "ref_species": str(ref_species),
-        "species": [str(s) for s in species],
-        "n_common_orthologs": len(common),
-        "method": method,
-        "orthology_type": orthology_type,
-    }
-
-    if preprocess:
-        adata.layers["counts"] = adata.X.copy()
-        sc.pp.normalize_total(adata, target_sum=target_sum)
-        sc.pp.log1p(adata)
-        adata.raw = adata
-        sc.pp.highly_variable_genes(
-            adata, n_top_genes=min(n_top_genes, len(common)),
-            batch_key=batch_key)
-        adata = adata[:, adata.var["highly_variable"]].copy()
-        sc.pp.scale(adata, max_value=10)
-        sc.pp.pca(adata, n_comps=min(n_pcs, adata.n_vars - 1, adata.n_obs - 1))
-
-    from ._batch import batch_correction
-    batch_correction(adata, batch_key=batch_key, methods=method, n_pcs=n_pcs,
-                     **integration_kwargs)
-
-    add_reference(adata, 'cross-species',
-                  'cross-species integration via one-to-one Ensembl orthologs')
-    return adata
-
-
-@register_function(
-    aliases=["SAMap", "samap_integrate", "跨物种SAMap", "cross species SAMap", "同源图整合"],
-    category="single",
-    description="Cross-species integration with SAMap (BLAST protein-homology graph + SAM)",
-    examples=[
-        "adata = ov.single.samap_integrate([zeb, frog], ['zf','fr'], ['zebrafish','frog'], proteomes=..., blast_maps='maps/')",
-    ],
-    related=["single.cross_species_integrate", "single.saturn_integrate", "single.get_orthologs"],
-)
-def samap_integrate(*args, **kwargs):
-    """Cross-species integration with **SAMap** (vendored under
-    ``omicverse.external.samap``). Builds a reciprocal-BLAST gene-homology graph
-    and runs the Self-Assembling Manifold — handles many-to-many homology and
-    large evolutionary distances. See
-    :func:`omicverse.external.samap._run.samap_integrate` for the full signature.
-    """
-    from ..external.samap._run import samap_integrate as _fn
-    return _fn(*args, **kwargs)
-
-
-@register_function(
-    aliases=["SATURN", "saturn_integrate", "跨物种SATURN", "cross species SATURN", "蛋白embedding整合"],
-    category="single",
-    description="Cross-species integration with SATURN (ESM2 protein-embedding macrogenes)",
-    examples=[
-        "adata = ov.single.saturn_integrate([zeb, frog], ['zebrafish','frog'], embedding_paths=...)",
-    ],
-    related=["single.cross_species_integrate", "single.samap_integrate", "single.get_orthologs"],
-)
-def saturn_integrate(*args, **kwargs):
-    """Cross-species integration with **SATURN** (vendored under
-    ``omicverse.external.saturn``). Learns "macrogenes" from ESM2 protein
-    language-model embeddings to map species into a shared space. See
-    :func:`omicverse.external.saturn._run.run_saturn` for the full signature.
-    """
-    from ..external.saturn._run import run_saturn as _fn
-    return _fn(*args, **kwargs)
+    return CrossSpecies(adatas, species, method=method, **kwargs).fit().adata
