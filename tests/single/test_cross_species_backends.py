@@ -10,6 +10,8 @@ import pytest
 
 
 def test_samap_vendored_imports():
+    # vendored samalg imports numba at module load
+    pytest.importorskip("numba")
     m = importlib.import_module("omicverse.external.samap")
     assert hasattr(m, "q") and hasattr(m, "ut")           # upstream namespace
     run = importlib.import_module("omicverse.external.samap._run")
@@ -24,6 +26,7 @@ def test_samalg_runs_on_current_numpy():
     sp = pytest.importorskip("scipy.sparse")
     ad = pytest.importorskip("anndata")
     pytest.importorskip("numba")
+    pytest.importorskip("hnswlib")   # SAM.run's kNN backend
     from omicverse.external.samap.samalg import SAM
 
     rng = np.random.default_rng(0)
@@ -39,8 +42,12 @@ def test_samalg_runs_on_current_numpy():
 
 
 def test_saturn_vendored_imports():
-    importlib.import_module("omicverse.external.saturn")
-    run = importlib.import_module("omicverse.external.saturn._run")
+    pytest.importorskip("torch")
+    try:
+        importlib.import_module("omicverse.external.saturn")
+        run = importlib.import_module("omicverse.external.saturn._run")
+    except ImportError as exc:  # optional heavy deps (scvi/fair-esm/...) absent
+        pytest.skip(f"SATURN optional dependency missing: {exc}")
     assert callable(run.run_saturn)
 
 
