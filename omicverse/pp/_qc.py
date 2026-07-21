@@ -443,38 +443,6 @@ _CE_MT_PREFIXES = ('ctc-', 'nduo-', 'ctb-')
 _MIN_PYSCDBLFINDER = "0.2.0"
 
 
-def _installed_version(pkg: str):
-    """Return the *distribution* version of ``pkg`` (or ``None`` if unknown).
-
-    Uses ``importlib.metadata`` rather than the module's ``__version__`` —
-    pyscdblfinder 0.2.0 ships a stale ``__version__ = '0.1.0'`` in its
-    ``__init__``, so only the distribution metadata is trustworthy here.
-    """
-    try:
-        from importlib.metadata import version, PackageNotFoundError
-    except ImportError:  # pragma: no cover - py<3.8
-        from importlib_metadata import version, PackageNotFoundError  # type: ignore
-    try:
-        return version(pkg)
-    except PackageNotFoundError:
-        return None
-
-
-def _version_lt(have: str, ref: str) -> bool:
-    """Return ``True`` when version ``have`` is older than ``ref``."""
-    try:
-        from packaging.version import parse
-        return parse(have) < parse(ref)
-    except Exception:  # pragma: no cover - packaging always present via scanpy
-        def _tup(s):
-            out = []
-            for part in str(s).split(".")[:3]:
-                digits = "".join(ch for ch in part if ch.isdigit())
-                out.append(int(digits) if digits else 0)
-            return tuple(out)
-        return _tup(have) < _tup(ref)
-
-
 def _resolve_doublets_method(method: str) -> str:
     """Resolve a doublets_method string, falling back gracefully when the
     requested backend's package is missing or too old.
@@ -502,8 +470,12 @@ def _resolve_doublets_method(method: str) -> str:
                 f"to use the new default.{Colors.ENDC}"
             )
             return 'scrublet'
-        ver = _installed_version('pyscdblfinder')
-        if ver is not None and _version_lt(ver, _MIN_PYSCDBLFINDER):
+        # Version read from distribution metadata (not pyscdblfinder.__version__,
+        # which 0.2.0 ships stale as '0.1.0'); helper lives in utils so other
+        # optional backends can reuse the same gate.
+        from ..utils._versions import version_at_least
+        ok, ver = version_at_least('pyscdblfinder', _MIN_PYSCDBLFINDER)
+        if ver is not None and not ok:
             print(
                 f"   {Colors.WARNING}⚠️  pyscdblfinder {ver} has a known "
                 f"large-dataset stall (near-zero CPU for hours on ~100k+ "
