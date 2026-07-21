@@ -201,7 +201,7 @@ def plot_sequence_logo(sequences: Sequence[str], alphabet: str = "auto",
     produces={},
 )
 def plot_pegrna(locus: str, pegrna, edit_pos: int, ax=None,
-                figure_width: float = 9):
+                figure_width: float = 9, label: Optional[str] = None):
     """Draw a pegRNA's components on *locus* (SnapGene-style feature map).
 
     Shows the protospacer (strand arrow), the Cas9 nick, the primer-binding
@@ -251,7 +251,8 @@ def plot_pegrna(locus: str, pegrna, edit_pos: int, ax=None,
         ax, _ = record.plot(figure_width=figure_width)
     else:
         record.plot(ax=ax)
-    ax.set_title(f"pegRNA on target ({pegrna.strand} strand, "
+    prefix = f"{label} — " if label else ""
+    ax.set_title(f"{prefix}pegRNA on target ({pegrna.strand} strand, "
                  f"PBS{pbs_len}/RTT{rtt_len})", fontsize=11)
     return ax
 
