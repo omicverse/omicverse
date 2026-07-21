@@ -63,7 +63,7 @@ class RBSResult:
     aliases=["rbs_strength", "RBS强度", "核糖体结合位点", "翻译起始",
              "translation_initiation", "rbs_calculator", "SD序列"],
     category="synthetic_biology",
-    description="RBS(核糖体结合位点)强度:用热力学模型(SD:anti-SD 杂交能 − mRNA 起始区解折叠)从 5'UTR 预测翻译起始速率。RBS / translation-initiation-rate prediction (Salis-style, ViennaRNA).",
+    description="RBS(核糖体结合位点)强度 / 翻译起始速率。method='thermodynamic'(SD:anti-SD 热力学基线,ViennaRNA);method='ostir'(OSTIR — 开源 RBS Calculator v2 真实算法)。RBS / translation-initiation-rate prediction (thermodynamic baseline or OSTIR RBS Calculator).",
     examples=[
         "r = ov.synbio.rbs_strength('AGGAGGACAACATG...')",
         "r.initiation_rate",
@@ -93,13 +93,16 @@ def rbs_strength(utr_and_cds: str, method: str = "thermodynamic",
     RBSResult
     """
     import math
-    if method not in ("thermodynamic", "salis"):
+    if method not in ("thermodynamic", "ostir", "salis"):
         raise ValueError(
-            f"method must be one of ['thermodynamic', 'salis'], got {method!r}")
+            f"method must be one of ['thermodynamic', 'ostir', 'salis'], got {method!r}")
+    if method == "ostir":
+        return _ostir_rbs(utr_and_cds, start)
     if method == "salis":
         raise ImportError(
-            "method='salis' 需要 Salis 实验室的 RBS Calculator(未随包分发,需在线 API/许可)。"
-            "请使用默认 method='thermodynamic'(SD:anti-SD 热力学基线,ViennaRNA)。")
+            "method='salis' 需要 Salis 实验室官方 RBS Calculator(在线 API/许可)。"
+            "请用 method='ostir'(OSTIR — 开源 RBS Calculator 重实现,真实算法)"
+            "或 method='thermodynamic'(SD:anti-SD 热力学基线)。")
     RNA = _rna("rbs_strength")
 
     seq = utr_and_cds.upper().replace("T", "U")
@@ -123,6 +126,39 @@ def rbs_strength(utr_and_cds: str, method: str = "thermodynamic",
     rate = 100.0 * math.exp(-_BETA * dG_total)
     return RBSResult(dG_total=dG_total, dG_SD=dG_SD, dG_mRNA=dG_mRNA,
                      initiation_rate=rate)
+
+
+def _ostir_rbs(utr_and_cds: str, start: Optional[int]) -> RBSResult:
+    """Real RBS Calculator via OSTIR (open-source reimplementation of the Salis
+    RBS Calculator v2; Reis & Salis 2020). Returns the predicted translation-
+    initiation rate (TIR) and ΔG breakdown."""
+    import os
+    import sys
+    try:
+        from ostir import run_ostir
+    except ImportError as exc:
+        raise ImportError(
+            "method='ostir' 需要 OSTIR。请 pip install ostir "
+            "(并需 ViennaRNA 命令行二进制 RNAfold 在 PATH 上;"
+            "conda install -c bioconda viennarna)。") from exc
+    # OSTIR shells out to RNAfold — make sure this interpreter's bin dir (where a
+    # conda-installed RNAfold lives) is visible.
+    bindir = os.path.dirname(sys.executable)
+    if bindir not in os.environ.get("PATH", ""):
+        os.environ["PATH"] = bindir + os.pathsep + os.environ.get("PATH", "")
+
+    kwargs = {"threads": 1}
+    if start is not None:
+        kwargs["start"] = int(start) + 1  # OSTIR is 1-based
+    results = run_ostir(utr_and_cds.upper().replace("U", "T"), **kwargs)
+    if not results:
+        raise RuntimeError("OSTIR 未返回结果(检查序列是否含起始密码子)。")
+    best = max(results, key=lambda d: d.get("expression", 0.0))
+    return RBSResult(
+        dG_total=float(best.get("dG_total", float("nan"))),
+        dG_SD=float(best.get("dG_SD_aSD", best.get("dG_mRNA_rRNA", float("nan")))),
+        dG_mRNA=float(best.get("dG_mRNA", float("nan"))),
+        initiation_rate=float(best.get("expression", 0.0)))
 
 
 @register_function(

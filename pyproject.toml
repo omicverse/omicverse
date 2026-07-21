@@ -379,6 +379,13 @@ synbio = [
   "biopython>=1.80",                            # sequence I/O, restriction, GenBank, assembly
   # Regulatory / RNA layer
   "ViennaRNA>=2.5",                             # RNA secondary structure, RBS/accessibility
+  # Real SOTA method backends (chosen via method=)
+  "ostir>=1.1",                                 # rbs_strength(method='ostir') — open RBS Calculator v2
+  "omegaconf>=2.1",                             # stability_ddg(method='thermompnn') config
+  "pytorch-lightning>=1.9",                     # stability_ddg(method='thermompnn') model loading
+  # NOTE: method='ostir' also needs the ViennaRNA CLI binary (RNAfold) on PATH:
+  #   conda install -c bioconda viennarna
+  # ThermoMPNN weights are auto-cloned from github on first use.
 ]
 
 

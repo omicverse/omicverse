@@ -88,11 +88,21 @@ def stability_ddg(
     warn_if_cpu(dev, "stability_ddg")
 
     if method == "thermompnn":
-        raise ImportError(
-            "method='thermompnn' 需要 ThermoMPNN 权重(未随包分发)。请安装 "
-            "https://github.com/Kuhlman-Lab/ThermoMPNN 并提供 checkpoint,"
-            "或使用默认 method='proteinmpnn'(零样本 proxy,无需额外权重)。"
-        )
+        # real trained ThermoMPNN (transfer head on ProteinMPNN); ΔΔG in the
+        # model's units, positive = destabilising.
+        from ._thermompnn import run_thermompnn
+        ddg_map = run_thermompnn(pdb, chain=chain or "A", device=dev)
+        rows = []
+        if mutations is None:
+            for (pos, alt), val in ddg_map.items():
+                rows.append((None, None, pos, alt, float(val)))
+        else:
+            for m in mutations:
+                wt, pos, alt = _parse_mut(m)
+                if (pos, alt) in ddg_map:
+                    rows.append((m, wt, pos, alt, float(ddg_map[(pos, alt)])))
+        df = pd.DataFrame(rows, columns=["mutation", "wt", "pos", "mut", "ddg"])
+        return df.sort_values("ddg", ascending=False).reset_index(drop=True)
 
     log_p, S, alphabet = unconditional_log_probs(pdb, device=dev)
     aidx = {a: alphabet.index(a) for a in _AA20}
