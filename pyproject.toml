@@ -384,6 +384,11 @@ synbio = [
   "omegaconf>=2.1",                             # stability_ddg(method='thermompnn') config
   "pytorch-lightning>=1.9",                     # stability_ddg(method='thermompnn') model loading
   "gdown>=4.6",                                 # enzyme_function(method='clean') — fetch CLEAN weights
+  "equilibrator-api>=0.6",                      # reaction_dg(method='equilibrator') — component-contribution ΔG
+  # NOTE: equilibrator-api pulls pyarrow>=21 + libcst; if pip tries to build them
+  # from source, install with a Rust toolchain on PATH and force wheels:
+  #   pip install --only-binary=pyarrow,libcst equilibrator-api
+  # First use downloads a ~2 GB component-contribution cache.
   # NOTE: method='ostir' also needs the ViennaRNA CLI binary (RNAfold) on PATH:
   #   conda install -c bioconda viennarna
   # ThermoMPNN weights are auto-cloned from github on first use.

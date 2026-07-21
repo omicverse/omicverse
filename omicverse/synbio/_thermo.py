@@ -112,11 +112,32 @@ def _parse_reaction(reaction) -> Dict[str, float]:
     return stoich
 
 
-def _equilibrator_dg(stoich) -> float:  # pragma: no cover - optional
-    from equilibrator_api import ComponentContribution, Reaction
-    cc = ComponentContribution()
-    rxn = Reaction({cc.get_compound(_clean(m)): c for m, c in stoich.items()})
-    return float(cc.standard_dg_prime(rxn).value.magnitude)
+_CC = {}
+
+
+def _get_cc():
+    """Cache the (expensive) ComponentContribution instance."""
+    if "cc" not in _CC:
+        from equilibrator_api import ComponentContribution
+        _CC["cc"] = ComponentContribution()
+    return _CC["cc"]
+
+
+def _equilibrator_dg(stoich) -> float:
+    """Real ΔG'° via eQuilibrator component-contribution (Noor 2013; Beber 2022).
+
+    Metabolite ids are resolved as BiGG identifiers (``bigg.metabolite:<id>``),
+    matching COBRApy/GEM conventions."""
+    cc = _get_cc()
+
+    def _fmt(side):
+        return " + ".join(f"{abs(c):g} bigg.metabolite:{_clean(m)}"
+                          for m, c in side)
+    subs = [(m, c) for m, c in stoich.items() if c < 0]
+    prods = [(m, c) for m, c in stoich.items() if c > 0]
+    formula = f"{_fmt(subs)} = {_fmt(prods)}"
+    rxn = cc.parse_reaction_formula(formula)
+    return float(cc.standard_dg_prime(rxn).value.to("kJ/mol").magnitude)
 
 
 @dataclass
