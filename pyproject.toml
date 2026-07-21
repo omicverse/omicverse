@@ -380,7 +380,9 @@ synbio = [
   "dna_features_viewer>=3.1",                   # primer / construct / plasmid maps
   "logomaker>=0.8",                             # sequence logos
   # Regulatory / RNA layer
-  "ViennaRNA>=2.5",                             # RNA secondary structure, RBS/accessibility
+  "ViennaRNA>=2.5",                             # RNA structure, RBS/accessibility, inverse folding
+  # Standards / interchange
+  "sbol2>=1.4",                                 # write_sbol / read_sbol — SBOL2 (iGEM/SynBioHub)
   # Real SOTA method backends (chosen via method=)
   "ostir>=1.1",                                 # rbs_strength(method='ostir') — open RBS Calculator v2
   "omegaconf>=2.1",                             # stability_ddg(method='thermompnn') config

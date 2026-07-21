@@ -54,11 +54,15 @@ _LAZY_ATTRS: dict[str, tuple[str, str]] = {
     "StrainDesignResult":    ("._strain", "StrainDesignResult"),
     "ec_model":              ("._ec", "ec_model"),
     "apply_kcat":            ("._ec", "apply_kcat"),
+    "dynamic_fba":           ("._dynamic", "dynamic_fba"),
+    "plot_dynamic_fba":      ("._dynamic", "plot_dynamic_fba"),
     # ---- Layer B: proteins & enzymes -------------------------------------
     "predict_structure":     ("._structure", "predict_structure"),
     "StructurePrediction":   ("._structure", "StructurePrediction"),
     "inverse_design":        ("._design", "inverse_design"),
     "denovo_backbone":       ("._design", "denovo_backbone"),
+    "denovo_binder":         ("._binder", "denovo_binder"),
+    "BinderDesign":          ("._binder", "BinderDesign"),
     "DesignedSequence":      ("._design", "DesignedSequence"),
     "variant_effect":        ("._variant", "variant_effect"),
     "stability_ddg":         ("._stability", "stability_ddg"),
@@ -68,6 +72,8 @@ _LAZY_ATTRS: dict[str, tuple[str, str]] = {
     "plot_ec_prediction":    ("._function", "plot_ec_prediction"),
     "ECPrediction":          ("._function", "ECPrediction"),
     "protein_embed":         ("._embed", "protein_embed"),
+    "predict_complex":       ("._boltz", "predict_complex"),
+    "ComplexPrediction":     ("._boltz", "ComplexPrediction"),
     # ---- Layer C: DNA ----------------------------------------------------
     "codon_optimize":        ("._codon", "codon_optimize"),
     "design_primers":        ("._codon", "design_primers"),
@@ -96,6 +102,14 @@ _LAZY_ATTRS: dict[str, tuple[str, str]] = {
     "rna_accessibility":     ("._rna", "rna_accessibility"),
     "rna_duplex":            ("._rna", "rna_duplex"),
     "gc_content":            ("._rna", "gc_content"),
+    "rna_inverse_design":    ("._rnadesign", "rna_inverse_design"),
+    "sirna_design":          ("._rnadesign", "sirna_design"),
+    "aso_design":            ("._rnadesign", "aso_design"),
+    "mrna_design":           ("._mrna", "mrna_design"),
+    "MRNADesign":            ("._mrna", "MRNADesign"),
+    "RNADesign":             ("._rnadesign", "RNADesign"),
+    "SiRNA":                 ("._rnadesign", "SiRNA"),
+    "ASO":                   ("._rnadesign", "ASO"),
     # ---- CRISPR & genome editing -----------------------------------------
     "design_grnas":          ("._crispr", "design_grnas"),
     "offtarget_search":      ("._crispr", "offtarget_search"),
@@ -104,6 +118,12 @@ _LAZY_ATTRS: dict[str, tuple[str, str]] = {
     "plot_grna_efficiency":  ("._crispr", "plot_grna_efficiency"),
     "plot_offtargets":       ("._crispr", "plot_offtargets"),
     "Guide":                 ("._crispr", "Guide"),
+    "prime_editing_design":  ("._editing", "prime_editing_design"),
+    "crispr_regulation":     ("._editing", "crispr_regulation"),
+    "design_cas13_guides":   ("._editing", "design_cas13_guides"),
+    "PegRNA":                ("._editing", "PegRNA"),
+    "RegGuide":              ("._editing", "RegGuide"),
+    "Cas13Guide":            ("._editing", "Cas13Guide"),
     # ---- DNA assembly & standards ----------------------------------------
     "restriction_map":       ("._assembly", "restriction_map"),
     "golden_gate":           ("._assembly", "golden_gate"),
@@ -111,6 +131,8 @@ _LAZY_ATTRS: dict[str, tuple[str, str]] = {
     "annotate_construct":    ("._assembly", "annotate_construct"),
     "write_genbank":         ("._assembly", "write_genbank"),
     "read_genbank":          ("._assembly", "read_genbank"),
+    "write_sbol":            ("._sbol", "write_sbol"),
+    "read_sbol":             ("._sbol", "read_sbol"),
     "view_primers":          ("._seqview", "view_primers"),
     "view_construct":        ("._seqview", "view_construct"),
     "plot_sequence_logo":    ("._seqview", "plot_sequence_logo"),
@@ -120,6 +142,9 @@ _LAZY_ATTRS: dict[str, tuple[str, str]] = {
     "plot_driving_forces":   ("._thermo", "plot_driving_forces"),
     "pathway_search":        ("._retro", "pathway_search"),
     "Pathway":               ("._retro", "Pathway"),
+    "retro_biosynthesis":    ("._retrobio", "retro_biosynthesis"),
+    "RetroRoute":            ("._retrobio", "RetroRoute"),
+    "RetroStep":             ("._retrobio", "RetroStep"),
     # ---- combinatorial libraries & directed evolution --------------------
     "degenerate_codon":      ("._library", "degenerate_codon"),
     "saturation_library":    ("._library", "saturation_library"),
@@ -131,10 +156,12 @@ _LAZY_ATTRS: dict[str, tuple[str, str]] = {
 
 # submodules that carry @register_function decorators
 _REGISTRY_SUBMODULES = (
-    "._gem", "._strain", "._ec", "._structure", "._design", "._variant",
+    "._gem", "._strain", "._ec", "._dynamic", "._structure", "._boltz",
+    "._design", "._binder", "._variant",
     "._stability", "._kcat", "._function", "._embed", "._codon", "._plot",
-    "._circuit", "._expression", "._rna", "._crispr", "._assembly",
-    "._thermo", "._retro", "._library", "._seqview",
+    "._circuit", "._expression", "._rna", "._rnadesign", "._mrna", "._crispr",
+    "._editing", "._assembly", "._sbol", "._thermo", "._retro", "._retrobio",
+    "._library", "._seqview",
 )
 
 

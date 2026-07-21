@@ -241,10 +241,11 @@ def _knockout_scan(model, target_rxn: str, growth_frac: float = 0.1,
 @register_function(
     aliases=[
         "strain_design", "菌株设计", "代谢工程", "敲除靶点", "过表达靶点",
-        "metabolic_engineering", "optknock", "robustknock", "fseof",
+        "metabolic_engineering", "optknock", "robustknock", "fseof", "mcs",
+        "最小割集",
     ],
     category="synthetic_biology",
-    description="菌株设计:过表达 (FSEOF) + 敲除靶点。method='fseof'(免依赖,生长偶联启发式);method='optknock'/'robustknock' 走 StrainDesign 的真实双层 MILP。Rank amplification (FSEOF) & knockout targets; exact OptKnock/RobustKnock via StrainDesign.",
+    description="菌株设计:过表达 (FSEOF) + 敲除靶点。method='fseof'(免依赖,生长偶联启发式);method='optknock'/'robustknock' 走 StrainDesign 真实双层 MILP;method='mcs' 计算生长偶联的最小割集 (minimal cut sets)。Rank amplification (FSEOF) & knockout targets; exact OptKnock/RobustKnock/MCS via StrainDesign.",
     examples=[
         "res = ov.synbio.strain_design(m, 'EX_succ_e')",
         "res.amplify.head(); res.knockout.head()",
@@ -283,10 +284,18 @@ def strain_design(
     StrainDesignResult
     """
     _cobra("strain_design")
-    _VALID = ("fseof", "optknock", "robustknock")
+    _VALID = ("fseof", "optknock", "robustknock", "mcs")
     if method not in _VALID:
         raise ValueError(f"method must be one of {list(_VALID)}, got {method!r}")
     tgt = _resolve_target(model, target)
+
+    if method == "mcs":
+        # minimal cut sets: intervention sets that growth-couple the product
+        knockout = _straindesign_mcs(model, tgt, max_knockouts,
+                                     min_yield=growth_frac, time_limit=time_limit)
+        amplify = _fseof(model, tgt)
+        return StrainDesignResult(target=tgt, amplify=amplify, knockout=knockout,
+                                  method="mcs")
 
     if method in ("optknock", "robustknock"):
         # exact bilevel-MILP design via StrainDesign; FSEOF still gives the
@@ -330,6 +339,61 @@ def _straindesign_milp(model, target_rxn: str, method: str, max_cost: int,
                          outer_objective=target_rxn)
     res = sd.compute_strain_designs(
         model, sd_modules=[module], max_cost=max_cost,
+        max_solutions=max_solutions, solver="glpk", time_limit=time_limit)
+
+    designs = getattr(res, "reaction_sd", None) or []
+    rows = []
+    for d in designs:
+        kos = sorted(r for r, v in d.items() if v < 0)
+        if kos:
+            rows.append({"knockouts": kos, "n_knockouts": len(kos)})
+    return pd.DataFrame(rows, columns=["knockouts", "n_knockouts"])
+
+
+def _straindesign_mcs(model, target_rxn: str, max_cost: int,
+                      min_yield: float = 0.1, max_solutions: int = 5,
+                      time_limit: int = 300):
+    """Minimal cut sets (MCS) that growth-couple production of *target_rxn*.
+
+    Builds a SUPPRESS module forbidding flux states where the product stays
+    below a fraction of its theoretical maximum, plus a PROTECT module keeping
+    growth feasible — the intervention (knockout) sets that make production
+    unavoidable whenever the cell grows. Returns a DataFrame of cut sets."""
+    import logging
+    import numpy as np
+    import pandas as pd
+    try:
+        import straindesign as sd
+    except ImportError as exc:
+        raise ImportError(
+            "method='mcs' 需要 StrainDesign(真实最小割集计算)。请 "
+            "pip install straindesign(或 pip install 'omicverse[synbio]')。"
+        ) from exc
+    for lg in ("straindesign", "straindesign.compression", "root"):
+        logging.getLogger(lg).setLevel(logging.ERROR)
+
+    biomass = _biomass_reaction(model)
+    if biomass is None:
+        raise ValueError("模型没有 biomass 反应,MCS 需要它来保护生长。")
+    # theoretical max product & a modest protected growth level
+    with model as probe:
+        probe.objective = target_rxn
+        max_prod = probe.slim_optimize()
+    with model as probe:
+        wt_growth = probe.slim_optimize()
+    if not (max_prod and np.isfinite(max_prod) and max_prod > 1e-9):
+        return pd.DataFrame(columns=["knockouts", "n_knockouts"])
+    thresh = float(min_yield) * float(max_prod)
+    grow = 0.1 * float(wt_growth) if wt_growth and np.isfinite(wt_growth) else 0.0
+
+    modules = [
+        sd.SDModule(model, sd.names.SUPPRESS,
+                    constraints=[f"{target_rxn} <= {thresh}"]),
+        sd.SDModule(model, sd.names.PROTECT,
+                    constraints=[f"{biomass.id} >= {grow}"]),
+    ]
+    res = sd.compute_strain_designs(
+        model, sd_modules=modules, max_cost=max_cost,
         max_solutions=max_solutions, solver="glpk", time_limit=time_limit)
 
     designs = getattr(res, "reaction_sd", None) or []

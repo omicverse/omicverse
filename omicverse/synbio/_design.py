@@ -116,18 +116,36 @@ def inverse_design(
     requires={},
     produces={},
 )
+def _rfdiff_python() -> str:
+    """Path to a Python with RFdiffusion installed (its own env — old torch/dgl
+    stack, incompatible with the main env)."""
+    import os
+    env = os.environ.get("OMICOS_RFDIFFUSION_PYTHON")
+    if env and os.path.exists(env):
+        return env
+    scratch = os.environ.get("SCRATCH", os.path.expanduser("~"))
+    return os.path.join(scratch, "env", "rfdiff", "bin", "python")
+
+
 def denovo_backbone(
     spec: Dict,
     out_path: Optional[str] = None,
     device: Optional[str] = None,
     rfdiffusion_dir: Optional[str] = None,
+    num_designs: int = 1,
 ) -> str:
-    """Generate a de-novo backbone with RFdiffusion (optional feature).
+    """Generate a de-novo backbone with RFdiffusion.
 
-    RFdiffusion has no PyPI package and needs its own weights; this wrapper
-    drives a local checkout when available and otherwise raises an actionable
-    error.  Marked optional in the ov.synbio spec.
-    """
+    ``spec`` selects the task:
+
+    * ``{'length': 100}`` — unconditional monomer of that length.
+    * ``{'contigs': '[A1-100/0 50-50]', 'target_pdb': 'target.pdb',
+      'hotspots': ['A30','A33']}`` — **binder** design against a target
+      (RFdiffusion PPI mode).
+
+    RFdiffusion runs from its own environment (``OMICOS_RFDIFFUSION_PYTHON`` or
+    ``$SCRATCH/env/rfdiff/bin/python``) since it needs an older torch/dgl stack.
+    Returns the path to the generated backbone PDB."""
     import os
     from ._device import require_gpu
     from ._esm_common import weights_dir
@@ -136,24 +154,42 @@ def denovo_backbone(
                       small_model_hint="(RFdiffusion 无小模型)")
     repo = rfdiffusion_dir or os.path.join(weights_dir(), "RFdiffusion")
     run_py = os.path.join(repo, "scripts", "run_inference.py")
+    models = os.path.join(repo, "models")
     if not os.path.exists(run_py):
         raise ImportError(
-            "denovo_backbone 需要 RFdiffusion(选做功能,未自动安装)。请:\n"
+            "denovo_backbone 需要 RFdiffusion(选做功能)。请:\n"
             "  git clone https://github.com/RosettaCommons/RFdiffusion "
-            f"{repo}\n  并按其 README 下载权重到 {repo}/models。\n"
-            "然后重试,或使用 predict_structure + inverse_design 的组合。"
+            f"{repo}\n  并 bash scripts/download_models.sh {models},\n"
+            "  且建一个装好 RFdiffusion 的独立 env,把 OMICOS_RFDIFFUSION_PYTHON 指向它。"
         )
-    # minimal driver: length-only unconditional generation
-    import subprocess, sys, tempfile
-    length = int(spec.get("length", 100))
+    py = _rfdiff_python()
+    if not os.path.exists(py):
+        raise ImportError(
+            "RFdiffusion 需要独立环境(老 torch/dgl 栈)。请建 env 并 pip install "
+            "其 SE3Transformer + rfdiffusion,然后设 OMICOS_RFDIFFUSION_PYTHON。"
+            f"(当前查找:{py})")
+
+    import subprocess, tempfile
     out = out_path or tempfile.mktemp(suffix=".pdb")
     prefix = out[:-4] if out.endswith(".pdb") else out
-    cmd = [
-        sys.executable, run_py,
-        f"inference.output_prefix={prefix}",
-        "inference.num_designs=1",
-        f"contigmap.contigs=[{length}-{length}]",
-    ]
+    cmd = [py, run_py, f"inference.output_prefix={prefix}",
+           f"inference.model_directory_path={models}",
+           f"inference.num_designs={num_designs}"]
+    if spec.get("target_pdb"):                     # binder / PPI mode
+        contigs = spec.get("contigs")
+        if not contigs:
+            raise ValueError("binder 设计需要 spec['contigs'](如 '[A1-100/0 50-50]')。")
+        cmd += [f"inference.input_pdb={spec['target_pdb']}",
+                f"contigmap.contigs={contigs}"]
+        if spec.get("hotspots"):
+            hs = "[" + ",".join(spec["hotspots"]) + "]"
+            cmd += [f"ppi.hotspot_res={hs}"]
+        # binder runs use the beta complex model + no noise for tighter designs
+        cmd += ["denoiser.noise_scale_ca=0", "denoiser.noise_scale_frame=0"]
+    else:
+        length = int(spec.get("length", 100))
+        contigs = spec.get("contigs", f"[{length}-{length}]")
+        cmd += [f"contigmap.contigs={contigs}"]
     subprocess.run(cmd, check=True, cwd=repo)
     produced = f"{prefix}_0.pdb"
     return produced if os.path.exists(produced) else prefix
