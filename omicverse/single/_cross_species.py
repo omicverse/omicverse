@@ -87,13 +87,22 @@ def _resolve_dataset(species: str) -> str:
     )
 
 
+# Ensembl mirrors, tried in order when a host is unreachable / in maintenance.
+_ENSEMBL_MIRRORS = (
+    "https://www.ensembl.org",
+    "https://asia.ensembl.org",
+    "https://useast.ensembl.org",
+)
+
+
 def _biomart_query(dataset: str, attributes: Sequence[str], *,
                    host: str = "https://www.ensembl.org", timeout: int = 120) -> pd.DataFrame:
     """Run a BioMart ``martservice`` query and return a TSV DataFrame.
 
     Uses the REST XML API directly over ``requests`` (HTTPS) — the ``biomart``
     PyPI package mishandles ``https://`` URLs, and Ensembl now returns 403 for
-    plain ``http``.
+    plain ``http``. If the requested ``host`` is unreachable or serving a
+    maintenance page, the other Ensembl mirrors are tried before giving up.
     """
     import requests
 
@@ -107,15 +116,33 @@ def _biomart_query(dataset: str, attributes: Sequence[str], *,
         + "".join(f'<Attribute name="{a}"/>' for a in attrs)
         + "</Dataset></Query>"
     )
-    resp = requests.get(host.rstrip("/") + "/biomart/martservice",
-                        params={"query": xml},
-                        headers={"User-Agent": "Mozilla/5.0 (omicverse cross-species)"},
-                        timeout=timeout)
-    resp.raise_for_status()
-    text = resp.text
-    if text.lstrip().lower().startswith(("query error", "<html", "error")):
-        raise RuntimeError(f"BioMart returned an error for dataset {dataset!r}:\n{text[:400]}")
-    return pd.read_csv(io.StringIO(text), sep="\t", header=None, names=attrs, dtype=str)
+
+    hosts = [host] + [m for m in _ENSEMBL_MIRRORS if m.rstrip("/") != host.rstrip("/")]
+    errors = []
+    for h in hosts:
+        try:
+            resp = requests.get(
+                h.rstrip("/") + "/biomart/martservice",
+                params={"query": xml},
+                headers={"User-Agent": "Mozilla/5.0 (omicverse cross-species)"},
+                timeout=timeout)
+            resp.raise_for_status()
+            text = resp.text
+            low = text.lstrip().lower()
+            # A valid TSV never starts with an HTML/status/error page.
+            if low.startswith(("query error", "<html", "<!doctype", "error")):
+                raise RuntimeError(f"non-tabular response from {h}: {text[:120]!r}")
+            df = pd.read_csv(io.StringIO(text), sep="\t", header=None,
+                             names=attrs, dtype=str)
+            if df.shape[1] != len(attrs):
+                raise RuntimeError(f"unexpected column count from {h}")
+            return df
+        except Exception as exc:  # try the next mirror
+            errors.append(f"{h}: {type(exc).__name__} {str(exc)[:80]}")
+            continue
+    raise RuntimeError(
+        "BioMart query failed on all Ensembl mirrors for dataset "
+        f"{dataset!r}:\n  " + "\n  ".join(errors))
 
 
 @register_function(
