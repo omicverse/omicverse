@@ -219,14 +219,22 @@ def plot_retro_routes(routes: List[RetroRoute], n: int = 3, ax=None,
     if not mols:
         raise ValueError("没有可画的分子(routes 为空或 SMILES 非法)。")
     per_row = min(mols_per_row, len(mols))
+    # force a PIL image (in a notebook RDKit's IPython integration can otherwise
+    # return SVG/PNG-bytes, which np.asarray can't turn into a float array)
     img = Draw.MolsToGridImage(mols, legends=legends, molsPerRow=per_row,
-                               subImgSize=(220, 180))
+                               subImgSize=(220, 180), useSVG=False,
+                               returnPNG=False)
+    if isinstance(img, (bytes, bytearray)):
+        import io
+        from PIL import Image
+        img = Image.open(io.BytesIO(img))
+    arr = np.asarray(img.convert("RGB"))
     if ax is None:
         fig, ax = plt.subplots(figsize=(per_row * 2.4,
                                         2.2 * (1 + (len(mols) - 1) // per_row)))
     else:
         fig = ax.figure
-    ax.imshow(np.asarray(img))
+    ax.imshow(arr)
     ax.axis("off")
     ax.set_title("Retrobiosynthesis: target → precursors", fontsize=11)
     fig.tight_layout()
