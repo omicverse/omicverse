@@ -368,6 +368,7 @@ synbio = [
   # Layer A — constraint-based metabolic modelling (CPU, free GLPK solver)
   "cobra>=0.26",                                # COBRApy — GEM I/O, FBA/FVA/pFBA, deletions
   "optlang>=1.7",                               # LP/MILP modelling layer (GLPK backend)
+  "straindesign>=1.11",                         # exact OptKnock/RobustKnock/MCS strain design (MILP)
   # Layer C — DNA design (CPU)
   "dnachisel>=3.2",                             # codon optimisation + sequence constraints
   "primer3-py>=2.0",                            # PCR primer design

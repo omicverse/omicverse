@@ -241,10 +241,10 @@ def _knockout_scan(model, target_rxn: str, growth_frac: float = 0.1,
 @register_function(
     aliases=[
         "strain_design", "菌株设计", "代谢工程", "敲除靶点", "过表达靶点",
-        "metabolic_engineering", "optknock", "optgene", "fseof",
+        "metabolic_engineering", "optknock", "robustknock", "fseof",
     ],
     category="synthetic_biology",
-    description="菌株设计:对给定产物给出排序的过表达 (FSEOF) 与敲除 (yield-scan/OptKnock) 靶点。默认无需额外依赖;装了 cameo 可选 method='optgene'/'optknock'。Rank amplification & knockout targets for over-producing a metabolite.",
+    description="菌株设计:过表达 (FSEOF) + 敲除靶点。method='fseof'(免依赖,生长偶联启发式);method='optknock'/'robustknock' 走 StrainDesign 的真实双层 MILP。Rank amplification (FSEOF) & knockout targets; exact OptKnock/RobustKnock via StrainDesign.",
     examples=[
         "res = ov.synbio.strain_design(m, 'EX_succ_e')",
         "res.amplify.head(); res.knockout.head()",
@@ -259,6 +259,7 @@ def strain_design(
     method: str = "fseof",
     growth_frac: float = 0.1,
     max_knockouts: int = 30,
+    time_limit: int = 300,
 ) -> StrainDesignResult:
     """Rank engineering targets for over-producing *target*.
 
@@ -282,20 +283,19 @@ def strain_design(
     StrainDesignResult
     """
     _cobra("strain_design")
-    if method not in ("fseof", "optgene", "optknock"):
-        raise ValueError(
-            f"method must be one of ['fseof', 'optgene', 'optknock'], got {method!r}")
+    _VALID = ("fseof", "optknock", "robustknock")
+    if method not in _VALID:
+        raise ValueError(f"method must be one of {list(_VALID)}, got {method!r}")
     tgt = _resolve_target(model, target)
 
-    if method in ("optgene", "optknock"):
-        try:
-            return _cameo_design(model, tgt, method)
-        except ImportError:
-            import logging
-            logging.getLogger("omicverse.synbio").warning(
-                "cameo 未安装,method='%s' 回退到内置 FSEOF。"
-                " pip install cameo 以使用精确 MILP 设计。", method,
-            )
+    if method in ("optknock", "robustknock"):
+        # exact bilevel-MILP design via StrainDesign; FSEOF still gives the
+        # complementary over-expression targets.
+        knockout = _straindesign_milp(model, tgt, method, max_knockouts,
+                                      time_limit=time_limit)
+        amplify = _fseof(model, tgt)
+        return StrainDesignResult(target=tgt, amplify=amplify, knockout=knockout,
+                                  method=method)
 
     amplify = _fseof(model, tgt)
     knockout = _knockout_scan(model, tgt, growth_frac=growth_frac,
@@ -304,26 +304,41 @@ def strain_design(
                               method="fseof")
 
 
-def _cameo_design(model, target_rxn: str, method: str) -> StrainDesignResult:
-    """Exact MILP design via cameo (optional)."""
+def _straindesign_milp(model, target_rxn: str, method: str, max_cost: int,
+                       max_solutions: int = 5, time_limit: int = 300):
+    """Exact OptKnock / RobustKnock via the StrainDesign package (real MILP).
+
+    Returns a DataFrame with one row per computed design: the knockout set and
+    its size."""
+    import logging
     import pandas as pd
-
     try:
-        from cameo.strain_design.deterministic.flux_variability_based import FSEOF  # noqa
-        from cameo.strain_design import OptGene
-    except ImportError as exc:  # pragma: no cover
-        raise ImportError("cameo 未安装:pip install cameo") from exc
+        import straindesign as sd
+    except ImportError as exc:
+        raise ImportError(
+            "method='%s' 需要 StrainDesign(真实 MILP 菌株设计)。请 "
+            "pip install straindesign(或 pip install 'omicverse[synbio]')。"
+            % method) from exc
+    for lg in ("straindesign", "straindesign.compression", "root"):
+        logging.getLogger(lg).setLevel(logging.ERROR)
 
-    if method == "optgene":
-        og = OptGene(model)
-        res = og.run(target=target_rxn, biomass=model.objective, max_knockouts=5)
-        ko = pd.DataFrame({"reaction": list(res.data_frame.get("reactions", []))})
-        return StrainDesignResult(target=target_rxn, amplify=pd.DataFrame(),
-                                  knockout=ko, method="optgene")
-    # optknock is similar; keep FSEOF amplification alongside
-    amp = _fseof(model, target_rxn)
-    return StrainDesignResult(target=target_rxn, amplify=amp,
-                              knockout=pd.DataFrame(), method=method)
+    biomass = _biomass_reaction(model)
+    if biomass is None:
+        raise ValueError("模型没有目标(biomass)反应,OptKnock 需要它作为内层目标。")
+    name = sd.names.OPTKNOCK if method == "optknock" else sd.names.ROBUSTKNOCK
+    module = sd.SDModule(model, name, inner_objective=biomass.id,
+                         outer_objective=target_rxn)
+    res = sd.compute_strain_designs(
+        model, sd_modules=[module], max_cost=max_cost,
+        max_solutions=max_solutions, solver="glpk", time_limit=time_limit)
+
+    designs = getattr(res, "reaction_sd", None) or []
+    rows = []
+    for d in designs:
+        kos = sorted(r for r, v in d.items() if v < 0)
+        if kos:
+            rows.append({"knockouts": kos, "n_knockouts": len(kos)})
+    return pd.DataFrame(rows, columns=["knockouts", "n_knockouts"])
 
 
 __all__ = ["strain_design", "production_envelope", "StrainDesignResult"]

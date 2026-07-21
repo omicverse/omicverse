@@ -108,9 +108,10 @@ def _baseline_enzyme_demand(model, kcat_map, mw_map) -> float:
         "GECKO", "ecModel", "酶约束",
     ],
     category="synthetic_biology",
-    description="酶约束代谢模型 (GECKO-light):把每个反应的 kcat 转成蛋白池容量约束,得到可直接送入 FBA 的酶约束 cobra.Model。这是 A↔B 咬合的代谢端。Build an enzyme-constrained model from a {reaction: kcat} map.",
+    description="酶约束代谢模型 (GECKO / sMOMENT):把 kcat + 酶分子量转成蛋白质量预算约束。method='gecko'(默认)约束全酶促反应组(改一个酶的 kcat 会在共享蛋白预算里重新分配,物理正确);method='pool' 只约束给定反应。Enzyme-constrained model (sMOMENT/GECKO): full-proteome or targeted.",
     examples=[
-        "ecm = ov.synbio.ec_model(m, {'PFK': 12.5})",
+        "ecm = ov.synbio.ec_model(m, {'PFK': 12.5})            # full-proteome GECKO",
+        "ecm = ov.synbio.ec_model(m, {'PFK': 12.5}, method='pool')  # only PFK",
         "sol = ov.synbio.fba(ecm)  # yield recomputed under the enzyme budget",
     ],
     related=["synbio.apply_kcat", "synbio.enzyme_kcat", "synbio.fba", "synbio.load_gem"],
@@ -122,10 +123,17 @@ def ec_model(
     kcat_map: Mapping[str, float],
     mw_map: Optional[Mapping[str, float]] = None,
     total_protein: Optional[float] = None,
+    method: str = "gecko",
+    default_kcat: float = 25.0,
     pool_tightness: float = 0.5,
     inplace: bool = False,
 ) -> "cobra.Model":
-    """Return an enzyme-constrained copy of *model*.
+    """Return an enzyme-constrained copy of *model* (sMOMENT / GECKO).
+
+    Each enzymatic reaction *r* gets a non-negative usage variable
+    :math:`e_r \\ge |v_r| / k_{cat,r}`, and a shared protein-mass budget
+    :math:`\\sum_r MW_r\\, e_r \\le P` couples them — exactly the sMOMENT/GECKO
+    formulation (Bekiaris & Klamt 2020; Sánchez *et al.* 2017).
 
     Parameters
     ----------
@@ -134,14 +142,22 @@ def ec_model(
     kcat_map
         ``{reaction_id: kcat}`` with kcat in **1/s** (turnover number).
     mw_map
-        Optional ``{reaction_id: molecular_weight_kDa}``; defaults to 40 kDa.
+        Optional ``{reaction_id: molecular_weight_kDa}`` (defaults to 40 kDa) —
+        pass real per-enzyme masses for quantitative work.
     total_protein
-        Total enzyme mass budget :math:`P`.  If ``None`` it is auto-set to
-        ``pool_tightness ×`` the wild-type enzyme demand of the mapped
-        reactions, so the constraint is guaranteed to bite (good for demos and
-        for feeling the effect of a kcat change).
+        Protein-mass budget :math:`P` (g protein / gDW).  ``None`` auto-sizes it
+        to ``pool_tightness ×`` the wild-type enzyme demand.
+    method
+        ``"gecko"`` (default) — constrain the **whole enzymatic reaction set**:
+        reactions in ``kcat_map`` use their kcat, the rest use ``default_kcat``.
+        The shared budget makes changing one enzyme's kcat physiologically
+        reallocate the proteome (the correct A↔B behaviour).
+        ``"pool"`` — constrain only the reactions in ``kcat_map`` (targeted).
+    default_kcat
+        kcat (1/s) assigned to unmapped enzymatic reactions under ``"gecko"``
+        (BRENDA median ≈ 25/s).
     pool_tightness
-        Fraction used when auto-sizing ``total_protein`` (smaller = tighter).
+        Fraction used when auto-sizing ``total_protein``.
     inplace
         Mutate *model* instead of copying.
 
@@ -149,18 +165,34 @@ def ec_model(
     -------
     cobra.Model
         Enzyme-constrained model; ``model.synbio_ec`` holds the created
-        variables/constraints and the pool size for inspection.
+        variables/constraints, the pool size, and the effective kcat map.
     """
     _cobra("ec_model")
+    if method not in ("gecko", "pool"):
+        raise ValueError(f"method must be one of ['gecko', 'pool'], got {method!r}")
     m = model if inplace else model.copy()
 
+    if method == "gecko":
+        # every gene-associated metabolic reaction draws on the proteome
+        eff_kcat = {}
+        skip = ("EX_", "DM_", "SK_", "BIOMASS", "ATPM")
+        for r in m.reactions:
+            if r.gene_reaction_rule and not r.id.startswith(skip) and "BIOMASS" not in r.id:
+                eff_kcat[r.id] = float(kcat_map.get(r.id, default_kcat))
+        for rid, k in kcat_map.items():        # honour explicit entries regardless
+            eff_kcat[rid] = float(k)
+    else:
+        eff_kcat = {k: float(v) for k, v in kcat_map.items()}
+
     if total_protein is None:
-        demand = _baseline_enzyme_demand(m, kcat_map, mw_map)
+        demand = _baseline_enzyme_demand(m, eff_kcat, mw_map)
         total_protein = pool_tightness * demand if demand > 0 else 1.0
 
-    created = _add_pool_constraints(m, kcat_map, mw_map, total_protein)
+    created = _add_pool_constraints(m, eff_kcat, mw_map, total_protein)
     created["total_protein"] = float(total_protein)
-    created["kcat_map"] = dict(kcat_map)
+    created["method"] = method
+    created["kcat_map"] = dict(eff_kcat)
+    created["user_kcat"] = dict(kcat_map)
     # stash metadata without breaking cobra (plain attribute).
     try:
         m.synbio_ec = created
