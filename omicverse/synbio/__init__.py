@@ -136,6 +136,7 @@ _LAZY_ATTRS: dict[str, tuple[str, str]] = {
     "view_primers":          ("._seqview", "view_primers"),
     "view_construct":        ("._seqview", "view_construct"),
     "plot_sequence_logo":    ("._seqview", "plot_sequence_logo"),
+    "plot_rna_structure":    ("._seqview", "plot_rna_structure"),
     # ---- pathway thermodynamics & retrosynthesis -------------------------
     "reaction_dg":           ("._thermo", "reaction_dg"),
     "max_min_driving_force": ("._thermo", "max_min_driving_force"),
@@ -143,6 +144,7 @@ _LAZY_ATTRS: dict[str, tuple[str, str]] = {
     "pathway_search":        ("._retro", "pathway_search"),
     "Pathway":               ("._retro", "Pathway"),
     "retro_biosynthesis":    ("._retrobio", "retro_biosynthesis"),
+    "plot_retro_routes":     ("._retrobio", "plot_retro_routes"),
     "RetroRoute":            ("._retrobio", "RetroRoute"),
     "RetroStep":             ("._retrobio", "RetroStep"),
     # ---- combinatorial libraries & directed evolution --------------------

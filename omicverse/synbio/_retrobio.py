@@ -181,4 +181,56 @@ def retro_biosynthesis(target_smiles: str, generations: int = 1,
     return routes[:max_routes]
 
 
-__all__ = ["retro_biosynthesis", "RetroStep", "RetroRoute"]
+@register_function(
+    aliases=["plot_retro_routes", "逆合成图", "retro_plot", "逆合成路径图",
+             "retrosynthesis_plot", "分子图"],
+    category="synthetic_biology",
+    description="画逆生物合成路径:把目标分子与每一步的前体用 RDKit 结构式画成网格,标注反应规则/EC。Draw retrobiosynthetic routes (target + precursors) as an RDKit molecule grid.",
+    examples=[
+        "routes = ov.synbio.retro_biosynthesis('CC(=O)C(=O)O')",
+        "ov.synbio.plot_retro_routes(routes, n=3)",
+    ],
+    related=["synbio.retro_biosynthesis"],
+    requires={},
+    produces={},
+)
+def plot_retro_routes(routes: List[RetroRoute], n: int = 3, ax=None,
+                      mols_per_row: int = 4):
+    """Draw the top *n* one-step routes as a molecule grid (target → precursors)."""
+    Chem, _ = _rdkit("plot_retro_routes")
+    from rdkit.Chem import Draw
+    from ._plot import _mpl
+    plt = _mpl()
+    import numpy as np
+
+    mols, legends = [], []
+    if routes:
+        t = Chem.MolFromSmiles(routes[0].target)
+        if t is not None:
+            mols.append(t)
+            legends.append("TARGET")
+    for r in routes[:n]:
+        step = r.steps[0]
+        for p in step.precursors:
+            m = Chem.MolFromSmiles(p)
+            if m is not None:
+                mols.append(m)
+                legends.append(step.rule)
+    if not mols:
+        raise ValueError("没有可画的分子(routes 为空或 SMILES 非法)。")
+    per_row = min(mols_per_row, len(mols))
+    img = Draw.MolsToGridImage(mols, legends=legends, molsPerRow=per_row,
+                               subImgSize=(220, 180))
+    if ax is None:
+        fig, ax = plt.subplots(figsize=(per_row * 2.4,
+                                        2.2 * (1 + (len(mols) - 1) // per_row)))
+    else:
+        fig = ax.figure
+    ax.imshow(np.asarray(img))
+    ax.axis("off")
+    ax.set_title("Retrobiosynthesis: target → precursors", fontsize=11)
+    fig.tight_layout()
+    return fig, ax
+
+
+__all__ = ["retro_biosynthesis", "plot_retro_routes", "RetroStep", "RetroRoute"]

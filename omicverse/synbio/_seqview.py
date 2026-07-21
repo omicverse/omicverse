@@ -187,4 +187,67 @@ def plot_sequence_logo(sequences: Sequence[str], alphabet: str = "auto",
     return fig, ax
 
 
-__all__ = ["view_primers", "view_construct", "plot_sequence_logo"]
+def _pairs_from_dotbracket(structure: str):
+    """Return the list of (i, j) base pairs from a dot-bracket string."""
+    stack, pairs = [], []
+    for i, c in enumerate(structure):
+        if c == "(":
+            stack.append(i)
+        elif c == ")" and stack:
+            pairs.append((stack.pop(), i))
+    return pairs
+
+
+@register_function(
+    aliases=["plot_rna_structure", "RNA结构图", "rna_structure_plot", "弧线图",
+             "二级结构图", "arc_diagram", "rna_arc"],
+    category="synthetic_biology",
+    description="RNA 二级结构弧线图:碱基排成一行,配对以半圆弧连接(按 G-C/A-U/G-U 上色),直观展示折叠。Arc-diagram of an RNA secondary structure (dot-bracket) coloured by pair type.",
+    examples=[
+        "s = ov.synbio.rna_fold(seq)",
+        "ov.synbio.plot_rna_structure(s.sequence, s.structure)",
+    ],
+    related=["synbio.rna_fold", "synbio.rna_inverse_design", "synbio.mrna_design"],
+    requires={},
+    produces={},
+)
+def plot_rna_structure(sequence: str, structure: str, ax=None,
+                       title: str = "RNA secondary structure"):
+    """Draw an arc diagram of *structure* (dot-bracket) over *sequence*.
+
+    Bases sit on a line; each base pair is a semicircular arc, coloured by pair
+    type (G-C blue, A-U orange, G-U/other grey). Compact and dependency-free."""
+    import numpy as np
+    from ._plot import _mpl
+    plt = _mpl()
+
+    seq = sequence.upper().replace("T", "U")
+    pairs = _pairs_from_dotbracket(structure)
+    L = len(structure)
+    if ax is None:
+        fig, ax = plt.subplots(figsize=(max(4, 0.14 * L), max(2.0, 0.045 * L + 1.4)))
+    else:
+        fig = ax.figure
+    colours = {"GC": "#2C7FB8", "CG": "#2C7FB8", "AU": "#F0894A",
+               "UA": "#F0894A", "GU": "#9E9E9E", "UG": "#9E9E9E"}
+    for i, j in pairs:
+        pair = (seq[i] + seq[j]) if i < len(seq) and j < len(seq) else "??"
+        col = colours.get(pair, "#C9C9C9")
+        centre, rad = (i + j) / 2.0, (j - i) / 2.0
+        th = np.linspace(0, np.pi, 40)
+        ax.plot(centre + rad * np.cos(th), rad * np.sin(th), color=col, lw=1.3)
+    ax.plot([0, L - 1], [0, 0], color="k", lw=1.2, zorder=0)
+    ax.scatter(range(L), [0] * L, s=6, c="k", zorder=3)
+    ax.set_ylim(-0.05 * L - 1, 0.5 * L + 1)
+    ax.set_xlim(-1, L)
+    ax.set_yticks([])
+    ax.set_xlabel(f"position (nt) — {len(pairs)} base pairs")
+    ax.set_title(title, fontsize=11)
+    for s in ("top", "right", "left"):
+        ax.spines[s].set_visible(False)
+    fig.tight_layout()
+    return fig, ax
+
+
+__all__ = ["view_primers", "view_construct", "plot_sequence_logo",
+           "plot_rna_structure"]
