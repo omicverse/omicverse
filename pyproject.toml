@@ -386,6 +386,7 @@ synbio = [
   "gdown>=4.6",                                 # enzyme_function(method='clean') — fetch CLEAN weights
   "equilibrator-api>=0.6",                      # reaction_dg(method='equilibrator') — component-contribution ΔG
   "rdkit>=2024.3",                              # enzyme_kcat(method='dlkcat') substrate graphs (NumPy-2 compatible)
+  "rs3>=0.0.18",                                # design_grnas(method='rs3') — Rule Set 3 on-target (needs lightgbm==3.3.5)
   # NOTE: equilibrator-api pulls pyarrow>=21 + libcst; if pip tries to build them
   # from source, install with a Rust toolchain on PATH and force wheels:
   #   pip install --only-binary=pyarrow,libcst equilibrator-api

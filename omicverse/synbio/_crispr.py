@@ -54,8 +54,9 @@ class Guide:
     start: int            # 0-based position of protospacer start on the input
     strand: str           # '+' | '-'
     gc: float
-    efficiency: float     # 0..1 heuristic on-target score
+    efficiency: float     # on-target score (heuristic 0..1, or rs3 z-score)
     poly_t: bool          # contains TTTT (Pol III terminator)
+    context: str = ""     # 30-mer context (4nt + 20nt spacer + PAM + 3nt) for rs3
 
     def __repr__(self) -> str:  # pragma: no cover
         return (f"Guide({self.spacer} {self.pam} {self.strand}@{self.start} "
@@ -82,7 +83,7 @@ def _efficiency(spacer: str) -> float:
     aliases=["design_grnas", "gRNA设计", "向导RNA", "sgRNA设计", "crispr_guides",
              "guide_design", "CRISPR", "向导设计"],
     category="synthetic_biology",
-    description="CRISPR gRNA 设计:在靶序列上扫描 PAM(SpCas9 NGG / SaCas9 / Cas12a),提取原型间隔序列,按 GC/poly-T/效率启发式打分并排序。Design & rank CRISPR guide RNAs for a target sequence.",
+    description="CRISPR gRNA 设计:扫描 PAM(SpCas9/SaCas9/Cas12a)提取原型间隔序列并排序。method='heuristic'(GC/poly-T)或 method='rs3'(真实 Rule Set 3 on-target 模型,Azimuth 继任者)。Design & rank CRISPR guide RNAs (heuristic or Rule Set 3).",
     examples=[
         "guides = ov.synbio.design_grnas(target_dna, enzyme='SpCas9')",
         "guides[0].spacer, guides[0].efficiency",
@@ -93,13 +94,16 @@ def _efficiency(spacer: str) -> float:
 )
 def design_grnas(sequence: str, enzyme: str = "SpCas9",
                  pam: Optional[str] = None, min_gc: float = 0.2,
-                 max_gc: float = 0.8, top_n: Optional[int] = None) -> List[Guide]:
+                 max_gc: float = 0.8, top_n: Optional[int] = None,
+                 method: str = "heuristic") -> List[Guide]:
     """Design guide RNAs targeting *sequence*.
 
     Scans both strands for PAM sites, extracts protospacers of the enzyme's
     length, filters on GC, and ranks by the heuristic efficiency score.
     """
     import re
+    if method not in ("heuristic", "rs3"):
+        raise ValueError(f"method must be one of ['heuristic', 'rs3'], got {method!r}")
     seq = sequence.upper().replace("U", "T")
     if enzyme not in ENZYMES and pam is None:
         raise ValueError(f"未知 enzyme='{enzyme}';可用 {list(ENZYMES)} 或传 pam=")
@@ -127,14 +131,43 @@ def design_grnas(sequence: str, enzyme: str = "SpCas9",
             gc = (spacer.count("G") + spacer.count("C")) / plen
             if not (min_gc <= gc <= max_gc):
                 continue
+            # 30-mer context for rs3: 4nt 5' + 20nt spacer + 3nt PAM + 3nt 3'
+            if three_prime:
+                ctx = s[sp_start - 4:sp_end + plen_pam + 3]
+            else:
+                ctx = s[p - 4:sp_end + 3]
+            context = ctx if len(ctx) == 30 else ""
             # map back to + strand coordinate for reporting
             start = sp_start if strand == "+" else len(seq) - sp_end
             guides.append(Guide(
                 spacer=spacer, pam=pam_seq, start=start, strand=strand, gc=gc,
-                efficiency=_efficiency(spacer), poly_t=("TTTT" in spacer)))
+                efficiency=_efficiency(spacer), poly_t=("TTTT" in spacer),
+                context=context))
+
+    if method == "rs3":
+        _score_rs3(guides)
 
     guides.sort(key=lambda g: g.efficiency, reverse=True)
     return guides[:top_n] if top_n else guides
+
+
+def _score_rs3(guides: List["Guide"]) -> None:
+    """Replace each guide's efficiency with the real Rule Set 3 score
+    (DeWeirdt *et al.* 2021; the successor to Azimuth/Rule Set 2). Guides that
+    lack a full 30-mer context keep their heuristic score."""
+    try:
+        from rs3.seq import predict_seq
+    except ImportError as exc:
+        raise ImportError(
+            "design_grnas(method='rs3') 需要 rs3(Rule Set 3 on-target 模型)。请 "
+            "pip install rs3 sglearn 'lightgbm==3.3.5'(rs3 的模型需 lightgbm 3.x)。"
+        ) from exc
+    scored = [g for g in guides if len(g.context) == 30]
+    if not scored:
+        return
+    preds = predict_seq([g.context for g in scored], sequence_tracr="Hsu2013")
+    for g, p in zip(scored, preds):
+        g.efficiency = float(p)
 
 
 @dataclass
