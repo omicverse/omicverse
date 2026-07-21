@@ -161,8 +161,10 @@ def plot_variant_effect(df: "pd.DataFrame", value_col: str = "score",
     import numpy as np
     plt = _mpl()
 
-    col = value_col if value_col in df.columns else (
-        "score" if "score" in df.columns else "ddg_proxy")
+    col = value_col
+    if col not in df.columns:
+        col = next((c for c in ("score", "ddg_proxy", "ddg") if c in df.columns),
+                   df.columns[-1])
     positions = sorted(df["pos"].unique())
     pos_index = {p: i for i, p in enumerate(positions)}
     mat = np.full((len(_AA20), len(positions)), np.nan)
@@ -190,7 +192,8 @@ def plot_variant_effect(df: "pd.DataFrame", value_col: str = "score",
         if wt in _AA20:
             ax.scatter(pos_index[p], _AA20.index(wt), marker=".", c="k", s=6)
 
-    label = "ESM score (Δ log-likelihood)" if col == "score" else "ΔΔG proxy"
+    label = {"score": "ESM score (Δ log-likelihood)",
+             "ddg_proxy": "ΔΔG proxy", "ddg": "ΔΔG (kcal/mol)"}.get(col, col)
     fig.colorbar(im, ax=ax, fraction=0.025, pad=0.01, label=label)
     ax.set_title("Saturation scan  (black dot = wild-type)")
     fig.tight_layout()

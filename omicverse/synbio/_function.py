@@ -158,4 +158,39 @@ def _clean_predict(seq: str, top_k: int, device) -> ECPrediction:
                         method="clean")
 
 
-__all__ = ["enzyme_function", "ECPrediction"]
+@register_function(
+    aliases=["plot_ec_prediction", "EC预测图", "ec_plot", "酶功能图",
+             "plot_enzyme_function"],
+    category="synthetic_biology",
+    description="画酶 EC 号预测的候选与置信度柱状图(CLEAN/k-NN 结果)。Bar chart of predicted EC numbers by confidence.",
+    examples=["ov.synbio.plot_ec_prediction(ov.synbio.enzyme_function(seq, method='clean'))"],
+    related=["synbio.enzyme_function"],
+    requires={},
+    produces={},
+)
+def plot_ec_prediction(pred, ax=None, title: str = "EC-number prediction"):
+    """Bar chart of an :class:`ECPrediction`'s candidates by confidence/similarity."""
+    from ._plot import _mpl
+    plt = _mpl()
+
+    preds = list(pred.predictions) if hasattr(pred, "predictions") else list(pred)
+    if not preds:
+        raise ValueError("没有 EC 预测可画。")
+    ecs = [f"EC {e}" for e, _ in preds]
+    vals = [v for _, v in preds]
+    if ax is None:
+        fig, ax = plt.subplots(figsize=(max(3.5, 0.9 * len(ecs)), 3.2))
+    else:
+        fig = ax.figure
+    bars = ax.bar(range(len(ecs)), vals, color="#4C72B0")
+    bars[0].set_color("#DD8452")
+    ax.set_xticks(range(len(ecs)))
+    ax.set_xticklabels(ecs, rotation=30, ha="right", fontsize=8)
+    ax.set_ylabel("confidence / similarity")
+    ax.set_ylim(0, max(1.0, max(vals) * 1.1))
+    ax.set_title(f"{title}  ({getattr(pred, 'method', '')})")
+    fig.tight_layout()
+    return fig, ax
+
+
+__all__ = ["enzyme_function", "plot_ec_prediction", "ECPrediction"]

@@ -65,6 +65,7 @@ _LAZY_ATTRS: dict[str, tuple[str, str]] = {
     "enzyme_kcat":           ("._kcat", "enzyme_kcat"),
     "KcatPrediction":        ("._kcat", "KcatPrediction"),
     "enzyme_function":       ("._function", "enzyme_function"),
+    "plot_ec_prediction":    ("._function", "plot_ec_prediction"),
     "ECPrediction":          ("._function", "ECPrediction"),
     "protein_embed":         ("._embed", "protein_embed"),
     # ---- Layer C: DNA ----------------------------------------------------
