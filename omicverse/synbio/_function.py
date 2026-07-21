@@ -150,20 +150,12 @@ def enzyme_function(
 
 
 def _clean_predict(seq: str, top_k: int, device) -> ECPrediction:
-    from ._esm_common import weights_dir
+    """Real EC prediction via the trained CLEAN model (Yu 2023)."""
+    from ._clean import run_clean
 
-    repo = os.path.join(weights_dir(), "CLEAN")
-    if not os.path.isdir(os.path.join(repo, "app")):
-        raise ImportError(
-            "method='clean' 需要 CLEAN 本地 checkout + 权重(未随包分发)。请:\n"
-            "  git clone https://github.com/tttianhao/CLEAN "
-            f"{repo}\n  并按其 README 下载预训练模型。\n"
-            "或使用默认 method='knn'(ESM-2 嵌入基线,无需额外权重)。"
-        )
-    raise NotImplementedError(
-        "CLEAN 后端已检测到 checkout,但请按 CLEAN README 运行其 inference 脚本;"
-        "本包默认推荐 method='knn'。"
-    )
+    preds = run_clean([seq], names=["query"], device=device)[0]
+    return ECPrediction(query_len=len(seq), predictions=preds[:top_k],
+                        method="clean")
 
 
 __all__ = ["enzyme_function", "ECPrediction"]

@@ -383,6 +383,7 @@ synbio = [
   "ostir>=1.1",                                 # rbs_strength(method='ostir') — open RBS Calculator v2
   "omegaconf>=2.1",                             # stability_ddg(method='thermompnn') config
   "pytorch-lightning>=1.9",                     # stability_ddg(method='thermompnn') model loading
+  "gdown>=4.6",                                 # enzyme_function(method='clean') — fetch CLEAN weights
   # NOTE: method='ostir' also needs the ViennaRNA CLI binary (RNAfold) on PATH:
   #   conda install -c bioconda viennarna
   # ThermoMPNN weights are auto-cloned from github on first use.
