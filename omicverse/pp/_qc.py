@@ -1766,10 +1766,16 @@ def qc_gpu(adata, mode='seurat',
     cells_before_final = adata.shape[0]
     genes_before_final = adata.shape[1]
     
-    rsc.pp.filter_cells(adata, min_counts=min_genes)
-    rsc.pp.filter_cells(adata, max_counts=max_genes_ratio*adata.shape[1])
-    rsc.pp.filter_genes(adata, min_counts=min_cells)
-    rsc.pp.filter_genes(adata, max_counts=max_cells_ratio*adata.shape[0])
+    # NB: filter on *cells-per-gene* / *genes-per-cell*, not total UMI counts.
+    # Using min_counts/max_counts here (the old bug, #862) dropped highly
+    # expressed marker genes — e.g. with max_cells_ratio=1 any gene whose total
+    # UMIs exceed n_cells (S100A8, LYZ, FCGR3B, ...) was removed. rapids-singlecell
+    # exposes min_genes/max_genes/min_cells/max_cells separately, matching the CPU
+    # path's _filter_cells_impl / _filter_genes_impl.
+    rsc.pp.filter_cells(adata, min_genes=min_genes)
+    rsc.pp.filter_cells(adata, max_genes=int(max_genes_ratio*adata.shape[1]))
+    rsc.pp.filter_genes(adata, min_cells=min_cells)
+    rsc.pp.filter_genes(adata, max_cells=int(max_cells_ratio*adata.shape[0]))
     
     cells_final_filtered = cells_before_final - adata.shape[0]
     genes_final_filtered = genes_before_final - adata.shape[1]
