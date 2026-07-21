@@ -1060,12 +1060,12 @@ if __name__ == '__main__':
     ct_map_path = args.ct_map_path
     
     if ct_map_path is None:
-        if species_1 or species_2 is "human":
+        if species_1 or species_2 == "human":
             if cell_type == "cell_type":
                 ct_map_path = '/dfs/project/cross-species/data/lung/shared/true_cell_type.csv'
             elif cell_type == "CL_class_coarse":
                 ct_map_path = '/dfs/project/cross-species/data/lung/shared/true_CL_class_coarse.csv'
-        elif species_1 or species_2 is "zebrafish":
+        elif species_1 or species_2 == "zebrafish":
             ct_map_path = '/dfs/project/cross-species/yanay/fz_true_ct.csv'
             
     if args.multiple_files:
