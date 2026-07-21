@@ -436,15 +436,57 @@ def mads_test(meta, cov, nmads=5, lt=None, batch_key=None):
 _CE_MT_PREFIXES = ('ctc-', 'nduo-', 'ctb-')
 
 
+# Minimum pyscdblfinder that ships the O(N·k) kNN doublet features. Earlier
+# releases (<=0.1.0) built a full N×N distance matrix in the neighbour step,
+# which needs ~N²·8 bytes (≈125 GB at 100k cells) and thrashes swap — the
+# process shows near-zero CPU and never finishes on large atlases (issue #848).
+_MIN_PYSCDBLFINDER = "0.2.0"
+
+
+def _installed_version(pkg: str):
+    """Return the *distribution* version of ``pkg`` (or ``None`` if unknown).
+
+    Uses ``importlib.metadata`` rather than the module's ``__version__`` —
+    pyscdblfinder 0.2.0 ships a stale ``__version__ = '0.1.0'`` in its
+    ``__init__``, so only the distribution metadata is trustworthy here.
+    """
+    try:
+        from importlib.metadata import version, PackageNotFoundError
+    except ImportError:  # pragma: no cover - py<3.8
+        from importlib_metadata import version, PackageNotFoundError  # type: ignore
+    try:
+        return version(pkg)
+    except PackageNotFoundError:
+        return None
+
+
+def _version_lt(have: str, ref: str) -> bool:
+    """Return ``True`` when version ``have`` is older than ``ref``."""
+    try:
+        from packaging.version import parse
+        return parse(have) < parse(ref)
+    except Exception:  # pragma: no cover - packaging always present via scanpy
+        def _tup(s):
+            out = []
+            for part in str(s).split(".")[:3]:
+                digits = "".join(ch for ch in part if ch.isdigit())
+                out.append(int(digits) if digits else 0)
+            return tuple(out)
+        return _tup(have) < _tup(ref)
+
+
 def _resolve_doublets_method(method: str) -> str:
     """Resolve a doublets_method string, falling back gracefully when the
-    requested backend's package is not installed.
+    requested backend's package is missing or too old.
 
     `scdblfinder` (default) requires `pyscdblfinder`; if it's missing we
     print a single-line install hint and fall back to `scrublet` (which
-    has lazy imports of its own and is broadly available). Other methods
-    pass through unchanged — their wrappers raise their own ImportError
-    with installation instructions.
+    has lazy imports of its own and is broadly available). If an outdated
+    pyscdblfinder (<0.2.0) is installed we also fall back to `scrublet`,
+    because those versions stall for hours with near-zero CPU on large
+    datasets (issue #848) — the pipeline should finish rather than hang.
+    Other methods pass through unchanged — their wrappers raise their own
+    ImportError with installation instructions.
     """
     if method == 'scdblfinder':
         try:
@@ -456,7 +498,21 @@ def _resolve_doublets_method(method: str) -> str:
             )
             print(
                 f"   {Colors.CYAN}💡 Install with: "
-                f"`pip install pyscdblfinder` to use the new default.{Colors.ENDC}"
+                f"`pip install \"pyscdblfinder>={_MIN_PYSCDBLFINDER}\"` "
+                f"to use the new default.{Colors.ENDC}"
+            )
+            return 'scrublet'
+        ver = _installed_version('pyscdblfinder')
+        if ver is not None and _version_lt(ver, _MIN_PYSCDBLFINDER):
+            print(
+                f"   {Colors.WARNING}⚠️  pyscdblfinder {ver} has a known "
+                f"large-dataset stall (near-zero CPU for hours on ~100k+ "
+                f"cells; issue #848); falling back to 'scrublet'.{Colors.ENDC}"
+            )
+            print(
+                f"   {Colors.CYAN}💡 Upgrade with: "
+                f"`pip install -U \"pyscdblfinder>={_MIN_PYSCDBLFINDER}\"` "
+                f"to use scdblfinder on large data.{Colors.ENDC}"
             )
             return 'scrublet'
     return method
