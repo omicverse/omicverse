@@ -320,7 +320,9 @@ def composite_rna(adata, multiomics = False,
     """
     global dev
     if torch.cuda.is_available():
-        dev = "cuda:0"
+        # Respect the device pinned via ov.settings.cpu_gpu_mixed_init(devices=...)
+        # (torch.cuda.set_device) rather than hard-coding GPU 0.
+        dev = f"cuda:{torch.cuda.current_device()}"
     else:
         dev = "cpu"
     device = torch.device(dev)

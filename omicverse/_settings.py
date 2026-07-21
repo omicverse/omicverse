@@ -6,6 +6,9 @@ class omicverseConfig:
     def __init__(self,mode='cpu'):
         self.mode = mode
         self.seed = None
+        # Preferred torch device (e.g. ``'cuda:1'``) when the user pins one via
+        # ``cpu_gpu_mixed_init(devices=...)``; ``None`` means auto-detect.
+        self.device = None
         from .utils._analytics_sender import send_analytics_full_silent
         import datetime
         test_id_full = f"FULL-{datetime.datetime.now().strftime('%Y%m%d-%H%M%S')}"
@@ -89,22 +92,32 @@ class omicverseConfig:
         category="utils",
         description="Initialize CPU-GPU mixed mode for accelerated single-cell analysis",
         examples=[
-            "# Initialize mixed mode for better performance", 
+            "# Initialize mixed mode for better performance",
             "ov.settings.cpu_gpu_mixed_init()",
+            "# Pin a specific GPU on a shared multi-GPU server",
+            "ov.settings.cpu_gpu_mixed_init(devices=1)",
             "# Use mixed mode with preprocessing",
-            "ov.settings.cpu_gpu_mixed_init()",
             "adata = ov.pp.qc(adata)  # Automatically uses mixed mode",
             "# Check current mode",
             "print(f'Current mode: {ov.settings.mode}')"
         ],
         related=["settings.gpu_init", "settings.cpu_init", "pp.qc", "pp.preprocess"]
     )
-    def cpu_gpu_mixed_init(self):
+    def cpu_gpu_mixed_init(self, devices=None):
         r"""Initialize CPU-GPU mixed mode for accelerated single-cell analysis.
 
         Parameters
         ----------
-        None
+        devices : int | str | None, optional
+            CUDA device to pin for the torch-backed mixed-mode kernels. Accepts
+            an index (``1``), a string (``"1"`` or ``"cuda:1"``), or a
+            single-element list. ``None`` (default) keeps the previous behaviour
+            of using torch's current device. On a shared multi-GPU server this
+            lets you route omicverse to a free GPU (e.g. GPU 1 while another user
+            holds GPU 0) without touching ``CUDA_VISIBLE_DEVICES``. The selected
+            device is pinned via ``torch.cuda.set_device`` so downstream kernels
+            that resolve a bare ``"cuda"`` (through ``current_device``) land on
+            it, and is recorded in ``ov.settings.device``.
 
         Returns
         -------
@@ -115,13 +128,35 @@ class omicverseConfig:
             >>> import omicverse as ov
             >>> # Initialize mixed mode for better performance
             >>> ov.settings.cpu_gpu_mixed_init()
-            >>> # Use mixed mode with preprocessing
-            >>> ov.settings.cpu_gpu_mixed_init()
-            >>> adata = ov.pp.qc(adata)  # Automatically uses mixed mode
+            >>> # Pin GPU 1 on a shared multi-GPU server
+            >>> ov.settings.cpu_gpu_mixed_init(devices=1)
+            >>> adata = ov.pp.qc(adata)  # Automatically uses mixed mode on GPU 1
         """
+        import warnings
+
         print('CPU-GPU mixed mode activated')
-        
+
+        # Parse the requested device into a single CUDA index (or None). Accepts
+        # 1, "1", "cuda:1", or a single-element list/tuple.
+        selected_index = None
+        if devices is not None:
+            dev = devices
+            if isinstance(dev, (list, tuple)):
+                dev = dev[0] if len(dev) else None
+            if dev is not None:
+                s = str(dev).strip()
+                if s.startswith('cuda:'):
+                    s = s.split(':', 1)[1]
+                try:
+                    selected_index = int(s)
+                except (TypeError, ValueError):
+                    raise ValueError(
+                        f"cpu_gpu_mixed_init: could not parse devices={devices!r}; "
+                        "pass a GPU index like 1, '1', or 'cuda:1'."
+                    )
+
         # Detect available GPU accelerators for mixed mode
+        self.device = None
         if torch is not None:
             available_devices = []
             if torch.cuda.is_available():
@@ -132,12 +167,37 @@ class omicverseConfig:
                 available_devices.append("ROCm")
             if hasattr(torch, 'xpu') and torch.xpu.is_available():
                 available_devices.append("XPU")
-            
+
             if available_devices:
                 print(f'Available GPU accelerators: {", ".join(available_devices)}')
             else:
                 print('No GPU accelerators detected - fallback to CPU')
-        
+
+            # Pin the requested CUDA device so downstream torch kernels (which
+            # resolve a bare "cuda" to torch.cuda.current_device()) land on it.
+            if selected_index is not None:
+                if torch.cuda.is_available():
+                    n = torch.cuda.device_count()
+                    if not 0 <= selected_index < n:
+                        raise ValueError(
+                            f"cpu_gpu_mixed_init: devices={devices!r} selects CUDA "
+                            f"index {selected_index}, but only {n} CUDA device(s) "
+                            "are visible."
+                        )
+                    torch.cuda.set_device(selected_index)
+                    self.device = f"cuda:{selected_index}"
+                    print(f'Using CUDA device {selected_index}: '
+                          f'{torch.cuda.get_device_name(selected_index)}')
+                else:
+                    warnings.warn(
+                        f"cpu_gpu_mixed_init: devices={devices!r} was requested but "
+                        "CUDA is not available; ignoring device selection."
+                    )
+        elif selected_index is not None:
+            warnings.warn(
+                "cpu_gpu_mixed_init: torch is not installed; devices ignored."
+            )
+
         self.mode = 'cpu-gpu-mixed'
     
 
