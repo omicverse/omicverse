@@ -1,5 +1,4 @@
 from scipy.stats import binned_statistic
-import hnswlib
 import sklearn.utils.sparsefuncs as sf
 import typing
 from numba import njit, prange
@@ -1660,6 +1659,7 @@ def _parallel_wrapper(j):
 
 
 def _united_proj(wpca1, wpca2, k=20, metric="cosine", ef=200, M=48):
+    import hnswlib   # lazy: only needed when SAMap actually runs, not at import
 
     metric = 'l2' if metric == 'euclidean' else metric
     metric = 'cosine' if metric == 'correlation' else metric
