@@ -111,6 +111,9 @@ _LAZY_ATTRS: dict[str, tuple[str, str]] = {
     "annotate_construct":    ("._assembly", "annotate_construct"),
     "write_genbank":         ("._assembly", "write_genbank"),
     "read_genbank":          ("._assembly", "read_genbank"),
+    "view_primers":          ("._seqview", "view_primers"),
+    "view_construct":        ("._seqview", "view_construct"),
+    "plot_sequence_logo":    ("._seqview", "plot_sequence_logo"),
     # ---- pathway thermodynamics & retrosynthesis -------------------------
     "reaction_dg":           ("._thermo", "reaction_dg"),
     "max_min_driving_force": ("._thermo", "max_min_driving_force"),
@@ -131,7 +134,7 @@ _REGISTRY_SUBMODULES = (
     "._gem", "._strain", "._ec", "._structure", "._design", "._variant",
     "._stability", "._kcat", "._function", "._embed", "._codon", "._plot",
     "._circuit", "._expression", "._rna", "._crispr", "._assembly",
-    "._thermo", "._retro", "._library",
+    "._thermo", "._retro", "._library", "._seqview",
 )
 
 
