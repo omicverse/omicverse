@@ -259,5 +259,92 @@ def hdr_arms(sequence: str, cut_site: int, arm_length: int = 500,
             "left_len": len(left), "right_len": len(right)}
 
 
+@register_function(
+    aliases=["plot_grna_efficiency", "gRNA效率图", "向导效率图", "guide_plot",
+             "plot_guides", "gRNA分布图"],
+    category="synthetic_biology",
+    description="画候选 gRNA 沿靶序列的分布与效率:横轴位置、纵轴效率、正负链分色、点大小=GC。Plot candidate gRNAs along the target by position and efficiency.",
+    examples=["ov.synbio.plot_grna_efficiency(guides, target_len=len(dna))"],
+    related=["synbio.design_grnas", "synbio.plot_offtargets"],
+    requires={},
+    produces={},
+)
+def plot_grna_efficiency(guides: List["Guide"], target_len: Optional[int] = None,
+                         ax=None):
+    """Scatter candidate guides along the target: x = start, y = efficiency,
+    colour = strand, size ∝ GC. Highlights where the best guides sit."""
+    from ._plot import _mpl
+    plt = _mpl()
+
+    if ax is None:
+        fig, ax = plt.subplots(figsize=(6.5, 3.2))
+    else:
+        fig = ax.figure
+    for strand, col in (("+", "#377EB8"), ("-", "#E41A1C")):
+        gs = [g for g in guides if g.strand == strand]
+        if gs:
+            ax.scatter([g.start for g in gs], [g.efficiency for g in gs],
+                       s=[30 + 120 * g.gc for g in gs], c=col, alpha=0.7,
+                       edgecolors="k", linewidths=0.3, label=f"{strand} strand")
+    if guides:
+        best = guides[0]
+        ax.annotate("best", (best.start, best.efficiency),
+                    textcoords="offset points", xytext=(4, 6), fontsize=8)
+    if target_len:
+        ax.set_xlim(0, target_len)
+    ax.set_xlabel("protospacer start (bp on target)")
+    ax.set_ylabel("on-target efficiency")
+    ax.set_title(f"CRISPR guide landscape ({len(guides)} guides; size ∝ GC)")
+    ax.legend(fontsize=8)
+    fig.tight_layout()
+    return fig, ax
+
+
+@register_function(
+    aliases=["plot_offtargets", "脱靶图", "脱靶热图", "offtarget_plot",
+             "plot_off_targets", "错配图"],
+    category="synthetic_biology",
+    description="画脱靶位点的错配矩阵热图:每行一个候选脱靶,每列一个位点,标出错配位置并按 CFD 排序。Plot off-target mismatch matrix (sites × positions), ranked by CFD.",
+    examples=["ov.synbio.plot_offtargets(offtargets, spacer=guide.spacer)"],
+    related=["synbio.offtarget_search", "synbio.plot_grna_efficiency"],
+    requires={},
+    produces={},
+)
+def plot_offtargets(offtargets: List["OffTarget"], spacer: Optional[str] = None,
+                    top_n: int = 15, ax=None):
+    """Mismatch matrix of the top off-targets (rows = sites, cols = positions).
+
+    Cells are dark where the off-target base differs from the guide; rows are
+    ordered by CFD (most concerning first), with the CFD annotated on the right."""
+    import numpy as np
+    from ._plot import _mpl
+    plt = _mpl()
+
+    hits = offtargets[:top_n]
+    if not hits:
+        raise ValueError("没有脱靶位点可画。")
+    L = len(hits[0].site)
+    ref = (spacer or hits[0].site).upper()
+    mat = np.zeros((len(hits), L))
+    for i, h in enumerate(hits):
+        for j in range(min(L, len(h.site))):
+            mat[i, j] = 1.0 if h.site[j] != ref[j] else 0.0
+
+    if ax is None:
+        fig, ax = plt.subplots(figsize=(max(5, 0.28 * L), max(2.5, 0.32 * len(hits))))
+    else:
+        fig = ax.figure
+    ax.imshow(mat, aspect="auto", cmap="Reds", vmin=0, vmax=1)
+    ax.set_xticks(range(0, L, max(1, L // 10)))
+    ax.set_yticks(range(len(hits)))
+    ax.set_yticklabels([f"cfd={h.cfd:.2f} (mm={h.mismatches})" for h in hits],
+                       fontsize=7)
+    ax.set_xlabel("protospacer position (PAM-distal → PAM-proximal)")
+    ax.set_title("Off-target mismatches (dark = mismatch)")
+    fig.tight_layout()
+    return fig, ax
+
+
 __all__ = ["design_grnas", "offtarget_search", "base_editor_window", "hdr_arms",
+           "plot_grna_efficiency", "plot_offtargets",
            "Guide", "OffTarget", "ENZYMES"]

@@ -211,4 +211,44 @@ def max_min_driving_force(
                      driving_forces=dfs)
 
 
-__all__ = ["reaction_dg", "max_min_driving_force", "MDFResult"]
+@register_function(
+    aliases=["plot_driving_forces", "驱动力图", "MDF图", "plot_mdf",
+             "驱动力柱状图", "热力学图"],
+    category="synthetic_biology",
+    description="画通路各反应的驱动力(-ΔG')柱状图,标出 MDF 水平线与瓶颈反应(红色)。Plot per-reaction driving forces with the MDF level and bottleneck.",
+    examples=["ov.synbio.plot_driving_forces(mdf_result)"],
+    related=["synbio.max_min_driving_force"],
+    requires={},
+    produces={},
+)
+def plot_driving_forces(mdf_result, ax=None):
+    """Bar chart of per-reaction driving forces (from :func:`max_min_driving_force`).
+
+    The MDF is drawn as a horizontal line; the bottleneck reaction (the step at
+    the MDF) is highlighted in red."""
+    from ._plot import _mpl
+    plt = _mpl()
+
+    rxns = list(mdf_result.driving_forces.keys())
+    vals = [mdf_result.driving_forces[r] for r in rxns]
+    colors = ["#E41A1C" if r == mdf_result.bottleneck else "#377EB8" for r in rxns]
+
+    if ax is None:
+        fig, ax = plt.subplots(figsize=(max(4, 0.7 * len(rxns)), 3.4))
+    else:
+        fig = ax.figure
+    ax.bar(range(len(rxns)), vals, color=colors)
+    ax.axhline(mdf_result.mdf, ls="--", c="k", lw=1,
+               label=f"MDF = {mdf_result.mdf:.1f} kJ/mol")
+    ax.axhline(0, c="grey", lw=0.8)
+    ax.set_xticks(range(len(rxns)))
+    ax.set_xticklabels(rxns, rotation=45, ha="right", fontsize=8)
+    ax.set_ylabel("driving force  −ΔG'  (kJ/mol)")
+    ax.set_title("Pathway thermodynamics (red = bottleneck)")
+    ax.legend(fontsize=8)
+    fig.tight_layout()
+    return fig, ax
+
+
+__all__ = ["reaction_dg", "max_min_driving_force", "MDFResult",
+           "plot_driving_forces"]

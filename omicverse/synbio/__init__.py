@@ -99,6 +99,8 @@ _LAZY_ATTRS: dict[str, tuple[str, str]] = {
     "offtarget_search":      ("._crispr", "offtarget_search"),
     "base_editor_window":    ("._crispr", "base_editor_window"),
     "hdr_arms":              ("._crispr", "hdr_arms"),
+    "plot_grna_efficiency":  ("._crispr", "plot_grna_efficiency"),
+    "plot_offtargets":       ("._crispr", "plot_offtargets"),
     "Guide":                 ("._crispr", "Guide"),
     # ---- DNA assembly & standards ----------------------------------------
     "restriction_map":       ("._assembly", "restriction_map"),
@@ -110,6 +112,7 @@ _LAZY_ATTRS: dict[str, tuple[str, str]] = {
     # ---- pathway thermodynamics & retrosynthesis -------------------------
     "reaction_dg":           ("._thermo", "reaction_dg"),
     "max_min_driving_force": ("._thermo", "max_min_driving_force"),
+    "plot_driving_forces":   ("._thermo", "plot_driving_forces"),
     "pathway_search":        ("._retro", "pathway_search"),
     "Pathway":               ("._retro", "Pathway"),
     # ---- combinatorial libraries & directed evolution --------------------
