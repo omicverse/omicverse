@@ -140,6 +140,70 @@ def view_structure(structure, color_by: str = "plddt",
 
 
 @register_function(
+    aliases=["view_superposition", "结构叠合", "结构对比", "superpose",
+             "structure_overlay", "叠合可视化", "两结构对比", "野生型变体对比"],
+    category="synthetic_biology",
+    description="两个结构的 3D 叠合对比 (py3Dmol):把变体结构叠合到参考(野生型)上,双色显示,突变位点用棒状高亮——直观看构象差异(配合 structure_rmsd 的数值)。Superimpose two structures in 3D, coloured separately, with mutation sites as sticks.",
+    examples=[
+        "ov.synbio.view_superposition('wt.pdb', 'variant.pdb', highlight=[27,46,113])",
+    ],
+    related=["synbio.structure_rmsd", "synbio.view_structure", "synbio.evaluate_design"],
+    requires={},
+    produces={},
+)
+def view_superposition(structure_a, structure_b,
+                       highlight: Optional[Sequence[int]] = None,
+                       colors=("#7EA6E0", "#F0894A"), width: int = 680,
+                       height: int = 500):
+    """Superimpose *structure_b* onto *structure_a* and show both in 3D.
+
+    ``structure_a`` (reference / wild-type) is drawn in ``colors[0]``, the
+    aligned ``structure_b`` (variant / design) in ``colors[1]``; ``highlight``
+    residue ids are drawn as sticks on both. Pair with :func:`structure_rmsd`
+    for the quantitative deviation."""
+    import tempfile
+    try:
+        import py3Dmol
+        from Bio.PDB import PDBParser, Superimposer, PDBIO
+    except ImportError as exc:  # pragma: no cover
+        raise ImportError(
+            "ov.synbio.view_superposition 需要 py3Dmol + biopython。请 pip install "
+            "py3Dmol biopython (或 pip install 'omicverse[synbio]')。") from exc
+
+    ta, tb = _pdb_text(structure_a), _pdb_text(structure_b)
+    fa, fb = tempfile.mktemp(suffix=".pdb"), tempfile.mktemp(suffix=".pdb")
+    open(fa, "w").write(ta)
+    open(fb, "w").write(tb)
+    p = PDBParser(QUIET=True)
+    sa, sb = p.get_structure("a", fa), p.get_structure("b", fb)
+
+    def _cas(s):
+        return [r["CA"] for ch in s[0] for r in ch if "CA" in r]
+    caa, cab = _cas(sa), _cas(sb)
+    n = min(len(caa), len(cab))
+    sup = Superimposer()
+    sup.set_atoms(caa[:n], cab[:n])
+    sup.apply(list(sb.get_atoms()))          # move variant onto the reference
+    fb2 = tempfile.mktemp(suffix=".pdb")
+    io = PDBIO()
+    io.set_structure(sb)
+    io.save(fb2)
+    tb2 = open(fb2).read()
+
+    v = py3Dmol.view(width=width, height=height)
+    v.addModel(ta, "pdb")
+    v.setStyle({"model": 0}, {"cartoon": {"color": colors[0]}})
+    v.addModel(tb2, "pdb")
+    v.setStyle({"model": 1}, {"cartoon": {"color": colors[1]}})
+    if highlight:
+        for m in (0, 1):
+            v.addStyle({"model": m, "resi": [int(r) for r in highlight]},
+                       {"stick": {"radius": 0.32}})
+    v.zoomTo()
+    return v
+
+
+@register_function(
     aliases=["plot_method_comparison", "方法对比图", "算法对比图", "baseline_vs_sota",
              "plot_comparison", "对比柱状图"],
     category="synthetic_biology",

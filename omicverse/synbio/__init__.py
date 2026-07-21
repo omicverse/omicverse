@@ -72,6 +72,9 @@ _LAZY_ATTRS: dict[str, tuple[str, str]] = {
     "plot_ec_prediction":    ("._function", "plot_ec_prediction"),
     "ECPrediction":          ("._function", "ECPrediction"),
     "protein_embed":         ("._embed", "protein_embed"),
+    "evaluate_design":       ("._evaluate", "evaluate_design"),
+    "structure_rmsd":        ("._evaluate", "structure_rmsd"),
+    "DesignScorecard":       ("._evaluate", "DesignScorecard"),
     "predict_complex":       ("._boltz", "predict_complex"),
     "ComplexPrediction":     ("._boltz", "ComplexPrediction"),
     # ---- Layer C: DNA ----------------------------------------------------
@@ -81,6 +84,7 @@ _LAZY_ATTRS: dict[str, tuple[str, str]] = {
     "PrimerPair":            ("._codon", "PrimerPair"),
     # ---- visualisation ---------------------------------------------------
     "view_structure":            ("._plot", "view_structure"),
+    "view_superposition":        ("._plot", "view_superposition"),
     "plot_method_comparison":    ("._plot", "plot_method_comparison"),
     "plot_variant_effect":       ("._plot", "plot_variant_effect"),
     "plot_enzyme_yield_response": ("._plot", "plot_enzyme_yield_response"),
@@ -161,7 +165,7 @@ _LAZY_ATTRS: dict[str, tuple[str, str]] = {
 # submodules that carry @register_function decorators
 _REGISTRY_SUBMODULES = (
     "._gem", "._strain", "._ec", "._dynamic", "._structure", "._boltz",
-    "._design", "._binder", "._variant",
+    "._design", "._binder", "._evaluate", "._variant",
     "._stability", "._kcat", "._function", "._embed", "._codon", "._plot",
     "._circuit", "._expression", "._rna", "._rnadesign", "._mrna", "._crispr",
     "._editing", "._assembly", "._sbol", "._thermo", "._retro", "._retrobio",
