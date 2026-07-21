@@ -142,6 +142,9 @@ _BATCH_OBSM = {
     "cca":       "X_cca",
     "seurat_cca": "X_cca",
     "CCA":       "X_cca",
+    "rpca":       "X_rpca",
+    "seurat_rpca": "X_rpca",
+    "RPCA":       "X_rpca",
 }
 
 @monitor
@@ -202,9 +205,14 @@ def batch_correction(adata:anndata.AnnData,batch_key:str,
         ``'totalVI'`` (joint RNA+protein; requires
         ``protein_expression_obsm_key=``), ``'scPoli'`` (scArches
         conditional VAE; supports ``cell_type_keys=`` for prototype
-        learning), ``'CellANOVA'``, ``'Concord'``, and ``'cca'`` /
+        learning), ``'CellANOVA'``, ``'Concord'``, ``'cca'`` /
         ``'seurat_cca'`` — the pure-Python port of ``Seurat::RunCCA``
-        (via the `pyccasc` package, no R / rpy2 required).
+        (via the `pyccasc` package, no R / rpy2 required) — and
+        ``'rpca'`` / ``'seurat_rpca'`` — a faithful Python port of Seurat's
+        ``IntegrateLayers(method = RPCAIntegration)`` (reciprocal-PCA anchors,
+        no R required; writes ``adata.obsm['X_rpca']``). RPCA accepts
+        ``features=``, ``reference=``, ``k_anchor=``, ``k_weight=``,
+        ``sd_weight=`` and ``orig_rep=`` (the joint reduction to correct).
     n_pcs : int, default=50
         Number of principal components / canonical components used by the
         selected backend. For ``'cca'`` this is the number of canonical
@@ -526,6 +534,27 @@ def batch_correction(adata:anndata.AnnData,batch_key:str,
         )
         add_reference(adata, 'CCA', 'batch correction with Seurat CCA '
                                      '(pyccasc)')
+        return adata
+    elif methods in ('rpca', 'seurat_rpca', 'RPCA'):
+        from ._rpca import rpca_integrate
+        # RPCA anchors correct an existing joint PCA (Seurat orig.reduction).
+        # Default to omicverse's scaled PCA, computing it if absent — same
+        # convention as the harmony branch.
+        rpca_kwargs = dict(kwargs)
+        orig_rep = rpca_kwargs.pop('orig_rep', None)
+        if orig_rep is None:
+            if 'scaled|original|X_pca' in adata.obsm.keys():
+                orig_rep = 'scaled|original|X_pca'
+            elif use_rep in adata.obsm.keys():
+                orig_rep = use_rep
+            elif use_rep == 'scaled|original|X_pca':
+                scale(adata)
+                pca(adata, layer='scaled', n_pcs=n_pcs)
+                orig_rep = 'scaled|original|X_pca'
+        rpca_integrate(
+            adata, batch_key=batch_key, n_pcs=n_pcs,
+            orig_rep=orig_rep, **rpca_kwargs,
+        )
         return adata
     else:
         print('Not supported')

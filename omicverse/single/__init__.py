@@ -84,6 +84,7 @@ from ._via import pyVIA, hematopoiesis
 scRNA_hematopoiesis = hematopoiesis
 from ._atac import atac_concat_get_index,atac_concat_inner,atac_concat_outer
 from ._batch import batch_correction
+from ._rpca import rpca_integrate
 from ._cross_species import (
     get_orthologs,
     map_var_to_orthologs,
@@ -399,6 +400,7 @@ __all__ = [
     
     # Batch correction and preprocessing
     'batch_correction',
+    'rpca_integrate',
 
     # Cross-species integration (ortholog / SAMap / SATURN via method=)
     'get_orthologs',
