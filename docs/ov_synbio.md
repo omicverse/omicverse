@@ -88,6 +88,74 @@ opt = ov.synbio.codon_optimize("MKTAYIAK…", host="e_coli")   # GC/enzyme-site 
 primers = ov.synbio.design_primers(opt.sequence)
 ```
 
+## Genetic circuits & regulation (CPU)
+
+The regulatory heart of synthetic biology — design gene circuits and simulate
+them deterministically (ODEs) or stochastically (Gillespie SSA).
+
+| Function | What it does |
+|---|---|
+| `genetic_circuit(template)` | Build a circuit — `toggle_switch`, `repressilator`, `logic_gate`, `feed_forward_loop`, or from parts |
+| `simulate_circuit(c, method='ode'\|'stochastic')` | Simulate → time × species DataFrame |
+| `plot_circuit(df)` | Timecourse figure |
+| `rbs_strength(utr)` | Translation-initiation rate (Salis-style SD:anti-SD thermodynamics, ViennaRNA) |
+| `promoter_strength(seq)` | σ70 strength from −10/−35 consensus |
+| `cai(cds)` / `predict_expression(...)` | Codon Adaptation Index / combined expression estimate |
+| `rna_fold` / `rna_accessibility` / `rna_duplex` | RNA structure, site accessibility, hybridisation (ViennaRNA) |
+
+```python
+c  = ov.synbio.genetic_circuit("repressilator")
+df = ov.synbio.simulate_circuit(c, t_end=300)     # sustained oscillation
+ov.synbio.plot_circuit(df)
+ov.synbio.rbs_strength("AAAGGAGGACAACATG…").initiation_rate
+```
+
+## CRISPR & genome editing (CPU)
+
+| Function | What it does |
+|---|---|
+| `design_grnas(seq, enzyme='SpCas9')` | PAM scan (SpCas9/SaCas9/Cas12a) + on-target efficiency, ranked |
+| `offtarget_search(spacer, background)` | Near-matches + seed-weighted CFD-style scoring |
+| `base_editor_window(spacer, editor='ABE'\|'CBE')` | Editable bases in the activity window |
+| `hdr_arms(seq, cut_site, insert=…)` | Homology arms / donor for HDR knock-in |
+
+```python
+guides = ov.synbio.design_grnas(target_dna, enzyme="SpCas9")
+ov.synbio.offtarget_search(guides[0].spacer, genome)
+```
+
+## DNA assembly & standards (CPU, Biopython)
+
+| Function | What it does |
+|---|---|
+| `restriction_map(seq, enzymes)` | Restriction-site map |
+| `golden_gate(fragments, enzyme='BsaI')` | Type IIS assembly by 4-nt overhangs → circular construct |
+| `gibson_assembly(fragments)` | Join fragments by terminal homology |
+| `annotate_construct(seq)` | ORFs + common parts (promoters/RBS/terminators) |
+| `read_genbank` / `write_genbank` | Annotated construct I/O |
+
+## Pathway design & libraries
+
+| Function | What it does |
+|---|---|
+| `reaction_dg(reaction)` | Reaction ΔG'° (built-in baseline / eQuilibrator hook) |
+| `max_min_driving_force(reactions, dg0)` | MDF as an exact LP — feasibility + thermodynamic bottleneck |
+| `pathway_search(model, target)` | Retrosynthesis: shortest production routes over a GEM |
+| `degenerate_codon(aas)` / `saturation_library` / `dms_library` | Combinatorial library design |
+| `ml_guided_design(seq)` | ESM-guided combinatorial directed evolution |
+
+```python
+res = ov.synbio.max_min_driving_force(reactions, dg0)   # res.mdf, res.bottleneck
+paths = ov.synbio.pathway_search(ov.synbio.load_gem("e_coli_core"), "succ_c")
+ov.synbio.degenerate_codon(list("ACDEFGHIKLMNPQRSTVWY"))   # -> NNK/NNS
+```
+
+> The circuit ODE/SSA, MDF LP, assembly, degenerate-codon and pathway search are
+> **exact**; RBS/promoter/gRNA-efficiency/off-target/ΔG are transparent
+> biophysical or consensus **baselines** with hooks to the Salis RBS Calculator,
+> Azimuth, the Doench-2016 CFD matrix, eQuilibrator and RetroRules for calibrated
+> work.
+
 ---
 
 ## The moat — A↔B coupling
