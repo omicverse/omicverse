@@ -84,6 +84,11 @@ from ._via import pyVIA, hematopoiesis
 scRNA_hematopoiesis = hematopoiesis
 from ._atac import atac_concat_get_index,atac_concat_inner,atac_concat_outer
 from ._batch import batch_correction
+from ._cross_species import (
+    get_orthologs,
+    map_var_to_orthologs,
+    cross_species_integrate,
+)
 from ._diffusionmap import diffmap
 from ._aucell import aucell
 from ._metacell import (
@@ -391,9 +396,14 @@ __all__ = [
     'atac_concat_inner',
     'atac_concat_outer',
     
-    # Batch correction and preprocessing  
+    # Batch correction and preprocessing
     'batch_correction',
-    
+
+    # Cross-species integration (ortholog-based)
+    'get_orthologs',
+    'map_var_to_orthologs',
+    'cross_species_integrate',
+
     # Quality control and assessment
     'SCCAF_assessment',
     'plot_roc',
