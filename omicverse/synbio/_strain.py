@@ -6,11 +6,11 @@ Two entry points:
 * :func:`production_envelope` — the classic growth-vs-product trade-off curve
   (pure COBRApy).
 * :func:`strain_design` — ranked amplification **and** knockout targets.  The
-  default engine is dependency-free: FSEOF (Flux Scanning based on Enforced
+  default method is dependency-free: FSEOF (Flux Scanning based on Enforced
   Objective Flux, Choi *et al.* 2010) for amplification targets plus a
   single-reaction knockout scan scored by product yield for deletion targets.
   If `cameo <https://github.com/biosustain/cameo>`_ is installed you may switch
-  ``engine="optgene"`` / ``"optknock"`` for exact MILP designs.
+  ``method="optgene"`` / ``"optknock"`` for exact MILP designs.
 
 All CPU, all on top of a :class:`cobra.Model`.
 """
@@ -40,19 +40,19 @@ class StrainDesignResult:
     knockout : pandas.DataFrame
         Single-deletion targets ranked by predicted product yield gain while
         growth stays feasible.
-    engine : str
-        Which engine produced the design (``"fseof"`` or a cameo method).
+    method : str
+        Which method produced the design (``"fseof"`` or a cameo method).
     """
 
     target: str
     amplify: "pd.DataFrame"
     knockout: "pd.DataFrame"
-    engine: str = "fseof"
+    method: str = "fseof"
     meta: dict = field(default_factory=dict)
 
     def __repr__(self) -> str:  # pragma: no cover - cosmetic
         return (
-            f"StrainDesignResult(target={self.target!r}, engine={self.engine!r}, "
+            f"StrainDesignResult(target={self.target!r}, method={self.method!r}, "
             f"amplify={len(self.amplify)} targets, knockout={len(self.knockout)} targets)"
         )
 
@@ -244,7 +244,7 @@ def _knockout_scan(model, target_rxn: str, growth_frac: float = 0.1,
         "metabolic_engineering", "optknock", "optgene", "fseof",
     ],
     category="synthetic_biology",
-    description="菌株设计:对给定产物给出排序的过表达 (FSEOF) 与敲除 (yield-scan/OptKnock) 靶点。默认无需额外依赖;装了 cameo 可选 engine='optgene'/'optknock'。Rank amplification & knockout targets for over-producing a metabolite.",
+    description="菌株设计:对给定产物给出排序的过表达 (FSEOF) 与敲除 (yield-scan/OptKnock) 靶点。默认无需额外依赖;装了 cameo 可选 method='optgene'/'optknock'。Rank amplification & knockout targets for over-producing a metabolite.",
     examples=[
         "res = ov.synbio.strain_design(m, 'EX_succ_e')",
         "res.amplify.head(); res.knockout.head()",
@@ -256,7 +256,7 @@ def _knockout_scan(model, target_rxn: str, growth_frac: float = 0.1,
 def strain_design(
     model: "cobra.Model",
     target: str,
-    engine: str = "fseof",
+    method: str = "fseof",
     growth_frac: float = 0.1,
     max_knockouts: int = 30,
 ) -> StrainDesignResult:
@@ -268,7 +268,7 @@ def strain_design(
         A :class:`cobra.Model`.
     target
         Reaction id of the product (usually an exchange, e.g. ``"EX_succ_e"``).
-    engine
+    method
         ``"fseof"`` (default, dependency-free): FSEOF amplification targets +
         a knockout yield-scan.  ``"optgene"`` / ``"optknock"`` route to cameo
         when it is installed.
@@ -282,26 +282,29 @@ def strain_design(
     StrainDesignResult
     """
     _cobra("strain_design")
+    if method not in ("fseof", "optgene", "optknock"):
+        raise ValueError(
+            f"method must be one of ['fseof', 'optgene', 'optknock'], got {method!r}")
     tgt = _resolve_target(model, target)
 
-    if engine in ("optgene", "optknock"):
+    if method in ("optgene", "optknock"):
         try:
-            return _cameo_design(model, tgt, engine)
+            return _cameo_design(model, tgt, method)
         except ImportError:
             import logging
             logging.getLogger("omicverse.synbio").warning(
-                "cameo 未安装,engine='%s' 回退到内置 FSEOF。"
-                " pip install cameo 以使用精确 MILP 设计。", engine,
+                "cameo 未安装,method='%s' 回退到内置 FSEOF。"
+                " pip install cameo 以使用精确 MILP 设计。", method,
             )
 
     amplify = _fseof(model, tgt)
     knockout = _knockout_scan(model, tgt, growth_frac=growth_frac,
                               max_targets=max_knockouts)
     return StrainDesignResult(target=tgt, amplify=amplify, knockout=knockout,
-                              engine="fseof")
+                              method="fseof")
 
 
-def _cameo_design(model, target_rxn: str, engine: str) -> StrainDesignResult:
+def _cameo_design(model, target_rxn: str, method: str) -> StrainDesignResult:
     """Exact MILP design via cameo (optional)."""
     import pandas as pd
 
@@ -311,16 +314,16 @@ def _cameo_design(model, target_rxn: str, engine: str) -> StrainDesignResult:
     except ImportError as exc:  # pragma: no cover
         raise ImportError("cameo 未安装:pip install cameo") from exc
 
-    if engine == "optgene":
+    if method == "optgene":
         og = OptGene(model)
         res = og.run(target=target_rxn, biomass=model.objective, max_knockouts=5)
         ko = pd.DataFrame({"reaction": list(res.data_frame.get("reactions", []))})
         return StrainDesignResult(target=target_rxn, amplify=pd.DataFrame(),
-                                  knockout=ko, engine="optgene")
+                                  knockout=ko, method="optgene")
     # optknock is similar; keep FSEOF amplification alongside
     amp = _fseof(model, target_rxn)
     return StrainDesignResult(target=target_rxn, amplify=amp,
-                              knockout=pd.DataFrame(), engine=engine)
+                              knockout=pd.DataFrame(), method=method)
 
 
 __all__ = ["strain_design", "production_envelope", "StrainDesignResult"]

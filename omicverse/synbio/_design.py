@@ -47,6 +47,7 @@ def inverse_design(
     pdb: str,
     num_sequences: int = 8,
     sampling_temp: float = 0.1,
+    method: str = "proteinmpnn",
     device: Optional[str] = None,
     seed: int = 37,
     verbose: bool = True,
@@ -74,10 +75,14 @@ def inverse_design(
     """
     from ._proteinmpnn import design_sequences
 
+    if method != "proteinmpnn":
+        raise ValueError(
+            f"method must be one of ['proteinmpnn'], got {method!r}. "
+            "(LigandMPNN backend is planned.)")
     dev = resolve_device(device)
     if verbose:
-        print(f"[ov.synbio.inverse_design] backbone={pdb} device={describe_device(dev)} "
-              f"n={num_sequences}")
+        print(f"[ov.synbio.inverse_design] method={method} backbone={pdb} "
+              f"device={describe_device(dev)} n={num_sequences}")
     warn_if_cpu(dev, "inverse_design")
 
     entries = design_sequences(pdb, num_sequences=num_sequences,

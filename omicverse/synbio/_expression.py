@@ -72,7 +72,8 @@ class RBSResult:
     requires={},
     produces={},
 )
-def rbs_strength(utr_and_cds: str, start: Optional[int] = None,
+def rbs_strength(utr_and_cds: str, method: str = "thermodynamic",
+                 start: Optional[int] = None,
                  footprint: int = 35) -> RBSResult:
     """Predict translation-initiation rate for a 5'UTR + start codon.
 
@@ -92,6 +93,13 @@ def rbs_strength(utr_and_cds: str, start: Optional[int] = None,
     RBSResult
     """
     import math
+    if method not in ("thermodynamic", "salis"):
+        raise ValueError(
+            f"method must be one of ['thermodynamic', 'salis'], got {method!r}")
+    if method == "salis":
+        raise ImportError(
+            "method='salis' 需要 Salis 实验室的 RBS Calculator(未随包分发,需在线 API/许可)。"
+            "请使用默认 method='thermodynamic'(SD:anti-SD 热力学基线,ViennaRNA)。")
     RNA = _rna("rbs_strength")
 
     seq = utr_and_cds.upper().replace("T", "U")
@@ -127,13 +135,18 @@ def rbs_strength(utr_and_cds: str, start: Optional[int] = None,
     requires={},
     produces={},
 )
-def promoter_strength(promoter: str) -> Dict[str, float]:
+def promoter_strength(promoter: str, method: str = "consensus") -> Dict[str, float]:
     """Relative σ70 promoter strength from −10 / −35 box quality.
 
     Scans for the best-matching −35 and −10 hexamers with a ~17 nt spacer and
     scores their similarity to the *E. coli* consensus. Returns a dict with the
     matched boxes, spacer, per-box scores, and a combined ``strength`` in
-    ``[0, 1]`` (1 = perfect consensus)."""
+    ``[0, 1]`` (1 = perfect consensus).
+
+    ``method='consensus'`` is the built-in baseline; trained MPRA-based models
+    can be added as further ``method`` values."""
+    if method != "consensus":
+        raise ValueError(f"method must be one of ['consensus'], got {method!r}")
     seq = promoter.upper().replace("U", "T")
 
     def _score(hexamer: str, consensus: str) -> float:

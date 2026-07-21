@@ -13,7 +13,7 @@ Engines
     it against a small bundled reference of characterised enzymes (or a
     user-supplied FASTA whose headers carry ``EC=...``).  Returns ranked EC
     candidates with cosine similarity.  Honest baseline — for genome-scale or
-    high-confidence annotation use ``engine="clean"``.
+    high-confidence annotation use ``method="clean"``.
 """
 from __future__ import annotations
 
@@ -33,7 +33,7 @@ class ECPrediction:
 
     query_len: int
     predictions: List[Tuple[str, float]] = field(default_factory=list)  # (EC, sim)
-    engine: str = "knn"
+    method: str = "knn"
 
     @property
     def top_ec(self) -> Optional[str]:
@@ -41,7 +41,7 @@ class ECPrediction:
 
     def __repr__(self) -> str:  # pragma: no cover
         top = ", ".join(f"{ec}({s:.2f})" for ec, s in self.predictions[:3])
-        return f"ECPrediction(engine={self.engine!r}, top=[{top}])"
+        return f"ECPrediction(method={self.method!r}, top=[{top}])"
 
 
 def _read_reference(path: str) -> List[Tuple[str, str, str]]:
@@ -83,7 +83,7 @@ def _read_reference(path: str) -> List[Tuple[str, str, str]]:
 )
 def enzyme_function(
     seq: str,
-    engine: str = "knn",
+    method: str = "knn",
     reference_fasta: Optional[str] = None,
     top_k: int = 3,
     device: Optional[str] = None,
@@ -95,7 +95,7 @@ def enzyme_function(
     ----------
     seq
         Query amino-acid sequence.
-    engine
+    method
         ``"knn"`` (default) or ``"clean"``.
     reference_fasta
         Custom reference FASTA (headers must contain ``EC=<number>``).  When
@@ -113,13 +113,13 @@ def enzyme_function(
 
     dev = resolve_device(device)
     if verbose:
-        print(f"[ov.synbio.enzyme_function] engine={engine} device={describe_device(dev)}")
+        print(f"[ov.synbio.enzyme_function] method={method} device={describe_device(dev)}")
     warn_if_cpu(dev, "enzyme_function")
 
-    if engine == "clean":
+    if method == "clean":
         return _clean_predict(seq, top_k, dev)
-    if engine != "knn":
-        raise ValueError(f"未知 engine='{engine}' (knn/clean)")
+    if method != "knn":
+        raise ValueError(f"method must be one of ['knn', 'clean'], got {method!r}")
 
     from ._embed import protein_embed
 
@@ -146,7 +146,7 @@ def enzyme_function(
         preds.append((ec, float(sims[idx])))
         if len(preds) >= top_k:
             break
-    return ECPrediction(query_len=len(seq), predictions=preds, engine="knn")
+    return ECPrediction(query_len=len(seq), predictions=preds, method="knn")
 
 
 def _clean_predict(seq: str, top_k: int, device) -> ECPrediction:
@@ -155,14 +155,14 @@ def _clean_predict(seq: str, top_k: int, device) -> ECPrediction:
     repo = os.path.join(weights_dir(), "CLEAN")
     if not os.path.isdir(os.path.join(repo, "app")):
         raise ImportError(
-            "engine='clean' 需要 CLEAN 本地 checkout + 权重(未随包分发)。请:\n"
+            "method='clean' 需要 CLEAN 本地 checkout + 权重(未随包分发)。请:\n"
             "  git clone https://github.com/tttianhao/CLEAN "
             f"{repo}\n  并按其 README 下载预训练模型。\n"
-            "或使用默认 engine='knn'(ESM-2 嵌入基线,无需额外权重)。"
+            "或使用默认 method='knn'(ESM-2 嵌入基线,无需额外权重)。"
         )
     raise NotImplementedError(
         "CLEAN 后端已检测到 checkout,但请按 CLEAN README 运行其 inference 脚本;"
-        "本包默认推荐 engine='knn'。"
+        "本包默认推荐 method='knn'。"
     )
 
 

@@ -85,6 +85,7 @@ def _load_esmfold(device: str):
 )
 def predict_structure(
     seq: str,
+    method: str = "esmfold",
     device: Optional[str] = None,
     out_path: Optional[str] = None,
     allow_cpu: bool = False,
@@ -109,6 +110,12 @@ def predict_structure(
     StructurePrediction
     """
     import numpy as np
+
+    if method != "esmfold":
+        raise ValueError(
+            f"method must be one of ['esmfold'], got {method!r}. "
+            "(ColabFold / AlphaFold backends are planned; ESMFold is the "
+            "single-sequence default.)")
 
     device = resolve_device(device)
     if not allow_cpu:

@@ -53,13 +53,19 @@ def _clean(mid: str) -> str:
     requires={},
     produces={},
 )
-def reaction_dg(reaction, use_equilibrator: bool = False) -> float:
+def reaction_dg(reaction, method: str = "baseline") -> float:
     """Standard transformed Gibbs energy ΔG'° (kJ/mol) of a reaction.
 
     *reaction* is either a ``{metabolite_id: stoichiometry}`` dict (negative =
-    substrate) or a string like ``'g6p_c --> f6p_c'``."""
+    substrate) or a string like ``'g6p_c --> f6p_c'``.
+
+    ``method`` selects the backend: ``"baseline"`` (built-in ΔGf table) or
+    ``"equilibrator"`` (component-contribution via equilibrator-api)."""
+    _VALID = {"baseline", "equilibrator"}
+    if method not in _VALID:
+        raise ValueError(f"method must be one of {sorted(_VALID)}, got {method!r}")
     stoich = _parse_reaction(reaction)
-    if use_equilibrator:
+    if method == "equilibrator":
         try:
             return _equilibrator_dg(stoich)
         except ImportError:
@@ -72,7 +78,7 @@ def reaction_dg(reaction, use_equilibrator: bool = False) -> float:
         if key not in _DGF:
             raise KeyError(
                 f"代谢物 '{mid}' 不在内置 ΔGf 表中。请装 equilibrator-api 并传 "
-                "use_equilibrator=True,或自行提供 ΔG'° 给 max_min_driving_force。")
+                "method='equilibrator',或自行提供 ΔG'° 给 max_min_driving_force。")
         dg += coeff * _DGF[key]
     return float(dg)
 

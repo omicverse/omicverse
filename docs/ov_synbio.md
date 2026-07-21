@@ -68,12 +68,20 @@ designs = ov.synbio.inverse_design("mypro.pdb", num_sequences=8)
 ddg = ov.synbio.stability_ddg("mypro.pdb")                      # ΔΔG proxy
 ```
 
-> **Honesty note.** `enzyme_kcat`'s default engine and `enzyme_function`'s
+> **Method selection.** Per the omicverse convention, interchangeable backends
+> are chosen with a single `method=` argument — one function per task, not one
+> function per method. Adding a new / SOTA backend is a new `method` value, never
+> a new function: `enzyme_kcat(seq, sub, method="dlkcat")`,
+> `enzyme_function(seq, method="clean")`, `stability_ddg(pdb, method="thermompnn")`,
+> `strain_design(m, t, method="optknock")`, `reaction_dg(rxn, method="equilibrator")`.
+> An unknown method raises `ValueError("method must be one of […]")`.
+>
+> **Honesty note.** `enzyme_kcat`'s default method and `enzyme_function`'s
 > default `knn` are dependency-light, sequence-sensitive **baselines** — good
 > for wiring and relative comparison, not calibrated quantitative prediction.
-> For quantitative results plug in DLKcat / UniKP weights (`engine="dlkcat"`)
-> or CLEAN (`engine="clean"`). `stability_ddg`'s default is the well-established
-> ProteinMPNN log-likelihood ΔΔG proxy; `engine="thermompnn"` uses calibrated
+> For quantitative results plug in DLKcat / UniKP weights (`method="dlkcat"`)
+> or CLEAN (`method="clean"`). `stability_ddg`'s default is the well-established
+> ProteinMPNN log-likelihood ΔΔG proxy; `method="thermompnn"` uses calibrated
 > weights when available.
 
 ## Layer C — DNA (CPU)

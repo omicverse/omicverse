@@ -1,6 +1,6 @@
 r"""Layer B — thermostability ΔΔG of point mutations.
 
-Score how a mutation changes fold stability.  The default engine is a
+Score how a mutation changes fold stability.  The default method is a
 dependency-light **ProteinMPNN zero-shot proxy**: from the backbone's
 per-residue unconditional log-probabilities,
 
@@ -10,7 +10,7 @@ per-residue unconditional log-probabilities,
 so a positive value means the wild-type residue is strongly preferred and the
 mutation is predicted **destabilising** (this is exactly the signal ThermoMPNN
 regresses on).  If a ThermoMPNN checkpoint is available you can switch
-``engine="thermompnn"`` for calibrated kcal/mol values.
+``method="thermompnn"`` for calibrated kcal/mol values.
 
 Runs on CPU (ProteinMPNN is light) or GPU.
 """
@@ -49,7 +49,7 @@ def _parse_mut(mut: str) -> Tuple[str, int, str]:
 def stability_ddg(
     pdb: str,
     mutations: Optional[Sequence[str]] = None,
-    engine: str = "proteinmpnn",
+    method: str = "proteinmpnn",
     device: Optional[str] = None,
     chain: Optional[str] = None,
     verbose: bool = True,
@@ -63,7 +63,7 @@ def stability_ddg(
     mutations
         List like ``["A23V", "K30E"]`` (1-based).  ``None`` = full saturation
         scan (every position × 19 substitutions).
-    engine
+    method
         ``"proteinmpnn"`` (default, zero-shot proxy) or ``"thermompnn"``.
     device
         ``None`` = auto.
@@ -78,17 +78,20 @@ def stability_ddg(
     import pandas as pd
     from ._proteinmpnn import unconditional_log_probs, MPNN_ALPHABET
 
+    if method not in ("proteinmpnn", "thermompnn"):
+        raise ValueError(
+            f"method must be one of ['proteinmpnn', 'thermompnn'], got {method!r}")
     dev = resolve_device(device)
     if verbose:
-        print(f"[ov.synbio.stability_ddg] pdb={pdb} engine={engine} "
+        print(f"[ov.synbio.stability_ddg] pdb={pdb} method={method} "
               f"device={describe_device(dev)}")
     warn_if_cpu(dev, "stability_ddg")
 
-    if engine == "thermompnn":
+    if method == "thermompnn":
         raise ImportError(
-            "engine='thermompnn' 需要 ThermoMPNN 权重(未随包分发)。请安装 "
+            "method='thermompnn' 需要 ThermoMPNN 权重(未随包分发)。请安装 "
             "https://github.com/Kuhlman-Lab/ThermoMPNN 并提供 checkpoint,"
-            "或使用默认 engine='proteinmpnn'(零样本 proxy,无需额外权重)。"
+            "或使用默认 method='proteinmpnn'(零样本 proxy,无需额外权重)。"
         )
 
     log_p, S, alphabet = unconditional_log_probs(pdb, device=dev)

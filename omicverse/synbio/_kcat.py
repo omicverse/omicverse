@@ -18,7 +18,7 @@ Engines
     It is deterministic and *responds to mutations* (a faster/slower variant
     gives a different k_cat), which is what the coupling demo needs.  It is an
     **honest baseline for wiring and relative comparison — not a calibrated
-    quantitative predictor.** For quantitative k_cat, use ``engine="dlkcat"``
+    quantitative predictor.** For quantitative k_cat, use ``method="dlkcat"``
     (or UniKP/TurNuP) with trained weights.
 """
 from __future__ import annotations
@@ -37,11 +37,11 @@ class KcatPrediction:
     sequence: str
     substrate: str
     kcat: float          # 1/s
-    engine: str
+    method: str
     log10_kcat: float = 0.0
 
     def __repr__(self) -> str:  # pragma: no cover
-        return (f"KcatPrediction(kcat={self.kcat:.3g} /s, engine={self.engine!r}, "
+        return (f"KcatPrediction(kcat={self.kcat:.3g} /s, method={self.method!r}, "
                 f"substrate={self.substrate!r})")
 
 
@@ -99,7 +99,7 @@ def _baseline_kcat(seq: str, substrate: str, device) -> float:
 def enzyme_kcat(
     seq: str,
     substrate_smiles: str = "",
-    engine: str = "baseline",
+    method: str = "baseline",
     device: Optional[str] = None,
     verbose: bool = True,
 ) -> KcatPrediction:
@@ -112,7 +112,7 @@ def enzyme_kcat(
     substrate_smiles
         Substrate SMILES (optional; modulates the baseline slightly, required
         by DLKcat).
-    engine
+    method
         ``"baseline"`` (default, sequence-sensitive, no extra weights) or
         ``"dlkcat"`` (needs a DLKcat checkout + weights).
     device
@@ -126,18 +126,18 @@ def enzyme_kcat(
 
     dev = resolve_device(device)
     if verbose:
-        print(f"[ov.synbio.enzyme_kcat] engine={engine} device={describe_device(dev)}")
+        print(f"[ov.synbio.enzyme_kcat] method={method} device={describe_device(dev)}")
     warn_if_cpu(dev, "enzyme_kcat")
 
-    if engine == "dlkcat":
+    if method == "dlkcat":
         kcat = _dlkcat_predict(seq, substrate_smiles, dev)
-    elif engine == "baseline":
+    elif method == "baseline":
         kcat = _baseline_kcat(seq, substrate_smiles, dev)
     else:
-        raise ValueError(f"未知 engine='{engine}' (baseline/dlkcat)")
+        raise ValueError(f"method must be one of ['baseline', 'dlkcat'], got {method!r}")
 
     return KcatPrediction(sequence=seq, substrate=substrate_smiles, kcat=kcat,
-                          engine=engine, log10_kcat=float(np.log10(kcat)))
+                          method=method, log10_kcat=float(np.log10(kcat)))
 
 
 def _dlkcat_predict(seq: str, smiles: str, device) -> float:
@@ -150,10 +150,10 @@ def _dlkcat_predict(seq: str, smiles: str, device) -> float:
                                "prediction_for_input.py")
     if not os.path.exists(pred_script):
         raise ImportError(
-            "engine='dlkcat' 需要 DLKcat 本地 checkout + 权重(未随包分发)。请:\n"
+            "method='dlkcat' 需要 DLKcat 本地 checkout + 权重(未随包分发)。请:\n"
             "  git clone https://github.com/SysBioChalmers/DLKcat "
             f"{repo}\n  并按其 README 准备训练好的模型。\n"
-            "或使用默认 engine='baseline'(基于 ESM,序列敏感,无需额外权重)。"
+            "或使用默认 method='baseline'(基于 ESM,序列敏感,无需额外权重)。"
         )
     # DLKcat's own CLI expects a TSV; delegate via subprocess.
     import subprocess, sys, tempfile, csv
