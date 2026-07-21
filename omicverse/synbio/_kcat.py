@@ -140,36 +140,74 @@ def enzyme_kcat(
                           method=method, log10_kcat=float(np.log10(kcat)))
 
 
-def _dlkcat_predict(seq: str, smiles: str, device) -> float:
-    """Run DLKcat if a local checkout with weights is present."""
+def _ensure_dlkcat() -> str:
+    """Clone DLKcat + unpack its index dicts; return the example dir."""
     import os
+    import subprocess
+    import urllib.request
+    import zipfile
     from ._esm_common import weights_dir
 
     repo = os.path.join(weights_dir(), "DLKcat")
-    pred_script = os.path.join(repo, "DeeplearningApproach", "Code", "example",
-                               "prediction_for_input.py")
-    if not os.path.exists(pred_script):
-        raise ImportError(
-            "method='dlkcat' 需要 DLKcat 本地 checkout + 权重(未随包分发)。请:\n"
-            "  git clone https://github.com/SysBioChalmers/DLKcat "
-            f"{repo}\n  并按其 README 准备训练好的模型。\n"
-            "或使用默认 method='baseline'(基于 ESM,序列敏感,无需额外权重)。"
-        )
-    # DLKcat's own CLI expects a TSV; delegate via subprocess.
-    import subprocess, sys, tempfile, csv
-    tmp = tempfile.mkdtemp(prefix="ovsynbio_dlkcat_")
-    inp = os.path.join(tmp, "input.tsv")
+    example = os.path.join(repo, "DeeplearningApproach", "Code", "example")
+    if not os.path.exists(os.path.join(example, "prediction_for_input.py")):
+        try:
+            subprocess.run(["git", "clone", "--depth", "1",
+                            "https://github.com/SysBioChalmers/DLKcat", repo],
+                           check=True, capture_output=True, text=True)
+        except (subprocess.CalledProcessError, FileNotFoundError) as exc:
+            raise ImportError(
+                "method='dlkcat' 需要 DLKcat,自动 git clone 失败。请手动 "
+                f"git clone https://github.com/SysBioChalmers/DLKcat 到 {repo}。"
+                f"({getattr(exc, 'stderr', exc)})") from exc
+    # the model's index dicts ship as Data/input.zip, not unpacked in the clone
+    data = os.path.join(repo, "DeeplearningApproach", "Data")
+    if not os.path.exists(os.path.join(data, "input", "fingerprint_dict.pickle")):
+        zpath = os.path.join(data, "input.zip")
+        if not os.path.exists(zpath):
+            urllib.request.urlretrieve(
+                "https://raw.githubusercontent.com/SysBioChalmers/DLKcat/master/"
+                "DeeplearningApproach/Data/input.zip", zpath)
+        with zipfile.ZipFile(zpath) as zf:
+            zf.extractall(data)
+    return example
+
+
+def _dlkcat_predict(seq: str, smiles: str, device) -> float:
+    """Real k_cat via the trained DLKcat model (Li *et al.* 2022, Nat Catal).
+
+    DLKcat needs a substrate SMILES; requires rdkit>=2024.3 under NumPy 2."""
+    import os
+    import subprocess
+    import sys
+    import tempfile
+    import csv
+
+    if not smiles:
+        raise ValueError("method='dlkcat' 需要底物 SMILES(substrate_smiles=)。")
+    example = _ensure_dlkcat()
+    uid = "ovsynbio_" + next(tempfile._get_candidate_names())
+    inp = os.path.join(example, f"{uid}.tsv")
+    out = os.path.join(example, "output.tsv")
     with open(inp, "w") as fh:
-        fh.write("Protein\tSMILES\n")
-        fh.write(f"{seq}\t{smiles}\n")
-    out = os.path.join(tmp, "output.tsv")
-    subprocess.run([sys.executable, pred_script, inp, out], check=True,
-                   cwd=os.path.dirname(pred_script))
+        fh.write("Substrate Name\tSubstrate SMILES\tProtein Sequence\n")
+        fh.write(f"query\t{smiles}\t{seq}\n")
+    env = dict(os.environ)
+    if not str(device).lower().startswith("cuda"):
+        env["CUDA_VISIBLE_DEVICES"] = ""
+    proc = subprocess.run([sys.executable, "prediction_for_input.py", inp],
+                          cwd=example, env=env, capture_output=True, text=True)
+    if not os.path.exists(out):
+        raise RuntimeError("DLKcat 推理失败:\n" + (proc.stderr or proc.stdout)[-1500:])
     with open(out) as fh:
         rows = list(csv.DictReader(fh, delimiter="\t"))
     for r in rows:
         for k, v in r.items():
             if "kcat" in k.lower():
+                try:
+                    os.remove(inp)
+                except OSError:
+                    pass
                 return float(v)
     raise RuntimeError("DLKcat 输出中未找到 kcat 列")
 
