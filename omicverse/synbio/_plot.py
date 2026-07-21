@@ -140,6 +140,61 @@ def view_structure(structure, color_by: str = "plddt",
 
 
 @register_function(
+    aliases=["plot_method_comparison", "方法对比图", "算法对比图", "baseline_vs_sota",
+             "plot_comparison", "对比柱状图"],
+    category="synthetic_biology",
+    description="baseline↔SOTA 方法对比柱状图:同一任务不同 method= 的结果并排(如 kcat/ΔG/脱靶/on-target 的基线 vs 真实模型)。Grouped bar chart comparing method= backends side by side.",
+    examples=[
+        "ov.synbio.plot_method_comparison(['PfkA'], {'baseline':[33.3],'dlkcat':[0.04]}, ylabel='kcat /s')",
+    ],
+    related=["synbio.enzyme_kcat", "synbio.reaction_dg", "synbio.offtarget_search"],
+    requires={},
+    produces={},
+)
+def plot_method_comparison(labels, series, ylabel: str = "value",
+                           title: str = "baseline vs SOTA", ax=None,
+                           log: bool = False):
+    """Grouped bar chart comparing several ``method=`` backends on the same task.
+
+    Parameters
+    ----------
+    labels
+        Category names (x-axis) — e.g. the reactions, sites, or a single item.
+    series
+        ``{method_name: [values aligned to labels]}``; the first method is drawn
+        as the "baseline" colour, the rest as SOTA colours.
+    """
+    import numpy as np
+    plt = _mpl()
+
+    methods = list(series.keys())
+    n_lab = len(labels)
+    n_met = len(methods)
+    x = np.arange(n_lab)
+    width = 0.8 / max(1, n_met)
+    palette = ["#B0B0B0", "#DD8452", "#4C72B0", "#55A868", "#C44E52"]
+
+    if ax is None:
+        fig, ax = plt.subplots(figsize=(max(4, 1.3 * n_lab * n_met ** 0.5), 3.6))
+    else:
+        fig = ax.figure
+    for i, mth in enumerate(methods):
+        ax.bar(x + (i - (n_met - 1) / 2) * width, series[mth], width,
+               label=mth, color=palette[i % len(palette)],
+               edgecolor="k", linewidth=0.3)
+    ax.set_xticks(x)
+    ax.set_xticklabels(labels)
+    ax.set_ylabel(ylabel)
+    if log:
+        ax.set_yscale("log")
+    ax.axhline(0, c="grey", lw=0.8)
+    ax.set_title(title)
+    ax.legend(fontsize=8)
+    fig.tight_layout()
+    return fig, ax
+
+
+@register_function(
     aliases=["plot_variant_effect", "突变热图", "饱和突变热图", "dms_heatmap",
              "变体效应图", "plot_dms"],
     category="synthetic_biology",

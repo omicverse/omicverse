@@ -75,6 +75,7 @@ _LAZY_ATTRS: dict[str, tuple[str, str]] = {
     "PrimerPair":            ("._codon", "PrimerPair"),
     # ---- visualisation ---------------------------------------------------
     "view_structure":            ("._plot", "view_structure"),
+    "plot_method_comparison":    ("._plot", "plot_method_comparison"),
     "plot_variant_effect":       ("._plot", "plot_variant_effect"),
     "plot_enzyme_yield_response": ("._plot", "plot_enzyme_yield_response"),
     "plot_production_envelope":  ("._plot", "plot_production_envelope"),
