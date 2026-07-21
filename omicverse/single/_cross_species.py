@@ -19,9 +19,13 @@ Workflow
 
 By default only **one-to-one** orthologs are used: they give an unambiguous
 shared gene axis, which is the conservative, widely-used choice for
-ortholog-based cross-species integration. Many-to-many homology (handled by
-SAMap via BLAST graphs, or SATURN via protein language-model embeddings) is
-heavier and out of scope here — see the issue thread.
+ortholog-based cross-species integration. For many-to-many homology / very
+large evolutionary distances, two heavier backends are vendored under
+``omicverse.external`` and exposed here:
+
+* :func:`samap_integrate` — **SAMap** (reciprocal-BLAST gene-homology graph +
+  Self-Assembling Manifold).
+* :func:`saturn_integrate` — **SATURN** (ESM2 protein-embedding macrogenes).
 """
 from __future__ import annotations
 
@@ -465,3 +469,42 @@ def cross_species_integrate(
     add_reference(adata, 'cross-species',
                   'cross-species integration via one-to-one Ensembl orthologs')
     return adata
+
+
+@register_function(
+    aliases=["SAMap", "samap_integrate", "跨物种SAMap", "cross species SAMap", "同源图整合"],
+    category="single",
+    description="Cross-species integration with SAMap (BLAST protein-homology graph + SAM)",
+    examples=[
+        "adata = ov.single.samap_integrate([zeb, frog], ['zf','fr'], ['zebrafish','frog'], proteomes=..., blast_maps='maps/')",
+    ],
+    related=["single.cross_species_integrate", "single.saturn_integrate", "single.get_orthologs"],
+)
+def samap_integrate(*args, **kwargs):
+    """Cross-species integration with **SAMap** (vendored under
+    ``omicverse.external.samap``). Builds a reciprocal-BLAST gene-homology graph
+    and runs the Self-Assembling Manifold — handles many-to-many homology and
+    large evolutionary distances. See
+    :func:`omicverse.external.samap._run.samap_integrate` for the full signature.
+    """
+    from ..external.samap._run import samap_integrate as _fn
+    return _fn(*args, **kwargs)
+
+
+@register_function(
+    aliases=["SATURN", "saturn_integrate", "跨物种SATURN", "cross species SATURN", "蛋白embedding整合"],
+    category="single",
+    description="Cross-species integration with SATURN (ESM2 protein-embedding macrogenes)",
+    examples=[
+        "adata = ov.single.saturn_integrate([zeb, frog], ['zebrafish','frog'], embedding_paths=...)",
+    ],
+    related=["single.cross_species_integrate", "single.samap_integrate", "single.get_orthologs"],
+)
+def saturn_integrate(*args, **kwargs):
+    """Cross-species integration with **SATURN** (vendored under
+    ``omicverse.external.saturn``). Learns "macrogenes" from ESM2 protein
+    language-model embeddings to map species into a shared space. See
+    :func:`omicverse.external.saturn._run.run_saturn` for the full signature.
+    """
+    from ..external.saturn._run import run_saturn as _fn
+    return _fn(*args, **kwargs)

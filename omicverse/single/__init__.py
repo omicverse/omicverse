@@ -88,6 +88,8 @@ from ._cross_species import (
     get_orthologs,
     map_var_to_orthologs,
     cross_species_integrate,
+    samap_integrate,
+    saturn_integrate,
 )
 from ._diffusionmap import diffmap
 from ._aucell import aucell
@@ -399,10 +401,12 @@ __all__ = [
     # Batch correction and preprocessing
     'batch_correction',
 
-    # Cross-species integration (ortholog-based)
+    # Cross-species integration (ortholog-based + SAMap + SATURN)
     'get_orthologs',
     'map_var_to_orthologs',
     'cross_species_integrate',
+    'samap_integrate',
+    'saturn_integrate',
 
     # Quality control and assessment
     'SCCAF_assessment',
