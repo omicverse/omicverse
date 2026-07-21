@@ -77,6 +77,46 @@ _LAZY_ATTRS: dict[str, tuple[str, str]] = {
     "plot_variant_effect":       ("._plot", "plot_variant_effect"),
     "plot_enzyme_yield_response": ("._plot", "plot_enzyme_yield_response"),
     "plot_production_envelope":  ("._plot", "plot_production_envelope"),
+    # ---- genetic circuits & regulation -----------------------------------
+    "genetic_circuit":       ("._circuit", "genetic_circuit"),
+    "simulate_circuit":      ("._circuit", "simulate_circuit"),
+    "plot_circuit":          ("._circuit", "plot_circuit"),
+    "GeneticCircuit":        ("._circuit", "GeneticCircuit"),
+    "toggle_switch":         ("._circuit", "toggle_switch"),
+    "repressilator":         ("._circuit", "repressilator"),
+    "logic_gate":            ("._circuit", "logic_gate"),
+    "feed_forward_loop":     ("._circuit", "feed_forward_loop"),
+    "rbs_strength":          ("._expression", "rbs_strength"),
+    "promoter_strength":     ("._expression", "promoter_strength"),
+    "cai":                   ("._expression", "cai"),
+    "predict_expression":    ("._expression", "predict_expression"),
+    "rna_fold":              ("._rna", "rna_fold"),
+    "rna_accessibility":     ("._rna", "rna_accessibility"),
+    "rna_duplex":            ("._rna", "rna_duplex"),
+    "gc_content":            ("._rna", "gc_content"),
+    # ---- CRISPR & genome editing -----------------------------------------
+    "design_grnas":          ("._crispr", "design_grnas"),
+    "offtarget_search":      ("._crispr", "offtarget_search"),
+    "base_editor_window":    ("._crispr", "base_editor_window"),
+    "hdr_arms":              ("._crispr", "hdr_arms"),
+    "Guide":                 ("._crispr", "Guide"),
+    # ---- DNA assembly & standards ----------------------------------------
+    "restriction_map":       ("._assembly", "restriction_map"),
+    "golden_gate":           ("._assembly", "golden_gate"),
+    "gibson_assembly":       ("._assembly", "gibson_assembly"),
+    "annotate_construct":    ("._assembly", "annotate_construct"),
+    "write_genbank":         ("._assembly", "write_genbank"),
+    "read_genbank":          ("._assembly", "read_genbank"),
+    # ---- pathway thermodynamics & retrosynthesis -------------------------
+    "reaction_dg":           ("._thermo", "reaction_dg"),
+    "max_min_driving_force": ("._thermo", "max_min_driving_force"),
+    "pathway_search":        ("._retro", "pathway_search"),
+    "Pathway":               ("._retro", "Pathway"),
+    # ---- combinatorial libraries & directed evolution --------------------
+    "degenerate_codon":      ("._library", "degenerate_codon"),
+    "saturation_library":    ("._library", "saturation_library"),
+    "dms_library":           ("._library", "dms_library"),
+    "ml_guided_design":      ("._library", "ml_guided_design"),
     # ---- device helper (handy for users) ---------------------------------
     "resolve_device":        ("._device", "resolve_device"),
 }
@@ -85,6 +125,8 @@ _LAZY_ATTRS: dict[str, tuple[str, str]] = {
 _REGISTRY_SUBMODULES = (
     "._gem", "._strain", "._ec", "._structure", "._design", "._variant",
     "._stability", "._kcat", "._function", "._embed", "._codon", "._plot",
+    "._circuit", "._expression", "._rna", "._crispr", "._assembly",
+    "._thermo", "._retro", "._library",
 )
 
 

@@ -375,7 +375,9 @@ synbio = [
   "fair-esm>=2.0",                              # ESM-2 / ESM-1v embeddings & variant effects
   "transformers>=4.30; python_version >= '3.10'",  # ESMFold (facebook/esmfold_v1), no openfold
   "biotite>=1.0; python_version >= '3.10'",     # structure parsing helpers
-  "biopython>=1.80",                            # sequence I/O utilities
+  "biopython>=1.80",                            # sequence I/O, restriction, GenBank, assembly
+  # Regulatory / RNA layer
+  "ViennaRNA>=2.5",                             # RNA secondary structure, RBS/accessibility
 ]
 
 
