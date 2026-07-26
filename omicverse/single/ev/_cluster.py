@@ -48,81 +48,6 @@ def _cluster_matrix(adata, layer, use_rep):
     return _dense(adata.X)
 
 
-# ---------------------------------------------------------------------------
-# Native Self-Organizing Map
-# ---------------------------------------------------------------------------
-class _SOM:
-    """A minimal rectangular-grid self-organizing map (numpy only).
-
-    This is the SOM core of FlowSOM — a Kohonen map with a Gaussian
-    neighborhood that shrinks over training. After training, each node holds
-    a prototype (codebook vector) in protein space.
-    """
-
-    def __init__(self, grid=(10, 10), n_features=0, random_state=0):
-        self.nx, self.ny = int(grid[0]), int(grid[1])
-        self.n_nodes = self.nx * self.ny
-        self.n_features = n_features
-        self.rng = np.random.default_rng(random_state)
-        self.codes = None
-        # 2-D grid coordinate of every node (for neighborhood distances)
-        gx, gy = np.meshgrid(np.arange(self.nx), np.arange(self.ny), indexing="ij")
-        self._grid = np.column_stack([gx.ravel(), gy.ravel()]).astype(np.float64)
-
-    def _init_codes(self, data):
-        """Seed codebook vectors from random data rows + small jitter."""
-        idx = self.rng.choice(data.shape[0], size=self.n_nodes, replace=True)
-        jitter = self.rng.normal(0.0, 1e-3, size=(self.n_nodes, data.shape[1]))
-        self.codes = data[idx].astype(np.float64) + jitter
-
-    def train(self, data, n_epochs=10, batch=None):
-        """Train the SOM with an online Kohonen update over ``n_epochs``."""
-        data = np.asarray(data, dtype=np.float64)
-        self.n_features = data.shape[1]
-        self._init_codes(data)
-        n_obs = data.shape[0]
-        batch = n_obs if batch is None else int(min(batch, n_obs))
-
-        radius0 = max(self.nx, self.ny) / 2.0
-        lr0 = 0.5
-        total = max(1, n_epochs * (n_obs // batch + 1))
-        step = 0
-        for _ in range(n_epochs):
-            order = self.rng.permutation(n_obs)
-            for start in range(0, n_obs, batch):
-                rows = data[order[start:start + batch]]
-                # winning node (best-matching unit) for each row
-                d = (
-                    (rows[:, None, :] - self.codes[None, :, :]) ** 2
-                ).sum(axis=2)
-                bmu = d.argmin(axis=1)
-                frac = step / total
-                radius = max(radius0 * (1.0 - frac), 1.0)
-                lr = lr0 * (1.0 - frac)
-                # Gaussian neighborhood weight from grid distance to BMU
-                gd = (
-                    (self._grid[bmu][:, None, :] - self._grid[None, :, :]) ** 2
-                ).sum(axis=2)
-                infl = np.exp(-gd / (2.0 * radius ** 2))  # rows x nodes
-                # weighted move of every node toward its assigned rows
-                w = infl * lr
-                num = w.T @ rows
-                den = w.sum(axis=0)[:, None]
-                den[den == 0] = 1.0
-                self.codes += (num / den - self.codes) * (den > 0)
-                step += 1
-        return self
-
-    def winners(self, data):
-        """Best-matching-unit index for each row of ``data``."""
-        data = np.asarray(data, dtype=np.float64)
-        d = ((data[:, None, :] - self.codes[None, :, :]) ** 2).sum(axis=2)
-        return d.argmin(axis=1)
-
-
-# ---------------------------------------------------------------------------
-# flowsom
-# ---------------------------------------------------------------------------
 @register_function(
     aliases=["ev_flowsom", "flowsom_ev", "FlowSOM", "自组织映射聚类"],
     category="ev",
@@ -192,28 +117,19 @@ def flowsom(
         the per-EV SOM node in ``obs[key_added + '_som']``, and the SOM /
         metacluster details in ``uns['ev']['flowsom']``.
     """
-    from sklearn.cluster import AgglomerativeClustering
+    # The SOM itself lives in `ov.flow._som`: FlowSOM is a flow-cytometry
+    # algorithm that this module borrowed, and its maths is not EV-specific.
+    # One implementation, two callers — the only thing that differs is where
+    # the result is written.
+    from ...flow._som import som_metacluster
 
     mat = _cluster_matrix(adata, layer, use_rep)
-    n_obs = mat.shape[0]
     n_nodes = int(grid[0]) * int(grid[1])
-    if n_clusters > n_nodes:
-        raise ValueError(
-            f"n_clusters ({n_clusters}) cannot exceed the SOM node count "
-            f"({n_nodes}); enlarge `grid`."
-        )
-
-    # 1-2. train SOM, assign every EV to its best-matching node
-    som = _SOM(grid=grid, random_state=random_state)
-    som.train(mat, n_epochs=n_epochs)
-    node_of_ev = som.winners(mat)
-
-    # 3. metacluster the SOM node prototypes
-    n_eff = int(min(n_clusters, n_nodes))
-    meta = AgglomerativeClustering(n_clusters=n_eff, linkage=linkage)
-    node_meta = meta.fit_predict(som.codes)
-
-    # 4. propagate node metacluster label back to every EV
+    node_of_ev, node_meta, _codes = som_metacluster(
+        mat, n_clusters=n_clusters, grid=grid, n_epochs=n_epochs,
+        linkage=linkage, random_state=random_state,
+    )
+    n_eff = int(len(np.unique(node_meta)))
     ev_meta = node_meta[node_of_ev]
     adata.obs[key_added] = pd.Categorical(
         [str(c) for c in ev_meta],

@@ -311,3 +311,14 @@ def test_quadrants_also_respect_the_parent_on_the_pass_through_branch():
     # The quadrants partition the PARENT, not the whole file.
     total = np.column_stack([res.masks[q] for q in quads]).sum(axis=1)
     assert np.array_equal(total > 0, res.masks["P"])
+
+
+def test_ov_flow_is_a_registered_namespace():
+    """`import omicverse.flow` works for a submodule whether or not it is
+    registered, so the whole test suite can pass while `ov.flow` — the way
+    every user and every agent reaches it — raises AttributeError."""
+    import omicverse as ov
+
+    assert hasattr(ov, "flow")
+    assert "flowsom" in ov.flow.__all__
+    assert callable(ov.flow.make_transform)

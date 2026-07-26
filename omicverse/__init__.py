@@ -92,6 +92,7 @@ _LAZY_MODULES = {
     'protein',
     'genetics',
     'airr',
+    'flow',
     'report',
     'epi',
 }
@@ -382,6 +383,7 @@ __all__ = [
     "protein",
     "genetics",
     "airr",
+    "flow",
     "datasets",
     "external",
     "llm",

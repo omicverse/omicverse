@@ -31,6 +31,7 @@ WHY IT IS WRITTEN RATHER THAN WRAPPED
     See ``_transforms.py`` for the full argument and the parity evidence.
 """
 
+from ._cluster import flowsom
 from ._compensate import (
     compensate,
     spillover_spreading_matrix,
@@ -46,6 +47,7 @@ from ._gates import (
     gate_from_dict,
     points_in_polygon,
 )
+from ._som import SOM, som_metacluster
 from ._gatingml import (
     from_gatingml,
     is_valid_xml_id,
@@ -80,4 +82,6 @@ __all__ = [
     # interchange
     "to_gatingml", "from_gatingml", "write_gatingml", "read_gatingml",
     "is_valid_xml_id", "sanitize_id",
+    # clustering
+    "flowsom", "SOM", "som_metacluster",
 ]
