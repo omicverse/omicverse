@@ -80,29 +80,21 @@ def build_blast_maps(proteomes: Dict[str, str], out_dir: str = "maps",
         subprocess.run(cmd, check=True, env=env,
                        stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
 
-    if engine == "diamond":
-        for sid in (a, b):
-            _run(["diamond", "makedb", "--in", proteomes[sid],
-                  "--db", os.path.join(sub, f"{sid}db"), "--threads", str(threads)])
+    # The engine plumbing lives in `ov.alignment.homology_search` — one home for
+    # the DIAMOND/BLAST+ command construction instead of a private copy here.
+    # SAMap needs the raw outfmt-6 FILES (its loader reads `maps/`), so we ask
+    # for `out=` and ignore the returned frame.
+    from ...alignment._homology import homology_search
 
-        def _align(pair):
-            qid, db = pair
-            _run(["diamond", "blastp", "--query", proteomes[qid],
-                  "--db", os.path.join(sub, f"{db}db"), "--outfmt", "6",
-                  "--evalue", str(evalue), "--max-target-seqs", str(max_target_seqs),
-                  f"--{sensitivity}", "--threads", str(threads), "--quiet",
-                  "--out", os.path.join(sub, f"{qid}_to_{db}.txt")])
-    else:  # blastp — reproduces SAMap's map_genes.sh (adds max_target_seqs cap)
-        for sid in (a, b):
-            _run(["makeblastdb", "-in", proteomes[sid], "-dbtype", "prot",
-                  "-out", os.path.join(sub, f"{sid}db")])
-
-        def _align(pair):
-            qid, db = pair
-            _run(["blastp", "-query", proteomes[qid], "-db", os.path.join(sub, f"{db}db"),
-                  "-outfmt", "6", "-evalue", str(evalue), "-max_hsps", "1",
-                  "-max_target_seqs", str(max_target_seqs), "-num_threads", str(threads),
-                  "-out", os.path.join(sub, f"{qid}_to_{db}.txt")])
+    def _align(pair):
+        qid, db = pair
+        homology_search(
+            proteomes[qid], proteomes[db],
+            method="diamond" if engine == "diamond" else "blastp",
+            evalue=evalue, max_target_seqs=max_target_seqs, threads=threads,
+            sensitivity=sensitivity, bin_dir=blast_bin,
+            out=os.path.join(sub, f"{qid}_to_{db}.txt"),
+        )
 
     # Run the two directions concurrently (independent BLAST/DIAMOND jobs).
     with ThreadPoolExecutor(max_workers=2) as pool:

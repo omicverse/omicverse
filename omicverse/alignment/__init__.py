@@ -5,6 +5,7 @@ This module provides comprehensive tools for fastq data processing and alignment
 - Alignment with kb-python (bulk / scRNA-seq)
 - RNA velocity analysis with kb-python
 - SRA download / conversion / QC / alignment / counting wrappers
+- Homology search: DIAMOND / NCBI BLAST+ (`homology_search`, `reciprocal_best_hits`)
 - 16S amplicon pipeline: cutadapt + vsearch (merge / filter / derep / UNOISE3 / uchime3 / SINTAX / usearch_global)
 """
 
@@ -23,6 +24,9 @@ from . import vsearch
 from .amplicon_16s import amplicon_16s_pipeline, build_amplicon_anndata
 from ._db import fetch_sintax_ref, fetch_silva, fetch_rdp
 
+# Homology search (DIAMOND / NCBI BLAST+)
+from ._homology import homology_search, reciprocal_best_hits, BLAST_TAB_COLUMNS
+
 # Phylogeny (MSA + tree inference)
 from .mafft import mafft
 from .fasttree import fasttree
@@ -33,6 +37,9 @@ from . import dada2
 from .dada2 import dada2_pipeline
 
 __all__ = [
+    "homology_search",
+    "reciprocal_best_hits",
+    "BLAST_TAB_COLUMNS",
     "single",
     "ref",
     "count",
