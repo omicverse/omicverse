@@ -380,11 +380,41 @@ def mmgbsa(
     species = _build_species_systems(traj_obj.top_path, lig_smiles, ff_used,
                                      ligand_ff)
 
+    # Energy evaluation builds its own Contexts, so it needs the same
+    # device-failure fallback as the dynamics engine — a platform can load
+    # fine and still fail when it compiles kernels (e.g. a CUDA/driver
+    # version mismatch).
+    from ._common import explicit_device_requested, is_device_error
+
+    def _build(plat, props):
+        return {name: _EnergyEvaluator(top, sysobj, plat, props)
+                for name, (top, sysobj, _) in species.items()}
+
     plat, props = resolve_platform(platform, precision, verbose=verbose)
-    evaluators = {
-        name: _EnergyEvaluator(top, sysobj, plat, props)
-        for name, (top, sysobj, _) in species.items()
-    }
+    try:
+        evaluators = _build(plat, props)
+    except Exception as exc:
+        if explicit_device_requested(platform) or not is_device_error(exc):
+            raise
+        import warnings
+        warnings.warn(
+            f"{plat.getName()} platform failed while setting up MM-GBSA "
+            f"energy evaluation ({exc}); falling back to a slower device.",
+            RuntimeWarning, stacklevel=2)
+        evaluators = None
+        for fallback in ("OpenCL", "CPU"):
+            if fallback == plat.getName():
+                continue
+            try:
+                plat, props = resolve_platform(fallback, precision,
+                                               verbose=verbose)
+                evaluators = _build(plat, props)
+                break
+            except Exception:
+                continue
+        if evaluators is None:
+            raise RuntimeError(
+                "no OpenMM platform could evaluate MM-GBSA energies") from exc
 
     # ---- score the frames ----------------------------------------------
     traj = md.load(traj_obj.traj_path, top=traj_obj.top_path)

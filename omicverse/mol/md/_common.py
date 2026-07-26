@@ -159,6 +159,25 @@ def platform_report(simulation) -> str:
     return simulation.context.getPlatform().getName()
 
 
+# Substrings that mark a failure as "this device cannot run the kernels"
+# rather than "this system is misconfigured". Only the former is worth
+# retrying elsewhere — a bad cutoff fails identically on every platform.
+_DEVICE_ERROR_MARKERS = ("cuda", "opencl", "ptx", "no binary", "device",
+                         "driver", "out of memory", "kernel")
+
+
+def is_device_error(exc: Exception) -> bool:
+    """Whether an OpenMM failure looks like a GPU/driver problem."""
+    text = str(exc).lower()
+    return any(marker in text for marker in _DEVICE_ERROR_MARKERS)
+
+
+def explicit_device_requested(platform) -> bool:
+    """True when the caller pinned a device (argument or env var)."""
+    return bool(os.environ.get(DEVICE_ENV)) or (
+        platform is not None and str(platform).lower() != "auto")
+
+
 # ------------------------------------------------------------------ #
 # provenance                                                           #
 # ------------------------------------------------------------------ #

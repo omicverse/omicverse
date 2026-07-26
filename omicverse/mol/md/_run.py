@@ -11,7 +11,8 @@ import os
 from typing import Any, Dict, Optional
 
 from ..._registry import register_function
-from ._common import (base_provenance, check_md, file_hash, resolve_platform)
+from ._common import (base_provenance, check_md, explicit_device_requested,
+                      file_hash, is_device_error, resolve_platform)
 from ._types import MDSystem, MDTrajectory
 
 # atom names that define the protein backbone
@@ -51,8 +52,7 @@ def _build_simulation(mdsys: MDSystem, integrator_factory, platform: str,
 
     from openmm import app
 
-    explicit = bool(os.environ.get("OMICOS_MD_DEVICE")) or (
-        platform is not None and str(platform).lower() != "auto")
+    explicit = explicit_device_requested(platform)
 
     def _make(plat, props):
         simulation = app.Simulation(mdsys.topology, mdsys.system,
@@ -69,15 +69,7 @@ def _build_simulation(mdsys: MDSystem, integrator_factory, platform: str,
         return _make(plat, props)
     except Exception as exc:
         name = plat.getName()
-        # Distinguish "this GPU/driver cannot run kernels" from "this system is
-        # misconfigured". Only the former is worth a driver diagnosis, and only
-        # the former is worth retrying on another platform — a bad cutoff or a
-        # broken topology fails identically everywhere.
-        text = str(exc).lower()
-        device_issue = any(k in text for k in (
-            "cuda", "opencl", "ptx", "no binary", "device", "driver",
-            "out of memory", "kernel"))
-        if not device_issue:
+        if not is_device_error(exc):
             raise
         hint = _GPU_RUNTIME_HINT.format(name=name, err=exc)
         if explicit or name == "CPU":
