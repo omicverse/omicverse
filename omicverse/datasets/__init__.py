@@ -137,6 +137,15 @@ from ._ev import (
     ev_masev,
     ev_marker_reference,
 )
+from ._flow import (
+    # SIMULATED flow-cytometry sample for the ov.flow tutorials. The only
+    # generated dataset in this namespace — a real FCS file cannot teach
+    # compensation, because the uncompensated truth is not recoverable from it.
+    flow_demo,
+    flow_demo_fcs,
+    FLOW_DEMO_PANEL,
+    FLOW_DEMO_SPILLOVER,
+)
 from ._ambient import (
     # Real raw 10x droplet datasets for the ov.pp.ambient tutorial
     pbmc_raw_10x,

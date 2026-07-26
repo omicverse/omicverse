@@ -74,14 +74,24 @@ def test_the_tutorials_are_in_the_guide_submodule():
     assert not missing, f"missing tutorials: {missing}"
 
 
-def test_no_flow_tutorial_was_left_behind_in_this_repo():
+def test_no_tutorial_notebook_was_left_behind_in_this_repo():
     """Runs with or without the submodule: the misplacement this guards against
-    is a file appearing HERE, which needs no submodule to detect."""
-    strays = sorted(p.name for p in (ROOT / "docs").glob("t_flow*.ipynb"))
+    is a file appearing HERE, which needs no submodule to detect.
+
+    Deliberately not scoped to `t_flow*` — it has happened twice, to synbio
+    (PR #887) and then to flow (PR #907), and a guard that only knows about the
+    last occurrence would not have caught either of them in advance. Any
+    `t_*.ipynb` under this repository's docs/ is in the wrong repository:
+    the documentation site is built by `sphinx-build omicverse_guide/docs`
+    (.github/workflows/deploy-docs.yml), and docs/ here is gitignored developer
+    notes. Module OVERVIEWS (`ov_*.md`) do belong here; notebooks do not.
+    """
+    strays = sorted(p.name for p in (ROOT / "docs").glob("t_*.ipynb"))
     assert not strays, (
         f"{strays} is in the main repo's docs/, which the documentation build "
-        "does not read — flow tutorials belong in "
-        "omicverse_guide/docs/Tutorials-flow/"
+        "does not read. Tutorials belong in the omicverse_guide submodule, as "
+        "omicverse_guide/docs/Tutorials-<domain>/, registered in Tutorial.md "
+        "and in tutorials/index_<domain>.md"
     )
 
 
@@ -182,9 +192,26 @@ def test_it_only_uses_the_public_api(name):
 @pytest.mark.parametrize("name", NOTEBOOKS)
 def test_each_notebook_stands_alone(name):
     """A reader who lands on notebook 3 from a search must not have to run 1
-    first, so each one writes its own demo file."""
+    first, so each one loads its own copy of the demo sample."""
     src = _text(_load(name), "code")
-    assert "write_demo" in src or "create_fcs" in src, f"{name}: no data of its own"
+    assert "ov.datasets.flow_demo" in src, f"{name}: no data of its own"
+
+
+@needs_submodule
+@pytest.mark.parametrize("name", NOTEBOOKS)
+def test_the_demo_data_comes_from_ov_datasets(name):
+    """Not from a generator pasted into the notebook.
+
+    It was inline in all four to begin with — forty lines of simulation the
+    reader had to scroll past before reaching any cytometry, repeated verbatim,
+    and four places for it to drift out of sync with the module it feeds.
+    """
+    src = _text(_load(name), "code")
+    for smell in ("def synthesise", "def write_demo", "flowio.create_fcs"):
+        assert smell not in src, (
+            f"{name} carries its own data generator ({smell}); "
+            "use ov.datasets.flow_demo / flow_demo_fcs"
+        )
 
 
 @needs_submodule
