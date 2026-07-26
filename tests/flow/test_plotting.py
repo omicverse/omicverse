@@ -258,6 +258,25 @@ def test_linear_axis_gets_evenly_spaced_ticks_in_data_units(sample, gates, resul
     assert all(("K" in s) or s == "0" for s in labels), labels
 
 
+def test_tick_labels_survive_a_font_change(sample, strategy, result, ax):
+    """Regression: Unicode superscripts are font-dependent.
+
+    ``¹²³`` are Latin-1 and near-universal; ``⁴⁵⁶⁷⁸⁹`` are U+2074+ and missing
+    from many fonts. Under ``ov.style()`` the axes rendered 10² and 10³ fine and
+    drew tofu boxes for 10⁴ and 10⁵ — a partial, silent failure that no
+    exception and no numeric check would catch. Mathtext is drawn by matplotlib
+    itself, so it cannot depend on the font in use.
+    """
+    biaxial(sample, "CD4", "CD8", strategy=strategy, result=result,
+            population="CD3+", ax=ax, max_events=1000)
+    labels = [t.get_text() for t in ax.get_xticklabels()]
+    exotic = [l for l in labels if any(ch in l for ch in "⁰¹²³⁴⁵⁶⁷⁸⁹")]
+    assert not exotic, f"font-dependent superscripts in tick labels: {exotic}"
+    powers = [l for l in labels if l not in ("0", "")]
+    assert powers, "no decade labels at all"
+    assert all(l.startswith("$") and l.endswith("$") for l in powers), powers
+
+
 def test_biexponential_axis_is_labelled_in_data_units(sample, strategy, result, ax):
     biaxial(sample, "CD4", "CD8", strategy=strategy, result=result,
             population="CD3+", ax=ax, max_events=1000)

@@ -132,7 +132,8 @@ def _style_axis(ax, tr: Optional[Transform], which: str, label: str) -> None:
     if len(major) == 0:
         return
     lo, hi = (ax.get_xlim() if which == "x" else ax.get_ylim())
-    major, labels = _thin_ticks(major, labels, 0.055 * abs(hi - lo))
+    major, labels = _thin_ticks(major, labels,
+                                _min_tick_sep(ax, which) * abs(hi - lo))
     pretty = [_tick_label(s) for s in labels]
     if which == "x":
         ax.set_xticks(major)
@@ -144,6 +145,41 @@ def _style_axis(ax, tr: Optional[Transform], which: str, label: str) -> None:
         ax.set_yticklabels(pretty)
     axis.set_tick_params(which="minor", length=2)
     axis.set_tick_params(which="major", length=4)
+
+
+def _min_tick_sep(ax, which: str, chars: float = 5.0) -> float:
+    """How far apart two tick labels must be, as a fraction of the axis.
+
+    A constant does not work. The separation that keeps ``-10²`` clear of ``0``
+    depends on the font size AND on how wide the panel is, and both change
+    underneath this code: ``ov.style()`` raises the default font from 10pt to
+    14pt, and these plots are drawn at anything from a 4-inch single panel to a
+    17-inch row of four. Calibrating a constant against one combination leaves
+    the labels overlapping in the others — which is what happened the first time
+    these figures were drawn after ``ov.style()``.
+
+    Estimated from the geometry rather than measured, because measuring needs a
+    renderer and a draw. On the x axis the constraint is label WIDTH; on the y
+    axis, where labels stack, it is their height.
+    """
+    import matplotlib as mpl
+
+    fig = ax.figure
+    pos = ax.get_position()
+    if which == "x":
+        inches = pos.width * fig.get_figwidth()
+        extent_pts = chars * 0.62 * _tick_fontsize(mpl, "x")
+    else:
+        inches = pos.height * fig.get_figheight()
+        extent_pts = 1.35 * _tick_fontsize(mpl, "y")
+    return min(max(extent_pts / max(inches * 72.0, 1.0), 0.03), 0.45)
+
+
+def _tick_fontsize(mpl, which: str) -> float:
+    size = mpl.rcParams[f"{which}tick.labelsize"]
+    if isinstance(size, (int, float)):
+        return float(size)
+    return float(mpl.rcParams["font.size"])
 
 
 def _thin_ticks(
@@ -215,14 +251,21 @@ def _si(v: float) -> str:
 
 
 def _tick_label(raw: str) -> str:
-    """``10^3`` -> ``10³``. Superscripts because a biexponential axis has a lot
-    of ticks and ``10^3`` is two characters wider at every one of them."""
-    sup = str.maketrans("0123456789", "⁰¹²³⁴⁵⁶⁷⁸⁹")
+    """``10^3`` -> mathtext ``$10^{3}$``.
+
+    Not Unicode superscripts. ``¹²³`` live in Latin-1 (U+00B2/B3/B9) and almost
+    every font has them; ``⁴⁵⁶⁷⁸⁹`` live in the Superscripts block (U+2074+) and
+    plenty of fonts do not. The failure is silent and partial — an axis renders
+    10² and 10³ correctly and then draws tofu boxes for 10⁴ and 10⁵, which is
+    exactly what happened the first time these plots were drawn after
+    ``ov.style()`` changed the font. Mathtext is rendered by matplotlib itself
+    and cannot depend on the font in use.
+    """
     s = str(raw)
-    if "^" in s:
-        base, exp = s.split("^", 1)
-        return base + exp.translate(sup)
-    return s
+    if "^" not in s:
+        return s
+    base, exp = s.split("^", 1)
+    return f"${base}^{{{exp}}}$"
 
 
 def _limits(
