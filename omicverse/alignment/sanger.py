@@ -158,9 +158,19 @@ def read_ab1(path: str, *, engine: str = "auto", pratio: float = 0.33,
     if engine not in ("auto", "tracy", "biopython"):
         raise ValueError("engine must be 'auto', 'tracy' or 'biopython'")
 
-    use_tracy = engine == "tracy" or (engine == "auto" and shutil.which("tracy"))
-    if use_tracy:
-        exe = _tracy(tracy_path, auto_install)
+    # Resolve with the SAME rule the rest of the module uses. `shutil.which`
+    # alone only looks at PATH, so a tracy sitting in the interpreter's own
+    # env bin (where `resolve_executable` finds it) was missed and `auto`
+    # silently degraded to Biopython — no secondary basecall, no dye channels,
+    # and no warning that the trace had been read the lesser way.
+    exe = None
+    if engine in ("auto", "tracy"):
+        try:
+            exe = _tracy(tracy_path, auto_install)
+        except FileNotFoundError:
+            if engine == "tracy":
+                raise
+    if exe:
         env = build_env()
         with tempfile.TemporaryDirectory(prefix="ov_sanger_") as tmp:
             out = os.path.join(tmp, "bc.json")
