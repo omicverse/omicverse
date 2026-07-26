@@ -54,6 +54,18 @@ _INSTALL_COMMANDS = {
     "mafft": ["mafft", "-c", "bioconda"],
     "FastTree": ["fasttree", "-c", "bioconda"],
     "FastTreeMP": ["fasttree", "-c", "bioconda"],
+    # `_INSTALL_HINTS` is only the message shown when a tool is missing; this is
+    # the dict `_install_tool` actually dispatches on. A tool listed in one but
+    # not the other makes `auto_install=True` a silent no-op that still ends in
+    # FileNotFoundError, so the two must be kept in step.
+    "diamond": ["diamond", "-c", "bioconda"],
+    "blastp": ["blast", "-c", "bioconda"],
+    "blastn": ["blast", "-c", "bioconda"],
+    "blastx": ["blast", "-c", "bioconda"],
+    "tblastn": ["blast", "-c", "bioconda"],
+    "tblastx": ["blast", "-c", "bioconda"],
+    "makeblastdb": ["blast", "-c", "bioconda"],
+    "tracy": ["tracy", "-c", "bioconda"],
 }
 
 

@@ -168,7 +168,10 @@ def read_ab1(path: str, *, engine: str = "auto", pratio: float = 0.33,
         try:
             exe = _tracy(tracy_path, auto_install)
         except FileNotFoundError:
-            if engine == "tracy":
+            # Falling back is only correct when tracy was merely ABSENT. If the
+            # caller named a path, a typo in it must not degrade silently to the
+            # lesser reader — they asked for a specific binary.
+            if engine == "tracy" or tracy_path:
                 raise
     if exe:
         env = build_env()
@@ -187,7 +190,40 @@ def read_ab1(path: str, *, engine: str = "auto", pratio: float = 0.33,
         ) from exc
     rec = SeqIO.read(path, "abi")
     quals = list(rec.letter_annotations.get("phred_quality", []))
-    return SangerTrace(path=path, sequence=str(rec.seq), secondary="", quality=quals)
+
+    # Pull the dye channels and basecall positions out of the raw ABIF
+    # directories too. An earlier cut returned only the sequence and quality,
+    # which made this path look like a success while handing every caller an
+    # unplottable trace — a viewer drew a blank canvas with no error to explain
+    # it. Only the SECONDARY basecall genuinely needs tracy (it comes from
+    # tracy's peak-ratio calling), so that stays empty and `mixed_positions`
+    # stays correctly empty with it.
+    #
+    # DATA9-12 are the processed (baseline-corrected, mobility-shifted) traces;
+    # DATA1-4 are the raw ones. FWO_1 is the filter-wheel order — the string
+    # that says which channel is which base, e.g. b"GATC" means DATA9 is G.
+    # PLOC2 is the edited peak location per base, PLOC1 the original.
+    raw = rec.annotations.get("abif_raw", {}) or {}
+    order = raw.get("FWO_1") or b"GATC"
+    if isinstance(order, str):
+        order = order.encode()
+    peaks: Dict[str, List[float]] = {}
+    for i, base in enumerate(order.decode("ascii", "replace")[:4]):
+        channel = raw.get(f"DATA{9 + i}")
+        if channel is not None and base in "ACGT":
+            peaks[base] = [float(v) for v in channel]
+    positions = raw.get("PLOC2")
+    if positions is None:
+        positions = raw.get("PLOC1")
+
+    return SangerTrace(
+        path=path,
+        sequence=str(rec.seq),
+        secondary="",
+        quality=quals,
+        basecall_pos=[int(p) for p in (positions or [])],
+        peaks=peaks,
+    )
 
 
 @register_function(
@@ -280,11 +316,11 @@ def align_to_reference(trace: str, reference: str, *, trim_left: int = 50,
             doc = json.load(fh)
         files = sorted(glob.glob(f"{prefix}*")) if out_prefix else []
     finally:
-        if out_prefix:
-            tmp.cleanup()
-        else:
-            payload = None  # keep tmp alive until parsed above
-            tmp.cleanup()
+        # The JSON is read inside the `try` above, so the directory is only
+        # needed until here in both cases. (An earlier cut had two identical
+        # branches and a dead `payload = None` guarding a lifetime concern that
+        # does not exist.)
+        tmp.cleanup()
 
     def _identity(diffs, span):
         return (span - len(diffs)) / span if span > 0 else 0.0
@@ -302,12 +338,17 @@ def align_to_reference(trace: str, reference: str, *, trim_left: int = 50,
     core_lo, core_hi = edge_margin, aligned - edge_margin
     core_span = max(0, core_hi - core_lo)
     core_diffs = [d for d in diffs if core_lo <= d["pos"] < core_hi]
+    # A short read (or a large `edge_margin`) can leave NO core at all. That is
+    # "cannot be judged", not "0% identity" — reporting 0.0 made
+    # `verify_construct` fail a perfect clone while handing back an empty
+    # `core_differences`, i.e. a rejection with no evidence. `None` forces the
+    # caller (and the agent reading it) to say so instead.
     return {
         "ref_align": ref_row,
         "alt_align": alt_row,
         "aligned": aligned,
         "identity": _identity(diffs, aligned),
-        "identity_core": _identity(core_diffs, core_span) if core_span else 0.0,
+        "identity_core": _identity(core_diffs, core_span) if core_span else None,
         "core_span": core_span,
         "edge_margin": edge_margin,
         "differences": diffs,
@@ -468,7 +509,14 @@ def verify_construct(traces, reference: str, *, min_identity: float = 0.995,
                 "differences": aln["differences"],
                 "core_differences": aln["core_differences"],
                 "forward": aln["forward"],
-                "passed": aln["identity_core"] >= min_identity,
+                # `identity_core is None` means the alignment was not longer
+                # than 2*edge_margin, so there is no trustworthy middle to judge
+                # on. That is UNJUDGEABLE, not a failure — but it must not
+                # silently pass either, so it fails with `unjudged` set and the
+                # caller is told to lower `edge_margin` or get a longer read.
+                "unjudged": aln["identity_core"] is None,
+                "passed": aln["identity_core"] is not None
+                          and aln["identity_core"] >= min_identity,
             })
     finally:
         tmp.cleanup()

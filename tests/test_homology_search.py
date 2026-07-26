@@ -14,8 +14,10 @@ import pytest
 from omicverse.alignment._homology import (
     BLAST_TAB_COLUMNS,
     _align_cmd,
+    _DIAMOND_SENSITIVITY,
     _PROGRAMS,
     _read_hits,
+    _resolve_binaries,
     homology_search,
     reciprocal_best_hits,
     resolve_method,
@@ -111,9 +113,16 @@ def test_diamond_command_shape():
     assert "--quiet" in cmd
 
 
-def test_diamond_fast_is_not_passed_as_a_flag():
-    """`fast` is DIAMOND's default; `--fast` would be rejected by older builds."""
-    assert "--fast" not in _cmd("diamond", sensitivity="fast")
+@pytest.mark.parametrize("mode", sorted(_DIAMOND_SENSITIVITY))
+def test_every_sensitivity_is_passed_through_as_its_flag(mode):
+    """Silently dropping a mode runs a different search than the caller asked for.
+
+    An earlier cut swallowed `--fast` on the belief that it was merely DIAMOND's
+    default and not a real flag. It is a real, distinct mode: verified by
+    invoking DIAMOND 2.2.4, which accepts `--fast` and `--faster` and rejects
+    `--bogus-mode`.
+    """
+    assert f"--{mode}" in _cmd("diamond", sensitivity=mode)
 
 
 def test_blast_command_shape_and_ignores_sensitivity():
@@ -234,3 +243,56 @@ def test_concurrent_searches_into_one_directory_do_not_collide(fastas, tmp_path)
                for q, s in zip(fwd["qseqid"], fwd["sseqid"])), fwd.head().to_dict()
     assert all(q.startswith("mm_") and s.startswith("hs_")
                for q, s in zip(rev["qseqid"], rev["sseqid"])), rev.head().to_dict()
+
+
+# ── regressions found in adversarial pre-merge review ───────────────────────
+
+def test_bin_dir_is_actually_used_to_locate_the_binary(tmp_path, monkeypatch):
+    """SAMap's `blast_bin` must keep working after the delegation refactor.
+
+    The previous implementation prepended `blast_bin` to `env["PATH"]` and ran a
+    bare `diamond`, so a DIAMOND installed ONLY there worked. Resolving through
+    `resolve_executable` alone consults the ambient PATH and the interpreter's
+    env/bin — never `bin_dir` — which would raise FileNotFoundError exactly
+    where the old code succeeded.
+    """
+    fake_bin = tmp_path / "private_bin"
+    fake_bin.mkdir()
+    exe = fake_bin / "diamond"
+    exe.write_text("#!/bin/sh\nexit 0\n")
+    exe.chmod(0o755)
+
+    # Nothing on the ambient PATH, and resolve_executable must not rescue us.
+    monkeypatch.setattr("omicverse.alignment._homology.resolve_executable",
+                        lambda *a, **k: (_ for _ in ()).throw(FileNotFoundError("not on PATH")))
+
+    env = {"PATH": str(fake_bin)}
+    resolved = _resolve_binaries(_PROGRAMS["diamond"], bin_dir=str(fake_bin),
+                                 auto_install=False, env=env)
+    assert resolved["diamond"] == str(exe)
+
+
+def test_all_numeric_sequence_ids_stay_strings(tmp_path):
+    """An all-numeric FASTA header must not be inferred as int64.
+
+    NCBI GI numbers and generated proteomes routinely look like this. When the
+    two directions of a reciprocal run infer different dtypes for the same
+    column, the merge in reciprocal_best_hits dies on valid data.
+    """
+    p = tmp_path / "hits.tsv"
+    p.write_text("12345\t67890\t93.7\t120\t7\t0\t1\t120\t1\t120\t8.7e-233\t623\n")
+    df = _read_hits(str(p))
+    assert df["qseqid"].dtype == object and df["sseqid"].dtype == object
+    assert df.loc[0, "qseqid"] == "12345"
+    assert df.loc[0, "sseqid"] == "67890"
+
+
+@pytest.mark.skipif(not (HAS_DIAMOND or HAS_BLAST), reason="no aligner on PATH")
+def test_reciprocal_best_hits_survives_numeric_ids(tmp_path):
+    """The dtype bug above, end to end: the merge must not raise."""
+    a = tmp_path / "a.faa"
+    b = tmp_path / "b.faa"
+    a.write_text(">1\nMGKVKVGVNGFGRIGRLVTRAAFNSGKVDIVAINDPFIDLNYMVYMFQYDSTHGKFHGTVK\n")
+    b.write_text(">2\nMVKVGVNGFGRIGRLVTRAAFSCGKVDVVAINDPFIDLHYMVYMFQYDSTHGKFNGTVKA\n")
+    rbh = reciprocal_best_hits(str(a), str(b), threads=2)
+    assert list(rbh["a"]) == ["1"] and list(rbh["b"]) == ["2"]

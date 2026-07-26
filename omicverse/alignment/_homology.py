@@ -51,8 +51,13 @@ _PROGRAMS: Dict[str, Dict[str, Any]] = {
     "tblastx":         {"engine": "blast",   "program": "tblastx", "db": "nucl"},
 }
 
+# Every one of these is a real DIAMOND mode flag, verified against DIAMOND
+# 2.2.4 by invoking it. `fast` in particular IS a distinct mode and not merely
+# the default — dropping its flag would silently run a different search than the
+# caller asked for, which is worse than erroring on an ancient build that
+# predates it (the aligner's own stderr is surfaced either way).
 _DIAMOND_SENSITIVITY = {
-    "fast", "mid-sensitive", "sensitive", "more-sensitive",
+    "faster", "fast", "mid-sensitive", "sensitive", "more-sensitive",
     "very-sensitive", "ultra-sensitive",
 }
 
@@ -85,7 +90,13 @@ def _read_hits(path: str):
 
     if not os.path.exists(path) or os.path.getsize(path) == 0:
         return pd.DataFrame(columns=BLAST_TAB_COLUMNS)
-    df = pd.read_csv(path, sep="\t", header=None, names=BLAST_TAB_COLUMNS)
+    # Sequence IDs stay STRINGS. Left to pandas, an all-numeric FASTA header
+    # ("12345", common in NCBI GI and in generated proteomes) is inferred as
+    # int64 — and when the two directions of a reciprocal run happen to infer
+    # different dtypes for the same column, the merge in `reciprocal_best_hits`
+    # dies with a pandas dtype ValueError on data that is perfectly valid.
+    df = pd.read_csv(path, sep="\t", header=None, names=BLAST_TAB_COLUMNS,
+                     dtype={"qseqid": str, "sseqid": str})
     for col in ("pident", "evalue", "bitscore"):
         df[col] = pd.to_numeric(df[col], errors="coerce")
     for col in ("length", "mismatch", "gapopen", "qstart", "qend", "sstart", "send"):
@@ -137,9 +148,7 @@ def _align_cmd(spec: Dict[str, Any], *, exe: Dict[str, str], query: str,
                     f"unknown DIAMOND sensitivity {sensitivity!r}; choose from "
                     + ", ".join(sorted(_DIAMOND_SENSITIVITY))
                 )
-            # `fast` is DIAMOND's default and is not a valid flag.
-            if sensitivity != "fast":
-                cmd.append(f"--{sensitivity}")
+            cmd.append(f"--{sensitivity}")
     else:
         cmd = [exe[spec["program"]], "-query", query, "-db", db_prefix,
                "-outfmt", "6", "-evalue", str(evalue), "-max_hsps", "1",
@@ -152,12 +161,28 @@ def _align_cmd(spec: Dict[str, Any], *, exe: Dict[str, str], query: str,
 
 def _resolve_binaries(spec: Dict[str, Any], *, bin_dir: str, auto_install: bool,
                       env: dict) -> Dict[str, str]:
+    """Resolve each binary to an absolute path, honouring ``bin_dir`` FIRST.
+
+    `resolve_executable` searches the ambient ``PATH`` and the interpreter's own
+    ``env/bin`` — it has no idea about ``bin_dir``. SAMap's ``build_blast_maps``
+    used to prepend its ``blast_bin`` to ``env["PATH"]`` and then run a bare
+    ``diamond``, so a DIAMOND installed ONLY in ``blast_bin`` worked. Resolving
+    through `resolve_executable` alone would drop that and raise
+    FileNotFoundError where the previous implementation succeeded, so
+    ``bin_dir`` gets first refusal here.
+    """
+    def _find(name: str) -> str:
+        found = _which(name, env)
+        if found:
+            return found
+        return resolve_executable(name, auto_install=auto_install)
+
     exe: Dict[str, str] = {}
     if spec["engine"] == "diamond":
-        exe["diamond"] = resolve_executable("diamond", auto_install=auto_install)
+        exe["diamond"] = _find("diamond")
     else:
-        exe[spec["program"]] = resolve_executable(spec["program"], auto_install=auto_install)
-        exe["makeblastdb"] = resolve_executable("makeblastdb", auto_install=auto_install)
+        exe[spec["program"]] = _find(spec["program"])
+        exe["makeblastdb"] = _find("makeblastdb")
     return exe
 
 

@@ -16,10 +16,42 @@ from omicverse.alignment.sanger import (
 )
 
 HAS_TRACY = shutil.which("tracy") is not None
-AB1 = "/tmp/sanger_test/real.ab1"
-HAS_AB1 = os.path.exists(AB1)
+
+
+def _find_ab1() -> str:
+    """Locate a real chromatogram to test against.
+
+    🔴 CI DOES NOT SHIP ONE, so every test gated on this SKIPS on GitHub Actions
+    — the suite's real-trace coverage is only exercised locally. An earlier cut
+    hard-coded `/tmp/sanger_test/real.ab1`, a path nothing in the repo creates,
+    which made that invisible. Point `OV_TEST_AB1` at a trace, or drop one in
+    `tests/data/`, to actually run them.
+    """
+    env = os.environ.get("OV_TEST_AB1")
+    if env and os.path.exists(env):
+        return env
+    here = os.path.dirname(os.path.abspath(__file__))
+    for candidate in (
+        os.path.join(here, "data", "sample_sanger.ab1"),
+        os.path.join(here, "..", "..", "sample_sanger.ab1"),
+        "/tmp/sanger_test/real.ab1",
+    ):
+        if os.path.exists(candidate):
+            return os.path.abspath(candidate)
+    return ""
+
+
+AB1 = _find_ab1()
+HAS_AB1 = bool(AB1)
 needs_trace = pytest.mark.skipif(not (HAS_TRACY and HAS_AB1),
-                                 reason="needs tracy + a real .ab1")
+                                 reason="needs tracy + a real .ab1 (set OV_TEST_AB1)")
+
+
+@pytest.fixture
+def sample_ab1() -> str:
+    if not (HAS_TRACY and HAS_AB1):
+        pytest.skip("needs tracy + a real .ab1 (set OV_TEST_AB1)")
+    return AB1
 
 
 # ── pure logic ──────────────────────────────────────────────────────────────
@@ -123,3 +155,59 @@ def test_verify_accepts_a_list_of_traces(tmp_path):
     tr.to_fasta(str(ref), name="ref")
     rep = verify_construct([AB1, AB1], str(ref))
     assert len(rep["traces"]) == 2 and rep["ok"] is True
+
+
+# ── regressions found in adversarial pre-merge review ───────────────────────
+
+@pytest.mark.skipif(not HAS_TRACY, reason="tracy not installed")
+def test_biopython_fallback_returns_a_PLOTTABLE_trace(sample_ab1):
+    """The fallback must not look like a success while returning an empty shell.
+
+    An earlier cut returned only sequence+quality, so `peaks` and `basecall_pos`
+    were empty. Every consumer that draws a chromatogram then produced a blank
+    canvas with nothing to explain it. Biopython exposes both (DATA9-12 keyed by
+    FWO_1, and PLOC2), so there is no reason to drop them.
+    """
+    bio = read_ab1(sample_ab1, engine="biopython")
+    assert sorted(bio.peaks) == ["A", "C", "G", "T"]
+    assert all(len(bio.peaks[b]) > 0 for b in "ACGT")
+    assert len(bio.basecall_pos) == len(bio.sequence)
+    # Only the SECONDARY basecall genuinely needs tracy.
+    assert bio.secondary == "" and bio.mixed_positions == []
+
+
+@pytest.mark.skipif(not HAS_TRACY, reason="tracy not installed")
+def test_fallback_channels_match_tracy_exactly(sample_ab1):
+    """Pins the FWO_1 channel->base mapping. Getting it wrong would silently
+    swap two dyes, which looks plausible and is completely wrong."""
+    tr = read_ab1(sample_ab1, engine="tracy")
+    bio = read_ab1(sample_ab1, engine="biopython")
+    for base in "ACGT":
+        assert tr.peaks[base] == pytest.approx(bio.peaks[base]), f"channel {base} differs"
+
+
+def test_a_typoed_tracy_path_does_not_silently_degrade(sample_ab1):
+    """`engine='auto'` may fall back when tracy is ABSENT — never when the
+    caller named a specific binary and got the path wrong."""
+    with pytest.raises(FileNotFoundError):
+        read_ab1(sample_ab1, tracy_path="/definitely/not/tracy")
+
+
+@pytest.mark.skipif(not HAS_TRACY, reason="tracy not installed")
+def test_an_unjudgeable_core_is_None_not_zero(sample_ab1, tmp_path):
+    """An edge_margin that eats the whole alignment means "cannot judge".
+
+    Reporting identity_core = 0.0 made verify_construct FAIL a perfect clone
+    while handing back an empty core_differences — a rejection with no evidence.
+    """
+    ref = tmp_path / "ref.fa"
+    tr = read_ab1(sample_ab1)
+    tr.to_fasta(str(ref))
+    aln = align_to_reference(sample_ab1, str(ref), edge_margin=10_000)
+    assert aln["core_span"] == 0
+    assert aln["identity_core"] is None
+    assert aln["identity"] is not None          # the whole-read number still stands
+
+    rep = verify_construct(sample_ab1, str(ref), edge_margin=10_000)
+    assert rep["traces"][0]["unjudged"] is True
+    assert rep["ok"] is False                    # must not silently pass either
