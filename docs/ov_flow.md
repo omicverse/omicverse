@@ -26,8 +26,11 @@ res = gs.apply(adata)
 res.stats()
 ```
 
-Full worked example: [`t_flow.ipynb`](t_flow.ipynb) — runs end to end on a synthetic `.fcs` the
-notebook writes itself, so it needs no data of your own.
+Full worked examples live with the rest of the user documentation, in the
+`omicverse_guide` submodule: [`Tutorials-flow`](../omicverse_guide/docs/Tutorials-flow/index.md)
+— four notebooks covering reading and compensation, gating, Gating-ML
+interchange, and FlowSOM. Each writes its own synthetic `.fcs`, so none of them
+needs data of your own.
 
 ## Reading a file
 
@@ -133,6 +136,43 @@ onto generated valid ids and carries the human name in `custom_info`, restoring 
 **opposite populations** and silently merging them would be the worst thing an interchange format
 could do. `write_gatingml` re-parses what it just wrote, because *"writes fine, will not read
 back"* is exactly the failure being avoided.
+
+## Plots
+
+Every other part of this module can be checked by reading a number; a gate
+cannot. *"CD3+ is 69.5% of Live"* is not evidence that the CD3 gate is in the
+right place — the only thing that settles it is seeing the boundary lying on the
+population, **on the scale the boundary was drawn on**.
+
+```python
+ov.flow.biaxial(adata, 'CD4', 'CD8', strategy=gs, gates=['CD4/CD8'],
+                result=res, population='CD3+')     # density + gate + the four %
+ov.flow.histogram(adata, 'CD3', gates=[cd3], result=res)
+ov.flow.backgate(adata, 'FSC-A', 'SSC-A', result=res, population='CD4 T')
+ov.flow.hierarchy(gs, result=res)
+ov.flow.spillover_heatmap(adata)
+ov.flow.flowsom_heatmap(adata)
+```
+
+* **The axis is the scale.** Events are drawn in scale space using the transform
+  the *gate* carries, and the ticks are re-labelled into data units via
+  `Transform.ticks`. The plot cannot disagree with the mask, because it reads the
+  scaling off the gate rather than being told it a second time.
+* **The events are the gate's events.** Channel lookup goes through the same
+  accessor `GatingStrategy.apply` uses, so a marker/detector alias resolves
+  identically in the picture and in the mask.
+* **The percentages come from the `GatingResult`**, not from re-running the gate
+  on whatever is being displayed. Those differ — a child is restricted by its
+  parent — and the number a reader should see is the one the analysis produced.
+* Gate dimensions are matched **by name**: a polygon stored as `('CD8','CD4')`
+  drawn on a CD4 × CD8 plot is transposed, not drawn mirrored.
+* Colour is per-event binned density, drawn low-to-high so rare events survive;
+  a plain scatter at 1e5 events is a black blob in which every population looks
+  equally dense.
+
+`backgate` is the one that catches a bad gate: a "CD4 T" population scattered
+through the debris corner of FSC × SSC is not a T-cell population, however clean
+the CD4 × CD8 plot looked, and no statistics table will say so.
 
 ## Unsupervised — FlowSOM
 

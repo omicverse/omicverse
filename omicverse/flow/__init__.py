@@ -12,6 +12,10 @@ WHAT LIVES HERE
     gate geometry       rectangle / polygon / ellipsoid / quadrant / boolean.
     gating strategy     the TREE, owned by the analysis rather than by a
                         sample, so one strategy applies to a whole batch.
+    plots               biaxial density, histograms, back-gating, the hierarchy
+                        and the spillover matrix — drawn in the gate's OWN
+                        transform, because a gate is only checkable by looking
+                        at it. See ``plotting.py``.
 
 WHAT DOES NOT
     Reading FCS files — that is ``ov.io.read_fcs``, because it is I/O. This
@@ -57,6 +61,14 @@ from ._gatingml import (
     write_gatingml,
 )
 from ._strategy import GatingResult, GatingStrategy
+from .plotting import (
+    backgate,
+    biaxial,
+    flowsom_heatmap,
+    hierarchy,
+    histogram,
+    spillover_heatmap,
+)
 from ._transforms import (
     Asinh,
     Hyperlog,
@@ -84,4 +96,7 @@ __all__ = [
     "is_valid_xml_id", "sanitize_id",
     # clustering
     "flowsom", "SOM", "som_metacluster",
+    # plotting
+    "biaxial", "histogram", "backgate", "hierarchy",
+    "spillover_heatmap", "flowsom_heatmap",
 ]

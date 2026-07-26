@@ -1,100 +1,227 @@
-"""Keep the committed tutorial honest.
+"""Keep the committed tutorials honest.
 
-`docs/t_flow.ipynb` ships WITH ITS OUTPUTS, following `docs/t_synbio.ipynb`. That
-makes it documentation people read without running — which means a stale or
-broken notebook teaches the wrong thing silently.
+The `ov.flow` tutorials live in the **omicverse_guide submodule**
+(`omicverse_guide/docs/Tutorials-flow/`), because that is the repository the
+documentation site is built from — Sphinx reads `omicverse_guide/docs`, so a
+notebook sitting in this repository's `docs/` is not published anywhere. They
+were briefly committed to the wrong repository; these tests now assert the
+correct location, which is also what stops the mistake recurring.
 
-Nothing in this repo executes notebooks (no nbmake, nbval or papermill anywhere
-in .github/ or pyproject.toml), so these are the only guard. The cheap checks
-run everywhere; the full re-execution runs wherever the toolchain is present.
+CI checks out submodules (`.github/workflows/python-package.yml`), so these run
+with teeth there. A developer without the submodule initialised gets skips —
+`git submodule update --init omicverse_guide` if you want them locally.
 
-Writing this notebook already caught two defects in itself that no unit test
-would have: a shape bug in a `np.allclose` check that made it print
-"scatter untouched: False" when scatter was in fact untouched, and a
-before/after comparison that printed the wrong column under a label claiming
-otherwise.
+The notebooks ship WITH THEIR OUTPUTS, which makes them documentation people
+read without running, which means a stale or broken one teaches the wrong thing
+silently. Nothing else in this repo executes notebooks (no nbmake, nbval or
+papermill in .github/ or pyproject.toml), so this file is the only guard.
+
+Defects these checks were written in response to, all of which were green under
+"it ran without an exception":
+
+* a notebook committed with **no figures at all** — every output a table —
+  because the module had no plotting functions at the time;
+* a `np.allclose` shape bug that printed "scatter untouched: False" when scatter
+  was in fact untouched;
+* a boolean gate captioned "CD3+ but not CD4+" that was in fact a tautology
+  returning its own operand.
 """
 from __future__ import annotations
 
 import importlib.util
 import json
+import os
 import pathlib
 
 import pytest
 
-NB = pathlib.Path(__file__).resolve().parents[2] / "docs" / "t_flow.ipynb"
+ROOT = pathlib.Path(__file__).resolve().parents[2]
+TUTORIALS = ROOT / "omicverse_guide" / "docs" / "Tutorials-flow"
+NOTEBOOKS = [
+    "t_flow_01_reading_and_compensation.ipynb",
+    "t_flow_02_gating.ipynb",
+    "t_flow_03_gatingml.ipynb",
+    "t_flow_04_flowsom.ipynb",
+]
 
-HAS_NBFORMAT = importlib.util.find_spec("nbformat") is not None
+HAS_SUBMODULE = (ROOT / "omicverse_guide" / "docs").is_dir()
 HAS_NBCLIENT = importlib.util.find_spec("nbclient") is not None
 HAS_FLOWIO = importlib.util.find_spec("flowio") is not None
 
-
-def test_the_tutorial_exists():
-    assert NB.exists(), "ov.flow ships a namespace; it ships a tutorial with it"
-
-
-def test_no_cell_errored_when_it_was_executed():
-    """The committed outputs must not contain a traceback. This is what catches
-    someone committing a notebook they ran after breaking the API."""
-    nb = json.loads(NB.read_text())
-    bad = []
-    for i, cell in enumerate(nb["cells"]):
-        for out in cell.get("outputs", []) or []:
-            if out.get("output_type") == "error":
-                bad.append((i, out.get("ename")))
-    assert not bad, f"error outputs in committed notebook: {bad}"
+needs_submodule = pytest.mark.skipif(
+    not HAS_SUBMODULE,
+    reason="omicverse_guide submodule not checked out "
+           "(git submodule update --init omicverse_guide)",
+)
 
 
-def test_every_code_cell_actually_ran():
+def _load(name):
+    return json.loads((TUTORIALS / name).read_text())
+
+
+def _text(nb, kind):
+    return " ".join(
+        "".join(c["source"]) for c in nb["cells"] if c["cell_type"] == kind
+    )
+
+
+@needs_submodule
+def test_the_tutorials_are_in_the_guide_submodule():
+    """Not in this repository's docs/. That directory holds developer notes and
+    is not part of the documentation build, so a tutorial there is invisible."""
+    assert TUTORIALS.is_dir(), f"{TUTORIALS} is missing"
+    missing = [n for n in NOTEBOOKS if not (TUTORIALS / n).exists()]
+    assert not missing, f"missing tutorials: {missing}"
+
+
+def test_no_flow_tutorial_was_left_behind_in_this_repo():
+    """Runs with or without the submodule: the misplacement this guards against
+    is a file appearing HERE, which needs no submodule to detect."""
+    strays = sorted(p.name for p in (ROOT / "docs").glob("t_flow*.ipynb"))
+    assert not strays, (
+        f"{strays} is in the main repo's docs/, which the documentation build "
+        "does not read — flow tutorials belong in "
+        "omicverse_guide/docs/Tutorials-flow/"
+    )
+
+
+@needs_submodule
+@pytest.mark.parametrize("name", NOTEBOOKS)
+def test_no_cell_errored_when_it_was_executed(name):
+    """The committed outputs must not contain a traceback. This catches someone
+    committing a notebook they ran after breaking the API."""
+    bad = [
+        (i, out.get("ename"))
+        for i, cell in enumerate(_load(name)["cells"])
+        for out in (cell.get("outputs") or [])
+        if out.get("output_type") == "error"
+    ]
+    assert not bad, f"{name}: error outputs in committed notebook: {bad}"
+
+
+@needs_submodule
+@pytest.mark.parametrize("name", NOTEBOOKS)
+def test_every_code_cell_actually_ran(name):
     """An un-run cell means the outputs below it describe a different state than
     the code above it — worse than no outputs at all."""
-    nb = json.loads(NB.read_text())
-    code = [c for c in nb["cells"] if c["cell_type"] == "code"]
-    assert code, "no code cells"
+    code = [c for c in _load(name)["cells"] if c["cell_type"] == "code"]
+    assert code, f"{name}: no code cells"
     unrun = [i for i, c in enumerate(code) if c.get("execution_count") is None]
-    assert not unrun, f"code cells never executed: {unrun}"
+    assert not unrun, f"{name}: code cells never executed: {unrun}"
 
 
-def test_the_outputs_are_in_execution_order():
+@needs_submodule
+@pytest.mark.parametrize("name", NOTEBOOKS)
+def test_the_outputs_are_in_execution_order(name):
     """Out-of-order counts mean cells were re-run piecemeal, so the narrative
     and the numbers no longer correspond."""
-    nb = json.loads(NB.read_text())
-    counts = [c["execution_count"] for c in nb["cells"]
+    counts = [c["execution_count"] for c in _load(name)["cells"]
               if c["cell_type"] == "code" and c.get("execution_count")]
-    assert counts == sorted(counts), f"execution counts out of order: {counts}"
+    assert counts == sorted(counts), f"{name}: execution counts out of order: {counts}"
 
 
-def test_it_says_the_data_is_simulated():
+@needs_submodule
+@pytest.mark.parametrize("name", NOTEBOOKS)
+def test_the_tutorial_shows_figures(name):
+    """The one that would have caught the original notebook.
+
+    Gating is a visual procedure: a reader cannot tell whether a gate is in the
+    right place from a table of counts. A flow-cytometry tutorial with no image
+    outputs is not a flow-cytometry tutorial, and every check that existed
+    before this one passed on exactly that.
+    """
+    images = sum(
+        1
+        for cell in _load(name)["cells"]
+        for out in (cell.get("outputs") or [])
+        for key in (out.get("data") or {})
+        if key.startswith("image/")
+    )
+    assert images >= 2, f"{name}: only {images} figure(s) in a cytometry tutorial"
+
+
+@needs_submodule
+def test_the_series_covers_the_module():
+    """Each notebook must actually reach the part of ov.flow it claims to."""
+    expected = {
+        "t_flow_01_reading_and_compensation.ipynb": ["read_fcs", "compensate",
+                                                     "Logicle", "spillover_heatmap"],
+        "t_flow_02_gating.ipynb": ["GatingStrategy", "PolygonGate", "QuadrantGate",
+                                   "BooleanGate", "hierarchy", "backgate"],
+        "t_flow_03_gatingml.ipynb": ["write_gatingml", "read_gatingml", "from_dict"],
+        "t_flow_04_flowsom.ipynb": ["flowsom", "flowsom_heatmap"],
+    }
+    for name, symbols in expected.items():
+        src = _text(_load(name), "code")
+        missing = [s for s in symbols if s not in src]
+        assert not missing, f"{name} never calls: {missing}"
+
+
+@needs_submodule
+@pytest.mark.parametrize("name", NOTEBOOKS)
+def test_it_says_the_data_is_simulated(name):
     """A tutorial whose numbers look like a real experiment must say plainly
     that they are not."""
-    text = " ".join(
-        "".join(c["source"]) for c in json.loads(NB.read_text())["cells"]
-        if c["cell_type"] == "markdown"
-    ).lower()
-    assert "simulated" in text or "synthetic" in text
+    text = _text(_load(name), "markdown").lower()
+    assert "simulated" in text or "synthetic" in text, f"{name}"
 
 
-def test_it_only_uses_the_public_api():
-    """A tutorial reaching into a private module is teaching an API that can be
+@needs_submodule
+@pytest.mark.parametrize("name", NOTEBOOKS)
+def test_it_only_uses_the_public_api(name):
+    """A tutorial reaching into a private module teaches an API that can be
     renamed without notice."""
-    src = " ".join(
-        "".join(c["source"]) for c in json.loads(NB.read_text())["cells"]
-        if c["cell_type"] == "code"
-    )
-    assert "ov.flow." in src
-    assert "._transforms" not in src and "._gates" not in src and "._strategy" not in src
+    src = _text(_load(name), "code")
+    assert "ov.flow." in src, f"{name}: never touches ov.flow"
+    for private in ("._transforms", "._gates", "._strategy", "._compensate",
+                    "._gatingml", "._som", "._cluster"):
+        assert private not in src, f"{name} reaches into {private}"
 
 
+@needs_submodule
+@pytest.mark.parametrize("name", NOTEBOOKS)
+def test_each_notebook_stands_alone(name):
+    """A reader who lands on notebook 3 from a search must not have to run 1
+    first, so each one writes its own demo file."""
+    src = _text(_load(name), "code")
+    assert "write_demo" in src or "create_fcs" in src, f"{name}: no data of its own"
+
+
+@needs_submodule
 @pytest.mark.skipif(not (HAS_NBCLIENT and HAS_FLOWIO),
                     reason="needs nbclient + flowio to re-execute")
-def test_the_notebook_still_runs(tmp_path):
-    """Re-execute end to end. The notebook is the only thing in the repo that
-    exercises read_fcs -> compensate -> transform -> gate -> GatingML -> FlowSOM
-    as one pipeline; the unit tests each cover a link, not the chain."""
+@pytest.mark.parametrize("name", NOTEBOOKS)
+def test_the_notebook_still_runs(name, tmp_path, monkeypatch):
+    """Re-execute end to end. These notebooks are the only thing in the repo
+    exercising read_fcs -> compensate -> transform -> gate -> plot -> GatingML
+    -> FlowSOM as one chain; the unit tests each cover a link, not the chain.
+
+    tmp_path as the working directory on purpose: they write .fcs and .xml
+    files, and none of those belong beside the notebooks.
+
+    The kernel is a subprocess, so it does not inherit the sys.path pytest set
+    up — it resolves `omicverse` however the environment happens to. On a
+    machine with more than one checkout installed that is silently the WRONG
+    one, and the failure surfaces as a baffling AttributeError twelve cells in.
+    Pinning PYTHONPATH makes the test mean "the tutorial runs against THIS
+    source", which is the only version of the question worth asking.
+    """
     import nbformat
     from nbclient import NotebookClient
 
-    nb = nbformat.read(NB, as_version=4)
+    existing = os.environ.get("PYTHONPATH", "")
+    monkeypatch.setenv(
+        "PYTHONPATH", str(ROOT) + (os.pathsep + existing if existing else "")
+    )
+
+    nb = nbformat.read(str(TUTORIALS / name), as_version=4)
+    nb.cells.insert(0, nbformat.v4.new_code_cell(
+        "import omicverse as ov, pathlib\n"
+        f"assert pathlib.Path(ov.__file__).resolve().parents[1] == "
+        f"pathlib.Path({str(ROOT)!r}).resolve(), (\n"
+        "    'the kernel imported a different omicverse checkout: ' + ov.__file__)\n"
+        "assert hasattr(ov.io, 'read_fcs')\n"
+    ))
     client = NotebookClient(nb, timeout=900, kernel_name="python3",
                             resources={"metadata": {"path": str(tmp_path)}})
     client.execute()
