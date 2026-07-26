@@ -270,3 +270,57 @@ def test_missing_file_is_a_FileNotFoundError(tmp_path):
 
     with pytest.raises(FileNotFoundError):
         read_fcs(str(tmp_path / "nope.fcs"))
+
+
+# ── channel values vs scale values ──────────────────────────────────────────
+# Found by adversarial review AFTER the reader had been written and opened as a
+# PR. The original fixture used $PnE = "0,0" and $PnG = 1.0 throughout, so it
+# could not have caught this no matter what the reader did.
+
+@pytest.fixture
+def fcs_amplified(tmp_path):
+    """A file with a real amplifier gain on one channel."""
+    import flowio
+
+    raw = np.array([[100.0, 200.0, 1000.0, 5000.0]] * 50, dtype=np.float32)
+    path = tmp_path / "amplified.fcs"
+    with open(path, "wb") as fh:
+        flowio.create_fcs(
+            fh, raw.flatten().tolist(),
+            channel_names=["FSC-A", "SSC-A", "FITC-A", "PE-A"],
+            metadata_dict={"$P4G": "2.0", "$P3R": "1024", "$P4R": "1024"},
+        )
+    return str(path)
+
+
+def test_amplifier_gain_is_applied(fcs_amplified):
+    """The DATA segment holds CHANNEL values; $PnG turns them into SCALE values.
+
+    Reading the raw buffer returned a gain-2.0 channel at exactly twice its true
+    value — silently, and every gate drawn on it would sit in the wrong place.
+    """
+    from omicverse.io import read_fcs
+
+    a = read_fcs(fcs_amplified)
+    assert np.isclose(np.asarray(a.X)[0, 3], 2500.0), "PE-A has $P4G=2.0: 5000 -> 2500"
+    assert np.isclose(np.asarray(a.X)[0, 2], 1000.0), "FITC-A has no gain: unchanged"
+    assert a.uns["fcs"]["preprocessed"] is True
+
+
+def test_preprocess_can_be_turned_off(fcs_amplified):
+    from omicverse.io import read_fcs
+
+    a = read_fcs(fcs_amplified, preprocess=False)
+    assert np.isclose(np.asarray(a.X)[0, 3], 5000.0)
+    assert a.uns["fcs"]["preprocessed"] is False
+
+
+def test_scaling_agrees_with_flowio_itself(fcs_amplified):
+    """Pin against the parser's own preprocessing rather than a hand-computed
+    number, so $PnE / $TIMESTEP handling stays correct too."""
+    import flowio
+
+    from omicverse.io import read_fcs
+
+    expected = flowio.FlowData(fcs_amplified).as_array(preprocess=True)
+    assert np.allclose(np.asarray(read_fcs(fcs_amplified).X), expected)

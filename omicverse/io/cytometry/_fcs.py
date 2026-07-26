@@ -24,7 +24,9 @@ The ``var`` schema here is deliberately identical to `pytometry
 (marker when present, else channel) and the same ``n / channel / marker / PnB /
 PnE / PnG / PnR`` columns. An AnnData from this function is therefore a drop-in
 input to ``pytometry.pp.compensate`` and ``pytometry.tl.normalize_logicle``
-without a conversion step — verified in the test suite, not assumed.
+without a conversion step. The test suite pins this, though those tests skip
+when pytometry is absent — so it is checked, not merely asserted, wherever
+pytometry is installed.
 
 The parsing itself uses `flowio <https://github.com/whitews/FlowIO>`_ (BSD-3),
 which is the parser underneath both pytometry and FlowKit. Depending on it
@@ -173,6 +175,7 @@ def read_fcs(
     markers_only: bool = False,
     sample: Optional[str] = None,
     compensated: bool = False,
+    preprocess: bool = True,
     dtype: Union[str, np.dtype] = "float32",
 ) -> AnnData:
     r"""Read an ``.fcs`` file.
@@ -180,7 +183,8 @@ def read_fcs(
     Arguments
     ---------
     path
-        Path to a Flow Cytometry Standard file (FCS 2.0/3.0/3.1/3.2).
+        Path to a Flow Cytometry Standard file. FCS **2.0 / 3.0 / 3.1** —
+        the versions the flowio parser supports; 3.2 is not claimed.
     channels
         Keep only these channels. Matched against BOTH the detector name
         (``$PnN``, e.g. ``'FITC-A'``) and the marker (``$PnS``, e.g. ``'CD3'``),
@@ -192,6 +196,12 @@ def read_fcs(
     sample
         Value for ``obs['sample']``. Defaults to the filename stem, which makes
         concatenating several files give a usable sample column for free.
+    preprocess
+        Convert the stored CHANNEL values into SCALE values — apply ``$PnG``
+        gain, decode ``$PnE`` log-amplified channels, and scale time by
+        ``$TIMESTEP``. On by default because scale values are what every
+        downstream step assumes; set ``False`` only if you specifically want the
+        raw ADC buffer.
     compensated
         Apply the file's own ``$SPILLOVER`` matrix on read. ``False`` by default
         and deliberately so: the acquisition matrix is frequently wrong, most
@@ -222,8 +232,14 @@ def read_fcs(
     fd = flowio.FlowData(str(path))
 
     var = _channel_frame(fd.channels)
-    values = np.reshape(np.asarray(fd.events, dtype=float),
-                        (-1, fd.channel_count))
+    # `as_array(preprocess=True)`, NOT the raw `fd.events` buffer. The DATA
+    # segment holds CHANNEL values; turning them into SCALE values means
+    # applying `$PnG` (amplifier gain), decoding `$PnE` log-amplified channels
+    # as ``10 ** (decades * x / range) * log0``, and scaling the time channel by
+    # `$TIMESTEP`. Reading the raw buffer silently returns a gain-2.0 channel at
+    # twice its true value and a log-amplified channel off by orders of
+    # magnitude — every downstream gate would then be drawn in the wrong place.
+    values = fd.as_array(preprocess=preprocess)
 
     keywords = dict(fd.text)
     spill = parse_spillover(
@@ -277,6 +293,7 @@ def read_fcs(
         "spillover": spill,
         "version": getattr(fd, "version", None),
         "compensated": bool(compensated),
+        "preprocessed": bool(preprocess),
         "path": os.path.abspath(path),
     }
     return adata

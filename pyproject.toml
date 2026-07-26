@@ -93,6 +93,22 @@ dependencies = [
 rust = [
     "anndataoom>=0.1.0,<1.0",
 ]
+# Flow / spectral / mass cytometry. `flowio` (BSD-3, pure Python, numpy only) is
+# the FCS parser behind ov.io.read_fcs and behind both pytometry and FlowKit; it
+# was previously an UNDECLARED runtime dependency of a public function.
+#   pip install omicverse[cytometry]
+cytometry = [
+    "flowio>=1.3",
+]
+# Adds the scverse cytometry stack: compensation, logicle/biexponential
+# transforms and FlowSOM on top of the reader. Kept separate because flowutils
+# and flowkit require numpy>=2, which is a heavier constraint than the reader
+# itself needs.
+#   pip install omicverse[cytometry-full]
+cytometry-full = [
+    "flowio>=1.3",
+    "pytometry>=0.1.4",
+]
 full = [
   "dynamo-release<=1.5.3",
   "squidpy",

@@ -56,8 +56,10 @@ def _require(modname: str, feature: str):
         return importlib.import_module(modname)
     except ImportError as exc:  # pragma: no cover - exercised only without dep
         raise ImportError(
+            # There is no `ev` extra — the old hint sent users to an install
+            # command that fails. Point at one that exists.
             f"{feature} needs the optional '{modname}' backend. Install with: "
-            f"pip install {modname}   (or pip install omicverse[ev])."
+            f"pip install {modname}   (or pip install omicverse[cytometry])."
         ) from exc
 
 
