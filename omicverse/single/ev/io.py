@@ -547,21 +547,22 @@ def read_nanofcm(
 
 @register_function(
     aliases=[
-        "read_fcs", "load_fcs", "read_flow", "读取FCS", "流式文件读取",
+        "read_fcs_ev", "load_fcs_ev", "读取EV流式",
     ],
     category="ev",
     description=(
-        "Read a single-EV flow-cytometry FCS file into an intensity-type "
-        "single-EV AnnData. Each FCS event is one EV and each fluorescence "
-        "channel a protein marker. Uses the optional 'flowkit' or 'fcsparser' "
-        "backend for FCS parsing; if neither is installed pass a CSV export "
-        "instead (see read_nanofcm)."
+        "Read an FCS file as SINGLE-EV data: each event is one vesicle and each "
+        "fluorescence channel a protein marker, returned as an intensity-type "
+        "single-EV AnnData with uns['ev']. This is the EV-flavoured wrapper — "
+        "for a general flow / spectral / mass cytometry read that keeps the "
+        "$PnN/$PnS channel-vs-marker distinction and the $SPILLOVER matrix, use "
+        "ov.io.read_fcs instead."
     ),
     examples=[
         "adata = ov.single.ev.read_fcs('ev_events.fcs')",
         "adata = ov.single.ev.read_fcs('ev_events.fcs', marker_cols=['FITC-A'])",
     ],
-    related=["single.ev.read_nanofcm", "single.ev.read_ev_matrix"],
+    related=["io.read_fcs", "single.ev.read_nanofcm", "single.ev.read_ev_matrix"],
 )
 def read_fcs(
     path: str,
@@ -572,14 +573,21 @@ def read_fcs(
 ):
     """Read an FCS-format single-EV flow event file into an AnnData.
 
+    Thin EV-flavoured wrapper over :func:`omicverse.io.read_fcs`. The general
+    reader owns the format — it keeps the ``$PnN`` detector name and the
+    ``$PnS`` marker apart, and parses ``$SPILLOVER`` — and this adds the single-
+    EV conventions on top: ``event%06d`` row names, the intensity ``value_type``
+    and the ``uns['ev']`` stamp.
+
     Parameters
     ----------
     path
-        Path to a ``.fcs`` file. If it ends in ``.csv`` / ``.tsv`` the call is
-        forwarded to :func:`read_nanofcm` (the documented CSV-export path).
+        Path to a ``.fcs`` file. If it ends in ``.csv`` / ``.tsv`` / ``.txt``
+        the call is forwarded to :func:`read_nanofcm` (the documented CSV-export
+        path), which is EV-specific and stays here.
     marker_cols
-        Channels to keep as protein markers. If ``None`` all channels are
-        kept.
+        Channels to keep as protein markers; ``None`` keeps all. Matched against
+        the detector name AND the marker name, so either vocabulary works.
     platform
         Platform tag stored in ``uns['ev']``.
     sample
@@ -590,11 +598,12 @@ def read_fcs(
     :class:`~anndata.AnnData`
         Intensity-type single-EV AnnData.
 
-    Notes
-    -----
-    FCS parsing requires the optional ``flowkit`` or ``fcsparser`` package
-    (``pip install fcsparser``). When neither is available, export the events
-    to CSV from the instrument software and use :func:`read_nanofcm`.
+    See Also
+    --------
+    omicverse.io.read_fcs
+        The general reader. Use it for conventional flow, spectral flow or mass
+        cytometry, or whenever you need the spillover matrix or the channel /
+        marker distinction — none of which survive the EV framing here.
     """
     if not os.path.exists(path):
         raise FileNotFoundError(path)
@@ -602,27 +611,26 @@ def read_fcs(
     if low.endswith((".csv", ".tsv", ".txt")):
         return read_nanofcm(path, marker_cols=marker_cols, platform=platform)
 
-    events: Optional[pd.DataFrame] = None
-    # try flowkit first, then fcsparser
-    try:
-        flowkit = _require("flowkit", "FCS parsing")
-        fk_sample = flowkit.Sample(path)
-        events = fk_sample.as_dataframe(source="raw")
-        if hasattr(events.columns, "get_level_values"):
-            events.columns = events.columns.get_level_values(-1)
-    except ImportError:
-        fcsparser = _require("fcsparser", "FCS parsing")
-        _, events = fcsparser.parse(path, reformat_meta=True)
+    from ...io.cytometry import read_fcs as _read_fcs
 
-    events = events.reset_index(drop=True)
-    if marker_cols is not None:
-        events = events[list(marker_cols)]
-    events.index = [f"event{i:06d}" for i in range(len(events))]
+    adata = _read_fcs(path, channels=marker_cols, sample=sample)
+    events = pd.DataFrame(
+        np.asarray(adata.X),
+        columns=[str(c) for c in adata.var.index],
+        index=[f"event{i:06d}" for i in range(adata.n_obs)],
+    )
     obs = pd.DataFrame(index=events.index)
     obs["sample"] = sample
-    return _build_ev_anndata(
+    out = _build_ev_anndata(
         events, value_type="intensity", platform=platform, obs=obs
     )
+    # Carry the FCS metadata through rather than discarding it, which is what
+    # this function used to do — the spillover matrix in particular is not
+    # recoverable once the events have been reframed as an EV matrix.
+    out.uns["fcs"] = adata.uns["fcs"]
+    out.var["channel"] = adata.var["channel"].to_numpy()
+    out.var["marker"] = adata.var["marker"].to_numpy()
+    return out
 
 
 # ---------------------------------------------------------------------------
