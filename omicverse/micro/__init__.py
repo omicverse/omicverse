@@ -77,6 +77,21 @@ _LAZY_ATTRS: dict[str, tuple[str, str]] = {
 
 __all__ = sorted(_LAZY_ATTRS)
 
+_REGISTRY_SUBMODULES = ("._diversity", "._ord", "._da", "._pp", "._phylo",
+                        "._meta", "._pair")
+
+
+def _hydrate_registry() -> None:
+    """Force-import every ``@register_function``-bearing submodule so the
+    global registry sees ``ov.micro`` at export time. Called from
+    :func:`omicverse._registry._hydrate_registry_for_export`."""
+    for mod in _REGISTRY_SUBMODULES:
+        try:
+            importlib.import_module(mod, package=__name__)
+        except Exception:
+            # Optional backends may be missing — register what loads cleanly.
+            continue
+
 
 def __getattr__(name: str):
     if name in _LAZY_ATTRS:

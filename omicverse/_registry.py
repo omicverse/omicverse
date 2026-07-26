@@ -1100,6 +1100,12 @@ def _hydrate_registry_for_export() -> None:
         "omicverse.protein",
         "omicverse.genetics",
         "omicverse.airr",
+        "omicverse.tl",
+        "omicverse.es",
+        "omicverse.micro",
+        # ov.flow lands with the flow-cytometry branch; the loop below tolerates
+        # a missing module, so listing it here keeps it discoverable on merge.
+        "omicverse.flow",
     )
     for module_name in module_names:
         try:
@@ -1150,6 +1156,13 @@ def _hydrate_registry_for_export() -> None:
         import omicverse.synbio as _synbio  # noqa: F401
 
         _synbio._hydrate_registry()
+    except Exception:
+        pass
+    # And ov.micro — its __init__ is lazy too.
+    try:
+        import omicverse.micro as _micro  # noqa: F401
+
+        _micro._hydrate_registry()
     except Exception:
         pass
 
