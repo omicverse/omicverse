@@ -320,7 +320,9 @@ class Monocle:
                           reduction_method: str = 'DDRTree',
                           norm_method: str = 'log',
                           method: str = 'fast',
-                          verbose: bool = False, **kwargs):
+                          verbose: bool = False,
+                          residualModelFormulaStr: Optional[str] = None,
+                          **kwargs):
         """
         Reduce dimensionality and learn the principal graph.
 
@@ -345,6 +347,13 @@ class Monocle:
               full objective (including the expensive ``||X − WZ||_2^2``
               term) on every iteration and terminates when it stops
               decreasing.  Pass this when you need bitwise R parity.
+        residualModelFormulaStr : str or None
+            Patsy/R-style model formula specifying cell-level effects to
+            subtract before scaling and dimension reduction, for example
+            ``"~ batch"`` or ``"~ batch + percent_mito"``. This is the
+            pure-Python equivalent of R Monocle 2's parameter of the same
+            name. The formula must include an intercept and reference columns
+            in ``adata.obs``.
         **kwargs : additional DDRTree parameters
             ``ncenter``, ``lambda_param``, ``param_gamma``, ``sigma``,
             ``maxIter``, ``tol``.
@@ -353,7 +362,9 @@ class Monocle:
             self.adata, max_components=max_components,
             reduction_method=reduction_method,
             norm_method=norm_method, verbose=verbose,
-            method=method, **kwargs,
+            method=method,
+            residualModelFormulaStr=residualModelFormulaStr,
+            **kwargs,
         )
         self._reduced = True
         return self

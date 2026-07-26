@@ -5,6 +5,7 @@ Implements reduceDimension() with DDRTree, ICA, and tSNE methods.
 """
 
 import numpy as np
+from patsy import PatsyError, dmatrix
 from scipy import sparse
 from scipy.sparse import csr_matrix
 from scipy.spatial.distance import pdist, squareform
@@ -16,6 +17,94 @@ from .ddrtree import DDRTree
 
 # Show the 'fast is default' hint once per Python session.
 _FAST_HINT_SHOWN = False
+
+
+def _residualize_model_effects(FM, obs, residual_model_formula):
+    """Regress phenotype effects from a genes-by-cells expression matrix.
+
+    This mirrors the ``residualModelFormulaStr`` stage in R Monocle 2's
+    ``reduceDimension``: build a model matrix from cell metadata, fit every
+    gene jointly by least squares, retain the intercept, and subtract the
+    fitted contribution of all other terms.
+
+    Parameters
+    ----------
+    FM : np.ndarray
+        Normalized expression matrix with shape ``(genes, cells)``.
+    obs : pandas.DataFrame
+        Cell metadata. Its row order must match the columns of ``FM``.
+    residual_model_formula : str
+        Patsy/R-style formula such as ``"~ batch"`` or
+        ``"~ batch + percent_mito"``. An intercept is required; use the
+        conventional ``~ batch`` form rather than ``~ 0 + batch``.
+
+    Returns
+    -------
+    residualized : np.ndarray
+        Expression with non-intercept model effects removed.
+    metadata : dict
+        JSON-serializable audit metadata for ``adata.uns['monocle']``.
+    """
+    if not isinstance(residual_model_formula, str) or not residual_model_formula.strip():
+        raise ValueError("residualModelFormulaStr must be a non-empty formula string")
+
+    try:
+        design_df = dmatrix(
+            residual_model_formula,
+            data=obs,
+            return_type="dataframe",
+            NA_action="raise",
+        )
+    except (PatsyError, KeyError, TypeError, ValueError) as exc:
+        raise ValueError(
+            f"Invalid residualModelFormulaStr {residual_model_formula!r}: {exc}"
+        ) from exc
+
+    if len(design_df) != FM.shape[1]:
+        raise ValueError(
+            "residualModelFormulaStr changed the number of cells; missing metadata "
+            "must be resolved before trajectory inference"
+        )
+
+    columns = list(design_df.columns)
+    if "Intercept" not in columns:
+        raise ValueError(
+            "residualModelFormulaStr must include an intercept; use '~ batch' "
+            "instead of '~ 0 + batch' or '~ batch - 1'"
+        )
+
+    design = np.asarray(design_df, dtype=np.float64)
+    if not np.all(np.isfinite(design)):
+        raise ValueError("residualModelFormulaStr produced non-finite design values")
+
+    rank = int(np.linalg.matrix_rank(design))
+    if rank < design.shape[1]:
+        raise ValueError(
+            "residualModelFormulaStr produced a rank-deficient design matrix "
+            f"(rank {rank} < {design.shape[1]} columns). Remove nested or "
+            "redundant covariates before trajectory inference."
+        )
+
+    effect_mask = np.asarray([name != "Intercept" for name in columns])
+    if not effect_mask.any():
+        adjusted = np.array(FM, dtype=np.float64, copy=True)
+    else:
+        # Solve all genes at once: design is cells x terms and FM.T is
+        # cells x genes. Retain the intercept and subtract only covariate
+        # contributions, matching R Monocle 2's beta[, -1] behavior for
+        # ordinary formulas with an intercept.
+        coefficients = np.linalg.lstsq(design, FM.T, rcond=None)[0]
+        fitted_effects = design[:, effect_mask] @ coefficients[effect_mask, :]
+        adjusted = (FM.T - fitted_effects).T
+
+    metadata = {
+        "formula": residual_model_formula,
+        "design_columns": columns,
+        "design_rank": rank,
+        "n_cells": int(design.shape[0]),
+        "n_terms": int(design.shape[1]),
+    }
+    return adjusted, metadata
 
 
 def _cal_ncenter(ncells, ncells_limit=100, auto_scale=True):
@@ -114,7 +203,8 @@ def _normalize_expr_data(adata, norm_method='log', pseudo_expr=1):
 
 def reduce_dimension(adata, max_components=2, reduction_method='DDRTree',
                      norm_method='log', pseudo_expr=1, auto_param_selection=True,
-                     verbose=False, scaling=True, random_state=2016, **kwargs):
+                     verbose=False, scaling=True, random_state=2016,
+                     residualModelFormulaStr=None, **kwargs):
     """
     Reduce dimensionality of the data.
 
@@ -139,6 +229,11 @@ def reduce_dimension(adata, max_components=2, reduction_method='DDRTree',
         Seed used for stochastic initialisation (tSNE, K-means, ICA).
         Does NOT mutate numpy's global RNG — pass it through to
         scikit-learn estimators directly.
+    residualModelFormulaStr : str or None
+        Patsy/R-style model formula specifying cell-level effects to remove
+        after normalization and before scaling and dimension reduction, for
+        example ``"~ batch"`` or ``"~ batch + percent_mito"``. The formula
+        must include an intercept and reference columns in ``adata.obs``.
     **kwargs : dict
         Additional arguments passed to DDRTree or other methods.
 
@@ -147,6 +242,9 @@ def reduce_dimension(adata, max_components=2, reduction_method='DDRTree',
     adata with updated .obsm, .uns['monocle'] fields
     """
     _init_monocle_uns(adata)
+    # This field describes the current reduction only. Avoid retaining stale
+    # correction metadata if the same object is reduced again without a model.
+    adata.uns['monocle'].pop('residual_model', None)
 
     # Normalize expression
     FM, use_mask, gene_names = _normalize_expr_data(adata, norm_method, pseudo_expr)
@@ -156,6 +254,38 @@ def reduce_dimension(adata, max_components=2, reduction_method='DDRTree',
     xsd = np.sqrt(np.mean((FM - xm[:, None]) ** 2, axis=1))
     nonzero_var = xsd > 0
     FM = FM[nonzero_var, :]
+
+    if residualModelFormulaStr is not None:
+        FM, residual_model = _residualize_model_effects(
+            FM, adata.obs, residualModelFormulaStr,
+        )
+        # A gene explained entirely by the residual model has no remaining
+        # trajectory information. Drop it before z-scoring and DDRTree.
+        residual_sd = FM.std(axis=1, ddof=1)
+        # Exact model effects normally leave floating-point residuals rather
+        # than bitwise zeros. Treat values at least-squares precision as zero
+        # so the following z-score cannot amplify numerical noise.
+        residual_scale = np.maximum(1.0, np.max(np.abs(FM), axis=1))
+        residual_tol = np.sqrt(np.finfo(np.float64).eps) * residual_scale
+        residual_nonzero = (
+            np.isfinite(residual_sd) & (residual_sd > residual_tol)
+        )
+        residual_model["n_genes_before"] = int(FM.shape[0])
+        residual_model["n_genes_removed_zero_variance"] = int(
+            (~residual_nonzero).sum()
+        )
+        FM = FM[residual_nonzero, :]
+        if FM.shape[0] == 0:
+            raise ValueError(
+                "All ordering genes have zero variance after applying "
+                "residualModelFormulaStr"
+            )
+        adata.uns['monocle']['residual_model'] = residual_model
+        if verbose:
+            print(
+                "Removed model effects before dimension reduction: "
+                f"{residualModelFormulaStr}"
+            )
 
     # Scale genes (z-score across cells)
     if scaling:

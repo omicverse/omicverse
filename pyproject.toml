@@ -40,6 +40,7 @@ dependencies = [
     'seaborn>=0.11',
     'datetime>=4.5',
     'statsmodels>=0.13',
+    'patsy>=0.5',
     'joblib>=1.2',
     #'gseapy==0.10.8',
     'ipywidgets>=8.0',
