@@ -40,6 +40,10 @@ def test_order_cells_root_by_column_sets_progenitor_state(small_branching_adata)
          .reduce_dimension()
          .order_cells(root_by_column='time', root_by_value=0))
 
+    root_cell = mono.adata.uns['monocle']['root_cell']
+    assert mono.adata.obs.loc[root_cell, 'time'] == 0
+    assert mono.adata.obs.loc[root_cell, 'Pseudotime'] == pytest.approx(0.0)
+
     # Find the state that contains most t=0 cells
     t0_mask = mono.adata.obs['time'] == 0
     progenitor_state = mono.adata.obs.loc[t0_mask, 'State'].mode().iloc[0]
@@ -67,6 +71,8 @@ def test_order_cells_root_by_column_defaults_to_min(small_branching_adata):
          .select_ordering_genes()
          .reduce_dimension()
          .order_cells(root_by_column='hours'))  # no value → use min (0)
+    root_cell = mono.adata.uns['monocle']['root_cell']
+    assert mono.adata.obs.loc[root_cell, 'hours'] == 0
     # State hosting the most 0h cells must be the root state
     t0 = mono.adata.obs[mono.adata.obs['hours'] == 0]
     root_state = t0['State'].mode().iloc[0]

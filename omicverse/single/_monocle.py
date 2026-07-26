@@ -34,6 +34,64 @@ from .._registry import register_function
 # ``__init__`` and stores it on the instance as ``self._m2``.
 
 
+def _population_graph_medoid(adata: AnnData, mask: pd.Series) -> str:
+    """Return a matching cell minimizing distance to the target population.
+
+    ``projected_dp`` is the cell-level MST created by the first ordering pass.
+    On a tree, all-node sums of distances to a weighted target set can be
+    computed in linear time by rerooting the tree. Restricting the final
+    minimum to matching cells gives a deterministic, representative root
+    without materializing an all-pairs distance matrix.
+    """
+
+    graph = adata.uns.get('monocle', {}).get('projected_dp')
+    target = np.asarray(mask, dtype=bool)
+    target_indices = np.flatnonzero(target)
+    if graph is None or target_indices.size == 0:
+        raise ValueError("Cannot select a root medoid without target cells and MST")
+
+    graph = graph.tocsr().maximum(graph.T.tocsr()).tocsr()
+    n_obs = adata.n_obs
+    parent = np.full(n_obs, -2, dtype=int)
+    edge_to_parent = np.zeros(n_obs, dtype=float)
+    distance_from_zero = np.zeros(n_obs, dtype=float)
+    parent[0] = -1
+    stack = [0]
+    traversal = []
+    while stack:
+        node = stack.pop()
+        traversal.append(node)
+        for offset in range(graph.indptr[node], graph.indptr[node + 1]):
+            neighbor = int(graph.indices[offset])
+            if neighbor == parent[node] or parent[neighbor] != -2:
+                continue
+            parent[neighbor] = node
+            weight = float(graph.data[offset])
+            edge_to_parent[neighbor] = weight
+            distance_from_zero[neighbor] = distance_from_zero[node] + weight
+            stack.append(neighbor)
+    if len(traversal) != n_obs:
+        raise ValueError("Cell projection MST is disconnected")
+
+    subtree_targets = target.astype(int)
+    for node in reversed(traversal[1:]):
+        subtree_targets[parent[node]] += subtree_targets[node]
+
+    total_targets = int(target_indices.size)
+    distance_sum = np.empty(n_obs, dtype=float)
+    distance_sum[0] = float(distance_from_zero[target].sum())
+    for node in traversal[1:]:
+        distance_sum[node] = (
+            distance_sum[parent[node]]
+            + edge_to_parent[node]
+            * (total_targets - 2 * subtree_targets[node])
+        )
+    root_index = int(
+        target_indices[np.argmin(distance_sum[target_indices])]
+    )
+    return str(adata.obs_names[root_index])
+
+
 @register_function(
     aliases=["Monocle", "monocle", "monocle2", "monocle 2", "DDRTree trajectory", "BEAM"],
     category="trajectory",
@@ -371,7 +429,7 @@ class Monocle:
 
     def order_cells(self, root_state=None, reverse: Optional[bool] = None,
                     root_by_column: Optional[str] = None,
-                    root_by_value=None):
+                    root_by_value=None, root_cell: Optional[str] = None):
         """Order cells along the learned trajectory, assigning Pseudotime and State.
 
         Parameters
@@ -385,8 +443,8 @@ class Monocle:
             (match R's ``orderCells(reverse=TRUE)``).
         root_by_column : str or None
             Name of a column in ``mono.adata.obs``. If given, the
-            state with the most cells matching ``root_by_value`` in
-            that column is auto-chosen as the root state. This
+            matching population's graph medoid is auto-chosen as an exact
+            root cell. The compatibility path below still
             replicates R Monocle 2's ``GM_state()`` tutorial helper —
             e.g. for HSMM::
 
@@ -399,6 +457,10 @@ class Monocle:
         root_by_value
             Value within ``root_by_column`` that marks the progenitor
             population. Defaults to the column minimum.
+        root_cell : str or None
+            Exact observation name to use as the root. When
+            ``root_by_column`` is supplied, Monocle chooses the matching
+            population's graph medoid and uses it as this exact anchor.
         """
         # Auto-detect root_state from a metadata column if requested.
         # Requires a previous order_cells() call so that `State` exists.
@@ -420,14 +482,20 @@ class Monocle:
                 raise ValueError(
                     f"No cells matched {root_by_column}={target!r}"
                 )
-            counts = self.adata.obs.loc[mask, 'State'].value_counts()
-            if counts.empty:
-                raise ValueError("No State values under the selected mask")
-            root_state = counts.idxmax()
+            root_cell = _population_graph_medoid(self.adata, mask)
+            # An exact population medoid supersedes the State-only heuristic.
+            root_state = None
 
         self.adata = self._m2.order_cells(
             self.adata, root_state=root_state, reverse=reverse,
+            root_cell=root_cell,
         )
+        if root_by_column is not None:
+            self.adata.uns['monocle']['root_by_column'] = root_by_column
+            self.adata.uns['monocle']['root_by_value'] = str(target)
+            self.adata.uns['monocle']['root_selection_method'] = (
+                'target_population_graph_medoid'
+            )
         self._ordered = True
         return self
 

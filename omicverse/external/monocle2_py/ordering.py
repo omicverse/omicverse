@@ -396,11 +396,22 @@ def _extract_ddrtree_ordering(adata, root_cell_name, use_cell_mst=False):
     return ordering_df
 
 
-def _select_root_cell(adata, root_state=None, reverse=False):
+def _select_root_cell(adata, root_state=None, reverse=False, root_cell=None):
     """Select root cell for pseudotime ordering."""
     monocle = adata.uns['monocle']
 
-    if root_state is not None:
+    if root_cell is not None:
+        root_cell = str(root_cell)
+        if root_cell not in adata.obs_names:
+            raise ValueError(f"Unknown root_cell {root_cell!r}")
+        if monocle['dim_reduce_type'] == 'DDRTree':
+            closest = np.asarray(
+                monocle['pr_graph_cell_proj_closest_vertex']
+            ).ravel().astype(int)
+            cell_idx = int(adata.obs_names.get_loc(root_cell))
+            return monocle['mst'].vs[int(closest[cell_idx])]['name']
+        return root_cell
+    elif root_state is not None:
         if 'State' not in adata.obs.columns:
             raise ValueError("State not set. Call order_cells() without root_state first.")
 
@@ -449,7 +460,7 @@ def _select_root_cell(adata, root_state=None, reverse=False):
         return mst.vs[diameter_path[0]]['name']
 
 
-def order_cells(adata, root_state=None, reverse=None):
+def order_cells(adata, root_state=None, reverse=None, root_cell=None):
     """
     Order cells along the learned trajectory and assign pseudotime.
 
@@ -458,6 +469,10 @@ def order_cells(adata, root_state=None, reverse=None):
     adata : AnnData
     root_state : int or None
         If specified, use cells in this state as root.
+    root_cell : str or None
+        If specified, anchor pseudotime at this exact observation. This is
+        used by ``root_by_column`` so a mixed State cannot silently choose a
+        root from the wrong metadata population.
     reverse : bool or None
         If True, reverse the ordering direction.
 
@@ -491,8 +506,12 @@ def order_cells(adata, root_state=None, reverse=None):
                 )
 
         # Initial ordering on Y-center MST
-        root_cell = _select_root_cell(adata, root_state, reverse)
-        cc_ordering = _extract_ddrtree_ordering(adata, root_cell, use_cell_mst=False)
+        root_center = _select_root_cell(
+            adata, root_state, reverse, root_cell=root_cell
+        )
+        cc_ordering = _extract_ddrtree_ordering(
+            adata, root_center, use_cell_mst=False
+        )
 
         # Project cells onto MST edges
         _project_cells_to_mst(adata)
@@ -501,13 +520,13 @@ def order_cells(adata, root_state=None, reverse=None):
         closest_vertex = monocle['pr_graph_cell_proj_closest_vertex']
 
         # Find root in cell MST
-        old_root_idx = list(mst.vs['name']).index(root_cell)
+        old_root_idx = list(mst.vs['name']).index(root_center)
         cells_at_root = np.where(closest_vertex == old_root_idx)[0]
 
         tip_leaves_cell = [v.index for v in cell_mst.vs if cell_mst.degree(v) == 1]
         tip_names = [cell_mst.vs[v]['name'] for v in tip_leaves_cell]
 
-        root_cell_new = None
+        root_cell_new = str(root_cell) if root_cell is not None else None
         # Preferred: a cell mapped to the root Y-centre that is also a
         # tip of the cell MST (matches R Monocle 2)
         for cell_idx in cells_at_root:
@@ -538,7 +557,7 @@ def order_cells(adata, root_state=None, reverse=None):
         # cc_ordering is keyed by Y-centre *vertex name* ("Y_0", ..., "Y_K-1"),
         # not by positional index. closest_vertex is an array of integer
         # Y-centre indices. Bounds-check, then look up by name.
-        if root_state is None:
+        if root_state is None and root_cell is None:
             n_Y = mst.vcount()
             cv = np.asarray(closest_vertex).ravel().astype(int)
             if cv.size and (cv.min() < 0 or cv.max() >= n_Y):
@@ -579,11 +598,15 @@ def order_cells(adata, root_state=None, reverse=None):
 
     elif dim_reduce_type == 'ICA':
         mst = monocle['mst']
-        root_cell = _select_root_cell(adata, root_state, reverse)
-        monocle['root_cell'] = root_cell
+        selected_root_cell = _select_root_cell(
+            adata, root_state, reverse, root_cell=root_cell
+        )
+        monocle['root_cell'] = selected_root_cell
 
         dp = monocle['cellPairwiseDistances']
-        cc_ordering = _extract_ddrtree_ordering(adata, root_cell, use_cell_mst=False)
+        cc_ordering = _extract_ddrtree_ordering(
+            adata, selected_root_cell, use_cell_mst=False
+        )
 
         adata.obs['Pseudotime'] = cc_ordering.loc[adata.obs_names, 'pseudo_time'].values
         adata.obs['State'] = pd.Categorical(
