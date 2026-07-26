@@ -85,8 +85,20 @@ def _ambertools_path_hint() -> str:
     import shutil
     import sys
 
-    if shutil.which("antechamber"):
+    found = shutil.which("antechamber")
+    if found:
+        # On PATH but still failing: almost always AMBERHOME, which
+        # antechamber needs to locate its parameter files (gaff.dat etc.).
+        # Without it antechamber exits non-zero and OpenFF just reports
+        # "no toolkit can assign_partial_charges".
+        if not os.environ.get("AMBERHOME"):
+            root = os.path.dirname(os.path.dirname(found))
+            return (
+                "NOTE: antechamber is on PATH but AMBERHOME is not set, so it "
+                "cannot find its parameter files and exits with an error.\n"
+                f"    export AMBERHOME=\"{root}\"\n")
         return ""
+
     local = os.path.join(os.path.dirname(sys.executable), "antechamber")
     if os.path.exists(local):
         return (
@@ -94,7 +106,8 @@ def _ambertools_path_hint() -> str:
             f"    {local}\n"
             "but it is not on PATH, which is how the OpenFF toolkit looks for "
             "it. Activate the environment, or prepend it:\n"
-            f"    export PATH=\"{os.path.dirname(local)}:$PATH\"\n")
+            f"    export PATH=\"{os.path.dirname(local)}:$PATH\"\n"
+            f"    export AMBERHOME=\"{os.path.dirname(os.path.dirname(local))}\"\n")
     return ""
 
 
@@ -231,6 +244,33 @@ def _to_openff_molecule(ligand, *, seed: int = 0):
     if mol.n_conformers == 0:
         mol.generate_conformers(n_conformers=1)
     return mol
+
+
+def _assign_charges(off_mol, *, seed: int = 0, verbose: bool = False):
+    """Give ``off_mol`` AM1-BCC partial charges, computed from a clean conformer.
+
+    AM1-BCC runs a semi-empirical QM optimisation (``sqm``) whose convergence
+    depends on the input geometry. A **docked pose** is a poor starting point —
+    AutoDock assembles it from rigid fragments and hydrogens are added
+    afterwards — and ``sqm`` can grind for many minutes on it before giving up,
+    surfacing only as the opaque "no registered toolkits can provide
+    assign_partial_charges".
+
+    Partial charges are a property of the *molecule*, not of the pose, so they
+    are computed from a freshly generated conformer and transferred back. This
+    is the standard practice, it is far faster, and the docked coordinates are
+    left untouched — those are what actually gets simulated.
+    """
+    import copy
+
+    clean = copy.deepcopy(off_mol)
+    clean._conformers = None
+    clean.generate_conformers(n_conformers=1)
+    clean.assign_partial_charges("am1bcc")
+    off_mol.partial_charges = clean.partial_charges
+    if verbose:
+        print("   AM1-BCC charges assigned (from a generated conformer)")
+    return off_mol
 
 
 def _register_ligand_template(forcefield, off_mol, ligand_ff: str):
@@ -422,6 +462,11 @@ def prepare_system(
             if verbose:
                 print(f"   parameterising ligand with {ligand_ff}")
             off_mol = _to_openff_molecule(ligand, seed=seed)
+            # Charge up front rather than lazily inside createSystem: a
+            # failure then points at the ligand, and a docked pose can fall
+            # back to a clean conformer. openmmforcefields reuses charges
+            # already present on the molecule instead of recomputing them.
+            _assign_charges(off_mol, seed=seed, verbose=verbose)
             _register_ligand_template(forcefield_obj, off_mol, ligand_ff)
 
         # ---- assemble complex ------------------------------------------
