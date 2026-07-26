@@ -18,6 +18,9 @@ Quick-start
 >>> val = ov.mol.redock_validate(ov.mol.fetch_structure("1M17", source="pdb"))
 >>> result = ov.mol.dock(s, "gefitinib", pocket=1)
 >>> ov.mol.view_docking(s, result)              # the binding pose, interactive
+>>> traj = ov.mol.simulate(result, ns=5)        # ...and now run it in time
+>>> ov.mol.plot_rmsd(traj)                      # did the pose hold?
+>>> ov.mol.mmgbsa(traj)                         # dynamics-averaged dG
 
 Surface
 -------
@@ -28,13 +31,30 @@ Visualization    ``view`` (py3Dmol interactive 3D — survives nbconvert),
 Druggability     ``pockets``, ``druggability`` (rust-fpocket backend)
 Known drugs      ``known_drugs`` (ChEMBL)
 Docking          ``dock``, ``redock_validate``, ``DockingResult``
+Dynamics         ``simulate`` (one-call MD), or the explicit stages
+                 ``prepare_system`` → ``minimize`` → ``equilibrate`` →
+                 ``production``; ``MDSystem``, ``MDTrajectory``
+Traj. analysis   ``rmsd``, ``rmsf``, ``radius_of_gyration``, ``hbonds``,
+                 ``contacts``, ``native_contacts``, ``secondary_structure``,
+                 ``rmsd_matrix``, ``cluster``, ``pca``, ``load_trajectory``;
+                 plots ``plot_rmsd`` / ``plot_rmsf`` / ``plot_rg`` /
+                 ``plot_energy``
+Free energy      ``mmgbsa`` (end-point MM-GBSA, GPU),
+                 ``alchemical_free_energy`` (FEP/TI — not implemented)
 
-The structural-biology stack (py3Dmol, biotite, chembl-webresource-client;
-rdkit, vina, meeko for docking; fpocket-rs for pockets) is **optional** —
-``import omicverse.mol`` does no heavy work, and each backend is gated by
-an actionable ``ImportError`` (``pip install omicverse[mol]`` /
-``omicverse[mol-dock]``). Follows the lazy-loading pattern of the rest of
-omicverse.
+The static stack goes from *what does the target look like* to *can it be
+drugged*; the dynamics layer adds *and what does it do over time* — an
+AlphaFold model can be checked for stability, and a docked pose can be
+relaxed with MD and rescored with MM-GBSA instead of trusting one static
+Vina number.
+
+Every backend is **optional** — ``import omicverse.mol`` does no heavy work,
+and each is gated by an actionable ``ImportError``: py3Dmol / biotite /
+chembl-webresource-client (``omicverse[mol]``), rdkit / vina / meeko
+(``omicverse[mol-dock]``), fpocket-rs for pockets, and openmm / mdtraj
+(``omicverse[md]``) for dynamics. PDBFixer is vendored in
+``omicverse.external.pdbfixer`` because upstream does not publish it on PyPI.
+Follows the lazy-loading pattern of the rest of omicverse.
 """
 from __future__ import annotations
 
@@ -59,10 +79,39 @@ _LAZY_ATTRS: dict[str, tuple[str, str]] = {
     "dock":              ("._dock", "dock"),
     "redock_validate":   ("._dock", "redock_validate"),
     "DockingResult":     ("._dock", "DockingResult"),
+    # Molecular dynamics — system preparation & the three run stages
+    "MDSystem":          (".md._types", "MDSystem"),
+    "MDTrajectory":      (".md._types", "MDTrajectory"),
+    "prepare_system":    (".md._system", "prepare_system"),
+    "minimize":          (".md._run", "minimize"),
+    "equilibrate":       (".md._run", "equilibrate"),
+    "production":        (".md._run", "production"),
+    "simulate":          (".md._run", "simulate"),
+    # Trajectory analysis
+    "load_trajectory":   (".md._analysis", "load_trajectory"),
+    "rmsd":              (".md._analysis", "rmsd"),
+    "rmsf":              (".md._analysis", "rmsf"),
+    "radius_of_gyration": (".md._analysis", "radius_of_gyration"),
+    "hbonds":            (".md._analysis", "hbonds"),
+    "contacts":          (".md._analysis", "contacts"),
+    "native_contacts":   (".md._analysis", "native_contacts"),
+    "secondary_structure": (".md._analysis", "secondary_structure"),
+    "rmsd_matrix":       (".md._analysis", "rmsd_matrix"),
+    "cluster":           (".md._analysis", "cluster"),
+    "pca":               (".md._analysis", "pca"),
+    "plot_rmsd":         (".md._analysis", "plot_rmsd"),
+    "plot_rmsf":         (".md._analysis", "plot_rmsf"),
+    "plot_rg":           (".md._analysis", "plot_rg"),
+    "plot_energy":       (".md._analysis", "plot_energy"),
+    # Binding free energy
+    "mmgbsa":            (".md._mmgbsa", "mmgbsa"),
+    "MMGBSAResult":      (".md._mmgbsa", "MMGBSAResult"),
+    "alchemical_free_energy": (".md._mmgbsa", "alchemical_free_energy"),
 }
 
 _REGISTRY_SUBMODULES = ("._structure", "._view", "._pocket", "._drugs",
-                        "._dock")
+                        "._dock", ".md._system", ".md._run", ".md._analysis",
+                        ".md._mmgbsa")
 
 
 def _hydrate_registry() -> None:

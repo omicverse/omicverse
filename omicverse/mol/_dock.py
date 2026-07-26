@@ -53,14 +53,21 @@ class DockingResult:
         The prepared input ligand.
     box : tuple or None
         ``(center, size)`` of the Vina search box.
+    receptor : MolStructure or None
+        The structure that was docked into. Kept so the pose can be handed
+        straight to molecular dynamics — ``ov.mol.simulate(result)`` rebuilds
+        the protein-ligand complex from it, and ``ov.mol.mmgbsa(result)``
+        rescores the pose from an MD ensemble.
     """
 
-    def __init__(self, poses, pose_blocks, affinities, ligand, box):
+    def __init__(self, poses, pose_blocks, affinities, ligand, box,
+                 receptor=None):
         self.poses = poses
         self.pose_blocks = pose_blocks
         self.affinities = np.asarray(affinities, dtype=float)
         self.ligand = ligand
         self.box = box
+        self.receptor = receptor
 
     @property
     def best(self):
@@ -416,8 +423,11 @@ def _run_vina(receptor_pdbqt: str, ligand_pdbqt: str, center, size,
         "result = ov.mol.dock(s, '/path/to/my_compound.sdf', pocket=1)",
         "result = ov.mol.dock(s, known_drugs('EGFR').iloc[0], pocket=1)",
         "result.save_poses('poses.sdf')",
+        "traj = ov.mol.simulate(result, ns=5)   # relax the pose with MD",
+        "ov.mol.mmgbsa(traj)                    # dynamics-averaged dG",
     ],
-    related=["mol.redock_validate", "mol.view_docking", "mol.pockets"],
+    related=["mol.redock_validate", "mol.view_docking", "mol.pockets",
+             "mol.simulate", "mol.mmgbsa"],
 )
 def dock(structure, ligand: Any, *, pocket: Optional[int] = None,
          box: Optional[Tuple[Sequence[float], Sequence[float]]] = None,
@@ -478,7 +488,7 @@ def dock(structure, ligand: Any, *, pocket: Optional[int] = None,
             exhaustiveness, n_poses, seed, verbose)
 
     return DockingResult(poses, blocks, affinities, prepared,
-                         (center, size))
+                         (center, size), receptor=structure)
 
 
 def _extract_cocrystal_ligand(pdb_path: str):

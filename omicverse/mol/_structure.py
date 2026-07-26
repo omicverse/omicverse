@@ -225,7 +225,8 @@ def _load_pae(path: str) -> Optional[np.ndarray]:
         "s = ov.mol.fetch_structure('P00533')        # UniProt accession",
         "s = ov.mol.fetch_structure('1M17', source='pdb')  # experimental",
     ],
-    related=["mol.predict_structure", "mol.view", "mol.pockets"],
+    related=["mol.predict_structure", "mol.view", "mol.pockets",
+             "mol.dock", "mol.simulate"],
 )
 def fetch_structure(query: str, *, source: str = "auto",
                     taxon: int = 9606, dir: str = "./data",
@@ -308,7 +309,8 @@ def fetch_structure(query: str, *, source: str = "auto",
     examples=[
         "s = ov.mol.predict_structure('MKTAYIAKQR...')",
     ],
-    related=["mol.fetch_structure", "mol.view"],
+    related=["mol.fetch_structure", "mol.view", "mol.simulate",
+             "mol.pockets"],
 )
 def predict_structure(sequence: str, *, engine: str = "esmfold",
                       name: Optional[str] = None, dir: str = "./data",

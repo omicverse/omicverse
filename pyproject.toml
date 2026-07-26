@@ -372,6 +372,41 @@ mol-dock = [
   "meeko>=0.7; python_version >= '3.10'",    # receptor / ligand pdbqt preparation
   "gemmi>=0.7; python_version >= '3.10'",    # structure I/O (meeko dependency)
 ]
+# Molecular dynamics (ov.mol.simulate / production / mmgbsa).
+#
+# On a GPU machine conda-forge is strongly recommended for OpenMM — its CUDA
+# build is far more likely to match the driver, and pip's OpenMM <8.2 is
+# incompatible with NumPy 2:
+#   conda install -c conda-forge openmm mdtraj openmmforcefields openff-toolkit
+#
+# PDBFixer is NOT listed: upstream ships it through conda-forge only, so it is
+# vendored in omicverse.external.pdbfixer and needs no installation.
+# NOTE on the OpenMM floor: openmm < 8.2 was built against the NumPy 1.x C API
+# and fails to import under NumPy 2 ("numpy.core.multiarray failed to import").
+# The floor makes that a clear resolution error instead of a silent install of
+# a broken build.
+#
+# The wheels also need a reasonably recent glibc — 8.2 needs >= 2.27, 8.5 needs
+# >= 2.34. On an old distribution (e.g. CentOS 7, glibc 2.17) pip cannot serve
+# any compatible wheel and will report exactly that; install from conda-forge
+# there, which ships its own glibc-independent build:
+#     conda install -c conda-forge openmm mdtraj
+md = [
+  "openmm>=8.2; python_version >= '3.10'",   # MD engine — CUDA/OpenCL platforms
+  "mdtraj>=1.9.9; python_version >= '3.10'", # trajectory I/O + analysis
+]
+# Small-molecule parameterisation, needed only to simulate a protein-LIGAND
+# complex (ov.mol.simulate(docking_result), ov.mol.mmgbsa).
+#
+# IMPORTANT: these two are not sufficient on their own. Both GAFF and OpenFF
+# assign AM1-BCC partial charges, which needs AmberTools' `sqm` — and
+# AmberTools is conda-only. Install the whole ligand stack from conda-forge:
+#   conda install -c conda-forge openmmforcefields openff-toolkit ambertools
+# (or add openff-nagl for ML-predicted charges instead of AmberTools).
+md-ligand = [
+  "openmmforcefields>=0.12; python_version >= '3.10'", # GAFF / SMIRNOFF templates
+  "openff-toolkit>=0.15; python_version >= '3.10'",    # OpenFF molecule handling
+]
 
 # Synthetic-biology stack for ``ov.synbio`` — a three-layer design stack:
 # metabolic networks (A), protein/enzyme design (B), DNA (C). Install via:
@@ -456,6 +491,8 @@ exclude = [
 [tool.setuptools.package-data]
 "omicverse.pl" = ["_data/*.csv"]
 "omicverse.synbio" = ["external/*.fasta", "external/cfd/*.pkl"]
+# Vendored PDBFixer: residue templates + forcefield XML must ship in the wheel
+"omicverse.external.pdbfixer" = ["*.xml", "templates/*.pdb", "LICENSE"]
 
 [tool.pytest.ini_options]
 asyncio_mode = "auto"

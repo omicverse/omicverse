@@ -81,6 +81,9 @@
 > [!NOTE]
 > **New — `ov.synbio` (synthetic biology).** A self-contained three-layer design stack that bridges metabolism, protein/enzyme engineering, and DNA: genome-scale metabolic modelling (FBA/FVA/strain design/enzyme-constrained GECKO models via COBRApy), protein/enzyme design (ESMFold structure prediction, ProteinMPNN inverse design, ESM zero-shot variant effect, ΔΔG stability, k_cat & EC-number prediction, ESM-2 embeddings), and DNA design (codon optimisation + primer design). Its signature is the **A↔B hinge** — predict a turnover number from an enzyme sequence, push it into a genome-scale model as an enzyme-capacity constraint, and re-solve the achievable yield. Optional install: `pip install "omicverse[synbio]"`.
 
+> [!NOTE]
+> **New — molecular dynamics in `ov.mol`.** The structural stack now reaches past a static snapshot into physics: take an omics hit to its 3D structure (AlphaFold / RCSB / ESMFold), score its pockets, dock a candidate with AutoDock Vina, and then **run GPU molecular dynamics** on the result (OpenMM) — chaining `dock → MD → MM-GBSA` so a static docking score becomes a dynamics-averaged binding free energy. Optional install: `pip install "omicverse[md]"`.
+
 ![omicverse-light](https://raw.githubusercontent.com/Starlitnightly/ImageStore/main/omicverse_img/background_light.png#gh-light-mode-only)
 ![omicverse-dark](https://raw.githubusercontent.com/Starlitnightly/ImageStore/main/omicverse_img/background_dark.png#gh-dark-mode-only)
 
