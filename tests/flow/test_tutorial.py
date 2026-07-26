@@ -46,7 +46,7 @@ SIMULATED = [
 #: Runs on real downloaded data, so it is excluded from the re-execution test:
 #: that would pull ~100 MB from Zenodo and PLOS on every CI run, and a red
 #: build caused by someone else's server being down teaches nothing.
-REAL_DATA = ["t_flow_05_real_data.ipynb"]
+REAL_DATA = ["t_flow_05_real_data.ipynb", "t_flow_06_case_study.ipynb"]
 NOTEBOOKS = SIMULATED + REAL_DATA
 
 HAS_SUBMODULE = (ROOT / "omicverse_guide" / "docs").is_dir()
@@ -168,6 +168,10 @@ def test_the_series_covers_the_module():
         "t_flow_05_real_data.ipynb": ["flow_pbmc_fortessa", "flow_pbmc_spectral",
                                       "compensate", "GatingStrategy",
                                       "write_gatingml", "flowsom", "PnR"],
+        "t_flow_06_case_study.ipynb": ["flow_pbmc_fortessa", "compensate",
+                                       "auto_transforms", "polygon", "threshold",
+                                       "quadrant", "plot_strategy", "batch_stats",
+                                       "plot_batch", "write_gatingml", "flowsom"],
     }
     for name, symbols in expected.items():
         src = _text(_load(name), "code")
@@ -185,19 +189,54 @@ def test_it_says_the_data_is_simulated(name):
 
 
 @needs_submodule
+def test_the_case_study_uses_only_ov_calls():
+    """The case study is the front door: someone who has never seen ov.flow
+    reads it first. Its code cells stay short and stay inside the ov.* API, so
+    the reader learns the library rather than a pile of numpy scaffolding — and
+    so that anything awkward enough to need scaffolding gets fixed in the module
+    instead of hidden in a notebook.
+
+    Every helper this rules out (auto_transforms, threshold/quadrant/polygon,
+    plot_strategy, batch_stats, plot_batch, apply_transforms) was added to
+    ov.flow precisely because writing this notebook needed it.
+    """
+    nb = _load("t_flow_06_case_study.ipynb")
+    lines = [
+        line for cell in nb["cells"] if cell["cell_type"] == "code"
+        for line in "".join(cell["source"]).splitlines()
+        if line.strip() and not line.strip().startswith("#")
+    ]
+    banned = ("np.", "numpy", "plt.", "matplotlib", "sns.")
+    offenders = [l for l in lines if any(b in l for b in banned)]
+    assert not offenders, (
+        "the case study reaches outside ov.*; add the missing piece to ov.flow "
+        f"instead: {offenders}"
+    )
+    assert len(lines) < 90, (
+        f"{len(lines)} lines of code in the case study — it is meant to be "
+        "readable in one sitting"
+    )
+
+
+@needs_submodule
 @pytest.mark.parametrize("name", REAL_DATA)
 def test_the_real_data_notebook_cites_its_sources(name):
     """Both datasets are CC-BY-4.0, and attribution is a licence CONDITION, not
     a courtesy. If the citation ever falls out of the notebook, redistribution
     of the figures stops being compliant — so it is a test, not a convention."""
+    #: Which datasets each notebook actually loads, and therefore must credit.
+    cited = {
+        "t_flow_05_real_data.ipynb": ["10.5281/zenodo.14311616",
+                                      "10.1371/journal.pone.0351131"],
+        "t_flow_06_case_study.ipynb": ["10.5281/zenodo.14311616"],
+    }
     text = _text(_load(name), "markdown")
-    for required in ("10.5281/zenodo.14311616", "10.1371/journal.pone.0351131",
-                     "CC-BY-4.0"):
-        assert required in text, f"{name} does not carry {required}"
+    for item in cited[name] + ["CC-BY-4.0"]:
+        assert item in text, f"{name} does not carry {item}"
 
 
 @needs_submodule
-@pytest.mark.parametrize("name", REAL_DATA)
+@pytest.mark.parametrize("name", ["t_flow_05_real_data.ipynb"])
 def test_the_real_data_notebook_reads_the_top_of_scale_from_the_file(name):
     """Its central lesson. A hard-coded 262144 is exactly the bug it warns
     about, and the Cytek instrument in the same notebook runs to 4,194,304."""

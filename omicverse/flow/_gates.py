@@ -23,11 +23,13 @@ from typing import Any, Dict, List, Mapping, Optional, Sequence, Tuple
 
 import numpy as np
 
+from .._registry import register_function
 from ._transforms import Transform, transform_from_dict
 
 __all__ = [
     "Gate", "RectangleGate", "PolygonGate", "EllipsoidGate", "QuadrantGate",
     "BooleanGate", "gate_from_dict", "points_in_polygon",
+    "threshold", "quadrant", "polygon",
 ]
 
 
@@ -121,6 +123,18 @@ class Gate:
         raise NotImplementedError
 
 
+@register_function(
+    aliases=["RectangleGate", "rectangle_gate", "矩形门", "阈值门", "threshold_gate"],
+    category="flow",
+    description=(
+        "Axis-aligned interval gate in 1..n dimensions — the shape of a threshold. Bounds are half-open [min, max) per Gating-ML, and None means unbounded on that side, which is how 'CD3 positive' is expressed without inventing a ceiling. Use ov.flow.threshold() to build one from data values."
+    ),
+    examples=[
+        'ov.flow.RectangleGate(name="CD3+", dims=("CD3",), bounds=((0.35, None),), transforms={"CD3": lg})',
+        'ov.flow.threshold("CD3+", "CD3", above=400, transforms=tr)',
+    ],
+    related=["flow.GatingStrategy", "flow.threshold", "flow.polygon", "flow.quadrant"],
+)
 @dataclass
 class RectangleGate(Gate):
     """Axis-aligned interval in 1..n dimensions.
@@ -155,6 +169,18 @@ class RectangleGate(Gate):
         return {"bounds": [list(b) for b in self.bounds]}
 
 
+@register_function(
+    aliases=["PolygonGate", "polygon_gate", "多边形门", "手绘门"],
+    category="flow",
+    description=(
+        "Arbitrary 2-D region gate — the gate people actually draw around a population on a biaxial plot. Vertices are stored on the display scale the boundary was drawn on. Use ov.flow.polygon() to build one from data values."
+    ),
+    examples=[
+        'ov.flow.PolygonGate(name="Cells", dims=("FSC-A","SSC-A"), vertices=v, transforms=tr)',
+        'ov.flow.polygon("Cells", "FSC-A", "SSC-A", [(28000, 2000), ...], transforms=tr)',
+    ],
+    related=["flow.GatingStrategy", "flow.threshold", "flow.polygon", "flow.quadrant"],
+)
 @dataclass
 class PolygonGate(Gate):
     """Arbitrary 2D region — the gate people actually draw."""
@@ -177,6 +203,17 @@ class PolygonGate(Gate):
         return {"vertices": self.vertices.tolist()}
 
 
+@register_function(
+    aliases=["EllipsoidGate", "ellipse_gate", "椭圆门", "马氏距离门"],
+    category="flow",
+    description=(
+        "Mahalanobis-distance region gate, parameterised by a covariance matrix and a squared distance exactly as Gating-ML 2.0 stores it, so it round-trips through the interchange format without a second representation."
+    ),
+    examples=[
+        'ov.flow.EllipsoidGate(name="E", dims=("CD4","CD8"), mean=mu, covariance=S, distance_square=4.0)',
+    ],
+    related=["flow.GatingStrategy", "flow.threshold", "flow.polygon", "flow.quadrant"],
+)
 @dataclass
 class EllipsoidGate(Gate):
     """Mahalanobis-distance region: ``(x-mu)' S^-1 (x-mu) <= d2``.
@@ -216,6 +253,17 @@ class EllipsoidGate(Gate):
         }
 
 
+@register_function(
+    aliases=["QuadrantGate", "quadrant_gate", "象限门", "四象限"],
+    category="flow",
+    description=(
+        "One divider per dimension producing 2**n named populations that SHARE their dividers — moving one boundary moves them all, which four independent rectangles would not. Use ov.flow.quadrant() to build one from data values."
+    ),
+    examples=[
+        'ov.flow.quadrant("CD4/CD8", "CD4", "CD8", 120, 250, transforms=tr, names=("DN","CD4 T","CD8 T","DP"))',
+    ],
+    related=["flow.GatingStrategy", "flow.threshold", "flow.polygon", "flow.quadrant"],
+)
 @dataclass
 class QuadrantGate(Gate):
     """One divider per dimension, producing 2**n named populations.
@@ -272,6 +320,17 @@ class QuadrantGate(Gate):
         }
 
 
+@register_function(
+    aliases=["BooleanGate", "boolean_gate", "布尔门", "逻辑门"],
+    category="flow",
+    description=(
+        "AND / OR / NOT over populations that have already been computed — how 'CD3+ but not CD4+' is expressed without redrawing geometry. Evaluated by the GatingStrategy, which is the only thing that knows what the referenced populations resolved to."
+    ),
+    examples=[
+        'ov.flow.BooleanGate(name="not CD4", dims=(), operator="not", operands=("CD4 T",))',
+    ],
+    related=["flow.GatingStrategy", "flow.threshold", "flow.polygon", "flow.quadrant"],
+)
 @dataclass
 class BooleanGate(Gate):
     """AND / OR / NOT over populations that have already been computed.
@@ -341,3 +400,115 @@ def gate_from_dict(d: Mapping[str, Any]) -> Gate:
         if key in d and d[key] is not None:
             d[key] = tuple(tuple(x) if isinstance(x, list) else x for x in d[key])
     return _KINDS[kind](**d)
+
+
+# ── constructors that take DATA values ──────────────────────────────────────
+#
+# A gate's geometry is stored in SCALE space, because that is where the
+# boundary was drawn. But nobody thinks in scale space: an experimentalist says
+# "CD3 above 400", not "CD3 above 0.347". Writing 0.347 by hand is the single
+# most common way a gate silently ends up in the wrong place — and the number
+# changes the moment the transform is refitted, with nothing to warn you.
+#
+# These three take the value you would say out loud, and convert it.
+
+
+def _need(transforms: Mapping[str, Any], dim: str) -> Any:
+    tr = (transforms or {}).get(dim)
+    if tr is None:
+        raise KeyError(
+            f"no transform given for {dim!r}. Pass the dict from "
+            f"ov.flow.auto_transforms(adata), or transforms={{'{dim}': ...}} — "
+            "a gate without its scale cannot be re-applied or saved honestly."
+        )
+    return tr
+
+
+def _to_scale(transforms: Mapping[str, Any], dim: str, value: Optional[float]):
+    if value is None:
+        return None
+    return float(_need(transforms, dim).apply(np.array([float(value)]))[0])
+
+
+def threshold(
+    name: str,
+    dim: str,
+    *,
+    transforms: Mapping[str, Any],
+    above: Optional[float] = None,
+    below: Optional[float] = None,
+) -> RectangleGate:
+    """A one-sided or two-sided threshold, written in data units.
+
+    >>> ov.flow.threshold('T cells', 'CD3', above=400, transforms=tr)   # doctest: +SKIP
+    >>> ov.flow.threshold('Live', 'Viability', below=400, transforms=tr)  # doctest: +SKIP
+
+    ``above``/``below`` are the data values a cytometrist would quote. Omitting
+    one leaves that side unbounded, which is how "CD3 positive" is expressed
+    without inventing a ceiling the data never had.
+    """
+    if above is None and below is None:
+        raise ValueError(
+            f"gate {name!r}: give above=, below=, or both — a threshold with "
+            "neither selects everything"
+        )
+    tr = _need(transforms, dim)
+    return RectangleGate(
+        name=name, dims=(dim,), transforms={dim: tr},
+        bounds=((_to_scale(transforms, dim, above),
+                 _to_scale(transforms, dim, below)),),
+    )
+
+
+def quadrant(
+    name: str,
+    x: str,
+    y: str,
+    at_x: float,
+    at_y: float,
+    *,
+    transforms: Mapping[str, Any],
+    names: Optional[Sequence[str]] = None,
+) -> QuadrantGate:
+    """Two dividers in data units, producing four named populations.
+
+    >>> ov.flow.quadrant('CD4/CD8', 'CD4', 'CD8', 120, 250, transforms=tr,
+    ...                  names=('DN', 'CD4 T', 'CD8 T', 'DP'))   # doctest: +SKIP
+
+    ``names`` is indexed by the bit pattern of "above the divider", with ``x``
+    as the low bit: ``(x-y-, x+y-, x-y+, x+y+)``. Getting that order wrong swaps
+    two populations that are biologically opposite, so the docstring spells it
+    out rather than leaving it to be inferred.
+    """
+    trx, try_ = _need(transforms, x), _need(transforms, y)
+    return QuadrantGate(
+        name=name, dims=(x, y), transforms={x: trx, y: try_},
+        dividers=(_to_scale(transforms, x, at_x), _to_scale(transforms, y, at_y)),
+        quadrant_names=tuple(names) if names else (),
+    )
+
+
+def polygon(
+    name: str,
+    x: str,
+    y: str,
+    vertices: Sequence[Sequence[float]],
+    *,
+    transforms: Mapping[str, Any],
+) -> PolygonGate:
+    """A polygon whose vertices are given in data units.
+
+    >>> ov.flow.polygon('Cells', 'FSC-A', 'SSC-A',
+    ...                 [(28000, 2000), (28000, 72000), (95000, 130000)],
+    ...                 transforms=tr)                            # doctest: +SKIP
+
+    Each vertex is ``(x_value, y_value)`` on the channels' own axes — the
+    numbers you would read off the plot.
+    """
+    trx, try_ = _need(transforms, x), _need(transforms, y)
+    verts = np.asarray(vertices, dtype=float)
+    if verts.ndim != 2 or verts.shape[1] != 2:
+        raise ValueError(f"gate {name!r}: vertices must be a list of (x, y) pairs")
+    scaled = np.column_stack([trx.apply(verts[:, 0]), try_.apply(verts[:, 1])])
+    return PolygonGate(name=name, dims=(x, y),
+                       transforms={x: trx, y: try_}, vertices=scaled)

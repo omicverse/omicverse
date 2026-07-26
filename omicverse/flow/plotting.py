@@ -53,6 +53,8 @@ __all__ = [
     "histogram",
     "backgate",
     "hierarchy",
+    "plot_strategy",
+    "plot_batch",
     "spillover_heatmap",
     "flowsom_heatmap",
 ]
@@ -1102,4 +1104,177 @@ def flowsom_heatmap(
     ax.figure.colorbar(im, ax=ax, fraction=0.030, shrink=0.8, label=cbar_label)
     ax.set_title(title if title is not None else f"FlowSOM metaclusters ({key})",
                  fontsize=9)
+    return ax
+
+
+@register_function(
+    aliases=["flow_plot_strategy", "plot_strategy", "门控策略图", "分层门控图",
+             "gating_sequence", "plot_gates"],
+    category="visualization",
+    description=(
+        "Draw a whole gating strategy as a row of panels — one per gate, each "
+        "on its own parent's events, in the transform that gate carries. The "
+        "figure a cytometry paper puts in its supplement, from the strategy "
+        "object rather than assembled by hand."
+    ),
+    examples=[
+        "ov.flow.plot_strategy(adata, gs, res)",
+        "ov.flow.plot_strategy(adata, gs, res, ncols=3)",
+    ],
+    related=["flow.GatingStrategy", "flow.biaxial", "flow.hierarchy"],
+)
+def plot_strategy(
+    adata: Any,
+    strategy: GatingStrategy,
+    result: GatingResult,
+    *,
+    layer: Optional[str] = None,
+    transforms: Optional[Mapping[str, Transform]] = None,
+    ncols: int = 4,
+    panel_size: Tuple[float, float] = (4.3, 4.0),
+    max_events: Optional[int] = 40_000,
+    against: Optional[str] = None,
+    **kwargs: Any,
+):
+    """Every gate in the strategy, each drawn on the events its parent kept.
+
+    This is the standard cytometry figure — "here is how I got to this
+    population" — and building it by hand means keeping a row of subplots, a
+    list of gates, and a list of parent names in sync. They drift. Here the
+    strategy is the single source of all three.
+
+    Panel choice per gate: a two-dimensional gate gets a biaxial plot of its own
+    dimensions; a one-dimensional gate gets a histogram, unless ``against`` names
+    a channel to spread it over. Boolean gates have no geometry and are skipped.
+
+    Returns the matplotlib figure.
+    """
+    import matplotlib.pyplot as plt
+
+    gates = [(name, strategy.gates[name]) for name in strategy.gates]
+    drawable = [(n, g) for n, g in gates if not isinstance(g, BooleanGate)]
+    if not drawable:
+        raise ValueError(
+            f"strategy {strategy.name!r} has no gate with geometry to draw"
+        )
+
+    ncols = max(1, min(ncols, len(drawable)))
+    nrows = math.ceil(len(drawable) / ncols)
+    fig, axes = plt.subplots(
+        nrows, ncols,
+        figsize=(panel_size[0] * ncols, panel_size[1] * nrows),
+        squeeze=False,
+    )
+    flat = [ax for row in axes for ax in row]
+
+    for ax, (name, gate) in zip(flat, drawable):
+        parent = strategy.parent_of(name)
+        population = None if parent == ROOT else parent
+        if len(gate.dims) >= 2:
+            biaxial(adata, gate.dims[0], gate.dims[1], layer=layer,
+                    transforms=transforms, strategy=strategy, gates=[gate],
+                    result=result, population=population, ax=ax,
+                    max_events=max_events, **kwargs)
+        elif against is not None:
+            biaxial(adata, gate.dims[0], against, layer=layer,
+                    transforms=transforms, strategy=strategy, gates=[gate],
+                    result=result, population=population, ax=ax,
+                    max_events=max_events, **kwargs)
+        else:
+            histogram(adata, gate.dims[0], layer=layer, transforms=transforms,
+                      strategy=strategy, gates=[gate], result=result,
+                      populations=[parent] if population else None, ax=ax)
+            ax.set_title(f"{name} — of {parent}", fontsize=9)
+
+    for ax in flat[len(drawable):]:
+        ax.set_axis_off()
+    fig.tight_layout()
+    return fig
+
+
+@register_function(
+    aliases=["flow_plot_batch", "plot_batch", "批次频率图", "样本频率对比",
+             "batch_frequencies"],
+    category="visualization",
+    description=(
+        "Grouped bar chart of population frequencies across samples, drawn "
+        "from the tidy table ov.flow.batch_stats returns. Shows the SPREAD "
+        "between samples, which a pooled frequency hides."
+    ),
+    examples=[
+        "stats = ov.flow.batch_stats(adata, gs); ov.flow.plot_batch(stats)",
+        "ov.flow.plot_batch(stats, populations=['CD4 T', 'CD8 T'])",
+    ],
+    related=["flow.batch_stats", "flow.GatingStrategy"],
+)
+def plot_batch(
+    stats: "pd.DataFrame",
+    *,
+    populations: Optional[Sequence[str]] = None,
+    groupby: str = "sample",
+    value: str = "freq_parent",
+    hue: Optional[str] = None,
+    palette: Optional[Sequence[str]] = None,
+    mark_low_n: bool = True,
+    title: Optional[str] = None,
+    ax: Optional[Any] = None,
+    figsize: Optional[Tuple[float, float]] = None,
+):
+    """The spread across samples, as bars.
+
+    Takes the long-form table from :func:`~omicverse.flow.batch_stats` rather
+    than an AnnData, so the numbers on the chart are provably the numbers in the
+    table — there is no second computation to disagree with the first.
+
+    ``mark_low_n`` hatches any bar whose population fell below the event
+    threshold in that sample. A 90% frequency measured on 12 events and one
+    measured on 12,000 are the same height otherwise, and only one of them means
+    anything.
+    """
+    import matplotlib.pyplot as plt
+
+    for column in (groupby, "population", value):
+        if column not in stats.columns:
+            raise KeyError(
+                f"{column!r} is not in this table — expected the output of "
+                f"ov.flow.batch_stats (have: {list(stats.columns)})"
+            )
+    df = stats if populations is None else stats[stats["population"].isin(populations)]
+    if df.empty:
+        raise ValueError(f"no rows left after filtering to {populations}")
+
+    order = list(populations) if populations is not None else list(
+        dict.fromkeys(df["population"])
+    )
+    samples = list(dict.fromkeys(df[groupby]))
+    if ax is None:
+        _, ax = plt.subplots(figsize=figsize or (1.15 * len(order) + 2.5, 3.4))
+
+    colors = list(palette) if palette else ["#4c72b0", "#dd8452", "#55a868",
+                                            "#c44e52", "#8172b3", "#937860"]
+    width = 0.8 / max(len(samples), 1)
+    x = np.arange(len(order))
+    for i, sample in enumerate(samples):
+        sub = df[df[groupby] == sample].set_index("population")
+        heights = [float(sub[value].get(p, np.nan)) for p in order]
+        low = [bool(sub["low_n"].get(p, False)) if "low_n" in sub else False
+               for p in order]
+        bars = ax.bar(x + (i - (len(samples) - 1) / 2) * width, heights, width,
+                      label=str(sample), color=colors[i % len(colors)])
+        if mark_low_n:
+            for bar, flag in zip(bars, low):
+                if flag:
+                    bar.set_hatch("///")
+                    bar.set_edgecolor("white")
+
+    ax.set_xticks(x, labels=order, rotation=25, ha="right")
+    ax.set_ylabel(value.replace("_", " "))
+    ax.legend(fontsize=7, frameon=False, ncol=min(len(samples), 3))
+    hatched = mark_low_n and bool(df.get("low_n", pd.Series(dtype=bool)).any())
+    ax.set_title(
+        title if title is not None else
+        ("population frequencies by sample"
+         + ("  (hatched = too few events to trust)" if hatched else "")),
+        fontsize=9,
+    )
     return ax

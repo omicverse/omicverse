@@ -58,9 +58,12 @@ from typing import Any, Dict, Optional, Sequence
 
 import numpy as np
 
+from .._registry import register_function
+
 __all__ = [
     "Transform", "Linear", "Log", "Asinh", "Logicle", "Hyperlog",
-    "make_transform", "transform_from_dict",
+    "make_transform", "transform_from_dict", "auto_transforms", "auto_width",
+    "apply_transforms",
 ]
 
 # float64 has ~2.2e-16 of relative precision; 100 bisection halvings of a unit
@@ -200,6 +203,17 @@ class Transform:
         }
 
 
+@register_function(
+    aliases=["Linear", "linear_transform", "线性变换", "flin"],
+    category="flow",
+    description=(
+        "GatingML's flin. Right for scatter channels (FSC/SSC), wrong for fluorescence, which spans four or five decades."
+    ),
+    examples=[
+        'ov.flow.Linear(t=262144, a=0.0)',
+    ],
+    related=["flow.auto_transforms", "flow.auto_width", "flow.make_transform"],
+)
 @dataclass
 class Linear(Transform):
     """``y = (x - a) / (t - a)`` — GatingML's flin. Right for scatter, wrong for
@@ -214,6 +228,17 @@ class Linear(Transform):
         return np.asarray(y, dtype=float) * (self.t - self.a) + self.a
 
 
+@register_function(
+    aliases=["Log", "log_transform", "对数变换", "flog"],
+    category="flow",
+    description=(
+        "GatingML's flog. NaN at and below zero, which is the honest answer — and the reason compensated cytometry data needs a biexponential scale instead."
+    ),
+    examples=[
+        'ov.flow.Log(t=262144, m=4.5)',
+    ],
+    related=["flow.auto_transforms", "flow.auto_width", "flow.make_transform"],
+)
 @dataclass
 class Log(Transform):
     """``y = (1/m) * log10(x / t) + 1`` — GatingML's flog.
@@ -235,6 +260,17 @@ class Log(Transform):
         return self.t * 10.0 ** ((np.asarray(y, dtype=float) - 1.0) * self.m)
 
 
+@register_function(
+    aliases=["Asinh", "asinh", "反双曲正弦变换", "cytof变换"],
+    category="flow",
+    description=(
+        "Inverse hyperbolic sine scale — the CyTOF workhorse. Cofactor 5 for mass cytometry, around 150 for fluorescence."
+    ),
+    examples=[
+        'ov.flow.Asinh(t=262144, m=4.5, a=0.0)',
+    ],
+    related=["flow.auto_transforms", "flow.auto_width", "flow.make_transform"],
+)
 @dataclass
 class Asinh(Transform):
     """GatingML's fasinh. The CyTOF workhorse, and the simplest thing that
@@ -303,6 +339,18 @@ class _Biexponential(Transform):
         return {"type": self.name, "t": self.t, "w": self.w, "m": self.m, "a": self.a}
 
 
+@register_function(
+    aliases=["Logicle", "logicle", "logicle变换", "双指数变换", "biexponential"],
+    category="flow",
+    description=(
+        "The logicle display scale (Parks, Roederer & Moore 2006) — linear near zero and logarithmic away from it, so compensated data that goes BELOW zero can be displayed at all. The default for fluorescence. Its W parameter sets the width of the linear region and should be fitted to the data with ov.flow.auto_width, not chosen by hand."
+    ),
+    examples=[
+        'ov.flow.Logicle(t=262144, m=4.5, w=1.0, a=0.0)',
+        'ov.flow.auto_transforms(adata)',
+    ],
+    related=["flow.auto_transforms", "flow.auto_width", "flow.make_transform"],
+)
 @dataclass
 class Logicle(_Biexponential):
     r"""Logicle / biexponential (Parks, Roederer & Moore 2006).
@@ -344,6 +392,17 @@ class Logicle(_Biexponential):
         return np.where(below, -val, val)
 
 
+@register_function(
+    aliases=["Hyperlog", "hyperlog", "超对数变换"],
+    category="flow",
+    description=(
+        "The hyperlog display scale (Bagwell 2005) — biexponential like logicle but strictly increasing with no branch in the positive region."
+    ),
+    examples=[
+        'ov.flow.Hyperlog(t=262144, m=4.5, w=1.0, a=0.0)',
+    ],
+    related=["flow.auto_transforms", "flow.auto_width", "flow.make_transform"],
+)
 @dataclass
 class Hyperlog(_Biexponential):
     r"""Hyperlog (Bagwell 2005), GatingML's ``fhyperlog``.
@@ -411,3 +470,151 @@ def transform_from_dict(d: Dict[str, Any]) -> Transform:
     kind = d.pop("type")
     d.pop("_p", None)
     return make_transform(kind, **d)
+
+
+# ── fitting a scale to the data ─────────────────────────────────────────────
+
+#: Detector names that are scatter or timing rather than fluorescence. These get
+#: a linear scale: they have no negative population to make room for, and a
+#: biexponential axis on FSC is just a harder-to-read linear one.
+_NON_FLUORESCENCE = ("FSC", "SSC", "TIME")
+
+
+def auto_width(values: np.ndarray, t: float, m: float = 4.5) -> float:
+    """The logicle linear-region width ``W`` implied by the data.
+
+    ``W = (M - log10(T / |r|)) / 2`` with ``r`` the 5th percentile of the
+    NEGATIVE values — make the linear region just wide enough to hold the noise
+    the detector actually produced. Published in Parks, Roederer & Moore (2006),
+    Cytometry A 69:541, the paper the logicle scale itself comes from.
+
+    This is not a nicety. A ``W`` chosen by hand on one instrument is wrong on
+    the next: real compensated negatives run to tens of thousands of units below
+    zero, and a linear region sized for tens compresses the entire negative
+    population into a spike against the axis, which is exactly where a threshold
+    gate has to be drawn.
+
+    Returns ``0.5`` when there is essentially nothing below zero — there is then
+    no noise floor to make room for, and any estimate would be fitting one
+    stray event.
+    """
+    v = np.asarray(values, dtype=float)
+    v = v[np.isfinite(v)]
+    negatives = v[v < 0]
+    if negatives.size < 10:
+        return 0.5
+    r = float(np.percentile(negatives, 5))
+    w = (m - math.log10(float(t) / abs(r))) / 2.0
+    # W must leave room for the log region: 0 < W < M/2.
+    return float(np.clip(w, 0.1, m / 2 - 0.1))
+
+
+def auto_transforms(
+    adata: Any,
+    *,
+    markers: Optional[Any] = None,
+    kind: str = "logicle",
+    m: float = 4.5,
+    layer: Optional[str] = None,
+) -> Dict[str, "Transform"]:
+    """Fit one display transform per channel, from the file and from the data.
+
+    Two things that a hand-written transform dict gets wrong on real data:
+
+    **The top of scale is in the file.** ``t`` comes from each channel's
+    ``$PnR``, not from a constant. A BD instrument writes 262144; a Cytek Aurora
+    writes 2293297 and 4194304 depending on the channel. Hard-coding one of them
+    puts every event of the other on the wrong part of the axis.
+
+    **The linear region has to be measured.** Fluorescence channels get
+    :func:`auto_width` run against their own negative population; see there for
+    why a hand-picked ``W`` does not travel between instruments.
+
+    Scatter and time channels get a :class:`Linear` scale — they have no
+    negative population, and a biexponential axis on FSC is a harder-to-read
+    linear one.
+
+    Arguments
+    ---------
+    adata
+        Read by :func:`ov.io.read_fcs`, ideally **after** compensation, since
+        compensation is what creates most of the negative values ``W`` is
+        being fitted to.
+    markers
+        Restrict to these channels. Default is every channel in ``var``.
+    kind
+        ``'logicle'`` or ``'hyperlog'`` for the fluorescence channels.
+
+    Returns ``{channel: Transform}``, ready to hand to a gate or a plot.
+
+    >>> tr = ov.flow.auto_transforms(adata)          # doctest: +SKIP
+    >>> ov.flow.biaxial(adata, 'CD4', 'CD8', transforms=tr)   # doctest: +SKIP
+    """
+    if kind.lower() not in ("logicle", "hyperlog"):
+        raise ValueError("kind must be 'logicle' or 'hyperlog' — the other "
+                         "scales take no fitted width")
+    biexp = _REGISTRY[kind.lower()]
+
+    names = list(adata.var.index) if markers is None else [str(x) for x in markers]
+    missing = [n for n in names if n not in set(adata.var.index)]
+    if missing:
+        raise KeyError(f"not channels in this data: {missing}")
+
+    X = adata.layers[layer] if layer else adata.X
+    X = np.asarray(X.todense()) if hasattr(X, "todense") else np.asarray(X)
+    index = {name: i for i, name in enumerate(adata.var.index)}
+
+    out: Dict[str, Transform] = {}
+    for name in names:
+        col = X[:, index[name]]
+        detector = str(adata.var["channel"].get(name, name)) if "channel" in adata.var else str(name)
+        t = float(adata.var["PnR"].get(name, 0) or 0) if "PnR" in adata.var else 0.0
+        if not t or not np.isfinite(t):
+            # No $PnR — fall back to the observed maximum rather than to a
+            # constant, and never to zero.
+            t = float(max(np.nanmax(col), 1.0))
+        if any(tag in detector.upper() or tag in str(name).upper()
+               for tag in _NON_FLUORESCENCE):
+            out[name] = Linear(t=t)
+        else:
+            out[name] = biexp(t=t, m=m, w=auto_width(col, t, m), a=0.0)
+    return out
+
+
+def apply_transforms(
+    adata: Any,
+    transforms: Optional[Dict[str, "Transform"]] = None,
+    *,
+    key_added: str = "transformed",
+    layer: Optional[str] = None,
+    **kwargs: Any,
+) -> Any:
+    """Write the transformed values into ``adata.layers[key_added]``.
+
+    Gating does not need this — a gate transforms its own two dimensions on the
+    fly. Clustering does: a SOM measures distance across every marker at once,
+    and on raw fluorescence that distance is dominated by whichever channel
+    happens to have the largest numbers. The clusters that come out then describe
+    the panel rather than the biology.
+
+    ``transforms=None`` fits them with :func:`auto_transforms`, so the common
+    case is one call:
+
+    >>> ov.flow.apply_transforms(adata)                        # doctest: +SKIP
+    >>> ov.flow.flowsom(adata, layer='transformed', markers=[...])  # doctest: +SKIP
+
+    Channels with no transform are copied through unchanged rather than dropped,
+    so the layer stays the same shape as ``X`` and a marker list keeps working.
+    """
+    if transforms is None:
+        transforms = auto_transforms(adata, layer=layer, **kwargs)
+
+    X = adata.layers[layer] if layer else adata.X
+    X = np.asarray(X.todense()) if hasattr(X, "todense") else np.asarray(X, dtype=float)
+    out = np.array(X, dtype=float, copy=True)
+    for i, name in enumerate(adata.var.index):
+        tr = transforms.get(str(name))
+        if tr is not None:
+            out[:, i] = tr.apply(X[:, i])
+    adata.layers[key_added] = out
+    return adata

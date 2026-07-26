@@ -50,6 +50,9 @@ from ._gates import (
     RectangleGate,
     gate_from_dict,
     points_in_polygon,
+    polygon,
+    quadrant,
+    threshold,
 )
 from ._som import SOM, som_metacluster
 from ._gatingml import (
@@ -60,13 +63,15 @@ from ._gatingml import (
     to_gatingml,
     write_gatingml,
 )
-from ._strategy import GatingResult, GatingStrategy
+from ._strategy import GatingResult, GatingStrategy, batch_stats
 from .plotting import (
     backgate,
     biaxial,
     flowsom_heatmap,
     hierarchy,
     histogram,
+    plot_batch,
+    plot_strategy,
     spillover_heatmap,
 )
 from ._transforms import (
@@ -76,6 +81,9 @@ from ._transforms import (
     Log,
     Logicle,
     Transform,
+    apply_transforms,
+    auto_transforms,
+    auto_width,
     make_transform,
     transform_from_dict,
 )
@@ -84,11 +92,13 @@ __all__ = [
     # transforms
     "Transform", "Linear", "Log", "Asinh", "Logicle", "Hyperlog",
     "make_transform", "transform_from_dict",
+    "auto_transforms", "auto_width", "apply_transforms",
     # gates
     "Gate", "RectangleGate", "PolygonGate", "EllipsoidGate", "QuadrantGate",
     "BooleanGate", "gate_from_dict", "points_in_polygon",
+    "threshold", "quadrant", "polygon",
     # strategy
-    "GatingStrategy", "GatingResult",
+    "GatingStrategy", "GatingResult", "batch_stats",
     # compensation
     "compensate", "spillover_to_compensation", "spillover_spreading_matrix",
     # interchange
@@ -98,5 +108,5 @@ __all__ = [
     "flowsom", "SOM", "som_metacluster",
     # plotting
     "biaxial", "histogram", "backgate", "hierarchy",
-    "spillover_heatmap", "flowsom_heatmap",
+    "plot_strategy", "plot_batch", "spillover_heatmap", "flowsom_heatmap",
 ]

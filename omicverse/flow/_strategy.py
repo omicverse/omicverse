@@ -38,9 +38,10 @@ from typing import Any, Dict, Iterable, List, Mapping, Optional, Sequence, Tuple
 import numpy as np
 import pandas as pd
 
+from .._registry import register_function
 from ._gates import BooleanGate, Gate, QuadrantGate, gate_from_dict
 
-__all__ = ["GatingStrategy", "GatingResult"]
+__all__ = ["GatingStrategy", "GatingResult", "batch_stats"]
 
 #: Prefix for the boolean columns written into ``adata.obs``. Namespaced so a
 #: population called "Time" cannot collide with a real obs column.
@@ -55,6 +56,18 @@ ROOT = "root"
 RESTRICT_BELOW = 1.0 / 3.0
 
 
+@register_function(
+    aliases=["GatingResult", "gating_result", "门控结果", "群体统计"],
+    category="flow",
+    description=(
+        "What a gating strategy produced on one sample: a boolean mask per "
+        "population plus the parent of each. Its stats() gives count, parent, "
+        "parent_count, freq_parent, freq_total and low_n — the last flagging "
+        "populations too small for the percentage to mean anything."
+    ),
+    examples=["res = gs.apply(adata)", "res.stats()", "res.masks['CD4 T']"],
+    related=["flow.GatingStrategy", "flow.batch_stats"],
+)
 @dataclass
 class GatingResult:
     """What a strategy produced on one sample."""
@@ -95,6 +108,26 @@ class GatingResult:
         return df.sort_values("population").reset_index(drop=True)
 
 
+@register_function(
+    aliases=["GatingStrategy", "gating_strategy", "门控策略", "门控树",
+             "gating_tree", "gating_hierarchy", "分层门控"],
+    category="flow",
+    description=(
+        "The gating strategy: an ordered TREE of gates that belongs to the "
+        "analysis rather than to any one sample. This is the central object of "
+        "ov.flow — it is what makes applying one strategy to ninety files "
+        "possible, and two strategies diffable. Each gate is evaluated only on "
+        "the events its parent kept. Round-trips through to_dict/from_dict and "
+        "through Gating-ML 2.0."
+    ),
+    examples=[
+        'gs = ov.flow.GatingStrategy("PBMC")',
+        'gs.add_gate(ov.flow.threshold("T cells", "CD3", above=400, transforms=tr))',
+        'res = gs.apply(adata); res.stats()',
+    ],
+    related=["flow.batch_stats", "flow.plot_strategy", "flow.write_gatingml",
+             "flow.threshold", "flow.polygon", "flow.quadrant"],
+)
 class GatingStrategy:
     """An ordered tree of gates.
 
@@ -284,3 +317,54 @@ class GatingStrategy:
             parent = entry.pop("parent", ROOT)
             gs.add_gate(gate_from_dict(entry), parent=parent)
         return gs
+
+
+def batch_stats(
+    adata: Any,
+    strategy: "GatingStrategy",
+    *,
+    groupby: str = "sample",
+    layer: Optional[str] = None,
+    min_events: int = 100,
+) -> pd.DataFrame:
+    """Run one strategy over every group in ``obs[groupby]``, separately.
+
+    THE POINT IS THE WORD "SEPARATELY". Applying the gates to a concatenated
+    matrix and reporting one number is the single most effective way to hide a
+    failed sample: a pooled frequency is an average, and an average of 5% and
+    78% is 40%, which looks like a finding rather than like one tube whose stain
+    did not work.
+
+    Returns tidy long-form — one row per (group, population) — so the spread
+    across samples is a column you can sort by rather than something you have to
+    go looking for. ``low_n`` is carried through per group, because a denominator
+    that is fine in the pooled data can be far too small in one file.
+
+    >>> stats = ov.flow.batch_stats(adata, gs, groupby='sample')  # doctest: +SKIP
+    >>> stats.query("population == 'CD4 T'").sort_values('freq_parent')  # doctest: +SKIP
+    """
+    if groupby not in adata.obs:
+        raise KeyError(
+            f"obs[{groupby!r}] not found — batch_stats needs a column saying "
+            f"which sample each event came from (have: {list(adata.obs)[:12]})"
+        )
+
+    frames = []
+    values = adata.obs[groupby]
+    groups = (values.cat.categories if hasattr(values, "cat")
+              else pd.unique(values))
+    for group in groups:
+        mask = (values == group).to_numpy()
+        if not mask.any():
+            continue
+        sub = adata[mask].copy()
+        result = strategy.apply(sub, layer=layer, write_obs=False,
+                                min_events=min_events)
+        df = result.stats(min_events=min_events)
+        df.insert(0, groupby, group)
+        df["n_events"] = int(mask.sum())
+        frames.append(df)
+
+    if not frames:
+        raise ValueError(f"obs[{groupby!r}] has no non-empty groups")
+    return pd.concat(frames, ignore_index=True)
