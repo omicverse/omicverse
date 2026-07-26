@@ -34,21 +34,62 @@ from .._registry import register_function
 # ``__init__`` and stores it on the instance as ``self._m2``.
 
 
+def _cell_mst_graph(adata: AnnData):
+    """The cell-level weighted MST for whichever reduction was run, or None.
+
+    The two reductions store it in different places, and only one of them
+    stores it under ``projected_dp``:
+
+    * **DDRTree** builds the principal graph over Y-CENTRES, then
+      ``_project_cells_to_mst`` projects cells onto it and writes the
+      cell-level tree to ``projected_dp``.
+    * **ICA** has no centres — its MST is already over cells, and
+      ``cellPairwiseDistances`` is the cell x cell distance matrix it was
+      built from. Nothing ever writes ``projected_dp``.
+
+    Reading ``projected_dp`` alone therefore works on DDRTree and raises on
+    ICA, which is what it did. The shape check below is not decoration: on
+    DDRTree ``cellPairwiseDistances`` is CENTRES x CENTRES, so using it
+    unconditionally would silently index the wrong graph.
+    """
+    from scipy.sparse import csr_matrix, issparse
+    from scipy.sparse.csgraph import minimum_spanning_tree
+
+    monocle = adata.uns.get('monocle', {})
+    graph = monocle.get('projected_dp')
+    if graph is not None:
+        return csr_matrix(graph) if not issparse(graph) else graph.tocsr()
+
+    dp = monocle.get('cellPairwiseDistances')
+    if dp is None:
+        return None
+    dp = np.asarray(dp, dtype=float)
+    if dp.shape != (adata.n_obs, adata.n_obs):
+        return None                       # centres, not cells — wrong graph
+    return minimum_spanning_tree(csr_matrix(dp)).tocsr()
+
+
 def _population_graph_medoid(adata: AnnData, mask: pd.Series) -> str:
     """Return a matching cell minimizing distance to the target population.
 
-    ``projected_dp`` is the cell-level MST created by the first ordering pass.
     On a tree, all-node sums of distances to a weighted target set can be
     computed in linear time by rerooting the tree. Restricting the final
     minimum to matching cells gives a deterministic, representative root
     without materializing an all-pairs distance matrix.
     """
 
-    graph = adata.uns.get('monocle', {}).get('projected_dp')
+    graph = _cell_mst_graph(adata)
     target = np.asarray(mask, dtype=bool)
     target_indices = np.flatnonzero(target)
-    if graph is None or target_indices.size == 0:
-        raise ValueError("Cannot select a root medoid without target cells and MST")
+    if target_indices.size == 0:
+        raise ValueError("Cannot select a root medoid without target cells")
+    if graph is None:
+        raise ValueError(
+            "Cannot select a root medoid: no cell-level MST is available for "
+            f"dim_reduce_type="
+            f"{adata.uns.get('monocle', {}).get('dim_reduce_type')!r}. "
+            "Run reduce_dimension() with DDRTree or ICA before order_cells()."
+        )
 
     graph = graph.tocsr().maximum(graph.T.tocsr()).tocsr()
     n_obs = adata.n_obs
@@ -442,11 +483,16 @@ class Monocle:
             If ``True``, flip the default diameter-endpoint choice
             (match R's ``orderCells(reverse=TRUE)``).
         root_by_column : str or None
-            Name of a column in ``mono.adata.obs``. If given, the
-            matching population's graph medoid is auto-chosen as an exact
-            root cell. The compatibility path below still
-            replicates R Monocle 2's ``GM_state()`` tutorial helper —
-            e.g. for HSMM::
+            Name of a column in ``mono.adata.obs``. If given, the cell
+            minimising total tree distance to the matching population — its
+            graph medoid — is chosen as an exact root cell.
+
+            This is stricter than R Monocle 2's ``GM_state()`` helper, which
+            returns the *State* holding most of the progenitor cells and lets
+            ordering pick any cell within it. Anchoring on a specific cell
+            stops a State that mixes progenitors with other cells from
+            silently rooting the trajectory in the wrong population. The
+            calling pattern is unchanged — e.g. for HSMM::
 
                 mono.order_cells()                 # first pass
                 mono.order_cells(root_by_column='Hours',
