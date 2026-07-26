@@ -458,4 +458,5 @@ markers = [
   "scientific: MCP tests requiring anndata + scanpy + scientific stack (scvelo, squidpy)",
   "extended: MCP tests requiring optional heavy packages (SEACells, pertpy, mira)",
   "real_runtime: MCP tests that import real OmicVerse modules (superset of core/scientific/extended)",
+  "network: tests that download from third-party servers; skipped unless OV_TEST_NETWORK=1",
 ]

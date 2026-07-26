@@ -146,6 +146,12 @@ from ._flow import (
     FLOW_DEMO_PANEL,
     FLOW_DEMO_SPILLOVER,
 )
+from ._cytometry import (
+    # Real public flow-cytometry datasets for the ov.flow tutorials, fetched
+    # from their original repositories (Zenodo / PLOS) rather than re-hosted
+    flow_pbmc_fortessa,
+    flow_pbmc_spectral,
+)
 from ._ambient import (
     # Real raw 10x droplet datasets for the ov.pp.ambient tutorial
     pbmc_raw_10x,

@@ -37,12 +37,17 @@ import pytest
 
 ROOT = pathlib.Path(__file__).resolve().parents[2]
 TUTORIALS = ROOT / "omicverse_guide" / "docs" / "Tutorials-flow"
-NOTEBOOKS = [
+SIMULATED = [
     "t_flow_01_reading_and_compensation.ipynb",
     "t_flow_02_gating.ipynb",
     "t_flow_03_gatingml.ipynb",
     "t_flow_04_flowsom.ipynb",
 ]
+#: Runs on real downloaded data, so it is excluded from the re-execution test:
+#: that would pull ~100 MB from Zenodo and PLOS on every CI run, and a red
+#: build caused by someone else's server being down teaches nothing.
+REAL_DATA = ["t_flow_05_real_data.ipynb"]
+NOTEBOOKS = SIMULATED + REAL_DATA
 
 HAS_SUBMODULE = (ROOT / "omicverse_guide" / "docs").is_dir()
 HAS_NBCLIENT = importlib.util.find_spec("nbclient") is not None
@@ -160,6 +165,9 @@ def test_the_series_covers_the_module():
                                    "BooleanGate", "hierarchy", "backgate"],
         "t_flow_03_gatingml.ipynb": ["write_gatingml", "read_gatingml", "from_dict"],
         "t_flow_04_flowsom.ipynb": ["flowsom", "flowsom_heatmap"],
+        "t_flow_05_real_data.ipynb": ["flow_pbmc_fortessa", "flow_pbmc_spectral",
+                                      "compensate", "GatingStrategy",
+                                      "write_gatingml", "flowsom", "PnR"],
     }
     for name, symbols in expected.items():
         src = _text(_load(name), "code")
@@ -168,12 +176,36 @@ def test_the_series_covers_the_module():
 
 
 @needs_submodule
-@pytest.mark.parametrize("name", NOTEBOOKS)
+@pytest.mark.parametrize("name", SIMULATED)
 def test_it_says_the_data_is_simulated(name):
     """A tutorial whose numbers look like a real experiment must say plainly
     that they are not."""
     text = _text(_load(name), "markdown").lower()
     assert "simulated" in text or "synthetic" in text, f"{name}"
+
+
+@needs_submodule
+@pytest.mark.parametrize("name", REAL_DATA)
+def test_the_real_data_notebook_cites_its_sources(name):
+    """Both datasets are CC-BY-4.0, and attribution is a licence CONDITION, not
+    a courtesy. If the citation ever falls out of the notebook, redistribution
+    of the figures stops being compliant — so it is a test, not a convention."""
+    text = _text(_load(name), "markdown")
+    for required in ("10.5281/zenodo.14311616", "10.1371/journal.pone.0351131",
+                     "CC-BY-4.0"):
+        assert required in text, f"{name} does not carry {required}"
+
+
+@needs_submodule
+@pytest.mark.parametrize("name", REAL_DATA)
+def test_the_real_data_notebook_reads_the_top_of_scale_from_the_file(name):
+    """Its central lesson. A hard-coded 262144 is exactly the bug it warns
+    about, and the Cytek instrument in the same notebook runs to 4,194,304."""
+    src = _text(_load(name), "code")
+    assert "PnR" in src, f"{name}: never reads $PnR"
+    assert "t=262144" not in src.replace(" ", ""), (
+        f"{name} hard-codes a top of scale while telling the reader not to"
+    )
 
 
 @needs_submodule
@@ -192,9 +224,9 @@ def test_it_only_uses_the_public_api(name):
 @pytest.mark.parametrize("name", NOTEBOOKS)
 def test_each_notebook_stands_alone(name):
     """A reader who lands on notebook 3 from a search must not have to run 1
-    first, so each one loads its own copy of the demo sample."""
+    first, so each one loads its own data."""
     src = _text(_load(name), "code")
-    assert "ov.datasets.flow_demo" in src, f"{name}: no data of its own"
+    assert "ov.datasets.flow_" in src, f"{name}: no data of its own"
 
 
 @needs_submodule
@@ -217,7 +249,7 @@ def test_the_demo_data_comes_from_ov_datasets(name):
 @needs_submodule
 @pytest.mark.skipif(not (HAS_NBCLIENT and HAS_FLOWIO),
                     reason="needs nbclient + flowio to re-execute")
-@pytest.mark.parametrize("name", NOTEBOOKS)
+@pytest.mark.parametrize("name", SIMULATED)
 def test_the_notebook_still_runs(name, tmp_path, monkeypatch):
     """Re-execute end to end. These notebooks are the only thing in the repo
     exercising read_fcs -> compensate -> transform -> gate -> plot -> GatingML
