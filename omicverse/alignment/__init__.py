@@ -5,6 +5,7 @@ This module provides comprehensive tools for fastq data processing and alignment
 - Alignment with kb-python (bulk / scRNA-seq)
 - RNA velocity analysis with kb-python
 - SRA download / conversion / QC / alignment / counting wrappers
+- Sanger .ab1: basecall / align-to-reference / mixed-trace decomposition / construct verification (tracy)
 - Homology search: DIAMOND / NCBI BLAST+ (`homology_search`, `reciprocal_best_hits`)
 - 16S amplicon pipeline: cutadapt + vsearch (merge / filter / derep / UNOISE3 / uchime3 / SINTAX / usearch_global)
 """
@@ -24,6 +25,10 @@ from . import vsearch
 from .amplicon_16s import amplicon_16s_pipeline, build_amplicon_anndata
 from ._db import fetch_sintax_ref, fetch_silva, fetch_rdp
 
+# Sanger sequencing (.ab1) — basecall / align / decompose / verify
+from .sanger import (SangerTrace, read_ab1, basecall, align_to_reference,
+                     decompose_trace, verify_construct)
+
 # Homology search (DIAMOND / NCBI BLAST+)
 from ._homology import homology_search, reciprocal_best_hits, BLAST_TAB_COLUMNS
 
@@ -37,6 +42,12 @@ from . import dada2
 from .dada2 import dada2_pipeline
 
 __all__ = [
+    "SangerTrace",
+    "read_ab1",
+    "basecall",
+    "align_to_reference",
+    "decompose_trace",
+    "verify_construct",
     "homology_search",
     "reciprocal_best_hits",
     "BLAST_TAB_COLUMNS",
