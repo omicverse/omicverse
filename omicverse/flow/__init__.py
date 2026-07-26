@@ -31,6 +31,11 @@ WHY IT IS WRITTEN RATHER THAN WRAPPED
     See ``_transforms.py`` for the full argument and the parity evidence.
 """
 
+from ._compensate import (
+    compensate,
+    spillover_spreading_matrix,
+    spillover_to_compensation,
+)
 from ._gates import (
     BooleanGate,
     EllipsoidGate,
@@ -40,6 +45,14 @@ from ._gates import (
     RectangleGate,
     gate_from_dict,
     points_in_polygon,
+)
+from ._gatingml import (
+    from_gatingml,
+    is_valid_xml_id,
+    read_gatingml,
+    sanitize_id,
+    to_gatingml,
+    write_gatingml,
 )
 from ._strategy import GatingResult, GatingStrategy
 from ._transforms import (
@@ -62,4 +75,9 @@ __all__ = [
     "BooleanGate", "gate_from_dict", "points_in_polygon",
     # strategy
     "GatingStrategy", "GatingResult",
+    # compensation
+    "compensate", "spillover_to_compensation", "spillover_spreading_matrix",
+    # interchange
+    "to_gatingml", "from_gatingml", "write_gatingml", "read_gatingml",
+    "is_valid_xml_id", "sanitize_id",
 ]
