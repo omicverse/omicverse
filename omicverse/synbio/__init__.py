@@ -56,6 +56,18 @@ _LAZY_ATTRS: dict[str, tuple[str, str]] = {
     "apply_kcat":            ("._ec", "apply_kcat"),
     "dynamic_fba":           ("._dynamic", "dynamic_fba"),
     "plot_dynamic_fba":      ("._dynamic", "plot_dynamic_fba"),
+    "reconstruct_gem":       ("._reconstruct", "reconstruct_gem"),
+    "gapfill_model":         ("._reconstruct", "gapfill_model"),
+    "universal_reactions":   ("._reconstruct", "universal_reactions"),
+    "validate_gem":          ("._reconstruct", "validate_gem"),
+    "plot_reconstruction":   ("._reconstruct", "plot_reconstruction"),
+    "ReconstructionReport":  ("._reconstruct", "ReconstructionReport"),
+    "GapfillReport":         ("._reconstruct", "GapfillReport"),
+    "contextualize_gem":     ("._context", "contextualize_gem"),
+    "reaction_expression":   ("._context", "reaction_expression"),
+    "gene_expression":       ("._context", "gene_expression"),
+    "plot_contextualization": ("._context", "plot_contextualization"),
+    "ContextResult":         ("._context", "ContextResult"),
     # ---- Layer B: proteins & enzymes -------------------------------------
     "predict_structure":     ("._structure", "predict_structure"),
     "StructurePrediction":   ("._structure", "StructurePrediction"),
@@ -164,7 +176,8 @@ _LAZY_ATTRS: dict[str, tuple[str, str]] = {
 
 # submodules that carry @register_function decorators
 _REGISTRY_SUBMODULES = (
-    "._gem", "._strain", "._ec", "._dynamic", "._structure", "._boltz",
+    "._gem", "._reconstruct", "._context", "._strain", "._ec", "._dynamic",
+    "._structure", "._boltz",
     "._design", "._binder", "._evaluate", "._variant",
     "._stability", "._kcat", "._function", "._embed", "._codon", "._plot",
     "._circuit", "._expression", "._rna", "._rnadesign", "._mrna", "._crispr",
