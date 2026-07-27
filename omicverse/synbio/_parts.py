@@ -121,10 +121,10 @@ _COPY_RANK = {"single": 0, "low": 1, "medium": 2, "high": 3}
 
 
 @register_function(
-    aliases=["query_parts", "部件库查询", "iGEM", "SynBioHub", "Addgene",
+    aliases=["query_parts", "部件库查询", "iGEM", "SynBioHub",
              "parts_registry", "查部件", "registry_search"],
     category="synthetic_biology",
-    description="远程查询标准生物部件库(iGEM Registry / SynBioHub / Addgene)。read_sbol/write_sbol 只能交换设计,找不到设计。需要 allow_network=True 显式开网 —— 库函数不应该默默联网。Search a parts registry by keyword or identifier.",
+    description="远程查询标准生物部件库:SynBioHub 与 iGEM Registry(经 SynBioHub 的 igem 集合)可检索。**Addgene 没有公开检索 API**,只有网页界面,所以 registry='addgene' 会明确报错并告诉你替代做法(从 Addgene 导出 GenBank 后用 read_genbank 读入),而不是假装能查。read_sbol/write_sbol 只能交换设计,找不到设计。需要 allow_network=True 显式开网 —— 库函数不应该默默联网。Search SynBioHub / iGEM for parts.",
     examples=[
         "hits = ov.synbio.query_parts('T7 promoter', registry='synbiohub', allow_network=True)",
         "part = ov.synbio.fetch_part('BBa_J23100', allow_network=True)",

@@ -126,8 +126,24 @@ def test_keep_orphan_reactions_carves_nothing(template):
 
 
 def test_reconstruct_rejects_unknown_method(template):
+    """'gapseq' used to be the example here because it was unsupported. It is a
+    real backend now, so an unknown method has to be something genuinely absent
+    — otherwise this test silently stops testing rejection."""
     with pytest.raises(ValueError, match="method must be one of"):
-        sb.reconstruct_gem("unused.faa", template=template, method="gapseq")
+        sb.reconstruct_gem("unused.faa", template=template, method="raven")
+
+
+def test_all_named_reconstruction_backends_are_accepted(template):
+    """Every backend the docs name must at least reach its own dispatch."""
+    import shutil
+
+    assert sb.reconstruct_gem("unused.faa", template=template,
+                              gene_map={}).method == "homology"
+    for method, tool in (("carveme", "carve"), ("gapseq", "gapseq")):
+        if shutil.which(tool):
+            continue
+        with pytest.raises(ImportError, match=tool):
+            sb.reconstruct_gem("unused.faa", template=template, method=method)
 
 
 def test_homology_without_a_template_proteome_is_an_error(template):

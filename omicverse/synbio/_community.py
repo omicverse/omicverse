@@ -82,7 +82,7 @@ class RBAResult:
 
 
 @register_function(
-    aliases=["rba", "资源分配", "RBA", "resource_balance", "ME_model",
+    aliases=["rba", "资源分配", "RBA", "resource_balance",
              "核糖体约束", "蛋白质组预算", "overflow"],
     category="synthetic_biology",
     description="资源平衡分析 (RBA):在 ec_model 的酶池之上,再把**核糖体**也变成受限资源 —— 生长必须为合成这些酶所需的蛋白质付费。这是溢流代谢的机理:高糖下细胞排乙酸不是因为氧化不了,而是呼吸每产一个 ATP 要的蛋白比发酵多,超过某个速率后限制因素是蛋白质组预算而不是碳源。Resource Balance Analysis — growth under a proteome budget including the ribosome.",
@@ -207,6 +207,62 @@ def rba(
         enzyme_fraction=enzyme_mass / used if used > 0 else 0.0,
         fluxes=fluxes, total_protein=total_protein, status=str(sol.status),
     )
+
+
+@register_function(
+    aliases=["me_model", "ME_model", "ME模型", "COBRAme", "cobrame",
+             "转录翻译模型", "代谢表达模型"],
+    category="synthetic_biology",
+    description="ME 模型(代谢-表达模型,COBRAme):把转录、翻译、复合物组装本身作为**反应**显式建进模型,因此可以问『多合成这个酶要占多少核糖体时间』这类 RBA 答不了的问题。RBA 是同一想法的粗粒度版本 —— 一个总的蛋白质组预算约束,不展开合成机器;两者不能互相冒充。需要 COBRAme + 一份物种特异的 ME 重建。ME-model dispatch (COBRAme).",
+    examples=[
+        "me = ov.synbio.me_model('iJL1678b')",
+        "res = ov.synbio.rba(m)   # the coarse-grained alternative, no extra deps",
+    ],
+    related=["synbio.rba", "synbio.ec_model", "synbio.fba"],
+    requires={},
+    produces={},
+)
+def me_model(model_id: str = "iJL1678b", *, solver_tolerance: float = 1e-6):
+    """Load and solve a metabolism-and-expression model through COBRAme.
+
+    Parameters
+    ----------
+    model_id
+        A ME reconstruction, e.g. ``'iJL1678b'`` (*E. coli*).
+    solver_tolerance
+        ME models are numerically hard and need a high-precision solver
+        (qMINOS/SoPlex); this is passed through.
+
+    Notes
+    -----
+    This is deliberately a *separate* function from :func:`rba` rather than a
+    method of it. A ME model represents transcription, translation and complex
+    formation as explicit reactions with their own stoichiometry; RBA imposes a
+    single aggregate proteome-budget constraint and never writes those reactions
+    down. They answer different questions, and labelling one as the other —
+    which an earlier alias on ``rba`` did — makes it look as though ov.synbio
+    ships a ME model when it ships a proteome constraint.
+    """
+    try:
+        import cobrame  # noqa: F401
+    except ImportError as exc:
+        raise ImportError(
+            "ME 模型需要 COBRAme(github.com/SBRG/cobrame,无 PyPI 包)以及一份"
+            "物种特异的 ME 重建(如 ecolime 的 iJL1678b),还需要高精度求解器"
+            "(qMINOS 或 SoPlex)——ME 模型的数值条件很差,普通 LP 求解器解不动。\n"
+            "只想要蛋白质组资源约束的话,ov.synbio.rba 是粗粒度版本,"
+            "只依赖 COBRApy,不需要任何额外安装。") from exc
+
+    from cobrame.io.json import load_json_me_model  # type: ignore
+
+    import os
+    root = os.environ.get("OMICOS_ME_MODELS", "")
+    path = os.path.join(root, f"{model_id}.json") if root else f"{model_id}.json"
+    if not os.path.exists(path):
+        raise FileNotFoundError(
+            f"找不到 ME 模型 {path!r}。把 ME 重建放到 OMICOS_ME_MODELS 指向的目录,"
+            f"或传一个完整路径。")
+    return load_json_me_model(path)
 
 
 @register_function(

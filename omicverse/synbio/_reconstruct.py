@@ -264,12 +264,15 @@ def reconstruct_gem(
     -------
     ReconstructionReport
     """
-    if method not in ("homology", "carveme", "modelseed"):
+    if method not in ("homology", "carveme", "gapseq", "modelseed"):
         raise ValueError(
-            f"method must be one of ['homology', 'carveme', 'modelseed'], got {method!r}")
+            f"method must be one of ['homology', 'carveme', 'gapseq', "
+            f"'modelseed'], got {method!r}")
 
     if method == "carveme":
         rep = _reconstruct_carveme(proteome, carveme_args, output)
+    elif method == "gapseq":
+        rep = _reconstruct_gapseq(proteome, carveme_args, output)
     elif method == "modelseed":
         rep = _reconstruct_modelseed(proteome, output)
     else:
@@ -459,6 +462,73 @@ def _reconstruct_carveme(proteome, carveme_args, output) -> ReconstructionReport
         growth = 0.0
     return ReconstructionReport(
         model=model, method="carveme", template="carveme_universe",
+        n_reactions=len(model.reactions), n_metabolites=len(model.metabolites),
+        n_genes=len(model.genes), template_reactions=len(model.reactions),
+        growth=growth if growth == growth else 0.0,
+    )
+
+
+def _reconstruct_gapseq(genome, extra_args, output) -> ReconstructionReport:
+    """Drive the real gapseq pipeline (Zimmermann 2021).
+
+    gapseq differs from CarveMe in what it eats: CarveMe takes a **proteome**
+    and carves a universal model down, gapseq takes a **genome** (nucleotide
+    contigs), predicts pathways from it with its own reaction database, and
+    builds up. Passing a ``.faa`` here is the usual mistake, so it is caught
+    rather than left to fail inside the pipeline.
+    """
+    import shutil
+    import subprocess
+    import tempfile
+
+    exe = shutil.which("gapseq")
+    if exe is None:
+        raise ImportError(
+            "method='gapseq' 需要 gapseq 在 PATH 上。它是一套 R/bash 流水线,"
+            "不在 PyPI 上:conda install -c bioconda gapseq,或见 "
+            "github.com/jotech/gapseq。它还需要 blast/hmmer/exonerate 等外部工具。"
+            "只想要一个可跑的草稿模型的话,method='homology' 只需要 DIAMOND/BLAST+。")
+
+    ext = os.path.splitext(str(genome))[1].lower()
+    if ext in (".faa", ".fa.faa", ".pep"):
+        raise ValueError(
+            f"gapseq 需要**基因组**核苷酸序列(.fna/.fasta/.gbk),"
+            f"给到的是蛋白序列 {genome!r}。CarveMe 吃蛋白组、gapseq 吃基因组,"
+            f"两者不能互换 —— 用 method='carveme' 传蛋白组,或给 gapseq 一份基因组。")
+    if not os.path.exists(genome):
+        raise FileNotFoundError(f"genome FASTA not found: {genome}")
+
+    workdir = tempfile.mkdtemp(prefix="ov_gapseq_")
+    cmd = [exe, "doall", os.path.abspath(genome),
+           *(str(a) for a in (extra_args or []))]
+    subprocess.run(cmd, check=True, cwd=workdir)
+
+    # gapseq doall writes <basename>.xml next to its working directory
+    stem = os.path.splitext(os.path.basename(genome))[0]
+    produced = None
+    for candidate in (os.path.join(workdir, f"{stem}.xml"),
+                      os.path.join(workdir, f"{stem}-draft.xml")):
+        if os.path.exists(candidate):
+            produced = candidate
+            break
+    if produced is None:
+        found = sorted(f for f in os.listdir(workdir) if f.endswith(".xml"))
+        if not found:
+            raise RuntimeError(
+                f"gapseq 跑完了但在 {workdir} 里没找到 SBML 输出。"
+                f"目录内容:{sorted(os.listdir(workdir))[:10]}")
+        produced = os.path.join(workdir, found[0])
+
+    from ._gem import load_gem
+    model = load_gem(produced)
+    if output:
+        _write_model(model, output)
+    try:
+        growth = float(model.slim_optimize()) or 0.0
+    except Exception:
+        growth = 0.0
+    return ReconstructionReport(
+        model=model, method="gapseq", template="gapseq_database",
         n_reactions=len(model.reactions), n_metabolites=len(model.metabolites),
         n_genes=len(model.genes), template_reactions=len(model.reactions),
         growth=growth if growth == growth else 0.0,

@@ -440,3 +440,78 @@ def plot_substrate_scope(scope: SubstrateScope, axes=None):
 __all__ = ["enzyme_km", "catalytic_efficiency", "KineticsPrediction",
            "substrate_specificity", "SubstrateScope", "plot_substrate_scope",
            "DIFFUSION_LIMIT"]
+
+
+# ---------------------------------------------------------------------------
+# the B→dynamics bridge
+# ---------------------------------------------------------------------------
+
+@register_function(
+    aliases=["enzyme_dynamics", "酶动力学模拟", "分子动力学", "MD",
+             "enzyme_md", "构象动力学"],
+    category="synthetic_biology",
+    description="把设计好的酶序列一路带到分子动力学:predict_structure 折叠 → ov.mol.simulate 跑 MD → 可选 mmgbsa 算结合自由能。ov.mol 已有完整的 OpenMM 动力学栈,synbio 侧原本没有接口把设计交过去。**QM/MM 没有实现** —— 那需要 QM 引擎(Psi4/ORCA/xtb)与 OpenMM 的耦合层,不在本模块范围内,函数会明确说明而不是假装支持。Take a designed enzyme sequence through folding into molecular dynamics.",
+    examples=[
+        "traj = ov.synbio.enzyme_dynamics(seq, ns=5)",
+        "traj = ov.synbio.enzyme_dynamics(seq, ns=10, ligand='ligand.sdf')",
+    ],
+    related=["synbio.predict_structure", "synbio.stability_ddg",
+             "mol.simulate", "mol.mmgbsa"],
+    requires={},
+    produces={},
+)
+def enzyme_dynamics(sequence: str, *, ns: float = 5.0, ligand=None,
+                    device=None, out_dir: Optional[str] = None, **md_kwargs):
+    """Fold a designed sequence and run molecular dynamics on it.
+
+    Parameters
+    ----------
+    sequence
+        The enzyme's amino-acid sequence — typically straight out of
+        :func:`~omicverse.synbio.inverse_design` or
+        :func:`~omicverse.synbio.ancestral_reconstruction`.
+    ns
+        Simulation length in nanoseconds.
+    ligand
+        Optional ligand (path or SMILES) passed through to the MD stack, so a
+        substrate can be present during the run.
+    device
+        Device for the structure prediction step.
+    out_dir
+        Where to write the predicted structure and trajectory.
+    **md_kwargs
+        Forwarded to :func:`omicverse.mol.simulate` — force field, water model,
+        temperature, box padding and so on.
+
+    Returns
+    -------
+    The trajectory object :func:`omicverse.mol.simulate` returns.
+
+    Notes
+    -----
+    **QM/MM is not implemented anywhere in omicverse.** Mechanistic work on a
+    catalytic step needs a quantum engine (Psi4, ORCA, xtb) coupled to the MM
+    region, which is a different dependency stack from this one. This function
+    gets you classical dynamics on a designed enzyme; it does not get you a
+    reaction barrier, and it does not pretend to.
+    """
+    import os
+    import tempfile
+
+    seq = _clean_seq(sequence, "enzyme_dynamics")
+    out_dir = out_dir or tempfile.mkdtemp(prefix="ov_enzyme_md_")
+    os.makedirs(out_dir, exist_ok=True)
+
+    from ._structure import predict_structure
+    pdb_path = os.path.join(out_dir, "folded.pdb")
+    predict_structure(seq, device=device, out_path=pdb_path)
+
+    try:
+        from ..mol import simulate
+    except ImportError as exc:  # pragma: no cover - only without the MD extra
+        raise ImportError(
+            "分子动力学需要 ov.mol 的 MD 栈(OpenMM + MDTraj)。"
+            "见 ov.mol 的安装说明;结构预测这一步已经完成,PDB 在 "
+            f"{pdb_path}。") from exc
+
+    return simulate(pdb_path, ns=ns, ligand=ligand, **md_kwargs)

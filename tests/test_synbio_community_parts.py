@@ -334,3 +334,60 @@ def test_plot_backbone_choice():
     plt.switch_backend("Agg")
     fig, ax = sb.plot_backbone_choice(sb.select_backbone(host="e_coli"))
     plt.close(fig)
+
+
+# ---------------------------------------------------------------------------
+# the table's remaining named backends: named things must exist or say why not
+# ---------------------------------------------------------------------------
+
+def test_gapseq_is_a_reconstruction_backend_not_just_an_alias():
+    """`gapseq` appeared only as an alias string on gapfill_model while
+    reconstruct_gem accepted no such method — the name was present and the
+    thing was not."""
+    with pytest.raises(ValueError, match="gapseq"):
+        sb.reconstruct_gem("x.faa", method="not-a-method")
+    import shutil
+    if shutil.which("gapseq"):
+        pytest.skip("gapseq is installed; the dispatch would run for real")
+    with pytest.raises(ImportError, match="gapseq"):
+        sb.reconstruct_gem("genome.fna", method="gapseq")
+
+
+def test_gapseq_rejects_a_proteome():
+    """CarveMe eats a proteome, gapseq eats a genome. Passing .faa to gapseq is
+    the standard mistake and fails deep inside the pipeline otherwise."""
+    import shutil
+    if not shutil.which("gapseq"):
+        pytest.skip("the ImportError fires before the extension check")
+    with pytest.raises(ValueError, match="基因组|genome"):
+        sb.reconstruct_gem("proteins.faa", method="gapseq")
+
+
+def test_me_model_is_separate_from_rba():
+    """`ME_model` used to be an alias on rba, which made it look as though
+    ov.synbio ships a ME model when it ships a proteome constraint. They answer
+    different questions and are now different functions."""
+    assert sb.me_model is not sb.rba
+    with pytest.raises(ImportError, match="COBRAme|cobrame"):
+        sb.me_model()
+
+
+def test_me_model_error_points_at_the_dependency_free_alternative():
+    with pytest.raises(ImportError, match="rba"):
+        sb.me_model()
+
+
+def test_addgene_says_it_has_no_search_api():
+    """The registered description advertised Addgene while the code raised
+    NotImplementedError — the agent kernel reads that description."""
+    with pytest.raises(NotImplementedError, match="Addgene"):
+        sb.query_parts("pET28", registry="addgene", allow_network=True)
+
+
+def test_enzyme_dynamics_is_the_bridge_into_ov_mol():
+    """ov.mol has a full MD stack; synbio had no way to hand a design to it."""
+    assert callable(sb.enzyme_dynamics)
+    doc = sb.enzyme_dynamics.__doc__ or ""
+    assert "QM/MM is not implemented" in doc, (
+        "the docstring must say plainly that QM/MM is absent rather than imply "
+        "mechanistic capability")
