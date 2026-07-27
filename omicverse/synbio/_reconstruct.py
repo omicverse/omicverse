@@ -320,20 +320,46 @@ def _rbh_gene_map(
     if rbh is None or len(rbh) == 0:
         return {}
 
+    # outfmt-6 names these qseqid/sseqid (alignment.BLAST_TAB_COLUMNS) and does
+    # NOT carry qlen — reading a missing 'qlen' made min_coverage a silently
+    # inert parameter. Query lengths come from the FASTA instead.
     cols = set(rbh.columns)
-    qcol = "query" if "query" in cols else rbh.columns[0]
-    scol = "subject" if "subject" in cols else rbh.columns[1]
+    qcol = "qseqid" if "qseqid" in cols else rbh.columns[0]
+    scol = "sseqid" if "sseqid" in cols else rbh.columns[1]
+    qlens = _fasta_lengths(proteome)
+
     out: Dict[str, str] = {}
     for _, row in rbh.iterrows():
         pident = float(row.get("pident", 100.0) or 100.0)
         if pident < min_identity:
             continue
+        qid = str(row[qcol])
         length = float(row.get("length", 0) or 0)
-        qlen = float(row.get("qlen", 0) or 0)
+        qlen = qlens.get(qid, 0)
         if qlen and length / qlen < min_coverage:
             continue
-        out[str(row[qcol])] = str(row[scol])
+        out[qid] = str(row[scol])
     return out
+
+
+def _fasta_lengths(path: str) -> Dict[str, int]:
+    """``{sequence_id: length}`` for a FASTA, ids truncated at whitespace the
+    way the aligners report them."""
+    lengths: Dict[str, int] = {}
+    name = None
+    count = 0
+    with open(path, "r", encoding="utf-8", errors="replace") as fh:
+        for line in fh:
+            if line.startswith(">"):
+                if name is not None:
+                    lengths[name] = count
+                name = line[1:].strip().split()[0] if line[1:].strip() else ""
+                count = 0
+            else:
+                count += len(line.strip())
+    if name is not None:
+        lengths[name] = count
+    return lengths
 
 
 def _reconstruct_homology(

@@ -193,6 +193,12 @@ _LAZY_ATTRS: dict[str, tuple[str, str]] = {
     "saturation_library":    ("._library", "saturation_library"),
     "dms_library":           ("._library", "dms_library"),
     "ml_guided_design":      ("._library", "ml_guided_design"),
+    # ---- biosecurity screening (cross-cutting) ---------------------------
+    "screen_sequence":       ("._biosecurity", "screen_sequence"),
+    "translate_frames":      ("._biosecurity", "translate_frames"),
+    "plot_screening":        ("._biosecurity", "plot_screening"),
+    "ScreeningReport":       ("._biosecurity", "ScreeningReport"),
+    "ScreeningHit":          ("._biosecurity", "ScreeningHit"),
     # ---- device helper (handy for users) ---------------------------------
     "resolve_device":        ("._device", "resolve_device"),
 }
@@ -206,7 +212,7 @@ _REGISTRY_SUBMODULES = (
     "._codon", "._plot",
     "._circuit", "._expression", "._rna", "._rnadesign", "._mrna", "._crispr",
     "._editing", "._assembly", "._sbol", "._thermo", "._retro", "._retrobio",
-    "._library", "._seqview",
+    "._library", "._seqview", "._biosecurity",
 )
 
 
