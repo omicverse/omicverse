@@ -462,3 +462,33 @@ def test_host_validation_happens_before_the_codon_tables_are_needed():
     src = inspect.getsource(_harmonize.codon_harmonize)
     assert src.index("_check_hosts(") < src.index("codon_usage("), (
         "hosts must be validated before codon_usage imports python_codon_tables")
+
+
+@needs_tables
+def test_codon_usage_survives_codon_optimize():
+    """Regression: DNAchisel writes `log_best_frequencies` and
+    `log_codons_frequencies` into the dict python_codon_tables caches and hands
+    out, and codon_usage iterated every top-level key — so the log table (itself
+    keyed by codon) overwrote all 64 frequencies with negative values and every
+    CAI computed afterwards was 0.
+
+    Same process only, so it presented as test-order flakiness: the layer-C file
+    passed alone and failed after any suite that called codon_optimize.
+    """
+    from omicverse.synbio._harmonize import codon_usage
+
+    before = codon_usage("e_coli")
+    sb.codon_optimize(GAPDH, host="e_coli")
+    after = codon_usage("e_coli")
+
+    assert after == before
+    assert len(after) == 64, f"expected 64 codons, got {len(after)}"
+    assert all(0.0 <= v <= 1.0 for v in after.values()), "frequencies, not logs"
+
+
+@needs_tables
+def test_cai_survives_codon_optimize():
+    pytest.importorskip("dnachisel", reason="needs omicverse[synbio] (dnachisel)")
+    sb.codon_optimize(GAPDH, host="e_coli")
+    df = sb.compare_codon_strategies(GAPDH, "h_sapiens", "e_coli")
+    assert df.loc["optimized", "cai_in_target"] == pytest.approx(1.0, abs=1e-9)

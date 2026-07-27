@@ -57,6 +57,10 @@ for _c, _a in _CODON_TABLE.items():
 HOSTS = ("e_coli", "s_cerevisiae", "h_sapiens", "b_subtilis", "c_glutamicum",
          "p_pastoris", "cho")
 
+#: The keys of a codon-usage table that are actually amino acids. Anything else
+#: in there was put there by another library (see :func:`codon_usage`).
+_AMINO_ACIDS = frozenset("ACDEFGHIKLMNPQRSTVWY*")
+
 
 def _revcomp(s: str) -> str:
     return s.translate(_COMP)[::-1]
@@ -101,12 +105,29 @@ def codon_usage(host: str) -> Dict[str, float]:
             "dnachisel 一起安装)。请 pip install python_codon_tables。") from exc
 
     table = pct.get_codons_table(host)
+
+    # Read only the amino-acid entries. `python_codon_tables` caches one dict per
+    # species and hands out that same object, and DNAchisel writes its own
+    # `log_best_frequencies` / `log_codons_frequencies` into it as a side effect
+    # of codon_optimize(). Iterating every top-level key therefore picked up
+    # `log_codons_frequencies` — itself keyed by codon — and overwrote all 64
+    # frequencies with log values, which are negative. Every CAI computed after
+    # any call to codon_optimize came back 0, in the same process only, so it
+    # looked like test-order flakiness rather than shared-state corruption.
     out: Dict[str, float] = {}
     for aa, codons in table.items():
-        if aa == "*":
-            aa = "*"
+        if aa not in _AMINO_ACIDS:
+            continue
+        if not hasattr(codons, "items"):
+            continue
         for codon, freq in codons.items():
-            out[codon.upper().replace("U", "T")] = float(freq)
+            key = str(codon).upper().replace("U", "T")
+            if len(key) == 3 and set(key) <= set("ACGT"):
+                out[key] = float(freq)
+    if not out:
+        raise RuntimeError(
+            f"python_codon_tables 没有给出 {host!r} 的可用密码子频率 —— "
+            f"表的结构可能变了。顶层键:{sorted(table)[:8]}")
     return out
 
 
