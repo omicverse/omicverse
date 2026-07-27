@@ -371,3 +371,14 @@ def test_reference_terminators_behave_as_documented():
     assert sb.terminator_strength(sb.RRNB_T1).classification == "strong"
     assert sb.terminator_strength(sb.HAIRPIN_NO_U_TRACT).classification == \
         "not a terminator"
+
+
+def test_designed_sequence_exposes_the_conventional_field_name():
+    """``DesignedSequence`` stores its sequence as ``seq`` while every other
+    ov.synbio dataclass uses ``sequence`` — reaching for the conventional name
+    raised AttributeError, which is what the GPU suite hit. Both spellings work
+    now; the field stays ``seq`` because published tutorials read it."""
+    from omicverse.synbio._design import DesignedSequence
+
+    design = DesignedSequence(seq="MKV", score=1.0)
+    assert design.sequence == design.seq == "MKV"

@@ -23,6 +23,22 @@ class DesignedSequence:
     recovery: Optional[float] = None
     is_native: bool = False
 
+    @property
+    def sequence(self) -> str:
+        """Alias for :attr:`seq`.
+
+        Every other dataclass in ``ov.synbio`` names this field ``sequence``
+        (``CodonResult``, ``SolubilityPrediction``, ``AncestralSequence``,
+        ``EnzymeCandidate``, …) and ``seq`` is otherwise a *parameter* name.
+        This class is the one exception, which is a trap: reaching for
+        ``.sequence`` on a design raised AttributeError, and the GPU test did
+        exactly that.
+
+        The field stays ``seq`` because published tutorials read it, so this is
+        an alias rather than a rename — both spellings work.
+        """
+        return self.seq
+
     def __repr__(self) -> str:  # pragma: no cover
         tag = " (native)" if self.is_native else ""
         return f"DesignedSequence(score={self.score:.3f}{tag}, seq={self.seq})"
