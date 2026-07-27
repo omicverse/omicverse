@@ -68,6 +68,14 @@ _LAZY_ATTRS: dict[str, tuple[str, str]] = {
     "gene_expression":       ("._context", "gene_expression"),
     "plot_contextualization": ("._context", "plot_contextualization"),
     "ContextResult":         ("._context", "ContextResult"),
+    "knockout_flux":         ("._perturb", "knockout_flux"),
+    "compare_knockout_methods": ("._perturb", "compare_knockout_methods"),
+    "plot_knockout_response": ("._perturb", "plot_knockout_response"),
+    "PerturbationResult":    ("._perturb", "PerturbationResult"),
+    "optforce":              ("._optforce", "optforce"),
+    "plot_optforce":         ("._optforce", "plot_optforce"),
+    "OptForceResult":        ("._optforce", "OptForceResult"),
+    "Intervention":          ("._optforce", "Intervention"),
     # ---- Layer B: proteins & enzymes -------------------------------------
     "predict_structure":     ("._structure", "predict_structure"),
     "StructurePrediction":   ("._structure", "StructurePrediction"),
@@ -157,6 +165,9 @@ _LAZY_ATTRS: dict[str, tuple[str, str]] = {
     "plot_binding_sites":    ("._seqview", "plot_binding_sites"),
     # ---- pathway thermodynamics & retrosynthesis -------------------------
     "reaction_dg":           ("._thermo", "reaction_dg"),
+    "thermo_fba":            ("._thermo", "thermo_fba"),
+    "plot_thermo_fba":       ("._thermo", "plot_thermo_fba"),
+    "ThermoFBAResult":       ("._thermo", "ThermoFBAResult"),
     "max_min_driving_force": ("._thermo", "max_min_driving_force"),
     "plot_driving_forces":   ("._thermo", "plot_driving_forces"),
     "pathway_search":        ("._retro", "pathway_search"),
@@ -176,8 +187,8 @@ _LAZY_ATTRS: dict[str, tuple[str, str]] = {
 
 # submodules that carry @register_function decorators
 _REGISTRY_SUBMODULES = (
-    "._gem", "._reconstruct", "._context", "._strain", "._ec", "._dynamic",
-    "._structure", "._boltz",
+    "._gem", "._reconstruct", "._context", "._perturb", "._optforce",
+    "._strain", "._ec", "._dynamic", "._structure", "._boltz",
     "._design", "._binder", "._evaluate", "._variant",
     "._stability", "._kcat", "._function", "._embed", "._codon", "._plot",
     "._circuit", "._expression", "._rna", "._rnadesign", "._mrna", "._crispr",
