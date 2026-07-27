@@ -322,3 +322,85 @@ def test_ov_flow_is_a_registered_namespace():
     assert hasattr(ov, "flow")
     assert "flowsom" in ov.flow.__all__
     assert callable(ov.flow.make_transform)
+
+
+# ── a quadrant's sub-populations ARE populations ────────────────────────────
+#
+# `add_gate`'s own comment has always said each quadrant "must be addressable
+# as a parent", and `apply()` has always handled it correctly. Only the
+# validation refused, so gating within CD4+CD8- — the most ordinary thing to do
+# after drawing a quadrant — raised KeyError. Meanwhile `to_dict()` emitted
+# `"parent": "CD4+CD8-"` for a strategy built any other way, and `from_dict()`
+# rejected that exact document: the module could not round-trip its own output.
+
+def _quadrant_sample():
+    """Four events, one per quadrant, repeated — so every octant holds 50."""
+    import anndata as ad
+    X = np.array([[0.0, 0.0], [10.0, 0.0], [0.0, 10.0], [10.0, 10.0]] * 50,
+                 dtype=np.float32)
+    return ad.AnnData(X, var=pd.DataFrame(index=["x", "y"]))
+
+
+def _quadrant_strategy():
+    return GatingStrategy().add_gate(
+        QuadrantGate(name="Q", dims=("x", "y"), dividers=(5.0, 5.0),
+                     quadrant_names=("DN", "C4", "C8", "DP")))
+
+
+def test_a_quadrant_sub_population_can_be_a_parent():
+    gs = _quadrant_strategy()
+    gs.add_gate(RectangleGate(name="kid", dims=("x",), bounds=((0.0, None),)),
+                parent="C4")
+    res = gs.apply(_quadrant_sample(), write_obs=False)
+    assert res.masks["C4"].sum() == 50
+    # Restricted to its parent, not to the whole sample.
+    assert res.masks["kid"].sum() == 50
+    assert res.masks["kid"].sum() <= res.masks["C4"].sum()
+
+
+def test_a_strategy_gated_inside_a_quadrant_round_trips_through_its_own_dict():
+    gs = _quadrant_strategy()
+    gs.add_gate(RectangleGate(name="kid", dims=("x",), bounds=((0.0, None),)),
+                parent="C4")
+    d = gs.to_dict()
+    assert any(g.get("parent") == "C4" for g in d["gates"]), d["gates"]
+
+    back = GatingStrategy.from_dict(d)
+    assert back.parent_of("kid") == "C4"
+    a = _quadrant_sample()
+    r1, r2 = gs.apply(a, write_obs=False), back.apply(a, write_obs=False)
+    for name in r1.masks:
+        assert np.array_equal(r1.masks[name], r2.masks[name]), name
+
+
+def test_a_parent_that_does_not_exist_is_still_refused():
+    """Widening the check must not turn a typo into silence — and the message
+    now lists the octants, which is what the caller was reaching for."""
+    gs = _quadrant_strategy()
+    with pytest.raises(KeyError) as e:
+        gs.add_gate(RectangleGate(name="kid", dims=("x",), bounds=((0.0, None),)),
+                    parent="C5")
+    assert "C5" in str(e.value)
+    assert "C4" in str(e.value), "the available octants should be listed"
+
+
+def test_a_gate_before_its_parent_raises_instead_of_running_unrestricted():
+    """The silent one, and why this is a correctness fix and not an ergonomic
+    one.
+
+    `masks.get(parent)` returned None for a parent not yet computed, and None
+    means "no restriction" three lines later. Measured before the fix: a child
+    of an octant, declared first, returned 200 of 200 where its parent held 50.
+    No exception, no warning, and a perfectly plausible number.
+    """
+    gs = GatingStrategy()
+    # Reach past add_gate, which keeps the order right by construction. This is
+    # the state from_dict produces from a reordered document.
+    gs._gates["kid"] = RectangleGate(name="kid", dims=("x",), bounds=((-99.0, None),))
+    gs._parent["kid"] = "C4"
+    gs._order.append("kid")
+    gs.add_gate(QuadrantGate(name="Q", dims=("x", "y"), dividers=(5.0, 5.0),
+                             quadrant_names=("DN", "C4", "C8", "DP")))
+    with pytest.raises(KeyError) as e:
+        gs.apply(_quadrant_sample(), write_obs=False)
+    assert "has not been computed yet" in str(e.value)

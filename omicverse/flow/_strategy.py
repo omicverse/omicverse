@@ -152,10 +152,20 @@ class GatingStrategy:
             raise ValueError(f"a gate named {gate.name!r} is already in this strategy")
         if gate.name == ROOT:
             raise ValueError(f"{ROOT!r} is reserved for the ungated population")
-        if parent != ROOT and parent not in self._gates:
+        # Against every known POPULATION, not just the gate names. A quadrant's
+        # sub-populations are populations in their own right -- the comment
+        # below has always said they "must be addressable as a parent" -- but
+        # this check looked only at `_gates`, so gating within CD4+CD8-, the
+        # single most ordinary thing to do after drawing a quadrant, raised.
+        #
+        # `apply()` handled it correctly the whole time. Only the validation
+        # refused, and `to_dict()` happily emitted `"parent": "CD4+CD8-"` for a
+        # strategy built any other way -- which `from_dict()` then rejected, so
+        # the module could not round-trip its own output.
+        if parent != ROOT and parent not in self._parent:
             # Checked here rather than at apply() time so the error names the
             # gate being added, which is the thing the caller can fix.
-            known = [ROOT] + self._order
+            known = [ROOT] + sorted(self._parent)
             raise KeyError(
                 f"gate {gate.name!r} names parent {parent!r}, which is not in this "
                 f"strategy. Known populations: {known}"
@@ -225,7 +235,27 @@ class GatingStrategy:
         for name in self._order:
             gate = self._gates[name]
             parent = self._parent[name]
-            parent_mask = masks.get(parent) if parent != ROOT else None
+            if parent == ROOT:
+                parent_mask = None
+            elif parent in masks:
+                parent_mask = masks[parent]
+            else:
+                # RAISE, do not run unrestricted. `masks.get(parent)` returned
+                # None for a parent that simply had not been evaluated yet, and
+                # None means "no restriction" three lines down -- so a gate
+                # declared before its parent silently reported the whole sample.
+                # Measured: a child of a quadrant octant, placed first, returned
+                # 200 of 200 where its parent held 50. No exception, no warning,
+                # and a plausible number.
+                #
+                # `add_gate` keeps the order right by construction, but
+                # `from_dict` takes whatever order the document lists and
+                # `_order` is reachable directly.
+                raise KeyError(
+                    f"gate {name!r} names parent {parent!r}, which has not been "
+                    f"computed yet. A gate must come after its parent. "
+                    f"Computed so far: {sorted(masks)}"
+                )
 
             if isinstance(gate, BooleanGate):
                 # Booleans compose already-resolved populations, so they are not
