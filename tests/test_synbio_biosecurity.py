@@ -298,3 +298,51 @@ def test_plot_handles_an_empty_report():
     fig, axes = sb.plot_screening(rep)
     assert len(axes) == 2
     plt.close(fig)
+
+
+# ---------------------------------------------------------------------------
+# in-memory references, and the reverse-complement helper the six-frame claim
+# rests on
+# ---------------------------------------------------------------------------
+
+@needs_aligner
+def test_an_in_memory_reference_works_like_a_fasta():
+    """A reference is not always a file on disk — it may have come back from a
+    registry query or a database cursor. Requiring a path forced callers to
+    write a temporary FASTA themselves."""
+    rep = sb.screen_sequence(CONCERN_PROTEIN,
+                             databases={"reference_entry_01": CONCERN_PROTEIN})
+    assert rep.decision == "flag"
+    assert rep.hits and rep.hits[0].subject == "reference_entry_01"
+
+
+@needs_aligner
+def test_in_memory_and_file_references_agree(concern_db):
+    from_file = sb.screen_sequence(CONCERN_PROTEIN, databases=[concern_db])
+    from_memory = sb.screen_sequence(
+        CONCERN_PROTEIN, databases={"stand_in_concern_01": CONCERN_PROTEIN})
+    assert from_file.decision == from_memory.decision
+    assert len(from_file.hits) == len(from_memory.hits)
+
+
+def test_an_empty_in_memory_entry_is_rejected():
+    with pytest.raises(ValueError, match="是空的"):
+        sb.screen_sequence(CONCERN_PROTEIN, databases={"bad": ""})
+
+
+def test_reverse_complement_is_public():
+    """It is the operation that makes the six-frame requirement concrete, and
+    the tutorial needs it to show that flipping a construct does not evade the
+    screen."""
+    assert sb.reverse_complement("ATGGCT") == "AGCCAT"
+    assert sb.reverse_complement("augGCu") == "AGCCAT"
+
+
+def test_reverse_complement_is_an_involution():
+    seq = "ATGGCTTGTAAACGT"
+    assert sb.reverse_complement(sb.reverse_complement(seq)) == seq
+
+
+def test_reverse_complement_rejects_protein():
+    with pytest.raises(ValueError, match="非 DNA 字符"):
+        sb.reverse_complement("MKVQ")

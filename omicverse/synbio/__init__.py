@@ -255,6 +255,7 @@ _LAZY_ATTRS: dict[str, tuple[str, str]] = {
     "Part":                  ("._parts", "Part"),
     "screen_sequence":       ("._biosecurity", "screen_sequence"),
     "translate_frames":      ("._biosecurity", "translate_frames"),
+    "reverse_complement":    ("._biosecurity", "reverse_complement"),
     "plot_screening":        ("._biosecurity", "plot_screening"),
     "ScreeningReport":       ("._biosecurity", "ScreeningReport"),
     "ScreeningHit":          ("._biosecurity", "ScreeningHit"),

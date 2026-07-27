@@ -40,7 +40,8 @@ from __future__ import annotations
 
 import os
 from dataclasses import dataclass, field
-from typing import TYPE_CHECKING, Dict, List, Optional, Sequence, Tuple
+from typing import (TYPE_CHECKING, Dict, List, Mapping, Optional, Sequence,
+                    Tuple)
 
 from .._registry import register_function
 
@@ -179,7 +180,28 @@ def translate_frames(dna: str) -> Dict[str, str]:
     return out
 
 
-def _configured_databases(databases) -> List[str]:
+def _configured_databases(databases, tmpdir: Optional[str] = None) -> List[str]:
+    """Normalise ``databases`` to a list of FASTA paths.
+
+    Accepts a path, a list of paths, or a ``{identifier: sequence}`` mapping —
+    the in-memory form matters because a reference is not always a file on
+    disk: it may have just come back from a registry query, a database cursor,
+    or a curated list held in the calling script. Requiring a path forced
+    callers to write a temporary FASTA themselves, which is exactly the kind of
+    glue a library should absorb.
+    """
+    if isinstance(databases, Mapping):
+        if tmpdir is None:
+            raise ValueError("in-memory databases need a temp directory")
+        path = os.path.join(tmpdir, "inline_reference.faa")
+        with open(path, "w", encoding="utf-8") as fh:
+            for ident, seq in databases.items():
+                clean = "".join(str(seq).split()).upper()
+                if not clean:
+                    raise ValueError(f"参考序列 {ident!r} 是空的。")
+                fh.write(f">{ident}\n{clean}\n")
+        return [path]
+
     if databases is None:
         env = os.environ.get("OMICOS_BIOSECURITY_DB", "")
         paths = [p for p in env.split(os.pathsep) if p]
@@ -228,7 +250,8 @@ def screen_sequence(
         DNA or protein. ``sequence_type='auto'`` decides by alphabet; DNA is
         translated in all six frames before alignment.
     databases
-        FASTA path(s) of sequences of concern. Defaults to
+        The reference of concern: a FASTA path, a list of paths, or an
+        in-memory ``{identifier: sequence}`` mapping. Defaults to
         ``OMICOS_BIOSECURITY_DB`` (``os.pathsep``-separated). **No such set is
         bundled.**
     benign_databases
@@ -271,8 +294,11 @@ def screen_sequence(
     if not seq:
         raise ValueError("ov.synbio.screen_sequence: 序列为空。")
 
-    dbs = _configured_databases(databases)
-    benign = _configured_databases(benign_databases) if benign_databases else []
+    import tempfile
+    holder = tempfile.TemporaryDirectory(prefix="ov_screen_db_")
+    dbs = _configured_databases(databases, holder.name)
+    benign = (_configured_databases(benign_databases, holder.name)
+              if benign_databases else [])
 
     if not dbs:
         if require_database:
@@ -305,7 +331,6 @@ def screen_sequence(
         queries = {"protein": seq}
         unit_len = len(seq)
 
-    import tempfile
     from ..alignment import homology_search
 
     hits: List[ScreeningHit] = []
@@ -458,5 +483,28 @@ def plot_screening(report: ScreeningReport, axes=None):
     return fig, axes
 
 
-__all__ = ["screen_sequence", "ScreeningReport", "ScreeningHit",
+__all__ = ["screen_sequence", "ScreeningReport", "ScreeningHit", "reverse_complement",
            "translate_frames", "plot_screening", "DECISIONS"]
+
+
+@register_function(
+    aliases=["reverse_complement", "反向互补", "revcomp", "互补链",
+             "reverse_complement_dna"],
+    category="synthetic_biology",
+    description="DNA 反向互补。看似琐碎,但它是检验筛查是否真的覆盖六个阅读框的必要操作 —— 只读注释链的筛查,把插入片段翻转一下就能绕过。Reverse complement of a DNA sequence.",
+    examples=[
+        "ov.synbio.reverse_complement('ATGGCT')",
+        "ov.synbio.screen_sequence(ov.synbio.reverse_complement(dna), databases=ref)",
+    ],
+    related=["synbio.translate_frames", "synbio.screen_sequence"],
+    requires={},
+    produces={},
+)
+def reverse_complement(sequence: str) -> str:
+    """Reverse complement, uppercased, with U mapped to T."""
+    seq = "".join(str(sequence).split()).upper().replace("U", "T")
+    bad = sorted(set(seq) - set("ACGTN"))
+    if bad:
+        raise ValueError(
+            f"ov.synbio.reverse_complement: 序列含非 DNA 字符 {bad}。")
+    return _revcomp(seq)
