@@ -66,6 +66,14 @@ _LAZY_ATTRS: dict[str, tuple[str, str]] = {
     "contextualize_gem":     ("._context", "contextualize_gem"),
     "reaction_expression":   ("._context", "reaction_expression"),
     "gene_expression":       ("._context", "gene_expression"),
+    "fetch_ecoli_abundance": ("._context", "fetch_ecoli_abundance"),
+    "reference_protein":     ("._refseq", "reference_protein"),
+    "reference_family":      ("._refseq", "reference_family"),
+    "REFERENCE_PROTEINS":    ("._refseq", "REFERENCE_PROTEINS"),
+    "LYSOZYME_FAMILY":       ("._refseq", "LYSOZYME_FAMILY"),
+    "GAPDH_CDS":             ("._refseq", "GAPDH_CDS"),
+    "RRNB_T1":               ("._refseq", "RRNB_T1"),
+    "HAIRPIN_NO_U_TRACT":    ("._refseq", "HAIRPIN_NO_U_TRACT"),
     "plot_contextualization": ("._context", "plot_contextualization"),
     "ContextResult":         ("._context", "ContextResult"),
     "knockout_flux":         ("._perturb", "knockout_flux"),
@@ -261,7 +269,7 @@ _REGISTRY_SUBMODULES = (
     "._codon", "._plot",
     "._circuit", "._expression", "._rna", "._rnadesign", "._mrna", "._crispr",
     "._editing", "._assembly", "._sbol", "._thermo", "._retro", "._retrobio",
-    "._library", "._seqview", "._biosecurity", "._harmonize", "._fidelity", "._community", "._selenzyme", "._parts",
+    "._library", "._seqview", "._biosecurity", "._harmonize", "._fidelity", "._community", "._selenzyme", "._parts", "._refseq",
     "._compile",
 )
 

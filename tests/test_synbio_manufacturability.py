@@ -337,3 +337,37 @@ def test_plot_accepts_a_prediction_and_marks_the_signal_peptide():
     fig, axes = sb.plot_manufacturability(exp)
     assert len(axes) == 2
     plt.close(fig)
+
+
+# ---------------------------------------------------------------------------
+# the landmarks live in the package, so tutorials and tests cannot drift apart
+# ---------------------------------------------------------------------------
+
+def test_reference_sequences_match_the_ones_tested_here():
+    assert sb.reference_protein("phoA") == PHOA
+    assert sb.reference_protein("gfp") == GFP
+    assert sb.reference_protein("lacY") == LACY
+
+
+def test_reference_records_say_why_they_are_landmarks():
+    """A reference sequence with no documented expected behaviour is a string."""
+    record = sb.reference_protein("phoA", with_metadata=True)
+    assert "21" in record["description"], "the cleavage site should be recorded"
+    assert record["organism"]
+
+
+def test_unknown_reference_lists_the_available_ones():
+    with pytest.raises(KeyError, match="phoA|可用的有"):
+        sb.reference_protein("insulin")
+
+
+def test_reference_family_is_the_lysozyme_set():
+    family = sb.reference_family("lysozyme")
+    assert set(family) == {"chicken", "turkey", "quail", "duck"}
+    assert family["chicken"] == LYSOZYME
+
+
+def test_reference_terminators_behave_as_documented():
+    assert sb.terminator_strength(sb.RRNB_T1).classification == "strong"
+    assert sb.terminator_strength(sb.HAIRPIN_NO_U_TRACT).classification == \
+        "not a terminator"

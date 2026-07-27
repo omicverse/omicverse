@@ -151,6 +151,68 @@ def gene_expression(
         f"不支持的 expression 类型 {cls!r}。可以传 AnnData / DataFrame / Series / dict。")
 
 
+_ECOLI_ABUNDANCE_URL = (
+    "https://raw.githubusercontent.com/tibbdc/ECMpy/master/data/gene_abundance.csv"
+)
+
+
+@register_function(
+    aliases=["fetch_ecoli_abundance", "大肠杆菌丰度", "ecoli_proteome",
+             "大肠杆菌蛋白组", "fetch_ecoli_proteome"],
+    category="synthetic_biology",
+    description="下载真实的大肠杆菌基因丰度表(b 编号 → 蛋白丰度,来自已发表蛋白组,经 ECMpy 整理),用作 contextualize_gem 的输入。基因 id 就是 BiGG 模型用的 b 编号,与 e_coli_core / iML1515 直接对得上(textbook 模型 137 个基因里覆盖 136 个),不需要 id 映射。缓存到本地,只下载一次。Fetch a real E. coli gene-abundance table keyed by b-number.",
+    examples=[
+        "abund = ov.synbio.fetch_ecoli_abundance()",
+        "res = ov.synbio.contextualize_gem(abund, model, method='gimme')",
+    ],
+    related=["synbio.contextualize_gem", "synbio.reaction_expression"],
+    requires={},
+    produces={},
+)
+def fetch_ecoli_abundance(cache_dir: Optional[str] = None,
+                          timeout: float = 60.0) -> Dict[str, float]:
+    """Real *E. coli* protein abundances as ``{b_number: abundance}``.
+
+    Downloaded once and cached. The identifiers are the same b-numbers BiGG
+    models use for genes, so this drops straight into
+    :func:`contextualize_gem` without an id-mapping step — which is where most
+    omics-to-GEM attempts actually fail.
+    """
+    import os
+    import urllib.request
+
+    root = cache_dir or os.environ.get(
+        "OMICOS_SYNBIO_GEM_DIR",
+        os.path.join(os.path.expanduser("~"), ".omicverse", "synbio_gems"))
+    os.makedirs(root, exist_ok=True)
+    local = os.path.join(root, "ecoli_gene_abundance.csv")
+
+    if not os.path.exists(local):
+        try:
+            urllib.request.urlretrieve(_ECOLI_ABUNDANCE_URL, local)
+        except Exception as exc:
+            raise RuntimeError(
+                f"无法下载大肠杆菌丰度表({exc})。可以手动取 "
+                f"{_ECOLI_ABUNDANCE_URL} 放到 {local},或直接把自己的 "
+                f"{{gene: value}} 传给 contextualize_gem。") from exc
+
+    out: Dict[str, float] = {}
+    with open(local, "r", encoding="utf-8", errors="replace") as fh:
+        header = fh.readline()
+        for line in fh:
+            parts = line.strip().split(",")
+            if len(parts) < 2:
+                continue
+            gene = parts[0].strip().strip('"')
+            try:
+                out[gene] = float(parts[1])
+            except ValueError:
+                continue
+    if not out:
+        raise RuntimeError(f"丰度表 {local} 解析后是空的。")
+    return out
+
+
 def _aggregate(X, agg: str, axis: int):
     import numpy as np
     fns = {"mean": np.nanmean, "median": np.nanmedian,
