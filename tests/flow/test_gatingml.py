@@ -152,3 +152,127 @@ def test_quadrants_survive(tmp_path):
     back = fl.read_gatingml(p)
     assert back.gates["Q"].dividers == gs.gates["Q"].dividers
     assert back.gates["Q"].quadrant_names == gs.gates["Q"].quadrant_names
+
+
+# ── schema compliance ───────────────────────────────────────────────────────
+#
+# The document round-tripped through this module perfectly and was rejected by
+# every other tool: `flowkit.parse_gating_xml` answered "File is neither
+# Gating-ML 2.0 compliant nor a FlowJo workspace", because FlowKit validates
+# against the real XSD before it parses. Writing something only we can read is
+# the one thing an interchange format must not do, so these pin each violation
+# with stdlib only — no FlowKit needed to catch a regression.
+
+GATING = "{http://www.isac-net.org/std/Gating-ML/v2.0/gating}"
+DATA = "{http://www.isac-net.org/std/Gating-ML/v2.0/datatypes}"
+GATE_TAGS = {GATING + t for t in
+             ("RectangleGate", "PolygonGate", "EllipsoidGate",
+              "BooleanGate", "QuadrantGate")}
+
+
+def _root(tmp_path, gs):
+    p = str(tmp_path / "schema.xml")
+    fl.write_gatingml(gs, p)
+    return ET.parse(p).getroot()
+
+
+def test_every_dimension_names_its_compensation(tmp_path):
+    """`Dimension_Type/@compensation-ref` is `use="required"`. It was never
+    written, so every gate in every document we produced was invalid."""
+    root = _root(tmp_path, strategy())
+    dims = [d for g in root for d in g if d.tag in (GATING + "dimension", GATING + "divider")]
+    assert dims, "the fixture must contain dimensions"
+    for d in dims:
+        assert d.get(GATING + "compensation-ref") == "uncompensated", ET.tostring(d)
+
+
+def test_custom_info_is_the_first_child_and_in_the_data_type_namespace(tmp_path):
+    """Two separate violations in one element.
+
+    POSITION: `custom_info` comes from `Custom_Group` on `AbstractGate_Type`,
+    and in an XSD `complexContent` extension the base's content precedes the
+    extension's sequence — so it must lead, not trail.
+
+    NAMESPACE: it is declared in the DataTypes schema. `gating:custom_info` is
+    a different, undeclared element.
+    """
+    root = _root(tmp_path, strategy())
+    gates = [g for g in root if g.tag in GATE_TAGS]
+    assert gates
+    for g in gates:
+        kids = list(g)
+        assert kids, ET.tostring(g)
+        assert kids[0].tag == DATA + "custom_info", (g.tag, [k.tag for k in kids])
+        assert g.find(GATING + "custom_info") is None, "the gating: spelling is undeclared"
+
+
+def test_a_quadrant_gate_emits_its_quadrants(tmp_path):
+    """`QuadrantGate_Type` is `divider+` THEN `Quadrant+`. Only the dividers
+    were written, so the gate was structurally incomplete and a consumer had no
+    way to know which region carried which name."""
+    lg = fl.make_transform("logicle", t=262144, w=0.5, m=4.5, a=0.0)
+    gs = fl.GatingStrategy().add_gate(
+        fl.QuadrantGate(name="Q", dims=("CD4", "CD8"), dividers=(0.4, 0.4),
+                        transforms={"CD4": lg, "CD8": lg},
+                        quadrant_names=("DN", "C4", "C8", "DP")))
+    root = _root(tmp_path, gs)
+    q = next(g for g in root if g.tag == GATING + "QuadrantGate")
+    dividers = q.findall(GATING + "divider")
+    quadrants = q.findall(GATING + "Quadrant")
+    assert len(dividers) == 2
+    assert len(quadrants) == 4, "2 dimensions -> 2**2 quadrants"
+    for quad in quadrants:
+        positions = quad.findall(GATING + "position")
+        assert len(positions) == 2, "one position per divider"
+        refs = {p.get(GATING + "divider_ref") for p in positions}
+        assert refs == {d.get(GATING + "id") for d in dividers}
+    # Every quadrant is a distinct combination of sides — two on the same side
+    # of both dividers would be two names for one region.
+    sides = {tuple(sorted(
+        (p.get(GATING + "divider_ref"),
+         float(p.get(GATING + "location")) > 0.4) for p in quad.findall(GATING + "position")))
+        for quad in quadrants}
+    assert len(sides) == 4, sides
+
+
+def test_a_boolean_gate_does_not_claim_a_parent_it_does_not_honour(tmp_path):
+    """In Gating-ML `parent_id` means "evaluated within the parent". ov.flow's
+    boolean deliberately is not: with a parent keeping 2 of 4 events, `NOT A`
+    returns n - A. Writing parent_id asserted a restriction we do not apply,
+    and FlowKit — which builds its tree from parent_id AND the gateReferences —
+    died on the contradiction with `NetworkXNoPath`.
+
+    The placement still round-trips, via custom_info.
+    """
+    gs = strategy()
+    root = _root(tmp_path, gs)
+    b = next(g for g in root if g.tag == GATING + "BooleanGate")
+    assert b.get(GATING + "parent_id") is None
+
+    p = str(tmp_path / "b.xml")
+    fl.write_gatingml(gs, p)
+    back = fl.read_gatingml(p)
+    assert back.parent_of("CD3+ not blast") == gs.parent_of("CD3+ not blast")
+
+
+def test_the_document_validates_against_the_real_gating_ml_schema(tmp_path):
+    """The definitive check, when the XSD is available.
+
+    Skipped rather than vendored: the schema ships with FlowKit, which is not a
+    dependency (it pins numpy>=2). The stdlib tests above cover each violation
+    so a regression is caught without it.
+    """
+    lxml_etree = pytest.importorskip("lxml.etree")
+    flowkit = pytest.importorskip("flowkit")
+    import os
+    xsd = os.path.join(os.path.dirname(flowkit.__file__),
+                       "_resources", "Gating-ML.v2.0.xsd")
+    if not os.path.exists(xsd):
+        pytest.skip("Gating-ML XSD not found in this FlowKit")
+    schema = lxml_etree.XMLSchema(lxml_etree.parse(xsd))
+
+    p = str(tmp_path / "valid.xml")
+    fl.write_gatingml(strategy(), p)
+    doc = lxml_etree.parse(p)
+    assert schema.validate(doc), "\n".join(
+        f"line {e.line}: {e.message}" for e in schema.error_log)

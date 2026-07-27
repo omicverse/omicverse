@@ -19,8 +19,27 @@ unmediated wrapper produces corrupt interchange BY DEFAULT, for the most common
 naming convention in the field.
 
 This module therefore owns a display-name <-> ``xs:ID`` mapping: every gate gets
-a generated, valid id, and its human name is carried in ``gating:custom_info``
+a generated, valid id, and its human name is carried in ``data-type:custom_info``
 where it belongs. Round-tripping restores the display names exactly.
+
+SCHEMA COMPLIANCE IS THE POINT, AND WAS THE BUG
+-----------------------------------------------
+Writing something only we can read defeats the entire purpose. Until this was
+fixed the output round-tripped here perfectly and every other tool refused it:
+``flowkit.parse_gating_xml`` validates against the ISAC XSD first and answered
+"File is neither Gating-ML 2.0 compliant nor a FlowJo workspace". Four separate
+violations, none of which our own reader could notice:
+
+* ``Dimension_Type/@compensation-ref`` is ``use="required"`` and was omitted;
+* ``custom_info`` was written LAST, but it comes from ``Custom_Group`` on
+  ``AbstractGate_Type`` and an XSD extension puts the base's content first;
+* ``custom_info`` was written in the ``gating`` namespace; it is declared in
+  DataTypes;
+* ``QuadrantGate_Type`` is ``divider+`` then ``Quadrant+`` and the ``Quadrant``
+  elements were never emitted at all.
+
+``tests/flow/test_gatingml.py`` validates against the real XSD when FlowKit is
+installed, and pins each violation with stdlib assertions when it is not.
 """
 
 from __future__ import annotations
@@ -125,9 +144,20 @@ def _add_transform(root: ET.Element, xid: str, tr: Transform) -> None:
         })
 
 
+#: Gating-ML requires every dimension to name its compensation. The schema
+#: (``Dimension_Type``, ``use="required"``) allows ``'uncompensated'``,
+#: ``'FCS'``, or the id of a spillover matrix. A gate carries no binding to a
+#: matrix, so ``'uncompensated'`` is the only one we can state truthfully:
+#: it says this gate does not reference a compensation matrix, which is exactly
+#: the case. A caller who compensated first should say so with
+#: ``compensation_ref='FCS'``.
+UNCOMPENSATED = "uncompensated"
+
+
 def _dim(parent: ET.Element, name: str, xf: Optional[str],
-         mn: Optional[float] = None, mx: Optional[float] = None) -> ET.Element:
-    attrs = {}
+         mn: Optional[float] = None, mx: Optional[float] = None,
+         comp: str = UNCOMPENSATED) -> ET.Element:
+    attrs = {_q("gating", "compensation-ref"): comp}
     if mn is not None:
         attrs[_q("gating", "min")] = repr(float(mn))
     if mx is not None:
@@ -138,6 +168,59 @@ def _dim(parent: ET.Element, name: str, xf: Optional[str],
     ET.SubElement(d, _q("data-type", "fcs-dimension"),
                   {_q("data-type", "name"): name})
     return d
+
+
+def _custom_info(el: ET.Element, name: str, gate: Gate,
+                 parent: Optional[str] = None) -> None:
+    """The display name, which usually cannot be an ``xs:ID``.
+
+    FIRST CHILD, not last. ``custom_info`` comes from ``Custom_Group`` on
+    ``AbstractGate_Type``; every concrete gate type extends that base by
+    ``complexContent``, and in an XSD extension the BASE's content precedes the
+    extension's sequence. Appending it after the dimensions made the document
+    schema-invalid — "Element 'custom_info': This element is not expected.
+    Expected is ( dimension )" — and a schema-invalid document is one FlowKit
+    refuses outright, so the file round-tripped perfectly here and was unusable
+    anywhere else.
+    """
+    # data-type, NOT gating. `custom_info` is declared in Custom_Group in the
+    # DataTypes schema; `gating:custom_info` is a different, undeclared element
+    # and the validator says so: "Expected is one of ( data-type:custom_info,
+    # gating:dimension )".
+    info = ET.SubElement(el, _q("data-type", "custom_info"))
+    ET.SubElement(info, "omicverse-name").text = name
+    if parent is not None:
+        # Only a BooleanGate needs this: every other kind carries its placement
+        # in gating:parent_id, which means what we mean.
+        ET.SubElement(info, "omicverse-parent").text = parent
+    if isinstance(gate, QuadrantGate):
+        ET.SubElement(info, "omicverse-quadrants").text = "\t".join(gate.quadrant_names)
+
+
+def _quadrants(el: ET.Element, gate: QuadrantGate, gid: str,
+               divider_ids: List[str]) -> None:
+    """The ``Quadrant`` elements the schema requires after the dividers.
+
+    ``QuadrantGate_Type`` is ``divider+`` THEN ``Quadrant+``; we wrote only the
+    dividers, so the gate was structurally incomplete. Each quadrant names, per
+    dimension, which side of that divider it is on.
+
+    Bit order matches ``QuadrantGate.masks``: dimension 0 is the low bit, so
+    for ``dims=(x, y)`` the names run (x-y-, x+y-, x-y+, x+y+). Getting this
+    backwards here would silently swap two populations on export — the reader
+    would restore names attached to the wrong regions.
+    """
+    for i, qname in enumerate(gate.quadrant_names):
+        q = ET.SubElement(el, _q("gating", "Quadrant"),
+                          {_q("gating", "id"): sanitize_id(f"{gid}_q{i}")})
+        for k, (did, div) in enumerate(zip(divider_ids, gate.dividers)):
+            # `location` only has to fall on the correct side; the regions are
+            # unbounded outward, so divider +/- 1 is unambiguous on every scale.
+            above = bool((i >> k) & 1)
+            ET.SubElement(q, _q("gating", "position"), {
+                _q("gating", "divider_ref"): did,
+                _q("gating", "location"): repr(float(div) + (1.0 if above else -1.0)),
+            })
 
 
 def to_gatingml(strategy: GatingStrategy) -> ET.ElementTree:
@@ -163,16 +246,28 @@ def to_gatingml(strategy: GatingStrategy) -> ET.ElementTree:
     for name, gate in strategy.gates.items():
         parent = strategy.parent_of(name)
         attrs = {_q("gating", "id"): ids[name]}
-        if parent != ROOT and parent in ids:
+        # NOT on a BooleanGate. In Gating-ML `parent_id` means the gate is
+        # evaluated WITHIN the parent; ov.flow's boolean deliberately is not —
+        # verified: with parent P keeping 2 of 4 events, `NOT A` returns 3,
+        # i.e. n - A, ignoring P entirely. Writing parent_id would assert a
+        # restriction we do not apply.
+        #
+        # It also broke the consumer outright: FlowKit builds its tree from
+        # parent_id AND from the gateReferences, and the two disagree ->
+        # `NetworkXNoPath: No path between root and DP`. Our own tree placement
+        # travels in custom_info, which from_gatingml already reads.
+        if parent != ROOT and parent in ids and not isinstance(gate, BooleanGate):
             attrs[_q("gating", "parent_id")] = ids[parent]
 
         if isinstance(gate, RectangleGate):
             el = ET.SubElement(root, _q("gating", "RectangleGate"), attrs)
+            _custom_info(el, name, gate)
             for d, (lo, hi) in zip(gate.dims, gate.bounds):
                 tr = gate.transforms.get(d)
                 _dim(el, d, _transform_id(d, tr) if tr else None, lo, hi)
         elif isinstance(gate, PolygonGate):
             el = ET.SubElement(root, _q("gating", "PolygonGate"), attrs)
+            _custom_info(el, name, gate)
             for d in gate.dims:
                 tr = gate.transforms.get(d)
                 _dim(el, d, _transform_id(d, tr) if tr else None)
@@ -183,6 +278,7 @@ def to_gatingml(strategy: GatingStrategy) -> ET.ElementTree:
                                   {_q("data-type", "value"): repr(float(c))})
         elif isinstance(gate, EllipsoidGate):
             el = ET.SubElement(root, _q("gating", "EllipsoidGate"), attrs)
+            _custom_info(el, name, gate)
             for d in gate.dims:
                 tr = gate.transforms.get(d)
                 _dim(el, d, _transform_id(d, tr) if tr else None)
@@ -200,29 +296,33 @@ def to_gatingml(strategy: GatingStrategy) -> ET.ElementTree:
                           {_q("data-type", "value"): repr(float(gate.distance_square))})
         elif isinstance(gate, BooleanGate):
             el = ET.SubElement(root, _q("gating", "BooleanGate"), attrs)
+            _custom_info(el, name, gate,
+                         parent=ids[parent] if parent != ROOT and parent in ids else None)
             op = ET.SubElement(el, _q("gating", gate.operator))
             for operand in gate.operands:
                 ET.SubElement(op, _q("gating", "gateReference"),
                               {_q("gating", "ref"): ids.get(operand, sanitize_id(operand))})
         elif isinstance(gate, QuadrantGate):
             el = ET.SubElement(root, _q("gating", "QuadrantGate"), attrs)
+            _custom_info(el, name, gate)
+            divider_ids: List[str] = []
             for d, div in zip(gate.dims, gate.dividers):
                 tr = gate.transforms.get(d)
+                did = sanitize_id(f"div_{name}_{d}")
+                divider_ids.append(did)
                 dv = ET.SubElement(el, _q("gating", "divider"), {
-                    _q("gating", "id"): sanitize_id(f"div_{name}_{d}"),
+                    _q("gating", "id"): did,
+                    # QuadrantGateDivider_Type extends Dimension_Type, so the
+                    # same required attribute applies here.
+                    _q("gating", "compensation-ref"): UNCOMPENSATED,
                     **({_q("gating", "transformation-ref"): _transform_id(d, tr)} if tr else {}),
                 })
                 ET.SubElement(dv, _q("data-type", "fcs-dimension"),
                               {_q("data-type", "name"): d})
                 ET.SubElement(dv, _q("gating", "value")).text = repr(float(div))
+            _quadrants(el, gate, ids[name], divider_ids)
         else:                                                 # pragma: no cover
             raise TypeError(f"cannot serialise gate type {type(gate).__name__}")
-
-        # The DISPLAY name lives here, because it usually cannot be an xs:ID.
-        info = ET.SubElement(el, _q("gating", "custom_info"))
-        ET.SubElement(info, "omicverse-name").text = name
-        if isinstance(gate, QuadrantGate):
-            ET.SubElement(info, "omicverse-quadrants").text = "\t".join(gate.quadrant_names)
 
     return ET.ElementTree(root)
 
@@ -247,12 +347,29 @@ def _f(el: ET.Element, prefix: str, attr: str) -> Optional[float]:
 
 
 def _name_of(el: ET.Element, fallback: str) -> str:
-    info = el.find(_q("gating", "custom_info"))
-    if info is not None:
+    # data-type first (correct, and what we now write); gating second, because
+    # documents written before this fix used that namespace and their display
+    # names should keep round-tripping.
+    for ns in ("data-type", "gating"):
+        info = el.find(_q(ns, "custom_info"))
+        if info is None:
+            continue
         node = info.find("omicverse-name")
         if node is not None and node.text:
             return node.text
     return fallback
+
+
+def _custom_parent(el: ET.Element) -> Optional[str]:
+    """A BooleanGate's tree placement, which cannot ride in ``parent_id``."""
+    for ns in ("data-type", "gating"):
+        info = el.find(_q(ns, "custom_info"))
+        if info is None:
+            continue
+        node = info.find("omicverse-parent")
+        if node is not None and node.text:
+            return node.text
+    return None
 
 
 def from_gatingml(tree: ET.ElementTree) -> GatingStrategy:
@@ -291,7 +408,7 @@ def from_gatingml(tree: ET.ElementTree) -> GatingStrategy:
         xid = el.get(_q("gating", "id"))
         name = _name_of(el, xid)
         id_to_name[xid] = name
-        parent_id = el.get(_q("gating", "parent_id"))
+        parent_id = el.get(_q("gating", "parent_id")) or _custom_parent(el)
 
         dims_el = el.findall(_q("gating", "dimension"))
         dims, transforms, bounds = [], {}, []
