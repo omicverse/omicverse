@@ -83,7 +83,7 @@ def _efficiency(spacer: str) -> float:
     aliases=["design_grnas", "gRNA设计", "向导RNA", "sgRNA设计", "crispr_guides",
              "guide_design", "CRISPR", "向导设计"],
     category="synthetic_biology",
-    description="CRISPR gRNA 设计:扫描 PAM(SpCas9/SaCas9/Cas12a)提取原型间隔序列并排序。method='heuristic'(GC/poly-T)或 method='rs3'(真实 Rule Set 3 on-target 模型,Azimuth 继任者)。Design & rank CRISPR guide RNAs (heuristic or Rule Set 3).",
+    description="CRISPR gRNA 设计:扫描 PAM(SpCas9/SaCas9/Cas12a)提取原型间隔序列并排序。method='heuristic'(GC/poly-T,默认,无额外依赖)或 method='rs3'(真实 Rule Set 3 on-target 模型,Azimuth 继任者;rs3 与 omicverse 的 scikit-learn 版本冲突,须在独立环境安装)。Design & rank CRISPR guide RNAs (heuristic or Rule Set 3).",
     examples=[
         "guides = ov.synbio.design_grnas(target_dna, enzyme='SpCas9')",
         "guides[0].spacer, guides[0].efficiency",
@@ -100,6 +100,13 @@ def design_grnas(sequence: str, enzyme: str = "SpCas9",
 
     Scans both strands for PAM sites, extracts protospacers of the enzyme's
     length, filters on GC, and ranks by the heuristic efficiency score.
+
+    ``method='rs3'`` re-scores the guides with the real Rule Set 3 model, but
+    ``rs3`` is **not** part of ``omicverse[synbio]`` and cannot be installed
+    alongside omicverse (it pins ``scikit-learn<=1.0.2``; omicverse needs
+    ``>=1.2``). Use it from a separate environment — see the ImportError raised
+    by ``_score_rs3`` for the exact recipe. The default ``method='heuristic'``
+    needs no extra dependency.
     """
     import re
     if method not in ("heuristic", "rs3"):
@@ -159,8 +166,16 @@ def _score_rs3(guides: List["Guide"]) -> None:
         from rs3.seq import predict_seq
     except ImportError as exc:
         raise ImportError(
-            "design_grnas(method='rs3') 需要 rs3(Rule Set 3 on-target 模型)。请 "
-            "pip install rs3 sglearn 'lightgbm==3.3.5'(rs3 的模型需 lightgbm 3.x)。"
+            "design_grnas(method='rs3') 需要 rs3(Rule Set 3 on-target 模型),"
+            "它不随 omicverse[synbio] 一起安装,且不能装进当前环境:"
+            "rs3 钉死 scikit-learn<=1.0.2,而 omicverse 需要 scikit-learn>=1.2 —— "
+            "在本环境 pip install rs3 会把 scikit-learn 降级,从而弄坏 omicverse。\n"
+            "  · 留在本环境:用 method='heuristic'(默认),无需额外安装。\n"
+            "  · 一定要 Rule Set 3:在独立环境里跑,例如\n"
+            "      python -m venv /tmp/rs3env\n"
+            "      /tmp/rs3env/bin/pip install rs3 sglearn 'lightgbm==3.3.5'\n"
+            "    再把 design_grnas(...) 每个 guide 的 .context(30-mer)喂给那个环境的 "
+            "rs3.seq.predict_seq。"
         ) from exc
     scored = [g for g in guides if len(g.context) == 30]
     if not scored:

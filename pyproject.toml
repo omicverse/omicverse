@@ -407,7 +407,17 @@ synbio = [
   "gdown>=4.6",                                 # enzyme_function(method='clean') — fetch CLEAN weights
   "equilibrator-api>=0.6",                      # reaction_dg(method='equilibrator') — component-contribution ΔG
   "rdkit>=2024.3",                              # enzyme_kcat(method='dlkcat') substrate graphs (NumPy-2 compatible)
-  "rs3>=0.0.18",                                # design_grnas(method='rs3') — Rule Set 3 on-target (needs lightgbm==3.3.5)
+  # NOTE: rs3 (design_grnas(method='rs3'), Rule Set 3) is deliberately NOT listed
+  # here and must not be re-added. rs3 0.0.18 — its only release satisfying
+  # >=0.0.18, so a resolver cannot back off — pins scikit-learn<=1.0.2, while
+  # omicverse itself requires scikit-learn>=1.2. Listing it made the whole extra
+  # unsatisfiable: `pip install "omicverse[synbio]"` failed with
+  # ResolutionImpossible on every Python version, under both pip and uv, so none
+  # of the other 19 dependencies could be installed either. Installing rs3 into
+  # an existing omicverse env is equally unsafe — it downgrades scikit-learn to
+  # 1.0.2 and breaks omicverse. Use it from a separate environment; design_grnas
+  # raises an actionable ImportError explaining this, and method='heuristic'
+  # (the default) needs no extra install.
   # NOTE: equilibrator-api pulls pyarrow>=21 + libcst; if pip tries to build them
   # from source, install with a Rust toolchain on PATH and force wheels:
   #   pip install --only-binary=pyarrow,libcst equilibrator-api
