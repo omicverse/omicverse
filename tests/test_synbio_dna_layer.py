@@ -431,3 +431,34 @@ def test_plot_compiled_circuit():
     fig, axes = sb.plot_compiled_circuit(cc)
     assert len(axes) == 2
     plt.close(fig)
+
+
+# ---------------------------------------------------------------------------
+# a bare install must still get sensible errors
+# ---------------------------------------------------------------------------
+
+def test_bad_host_is_reported_as_a_bad_host_not_a_missing_dependency():
+    """Argument validation must not depend on an optional package.
+
+    codon_harmonize deferred host checking to codon_usage, which validated the
+    *source* host first — so a typo in the target host was only reported after
+    python_codon_tables had been imported. On a CI runner without the synbio
+    extra the caller was told to install a package when the real problem was
+    their own argument, and that is how this surfaced: green locally, red on the
+    bare `build` job.
+    """
+    from omicverse.synbio._harmonize import _check_hosts
+
+    with pytest.raises(ValueError, match="host must be one of"):
+        _check_hosts("h_sapiens", "e_koli")
+    _check_hosts("h_sapiens", "e_coli")       # both valid: no exception
+
+
+def test_host_validation_happens_before_the_codon_tables_are_needed():
+    """The order matters, so assert the order rather than the outcome."""
+    import inspect
+    from omicverse.synbio import _harmonize
+
+    src = inspect.getsource(_harmonize.codon_harmonize)
+    assert src.index("_check_hosts(") < src.index("codon_usage("), (
+        "hosts must be validated before codon_usage imports python_codon_tables")

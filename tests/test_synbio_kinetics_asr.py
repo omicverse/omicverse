@@ -306,6 +306,10 @@ def test_fully_measured_scope_is_quantitative(scope):
 
 
 def test_predicted_scope_is_not_quantitative():
+    """Without measured constants the scope falls through to enzyme_kcat, which
+    is an ESM model — so this one genuinely needs the protein-LM stack, unlike
+    every other test here. The K_M baseline is pure Python and does not."""
+    pytest.importorskip("esm", reason="needs omicverse[synbio] (fair-esm)")
     s = sb.substrate_specificity(CHICKEN, [ACETATE, GLUCOSE])
     assert not s.quantitative
 

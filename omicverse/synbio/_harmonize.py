@@ -72,6 +72,17 @@ def _clean_dna(seq: str, fn: str) -> str:
     return s
 
 
+def _check_hosts(*hosts: str) -> None:
+    """Reject unknown hosts without needing the codon tables to be installed.
+
+    Argument validation must not depend on an optional package: a typo in a host
+    name should say so, not report a missing dependency.
+    """
+    for host in hosts:
+        if host not in HOSTS:
+            raise ValueError(f"host must be one of {list(HOSTS)}, got {host!r}")
+
+
 def codon_usage(host: str) -> Dict[str, float]:
     """Relative synonymous codon usage for ``host``, ``{codon: frequency}``.
 
@@ -182,6 +193,12 @@ def codon_harmonize(
     if len(seq) % 3:
         raise ValueError(
             f"CDS 长度 {len(seq)} 不是 3 的倍数,无法按密码子处理。")
+    # Validate *both* hosts before touching the codon tables. Deferring to
+    # codon_usage checked the source host first, so a bad target host was only
+    # reported after python_codon_tables had been imported — on a bare install
+    # the caller got "install python_codon_tables" for what was actually a typo
+    # in their own argument.
+    _check_hosts(source_host, target_host)
 
     src_usage = codon_usage(source_host)
     tgt_usage = codon_usage(target_host)
@@ -278,6 +295,7 @@ def compare_codon_strategies(cds: str, source_host: str = "h_sapiens",
     import pandas as pd
 
     seq = _clean_dna(cds, "compare_codon_strategies")
+    _check_hosts(source_host, target_host)
     harm = codon_harmonize(seq, source_host, target_host)
     tgt_usage = codon_usage(target_host)
     tgt_ranks = _family_ranks(tgt_usage)
