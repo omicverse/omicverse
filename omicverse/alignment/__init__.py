@@ -36,6 +36,8 @@ from ._homology import homology_search, reciprocal_best_hits, BLAST_TAB_COLUMNS
 from .mafft import mafft
 from .fasttree import fasttree
 from .phylogeny import build_phylogeny
+from .msa import (msa, Alignment, protein_tree, PhyloTree, plot_msa,
+                  plot_tree)
 
 # DADA2 backend (pure-Python via pydada2)
 from . import dada2
@@ -78,6 +80,12 @@ __all__ = [
     "mafft",
     "fasttree",
     "build_phylogeny",
+    "msa",
+    "Alignment",
+    "protein_tree",
+    "PhyloTree",
+    "plot_msa",
+    "plot_tree",
     # DADA2
     "dada2",
     "dada2_pipeline",
