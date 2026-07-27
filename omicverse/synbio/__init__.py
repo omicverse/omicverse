@@ -277,6 +277,7 @@ _LAZY_ATTRS: dict[str, tuple[str, str]] = {
     "fit_growth_curves":     ("._assay", "fit_growth_curves"),
     "compare_growth_models": ("._assay", "compare_growth_models"),
     "read_plate_reader":     ("._assay", "read_plate_reader"),
+    "fetch_growth_dataset":  ("._assay", "fetch_growth_dataset"),
     "dose_response":         ("._assay", "dose_response"),
     "compare_growth_to_model": ("._assay", "compare_growth_to_model"),
     "plot_growth_curves":    ("._assay", "plot_growth_curves"),

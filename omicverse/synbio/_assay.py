@@ -478,6 +478,7 @@ def fit_growth_curves(
                               blank=blank_value, well=w, label=label)
         rows.append({
             "well": w, "label": label, "mu_max": fit.mu_max,
+            "slope_max": fit.slope_max,
             "doubling_time_h": fit.doubling_time, "lag_h": fit.lag,
             "carrying_capacity": fit.carrying_capacity,
             "r_squared": fit.r_squared, "rmse": fit.rmse,
@@ -929,8 +930,75 @@ def plot_dose_response(concentration, response, fit: DoseResponse, ax=None):
 
 __all__ = [
     "fit_growth_curve", "GrowthFit", "GROWTH_MODELS", "compare_growth_models",
+    "fetch_growth_dataset",
     "fit_growth_curves", "read_plate_reader",
     "dose_response", "DoseResponse",
     "compare_growth_to_model",
     "plot_growth_curves", "plot_dose_response",
 ]
+
+
+_GROWTHDATA_URL = (
+    "https://raw.githubusercontent.com/sprouffske/growthcurver/master/"
+    "data/growthdata.rda"
+)
+
+
+@register_function(
+    aliases=["fetch_growth_dataset", "示例生长数据", "真实生长曲线",
+             "growthdata", "酶标仪示例数据"],
+    category="synthetic_biology",
+    description="下载一份**真实的**96 孔酶标仪生长数据(Growthcurver 随包发布的 growthdata:145 个时间点 × 96 孔,0–24 小时),用作 fit_growth_curves 的输入。**这份数据里没有培养基空白孔** —— 96 个孔里 95 个都有明显生长(6–13 倍),所以要么不扣空白,要么用 t=0 的读数作基线;把某一列当成空白扣掉会把数据毁掉。缓存到本地,只下载一次。Fetch a real 96-well plate-reader growth dataset.",
+    examples=[
+        "od = ov.synbio.fetch_growth_dataset()",
+        "fits = ov.synbio.fit_growth_curves(od)                    # no blank wells in this set",
+        "fits = ov.synbio.fit_growth_curves(od, blank=float(od.iloc[0, 1:].mean()))",
+    ],
+    related=["synbio.fit_growth_curves", "synbio.read_plate_reader",
+             "synbio.compare_growth_to_model"],
+    requires={},
+    produces={},
+)
+def fetch_growth_dataset(cache_dir: Optional[str] = None,
+                         timeout: float = 60.0) -> "pd.DataFrame":
+    """A real 96-well OD time course, as ``time_h`` plus one column per well.
+
+    Downloaded once and cached. This is measured plate-reader data rather than a
+    curve generated from a model — which matters for a demonstration, since a
+    fitter shown only on data produced by its own equations has not been shown to
+    work on anything.
+
+    **There are no blank wells in this set.** 95 of the 96 wells grow 6–13 fold,
+    including all of column 12, so nominating a column as the blank and
+    subtracting it removes real signal — doing that dropped the median R² to
+    0.39. Fit it as-is, or pass ``blank=`` the mean t=0 reading (~0.05).
+    """
+    import os
+
+    root = cache_dir or os.environ.get(
+        "OMICOS_SYNBIO_GEM_DIR",
+        os.path.join(os.path.expanduser("~"), ".omicverse", "synbio_gems"))
+    os.makedirs(root, exist_ok=True)
+    local = os.path.join(root, "growthdata.rda")
+
+    if not os.path.exists(local):
+        import urllib.request
+        try:
+            urllib.request.urlretrieve(_GROWTHDATA_URL, local)
+        except Exception as exc:
+            raise RuntimeError(
+                f"无法下载示例生长数据({exc})。可手动取 {_GROWTHDATA_URL} "
+                f"放到 {local},或用 ov.synbio.read_plate_reader 读自己的数据。"
+            ) from exc
+
+    try:
+        import pyreadr
+    except ImportError as exc:
+        raise ImportError(
+            "这份数据集是 R 的 .rda 格式,读取需要 pyreadr"
+            "(pip install pyreadr)。或用 ov.synbio.read_plate_reader "
+            "读自己导出的 CSV。") from exc
+
+    frame = pyreadr.read_r(local)["growthdata"]
+    frame = frame.rename(columns={frame.columns[0]: "time_h"})
+    return frame

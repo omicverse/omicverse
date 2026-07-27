@@ -967,3 +967,54 @@ def test_plot_expression_library(_agg):
 def test_plot_integration_sites(_agg):
     fig, ax = sb.plot_integration_sites(sb.integration_sites())
     _agg.close(fig)
+
+
+# ---------------------------------------------------------------------------
+# the real dataset the tutorial fits
+# ---------------------------------------------------------------------------
+
+def _growth_dataset():
+    pytest.importorskip("pyreadr", reason="the dataset is an R .rda file")
+    try:
+        return sb.fetch_growth_dataset()
+    except RuntimeError as exc:                      # no network on this runner
+        pytest.skip(str(exc)[:80])
+
+
+def test_real_dataset_has_the_expected_shape():
+    od = _growth_dataset()
+    assert od.shape[1] == 97, "time column plus 96 wells"
+    assert od["time_h"].min() == 0.0 and od["time_h"].max() == pytest.approx(24.0)
+
+
+def test_real_dataset_has_no_blank_wells():
+    """Documented because it is a trap: 95 of the 96 wells grow six- to
+    thirteen-fold, column 12 included. Nominating a column as the blank and
+    subtracting it drops the median R² from 0.998 to 0.39."""
+    od = _growth_dataset()
+    wells = [c for c in od.columns if c != "time_h"]
+    grew = [w for w in wells
+            if od[w].iloc[-1] > 3.0 * od[w].iloc[0]]
+    assert len(grew) >= 90, f"only {len(grew)} wells grew — is this the right set?"
+    for well in (f"{r}12" for r in "ABCDEFGH"):
+        assert od[well].iloc[-1] > 3.0 * od[well].iloc[0], (
+            f"{well} is not a blank in this dataset")
+
+
+def test_every_well_of_the_real_run_fits_well():
+    """The claim the tutorial rests on. A fitter validated only on curves from
+    its own equations has not been validated."""
+    od = _growth_dataset()
+    baseline = float(od.iloc[0, 1:].mean())
+    fits = sb.fit_growth_curves(od, blank=baseline)
+    assert len(fits) == 96
+    assert fits["r_squared"].median() > 0.99
+    assert int(fits["good_fit"].sum()) >= 90
+
+
+def test_real_fits_give_biologically_plausible_parameters():
+    od = _growth_dataset()
+    fits = sb.fit_growth_curves(od, blank=float(od.iloc[0, 1:].mean()))
+    assert (fits["doubling_time_h"] > 0.1).all()
+    assert (fits["lag_h"] >= 0).all()
+    assert (fits["carrying_capacity"] > 0).all()
