@@ -407,17 +407,21 @@ synbio = [
   "gdown>=4.6",                                 # enzyme_function(method='clean') — fetch CLEAN weights
   "equilibrator-api>=0.6",                      # reaction_dg(method='equilibrator') — component-contribution ΔG
   "rdkit>=2024.3",                              # enzyme_kcat(method='dlkcat') substrate graphs (NumPy-2 compatible)
-  # NOTE: rs3 (design_grnas(method='rs3'), Rule Set 3) is deliberately NOT listed
-  # here and must not be re-added. rs3 0.0.18 — its only release satisfying
-  # >=0.0.18, so a resolver cannot back off — pins scikit-learn<=1.0.2, while
-  # omicverse itself requires scikit-learn>=1.2. Listing it made the whole extra
-  # unsatisfiable: `pip install "omicverse[synbio]"` failed with
-  # ResolutionImpossible on every Python version, under both pip and uv, so none
-  # of the other 19 dependencies could be installed either. Installing rs3 into
-  # an existing omicverse env is equally unsafe — it downgrades scikit-learn to
-  # 1.0.2 and breaks omicverse. Use it from a separate environment; design_grnas
-  # raises an actionable ImportError explaining this, and method='heuristic'
-  # (the default) needs no extra install.
+  "lightgbm>=4.0",                              # design_grnas(method='rs3') — runs the Rule Set 3 booster
+  "seqfold>=0.7.7",                             # sglearn's folding features for the rs3 featuriser
+  # NOTE: rs3 itself (design_grnas(method='rs3'), Rule Set 3) is deliberately
+  # NOT listed here and must not be re-added. rs3 0.0.18 — its only release
+  # satisfying >=0.0.18, so a resolver cannot back off — pins
+  # scikit-learn<=1.0.2, while omicverse itself requires scikit-learn>=1.2.
+  # Listing it made the whole extra unsatisfiable: `pip install
+  # "omicverse[synbio]"` failed with ResolutionImpossible on every Python
+  # version, under both pip and uv, so none of the other dependencies could be
+  # installed either. Those pins are stale rather than real (RuleSet3.pkl holds
+  # a plain lightgbm regressor, no scikit-learn estimator), so omicverse/synbio/
+  # _rs3.py installs rs3 + sglearn with --no-deps into $OMICOS_SYNBIO_WEIGHTS on
+  # first use and lets lightgbm/seqfold above satisfy it at runtime. A plain
+  # `pip install rs3` into an omicverse env is still unsafe — it downgrades
+  # scikit-learn to 1.0.2 and breaks omicverse.
   # NOTE: equilibrator-api pulls pyarrow>=21 + libcst; if pip tries to build them
   # from source, install with a Rust toolchain on PATH and force wheels:
   #   pip install --only-binary=pyarrow,libcst equilibrator-api
