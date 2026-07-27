@@ -54,13 +54,15 @@ class Guide:
     start: int            # 0-based position of protospacer start on the input
     strand: str           # '+' | '-'
     gc: float
-    efficiency: float     # on-target score (heuristic 0..1, or rs3 z-score)
+    efficiency: float     # heuristic on-target score, always in [0,1]
     poly_t: bool          # contains TTTT (Pol III terminator)
     context: str = ""     # 30-mer context (4nt + 20nt spacer + PAM + 3nt) for rs3
+    rs3_score: Optional[float] = None   # Rule Set 3 z-score; None if not scored
 
     def __repr__(self) -> str:  # pragma: no cover
+        tail = "" if self.rs3_score is None else f" rs3={self.rs3_score:+.2f}"
         return (f"Guide({self.spacer} {self.pam} {self.strand}@{self.start} "
-                f"GC={self.gc:.2f} eff={self.efficiency:.2f})")
+                f"GC={self.gc:.2f} eff={self.efficiency:.2f}{tail})")
 
 
 def _efficiency(spacer: str) -> float:
@@ -83,10 +85,11 @@ def _efficiency(spacer: str) -> float:
     aliases=["design_grnas", "gRNA设计", "向导RNA", "sgRNA设计", "crispr_guides",
              "guide_design", "CRISPR", "向导设计"],
     category="synthetic_biology",
-    description="CRISPR gRNA 设计:扫描 PAM(SpCas9/SaCas9/Cas12a)提取原型间隔序列并排序。method='heuristic'(GC/poly-T,默认,无额外依赖)或 method='rs3'(真实 Rule Set 3 on-target 模型,Azimuth 继任者;首用自动下载 ~20MB 模型)。Design & rank CRISPR guide RNAs (heuristic or Rule Set 3).",
+    description="CRISPR gRNA 设计:扫描 PAM(SpCas9/SaCas9/Cas12a)提取原型间隔序列并排序。method='heuristic'(默认,无额外依赖)按 efficiency([0,1] GC/poly-T 启发式)排序;method='rs3' 额外填 rs3_score(真实 Rule Set 3 z 分数,Azimuth 继任者;首用自动下载 ~20MB 模型)并按它排序,efficiency 语义不变。Design & rank CRISPR guide RNAs (heuristic or Rule Set 3).",
     examples=[
         "guides = ov.synbio.design_grnas(target_dna, enzyme='SpCas9')",
         "guides[0].spacer, guides[0].efficiency",
+        "rs3 = ov.synbio.design_grnas(target_dna, method='rs3'); rs3[0].rs3_score",
     ],
     related=["synbio.offtarget_search", "synbio.base_editor_window", "synbio.hdr_arms"],
     requires={},
@@ -99,14 +102,20 @@ def design_grnas(sequence: str, enzyme: str = "SpCas9",
     """Design guide RNAs targeting *sequence*.
 
     Scans both strands for PAM sites, extracts protospacers of the enzyme's
-    length, filters on GC, and ranks by the heuristic efficiency score.
+    length and filters on GC.
 
-    ``method='rs3'`` re-scores the guides with the real Rule Set 3 model. rs3
-    cannot be a declared dependency (its stale pins would make the whole
-    ``[synbio]`` extra unresolvable), so on first use it is fetched with
-    ``--no-deps`` into ``$OMICOS_SYNBIO_WEIGHTS/rs3`` — ~20 MB, one network
-    round-trip, see :mod:`omicverse.synbio._rs3`. The default
-    ``method='heuristic'`` needs no download at all.
+    ``method='heuristic'`` (the default) ranks by :attr:`Guide.efficiency`, a
+    transparent GC/poly-T score in ``[0,1]`` that needs no download at all.
+
+    ``method='rs3'`` additionally fills :attr:`Guide.rs3_score` with the real
+    Rule Set 3 z-score and ranks by *that*; ``efficiency`` keeps its heuristic
+    meaning in both cases, so the two are never compared on the same scale.
+    Guides too close to the sequence ends to yield a 30-mer context cannot be
+    rs3-scored and are ranked last. rs3 cannot be a declared dependency (its
+    stale pins would make the whole ``[synbio]`` extra unresolvable), so on
+    first use it is fetched with ``--no-deps`` into
+    ``$OMICOS_SYNBIO_WEIGHTS/rs3`` — ~20 MB, one network round-trip, see
+    :mod:`omicverse.synbio._rs3`.
     """
     import re
     if method not in ("heuristic", "rs3"):
@@ -153,15 +162,24 @@ def design_grnas(sequence: str, enzyme: str = "SpCas9",
 
     if method == "rs3":
         _score_rs3(guides)
-
-    guides.sort(key=lambda g: g.efficiency, reverse=True)
+        # rs3 returns a z-score (unbounded, frequently negative) — it lives in
+        # its own field and is *not* comparable to the heuristic [0,1] score.
+        # Guides with no 30-mer context cannot be scored, so they rank last
+        # rather than being mixed in on an incompatible scale.
+        guides.sort(key=lambda g: (g.rs3_score is not None, g.rs3_score or 0.0),
+                    reverse=True)
+    else:
+        guides.sort(key=lambda g: g.efficiency, reverse=True)
     return guides[:top_n] if top_n else guides
 
 
 def _score_rs3(guides: List["Guide"]) -> None:
-    """Replace each guide's efficiency with the real Rule Set 3 score
-    (DeWeirdt *et al.* 2021; the successor to Azimuth/Rule Set 2). Guides that
-    lack a full 30-mer context keep their heuristic score."""
+    """Attach the real Rule Set 3 score (DeWeirdt *et al.* 2021; the successor
+    to Azimuth/Rule Set 2) to each guide's ``rs3_score``.
+
+    The heuristic ``efficiency`` is left untouched — the two scores are on
+    different scales. Guides lacking a full 30-mer context keep
+    ``rs3_score=None``; no flanking sequence is invented to manufacture one."""
     scored = [g for g in guides if len(g.context) == 30]
     if not scored:
         return
@@ -169,7 +187,7 @@ def _score_rs3(guides: List["Guide"]) -> None:
 
     preds = predict_rs3([g.context for g in scored], sequence_tracr="Hsu2013")
     for g, p in zip(scored, preds):
-        g.efficiency = float(p)
+        g.rs3_score = float(p)
 
 
 @dataclass

@@ -166,3 +166,144 @@ def test_load_model_leaves_a_healthy_pickle_alone(monkeypatch):
     monkeypatch.setitem(sys.modules, "rs3.seq", fake_seq)
 
     assert _rs3._load_model()._n_classes == 3
+
+
+# ---------------------------------------------------------------------------
+# Ranking semantics: rs3 is a z-score, ``efficiency`` is a [0,1] heuristic,
+# and the two must never be sorted against each other.
+#
+# ``TARGET`` above carries 10-nt flanks so every guide gets a 30-mer context.
+# These tests need the opposite: a target whose end-adjacent guides *cannot* be
+# scored, because that is where the scales used to collide.
+# ---------------------------------------------------------------------------
+RANKING_TARGET = (
+    "GGCCATGGAGTCTAGGACTTCAGGTACCGGATCAGGCTAACGGTTAGGCCATTAGGACGTTAGG"
+    "ACCTTGGCATGCAGGTTACCGGAATTCAGGCCTTAAGGCATTCAGGTTAACGGCCATTAGGTAC"
+)
+
+
+@pytest.fixture
+def stub_rs3(monkeypatch):
+    """Replace ``_rs3.predict_rs3`` with a stub returning negative z-scores.
+
+    Score = -(index + 1) * 0.5, so the *first* context handed to the model gets
+    the highest (least negative) score. Every value is < 0 — the regime real
+    Rule Set 3 lives in, and the one that used to let unscored heuristic guides
+    float to the top of an rs3 ranking.
+
+    Patching here also keeps ``ensure_rs3()`` out of the test: no ``--no-deps``
+    pip fetch, no ~20 MB model download, no lightgbm import.
+    """
+    calls = {}
+
+    def predict_rs3(contexts, sequence_tracr="Hsu2013"):
+        calls["contexts"] = list(contexts)
+        calls["tracr"] = sequence_tracr
+        return [-(i + 1) * 0.5 for i in range(len(contexts))]
+
+    monkeypatch.setattr(_rs3, "predict_rs3", predict_rs3)
+    return calls
+
+
+def test_heuristic_leaves_rs3_score_unset():
+    guides = ov.synbio.design_grnas(RANKING_TARGET)
+    assert guides
+    assert all(g.rs3_score is None for g in guides)
+
+
+def test_rs3_score_populated_only_where_context_exists(stub_rs3):
+    for g in ov.synbio.design_grnas(RANKING_TARGET, method="rs3"):
+        assert (g.rs3_score is not None) == (len(g.context) == 30)
+
+
+def test_rs3_does_not_clobber_heuristic_efficiency(stub_rs3):
+    """The regression: ``efficiency`` used to *become* the z-score."""
+    heur = {(g.spacer, g.start, g.strand): g.efficiency
+            for g in ov.synbio.design_grnas(RANKING_TARGET)}
+    for g in ov.synbio.design_grnas(RANKING_TARGET, method="rs3"):
+        assert 0.0 <= g.efficiency <= 1.0
+        assert g.efficiency == pytest.approx(heur[(g.spacer, g.start, g.strand)])
+
+
+def test_rs3_ranking_is_by_z_score_and_tolerates_negatives(stub_rs3):
+    guides = ov.synbio.design_grnas(RANKING_TARGET, method="rs3")
+    scored = [g for g in guides if g.rs3_score is not None]
+    assert scored, "stub should have scored at least one guide"
+    assert all(g.rs3_score < 0 for g in scored), "stub returns negative z-scores"
+    zs = [g.rs3_score for g in scored]
+    assert zs == sorted(zs, reverse=True)
+
+
+def test_unscorable_guides_rank_last(stub_rs3):
+    """A top-heuristic guide with no context must not outrank a real rs3 hit.
+
+    ``RANKING_TARGET`` has guides too close to both ends to yield a 30-mer, and
+    one of them carries the *highest* heuristic efficiency in the pool — under
+    the old scale-mixing sort it landed at rank 0, ahead of every guide the
+    model actually scored.
+    """
+    guides = ov.synbio.design_grnas(RANKING_TARGET, method="rs3")
+    unscored = [g for g in guides if g.rs3_score is None]
+    scored = [g for g in guides if g.rs3_score is not None]
+    assert unscored and scored, "target must exercise both cases"
+
+    n = len(scored)
+    assert all(g.rs3_score is not None for g in guides[:n]), "scored guides lead"
+    assert all(g.rs3_score is None for g in guides[n:]), "unscored form the tail"
+
+    # The trap: an unscored guide beats every scored one on the heuristic scale.
+    assert max(g.efficiency for g in unscored) >= max(g.efficiency for g in scored)
+
+
+def test_no_fabricated_flanks_reach_the_model(stub_rs3):
+    """Contexts are real 30-mers taken from the input, never padded out."""
+    ov.synbio.design_grnas(RANKING_TARGET, method="rs3")
+    revcomp = RANKING_TARGET.translate(str.maketrans("ACGTN", "TGCAN"))[::-1]
+    for ctx in stub_rs3["contexts"]:
+        assert len(ctx) == 30
+        assert set(ctx) <= set("ACGT")
+        assert ctx in RANKING_TARGET or ctx in revcomp
+
+
+def test_tracr_passed_through(stub_rs3):
+    ov.synbio.design_grnas(RANKING_TARGET, method="rs3")
+    assert stub_rs3["tracr"] == "Hsu2013"
+
+
+def test_top_n_applies_after_the_rs3_sort(stub_rs3):
+    full = ov.synbio.design_grnas(RANKING_TARGET, method="rs3")
+    top = ov.synbio.design_grnas(RANKING_TARGET, method="rs3", top_n=3)
+    assert len(top) == 3
+    assert [g.spacer for g in top] == [g.spacer for g in full[:3]]
+
+
+def test_rs3_failure_is_not_silently_downgraded(monkeypatch):
+    """An unavailable rs3 raises — it does not quietly fall back to heuristic.
+
+    A silent fallback would hand back a heuristic ranking under the name the
+    caller asked rs3 for: the same scale confusion, just hidden better.
+    """
+    def boom(contexts, sequence_tracr="Hsu2013"):
+        raise ImportError("rs3 install failed")
+
+    monkeypatch.setattr(_rs3, "predict_rs3", boom)
+    with pytest.raises(ImportError, match="rs3"):
+        ov.synbio.design_grnas(RANKING_TARGET, method="rs3")
+
+
+def test_guide_rs3_score_defaults_to_none():
+    from omicverse.synbio._crispr import Guide
+
+    g = Guide(spacer="A" * 20, pam="AGG", start=0, strand="+", gc=0.0,
+              efficiency=0.5, poly_t=False)
+    assert g.rs3_score is None
+
+
+def test_guide_repr_shows_rs3_only_when_scored():
+    from omicverse.synbio._crispr import Guide
+
+    g = Guide(spacer="A" * 20, pam="AGG", start=0, strand="+", gc=0.0,
+              efficiency=0.5, poly_t=False)
+    assert "rs3" not in repr(g)
+    g.rs3_score = -1.25
+    assert "rs3=-1.25" in repr(g)
