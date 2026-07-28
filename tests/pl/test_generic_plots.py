@@ -721,3 +721,127 @@ class TestSurface:
         # ov.pl.violin still takes an AnnData; ov.pl.violinplot takes a frame
         assert pl.violin is not pl.violinplot
         assert pl.boxplot is not pl.barplot
+
+
+class TestKdeCut:
+    """``cut`` must mean bandwidths, as it does in seaborn and R.
+
+    It was implemented as a fraction of the data *range* (``cut * span / 6``),
+    so the default ``cut=2`` extended every density by a third of the range in
+    each direction. That single line is what made ``ov.pl.violinplot`` look
+    like a smudge next to ``ov.pl.violin``.
+    """
+
+    @staticmethod
+    def _sample():
+        return np.random.default_rng(0).normal(size=500)
+
+    def test_cut_zero_stops_at_the_data(self):
+        from omicverse.pl._stats_common import kde_curve
+
+        values = self._sample()
+        grid, _ = kde_curve(values, cut=0)
+        assert grid.min() == pytest.approx(values.min())
+        assert grid.max() == pytest.approx(values.max())
+
+    def test_cut_extends_by_exactly_that_many_bandwidths(self):
+        from scipy.stats import gaussian_kde
+
+        from omicverse.pl._stats_common import kde_curve
+
+        values = self._sample()
+        bandwidth = gaussian_kde(values).factor * np.std(values, ddof=1)
+        grid, _ = kde_curve(values, cut=2)
+        assert grid.min() == pytest.approx(values.min() - 2 * bandwidth)
+        assert grid.max() == pytest.approx(values.max() + 2 * bandwidth)
+
+    def test_the_old_range_fraction_would_have_been_much_wider(self):
+        """Guard on the magnitude, not just the formula."""
+        from omicverse.pl._stats_common import kde_curve
+
+        values = self._sample()
+        span = values.max() - values.min()
+        grid, _ = kde_curve(values, cut=2)
+        overshoot = values.min() - grid.min()
+        assert overshoot < 0.1 * span          # the fix
+        assert overshoot > 0                   # but cut still does something
+
+    def test_clip_bounds_the_support(self):
+        from omicverse.pl._stats_common import kde_curve
+
+        grid, _ = kde_curve(np.abs(self._sample()), cut=3, clip=(0, None))
+        assert grid.min() == 0.0
+
+    def test_density_integrates_to_one(self):
+        from omicverse.pl._stats_common import kde_curve
+
+        grid, density = kde_curve(self._sample(), cut=4)
+        assert np.trapz(density, grid) == pytest.approx(1.0, abs=1e-3)
+
+    def test_degenerate_sample_does_not_raise(self):
+        from omicverse.pl._stats_common import kde_curve
+
+        for values in (np.full(20, 3.0), np.array([1.0]), np.array([])):
+            grid, density = kde_curve(values)
+            assert np.all(density == 0.0)
+            assert grid.size == 200
+
+
+class TestViolinLook:
+    """The defaults that decide whether a violin reads or smudges."""
+
+    @staticmethod
+    def _bodies(ax):
+        """Only the violin polygons — a scatter's path is its marker shape."""
+        from matplotlib.collections import PolyCollection
+
+        return [c for c in ax.collections if isinstance(c, PolyCollection)]
+
+    @classmethod
+    def _widths(cls, ax):
+        return [float(np.ptp(c.get_paths()[0].vertices[:, 0]))
+                for c in cls._bodies(ax)]
+
+    def test_default_scale_gives_every_violin_the_same_width(self, cells):
+        """`ov.pl.violin` normalises by width; so should `violinplot`."""
+        widths = self._widths(violinplot(cells, "cell_type", "score"))
+        assert len(widths) == cells["cell_type"].nunique()
+        assert max(widths) - min(widths) < 0.05 * max(widths)
+
+    def test_violins_have_a_visible_outline(self, cells):
+        ax = violinplot(cells, "cell_type", "score")
+        bodies = self._bodies(ax)
+        assert bodies, "no filled violin found"
+        edge = np.asarray(bodies[0].get_edgecolor()).ravel()
+        # black, not white — an unoutlined fill is the 'smudge' failure mode
+        assert float(edge[0]) < 0.5
+
+    def test_area_scaling_is_still_available(self, cells):
+        widths = self._widths(violinplot(cells, "cell_type", "score",
+                                         scale="area"))
+        assert max(widths) - min(widths) > 1e-6
+
+    def test_stripplot_overlay_draws_every_point(self, cells):
+        plain = violinplot(cells, "cell_type", "score")
+        n_plain = sum(c.get_offsets().shape[0] for c in plain.collections
+                      if c.get_offsets() is not None)
+        plt.close("all")
+        striped = violinplot(cells, "cell_type", "score", stripplot=True)
+        n_striped = sum(c.get_offsets().shape[0] for c in striped.collections
+                        if c.get_offsets() is not None)
+        assert n_striped - n_plain >= len(cells)
+
+    def test_cut_zero_keeps_a_bounded_quantity_in_range(self, cells):
+        positive = cells.assign(abs_score=cells["score"].abs())
+        ax = violinplot(positive, "cell_type", "abs_score", cut=0, inner=None)
+        lowest = min(float(c.get_paths()[0].vertices[:, 1].min())
+                     for c in self._bodies(ax))
+        assert lowest >= positive["abs_score"].min() - 1e-9
+
+    def test_clip_bounds_a_violin_too(self, cells):
+        positive = cells.assign(abs_score=cells["score"].abs())
+        ax = violinplot(positive, "cell_type", "abs_score", cut=3,
+                        clip=(0, None), inner=None)
+        lowest = min(float(c.get_paths()[0].vertices[:, 1].min())
+                     for c in self._bodies(ax))
+        assert lowest >= -1e-9

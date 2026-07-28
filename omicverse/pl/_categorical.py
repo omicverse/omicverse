@@ -24,7 +24,8 @@ import numpy as np
 import pandas as pd
 
 from .._registry import register_function
-from ._stats_common import as_frame, default_palette, group_levels, resolve_columns
+from ._stats_common import (as_frame, default_palette, group_levels,
+                            kde_curve, resolve_columns)
 
 __all__ = [
     "barplot", "stripplot", "violinplot", "stackplot", "lollipopplot",
@@ -440,12 +441,7 @@ def stripplot(data: Any = None,
     return (ax, {"test": results}) if return_stats else ax
 
 
-def _kde_profile(values: np.ndarray, grid: np.ndarray, bw_method):
-    from scipy.stats import gaussian_kde
 
-    if values.size < 2 or np.allclose(values, values[0]):
-        return np.zeros_like(grid)
-    return gaussian_kde(values, bw_method=bw_method)(grid)
 
 
 @register_function(
@@ -476,14 +472,19 @@ def violinplot(data: Any = None,
                split: bool = False,
                inner: Optional[str] = "box",
                cut: float = 2.0,
+               clip: Optional[Tuple[Optional[float], Optional[float]]] = None,
                bw_method: Any = None,
                gridsize: int = 200,
-               scale: str = "area",
+               scale: str = "width",
+               stripplot: bool = False,
+               strip_size: float = 2.0,
+               strip_alpha: float = 0.5,
                orient: str = "v",
                width: float = 0.8,
                palette=None,
                alpha: float = 0.9,
-               linewidth: float = 0.8,
+               linewidth: float = 1.1,
+               edgecolor: str = "black",
                ax=None,
                figsize: Optional[Tuple[float, float]] = None,
                test: Optional[str] = None,
@@ -511,11 +512,23 @@ def violinplot(data: Any = None,
         observations), ``'stick'`` (a tick per observation), or ``None``.
     cut
         How far past the extreme observations the density is drawn, in
-        bandwidths. ``cut=0`` clips at the data range, which is what you want
-        for a bounded quantity like a proportion.
+        **kernel bandwidths** — the same meaning as in seaborn and R.
+        ``cut=0`` stops at the data range, which is what a bounded quantity
+        like a proportion needs.
+    clip
+        Hard ``(low, high)`` limits on the density support, e.g. ``(0, None)``
+        for a non-negative quantity. Either end may be ``None``.
     scale
-        ``'area'`` (equal area, default), ``'width'`` (equal maximum width) or
+        ``'width'`` (equal maximum width, the default and what
+        :func:`~omicverse.pl.violin` uses), ``'area'`` (equal area) or
         ``'count'`` (width proportional to n).
+    stripplot
+        Overlay the raw observations. Off by default here because this
+        function is routinely handed a hundred thousand rows; turn it on for
+        the small-n plots where a violin alone hides the sample size.
+    edgecolor, linewidth
+        Outline of each violin. A visible outline is most of what separates a
+        readable violin from a coloured smudge.
 
     Returns
     -------
@@ -547,10 +560,8 @@ def violinplot(data: Any = None,
             values = frame.loc[mask, "y"].to_numpy(dtype=float)
             if values.size == 0:
                 continue
-            span = values.max() - values.min()
-            pad = cut * (span / 6 if span > 0 else 1.0)
-            grid = np.linspace(values.min() - pad, values.max() + pad, gridsize)
-            density = _kde_profile(values, grid, bw_method)
+            grid, density = kde_curve(values, cut=cut, gridsize=gridsize,
+                                      bw_method=bw_method, clip=clip)
             profiles.append({"x": level, "hue": hue_level, "n": values.size,
                              "grid": grid, "density": density,
                              "position": x_index + offsets[h_index],
@@ -583,13 +594,23 @@ def violinplot(data: Any = None,
         if orient == "v":
             ax.fill_betweenx(grid, edge_lo, edge_hi, color=profile["color"],
                              alpha=alpha, linewidth=linewidth,
-                             edgecolor="white", zorder=2)
+                             edgecolor=edgecolor, zorder=2)
         else:
             ax.fill_between(grid, edge_lo, edge_hi, color=profile["color"],
                             alpha=alpha, linewidth=linewidth,
-                            edgecolor="white", zorder=2)
+                            edgecolor=edgecolor, zorder=2)
 
         values = profile["values"]
+        if stripplot:
+            noise = rng.uniform(-slot * 0.10, slot * 0.10, values.size)
+            if orient == "v":
+                ax.scatter(position + noise, values, s=strip_size,
+                           color="0.15", alpha=strip_alpha, linewidths=0,
+                           zorder=2.5)
+            else:
+                ax.scatter(values, position + noise, s=strip_size,
+                           color="0.15", alpha=strip_alpha, linewidths=0,
+                           zorder=2.5)
         centre = position
         if split:
             centre = position + (-slot / 6 if profile["half"] == 0 else slot / 6)

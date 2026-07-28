@@ -21,7 +21,8 @@ from typing import Any, Dict, Mapping, Optional, Tuple
 import numpy as np
 import pandas as pd
 
-__all__ = ["as_frame", "default_palette", "group_levels", "resolve_columns"]
+__all__ = ["as_frame", "default_palette", "group_levels", "kde_curve",
+           "resolve_columns"]
 
 
 def as_frame(data: Any) -> Optional[pd.DataFrame]:
@@ -187,3 +188,38 @@ def default_palette(n: int, palette: Any = None) -> list:
     if len(base) < n:
         base = (base * (n // len(base) + 1))[:n]
     return base[:n]
+
+
+def kde_curve(values, *, cut: float = 2.0, gridsize: int = 200,
+              bw_method: Any = None, clip=None):
+    """Gaussian KDE of ``values`` on a grid extended by ``cut`` *bandwidths*.
+
+    ``cut`` means what it means in seaborn and R: how far past the extreme
+    observations the density is drawn, measured in kernel bandwidths. An
+    earlier version of this code measured it as a fraction of the data range
+    instead, which put a long thin tail on every violin — visually the whole
+    difference between these plots and the ones in ``ov.pl.violin``.
+
+    Returns ``(grid, density)``; a degenerate sample (fewer than two distinct
+    values) yields a flat zero density rather than raising.
+    """
+    import numpy as _np
+
+    values = _np.asarray(values, dtype=float)
+    values = values[_np.isfinite(values)]
+    if values.size < 2 or _np.allclose(values, values[0]):
+        centre = float(values[0]) if values.size else 0.0
+        grid = _np.linspace(centre - 1.0, centre + 1.0, gridsize)
+        return grid, _np.zeros_like(grid)
+
+    from scipy.stats import gaussian_kde
+
+    kernel = gaussian_kde(values, bw_method=bw_method)
+    bandwidth = float(kernel.factor * _np.std(values, ddof=1))
+    low = values.min() - cut * bandwidth
+    high = values.max() + cut * bandwidth
+    if clip is not None:
+        low = max(low, clip[0]) if clip[0] is not None else low
+        high = min(high, clip[1]) if clip[1] is not None else high
+    grid = _np.linspace(low, high, gridsize)
+    return grid, kernel(grid)

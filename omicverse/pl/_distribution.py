@@ -15,7 +15,8 @@ import numpy as np
 import pandas as pd
 
 from .._registry import register_function
-from ._stats_common import as_frame, default_palette, group_levels, resolve_columns
+from ._stats_common import (as_frame, default_palette, group_levels,
+                            kde_curve, resolve_columns)
 
 __all__ = ["histplot", "kdeplot", "ridgeplot", "qqplot"]
 
@@ -30,18 +31,7 @@ def _values_and_groups(data, x, hue, order, hue_order, *, name="x"):
     return frame, hues, names, frame.attrs.get("n_dropped", 0)
 
 
-def _grid(values: np.ndarray, cut: float, gridsize: int) -> np.ndarray:
-    span = float(values.max() - values.min())
-    pad = cut * (span / 6 if span > 0 else 1.0)
-    return np.linspace(values.min() - pad, values.max() + pad, gridsize)
 
-
-def _density(values: np.ndarray, grid: np.ndarray, bw_method) -> np.ndarray:
-    from scipy.stats import gaussian_kde
-
-    if values.size < 2 or np.allclose(values, values[0]):
-        return np.zeros_like(grid)
-    return gaussian_kde(values, bw_method=bw_method)(grid)
 
 
 @register_function(
@@ -191,9 +181,9 @@ def histplot(data: Any = None,
         if kde:
             mask = (np.ones(len(frame), dtype=bool) if hue_level is None
                     else frame["hue"].to_numpy() == hue_level)
-            grid = _grid(values[mask], 2.0, 200)
-            ax.plot(grid, _density(values[mask], grid, bw_method), color=colour,
-                    linewidth=1.5, zorder=3)
+            grid, curve = kde_curve(values[mask], cut=2.0, gridsize=200,
+                                    bw_method=bw_method)
+            ax.plot(grid, curve, color=colour, linewidth=1.5, zorder=3)
 
     label = xlabel if xlabel is not None else names.get("x", "")
     if log_scale:
@@ -328,8 +318,8 @@ def kdeplot(data: Any = None,
             sample = values[mask]
             if sample.size < 2:
                 continue
-            grid = _grid(sample, cut, gridsize)
-            density = _density(sample, grid, bw_method)
+            grid, density = kde_curve(sample, cut=cut, gridsize=gridsize,
+                                      bw_method=bw_method)
             if cumulative:
                 density = np.cumsum(density) * np.gradient(grid)
             ax.plot(grid, density, color=colour, linewidth=linewidth,
@@ -467,8 +457,8 @@ def ridgeplot(data: Any = None,
         if sample.size < 2:
             profiles.append(None)
             continue
-        grid = _grid(sample, cut, gridsize)
-        density = _density(sample, grid, bw_method)
+        grid, density = kde_curve(sample, cut=cut, gridsize=gridsize,
+                                  bw_method=bw_method)
         peak = max(peak, float(density.max()))
         profiles.append((grid, density, sample))
 
