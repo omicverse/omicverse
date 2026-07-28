@@ -103,6 +103,9 @@ class FidelityReport:
     matrix: Dict[Tuple[str, str], float] = field(default_factory=dict)
     palindromic: List[str] = field(default_factory=list)
     duplicates: List[str] = field(default_factory=list)
+    #: Pairs in the set that are each other's reverse complement — mutually
+    #: ligatable in the wrong orientation, and a structural error in the set.
+    reverse_complement_pairs: List[List[str]] = field(default_factory=list)
 
     @property
     def n_fragments(self) -> int:
@@ -110,7 +113,7 @@ class FidelityReport:
 
     @property
     def verdict(self) -> str:
-        if self.duplicates or self.palindromic:
+        if self.duplicates or self.palindromic or self.reverse_complement_pairs:
             return "invalid set"
         if self.fidelity >= 0.95:
             return "high fidelity"
@@ -215,6 +218,12 @@ def overhang_fidelity(
 
     duplicates = sorted({o for o in ohs if ohs.count(o) > 1})
     palindromic = sorted({o for o in ohs if o == _revcomp(o)})
+    # Two overhangs that are each other's reverse complement will ligate to one
+    # another in the wrong orientation. That is a structural error in the set, not
+    # a lower probability of success, so it belongs with duplicates and
+    # palindromes rather than in the fidelity number.
+    reverse_pairs = sorted({tuple(sorted((o, _revcomp(o)))) for o in ohs
+                            if _revcomp(o) in ohs and o != _revcomp(o)})
 
     matrix: Dict[Tuple[str, str], float] = {}
     for a in ohs:
@@ -254,6 +263,7 @@ def overhang_fidelity(
         method="measured" if use_measured else "mismatch",
         cross_reactions=cross, matrix=matrix,
         palindromic=palindromic, duplicates=duplicates,
+        reverse_complement_pairs=[list(p) for p in reverse_pairs],
     )
 
 
@@ -321,16 +331,37 @@ def design_overhang_set(
             and len(set(o)) > 1            # homopolymers anneal and slip badly
             and o not in forbidden and o not in fixed]
 
+    def complexity_penalty(o: str) -> float:
+        """Prefer balanced, mixed 4-mers when cross-reactivity cannot separate.
+
+        With an empty set every candidate has worst-cross 0.0, so the first pick —
+        and by extension the shape of the whole set — used to be decided purely by
+        lexicographic order. That returned AAAC / CCCA / GGGT / TTTG: 3+1
+        low-complexity 4-mers, and by twelve overhangs it was reaching for AT-only
+        ends with essentially no duplex stability at 37 C.
+        """
+        gc = sum(1 for b in o if b in "GC") / 4.0
+        counts = sorted((o.count(b) for b in "ACGT"), reverse=True)
+        return abs(gc - 0.5) + 0.5 * (counts[0] - 1) / 3.0
+
     chosen = list(fixed)
     while len(chosen) < n:
-        best, best_worst = None, None
+        best, best_key = None, None
+        taken = set(chosen)
         for cand in pool:
+            # An overhang and its own reverse complement are mutually ligatable in
+            # the wrong orientation. Above 20 overhangs the greedy search used to
+            # return exactly that — ('ACCC', 'GGGT') — and reported it as a merely
+            # lower fidelity number rather than as an invalid set.
+            if _revcomp(cand) in taken:
+                continue
             worst = max((cross(cand, c) for c in chosen), default=0.0)
             worst = max(worst, max((cross(c, cand) for c in chosen), default=0.0))
             if worst > max_cross:
                 continue
-            if best_worst is None or worst < best_worst:
-                best, best_worst = cand, worst
+            key = (round(worst, 6), complexity_penalty(cand), cand)
+            if best_key is None or key < best_key:
+                best, best_key = cand, key
         if best is None:
             raise ValueError(
                 f"在 max_cross={max_cross} 的约束下只能找到 {len(chosen)} 个正交悬挂端,"

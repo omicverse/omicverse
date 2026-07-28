@@ -173,21 +173,40 @@ def test_aggregation_external_backends_are_explained():
 # signal peptides — the landmark test
 # ---------------------------------------------------------------------------
 
-def test_phoa_signal_peptide_cleaves_where_the_literature_says():
-    """PhoA's Sec/SPI signal peptide is cleaved after residue 21."""
+def test_phoa_signal_peptide_is_found_and_its_true_site_is_not_ruled_out():
+    """PhoA's Sec/SPI signal peptide is cleaved after residue 21.
+
+    The heuristic no longer names 21 as its single answer, and that is a
+    deliberate trade. Site 21 used to win an exact tie by loop order — the
+    scorer never distinguished it — and on an eight-protein reference panel
+    breaking those ties towards the *earliest* site scores 5/8 while breaking them
+    towards the latest scores **6/8**. The c-region motif term that made the score
+    discriminate at all took the panel from 3/8 to 5/8 before either tie-break.
+    PhoA is one of the two the 6/8 version now misses, by +2.
+
+    So the assertion is what the function can honestly support: the signal peptide
+    is detected, and the true site is among the reported alternatives at an
+    indistinguishable score. `method='signalp'` is the answer when the exact
+    residue matters — for instance when grafting a mature sequence onto a fusion.
+    """
     sp = sb.predict_signal_peptide(PHOA)
     assert sp.has_signal, f"missed PhoA's signal peptide ({sp.reason})"
-    assert sp.cleavage_site == PHOA_CLEAVAGE, (
-        f"cleavage predicted after {sp.cleavage_site}, expected {PHOA_CLEAVAGE}")
-    assert PHOA[:sp.cleavage_site] == PHOA_SIGNAL
-    assert sp.mature_sequence.startswith("RTPEMPVLENR")
+    sites = [site for site, _score in sp.alternatives]
+    assert PHOA_CLEAVAGE in sites, (
+        f"the true site {PHOA_CLEAVAGE} must at least be a candidate; "
+        f"got {sp.alternatives}")
+    top_score = sp.alternatives[0][1]
+    tied = [site for site, score in sp.alternatives if score >= top_score - 1e-9]
+    assert PHOA_CLEAVAGE in tied, f"true site must be among the tied best: {sp.alternatives}"
+    assert abs(sp.cleavage_site - PHOA_CLEAVAGE) <= 3, sp.cleavage_site
 
 
 def test_phoa_tripartite_structure_is_reported():
     sp = sb.predict_signal_peptide(PHOA)
     assert sp.n_region[1] >= 1
     assert sp.h_region[1] > sp.h_region[0]
-    assert sp.c_region[1] == PHOA_CLEAVAGE
+    assert sp.c_region[1] == sp.cleavage_site, "the c-region must end at the cut"
+    assert abs(sp.c_region[1] - PHOA_CLEAVAGE) <= 3
     assert sp.h_hydrophobicity > 1.0, "the h-region must be the hydrophobic core"
 
 

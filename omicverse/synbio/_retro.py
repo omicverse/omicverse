@@ -59,7 +59,8 @@ def _base(mid: str) -> str:
 def pathway_search(model: "cobra.Model", target: str,
                    source: Optional[str] = None, max_depth: int = 6,
                    max_paths: int = 5,
-                   ignore_currency: bool = True) -> List[Pathway]:
+                   ignore_currency: bool = True,
+                   exclude_transport: bool = True) -> List[Pathway]:
     """Enumerate shortest production pathways to *target*.
 
     Parameters
@@ -78,6 +79,13 @@ def pathway_search(model: "cobra.Model", target: str,
         Number of pathways to return (shortest first).
     ignore_currency
         Skip ubiquitous cofactors (ATP, NAD(H), H2O, …) when tracing precursors.
+    exclude_transport
+        Exclude reactions that only move a metabolite across a membrane, and
+        exchange reactions. Without this the shortest route to ``succ_c`` is
+        ``SUCCt2_2`` — import succinate — with *dctA* named as "the gene to
+        express", and three of five routes to succinate were transporters. A
+        transport step is real chemistry but it is not a way to *make* the
+        molecule, which is what a production route is asked for.
 
     Returns
     -------
@@ -92,8 +100,22 @@ def pathway_search(model: "cobra.Model", target: str,
         target = cand[0]
 
     # producer map: metabolite -> reactions that can produce it (both directions)
+    def is_transport(rxn) -> bool:
+        """True when a reaction only relocates a metabolite between compartments.
+
+        Detected structurally: some base metabolite id appears on both the
+        substrate and the product side. That catches symporters, antiporters and
+        PTS-style transport without needing an annotation.
+        """
+        left = {_base(m.id) for m, c in rxn.metabolites.items() if c < 0}
+        right = {_base(m.id) for m, c in rxn.metabolites.items() if c > 0}
+        shared = {b for b in left & right if not (ignore_currency and b in _CURRENCY)}
+        return bool(shared)
+
     producers: Dict[str, List] = {}
     for rxn in model.reactions:
+        if exclude_transport and (rxn.boundary or is_transport(rxn)):
+            continue
         lb, ub = rxn.lower_bound, rxn.upper_bound
         for met, coeff in rxn.metabolites.items():
             fwd = coeff > 0 and ub > 0
@@ -111,14 +133,27 @@ def pathway_search(model: "cobra.Model", target: str,
                 subs.append(met.id)
         return subs
 
+    # Which base metabolites the medium supplies, in any compartment. Availability
+    # has to look *through* transport even when production routes may not use it:
+    # glucose is an available precursor in the cytosol because glc__D_e is in the
+    # medium and a transporter exists. Requiring the exact compartment-qualified id
+    # to carry an EX_ reaction meant that, once transport was excluded from the
+    # producer map, no cytosolic route could terminate at all and the search
+    # returned nothing.
+    medium_bases = {_base(m.id) for m in model.metabolites
+                    if any(r.boundary for r in m.reactions)}
+
     def is_available(mid: str) -> bool:
         if source and mid == source:
             return True
         if ignore_currency and _base(mid) in _CURRENCY:
             return True
-        # medium / exchangeable metabolites are available precursors
-        m = model.metabolites.get_by_id(mid)
-        return any(r.id.startswith("EX_") for r in m.reactions) and source is None
+        if source is not None:
+            return False
+        # the target itself is never "available" — that is the question being asked
+        if _base(mid) == _base(target):
+            return False
+        return _base(mid) in medium_bases
 
     # BFS over states (frontier metabolites still to be made, reactions used)
     from collections import deque

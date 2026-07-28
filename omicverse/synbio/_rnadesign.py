@@ -173,6 +173,32 @@ def _uitei_score(s: str) -> Tuple[int, Dict[str, bool]]:
     return sum(c.values()), c
 
 
+#: 5' terminal pentamer stability difference, in arbitrary stacking units.
+#: Positive means the antisense 5' end is the *less* stable one, which is what
+#: loads it as the guide.
+_STACK = {"GC": 3.0, "CG": 3.0, "GG": 2.5, "CC": 2.5, "AU": 1.0, "UA": 1.0,
+          "AA": 0.9, "UU": 0.9, "AG": 1.8, "GA": 1.8, "AC": 1.8, "CA": 1.8,
+          "UG": 1.6, "GU": 1.6, "UC": 1.6, "CU": 1.6}
+
+
+def _terminal_asymmetry(antisense: str, window: int = 5) -> float:
+    """Stability of the antisense 3' end minus its 5' end, over ``window`` nt.
+
+    RISC loads the strand whose 5' end is less thermodynamically stable, so a
+    positive value is what a working siRNA needs. Nothing in the ranking used to
+    look at it, and a candidate with inverted asymmetry scored identically to a
+    correct one.
+    """
+    seq = antisense.upper().replace("T", "U")
+    if len(seq) < 2 * window:
+        return 0.0
+
+    def stability(part: str) -> float:
+        return sum(_STACK.get(part[i:i + 2], 1.5) for i in range(len(part) - 1))
+
+    return stability(seq[-window:]) - stability(seq[:window])
+
+
 @register_function(
     aliases=["sirna_design", "siRNA设计", "siRNA", "rnai_design", "小干扰RNA",
              "沉默设计", "knockdown_design"],
@@ -187,13 +213,30 @@ def _uitei_score(s: str) -> Tuple[int, Dict[str, bool]]:
     produces={},
 )
 def sirna_design(mrna: str, n: int = 10, method: str = "reynolds",
-                 min_score: int = 0, avoid_start: int = 75) -> List[SiRNA]:
+                 min_score: int = 0, avoid_start: int = 75,
+                 min_spacing: Optional[int] = None,
+                 rank_by_asymmetry: bool = True) -> List[SiRNA]:
     """Rank 19-nt siRNA candidates against *mrna*.
 
-    ``method='reynolds'`` (default) uses the 8-criteria Reynolds rules;
-    ``method='uitei'`` uses the Ui-Tei rules. Candidates start after
-    ``avoid_start`` nt (5' UTR / early ORF are poor targets) and are ranked by
-    rule score, breaking ties by target-site accessibility (more open = better)."""
+    ``method='reynolds'`` uses the Reynolds rules; ``method='uitei'`` the Ui-Tei
+    rules. Candidates start after ``avoid_start`` nt.
+
+    Ties on the rule score are broken by **thermodynamic asymmetry** — the
+    difference in duplex stability between the two ends, which is the single
+    largest determinant of which strand RISC loads (Khvorova, Schwarz 2003). A
+    candidate whose asymmetry is inverted will load the passenger strand and
+    silence the wrong transcript, and it used to be returned with the same rank as
+    a correct one.
+
+    ``min_spacing`` (default: the siRNA length, i.e. no overlap) stops the
+    function returning the same site several times over. It previously ranked by
+    ``(-score, position)``, so ``n=5`` came back as positions 81, 82, 83, 96, 98 —
+    three 1-nt-shifted copies of one site presented as three designs.
+
+    The docstring used to claim ties were broken by target-site accessibility.
+    ``rna_accessibility`` was never called; it now is, when ``rank_by_asymmetry``
+    is False.
+    """
     scorers = {"reynolds": _reynolds_score, "uitei": _uitei_score}
     if method not in scorers:
         raise ValueError(
@@ -216,7 +259,37 @@ def sirna_design(mrna: str, n: int = 10, method: str = "reynolds",
                            score=score, method=method, criteria=crit))
 
     # rank: rule score desc, then 5'->3' position (earlier, well-scored sites first)
-    cands.sort(key=lambda c: (-c.score, c.position))
+    # secondary key: asymmetry (or accessibility), not position
+    for c in cands:
+        c.criteria = dict(c.criteria or {})
+        if rank_by_asymmetry:
+            c.criteria["asymmetry"] = _terminal_asymmetry(c.antisense)
+            c.criteria["secondary"] = c.criteria["asymmetry"]
+        else:
+            # Import here rather than at module scope so the ViennaRNA dependency
+            # stays optional, and let an ImportError propagate: a bare
+            # `except Exception -> nan` hid a NameError and made the accessibility
+            # mode silently do nothing, which is how the docstring came to promise
+            # a ranking the code never performed.
+            from ._rna import rna_accessibility
+            open_cost = float(rna_accessibility(m, c.position,
+                                                c.position + len(c.sense)))
+            c.criteria["accessibility"] = open_cost
+            c.criteria["secondary"] = -open_cost
+    cands.sort(key=lambda c: (-c.score, -c.criteria.get("secondary", 0.0), c.position))
+    for c in cands:
+        if rank_by_asymmetry and c.criteria.get("asymmetry", 0.0) < 0:
+            c.criteria["warning"] = (
+                "thermodynamic asymmetry is inverted — RISC will preferentially "
+                "load the passenger strand and silence the wrong transcript")
+
+    # enforce spacing so distinct designs are distinct sites
+    spacing = len(cands[0].sense) if (min_spacing is None and cands) else (min_spacing or 0)
+    spaced: List[SiRNA] = []
+    for cand in cands:
+        if all(abs(cand.position - kept.position) >= spacing for kept in spaced):
+            spaced.append(cand)
+    cands = spaced
     return cands[:n]
 
 

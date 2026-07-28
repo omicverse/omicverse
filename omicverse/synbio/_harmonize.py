@@ -439,6 +439,21 @@ class SynthesisAssessment:
                 f"{len(self.issues)} issues, GC={self.gc_content:.1%})")
 
 
+#: Type IIS and common cloning sites worth refusing by default — an internal site
+#: makes a fragment uncloneable by the very method it was designed for, and
+#: ``restriction_map`` sat in the same package without this function ever asking it.
+_ENZYME_SITES = {
+    "BsaI": "GGTCTC", "BsmBI": "CGTCTC", "BbsI": "GAAGAC", "SapI": "GCTCTTC",
+    "NdeI": "CATATG", "XhoI": "CTCGAG", "EcoRI": "GAATTC", "BamHI": "GGATCC",
+    "HindIII": "AAGCTT", "NcoI": "CCATGG", "SacI": "GAGCTC", "SalI": "GTCGAC",
+}
+
+#: Scanned when ``forbidden_sites`` is not given: the Type IIS enzymes every
+#: modular-assembly standard uses, so a domesticated part must not contain them.
+_FORBIDDEN_SITES = tuple(
+    (name, _ENZYME_SITES[name]) for name in ("BsaI", "BsmBI", "BbsI", "SapI"))
+
+
 @register_function(
     aliases=["synthesis_complexity", "合成难度", "合成复杂度", "可合成性",
              "synthesis_difficulty", "manufacturability_dna", "下单前检查"],
@@ -457,10 +472,14 @@ def synthesis_complexity(
     sequence: str,
     *,
     gc_window: int = 50,
-    gc_low: float = 0.25,
-    gc_high: float = 0.75,
+    gc_low: float = 0.35,
+    gc_high: float = 0.65,
     homopolymer_length: int = 8,
     repeat_length: int = 20,
+    forbidden_sites: Optional[Sequence[str]] = None,
+    max_fragment_nt: int = 3000,
+    blocking_repeat_nt: int = 100,
+    blocking_homopolymer_nt: int = 15,
     hairpin_stem: int = 10,
     hairpin_loop_max: int = 100,
 ) -> SynthesisAssessment:
@@ -537,10 +556,19 @@ def synthesis_complexity(
                 direct_spans.append((j, j, src))
         else:
             seen[kmer] = j
+    longest_direct = 0
+    for s, e, src in direct_spans:
+        length = e - s + repeat_length
+        longest_direct = max(longest_direct, length)
     for s, e, src in direct_spans[:20]:
+        length = e - s + repeat_length
+        # Severity has to scale with repeat *length*. Counting merged spans made a
+        # 1 kb perfect tandem duplication — an unconditional "unable to
+        # synthesise" at every vendor — score the same as a single 20-nt repeat.
         issues.append(SynthesisIssue(
             "direct_repeat", s + 1, e + repeat_length,
-            f"{e - s + repeat_length} nt repeat of position {src + 1}", 0.5))
+            f"{length} nt repeat of position {src + 1}",
+            min(1.0, length / 200.0)))
     direct = len(direct_spans)
 
     inverted_spans: List[Tuple[int, int, int]] = []
@@ -578,20 +606,75 @@ def synthesis_complexity(
                     f"{hairpin_stem}-nt stem, {hit - j - hairpin_stem}-nt loop",
                     0.6))
 
+    # Sites that make the fragment uncloneable rather than unsynthesisable. Kept
+    # in the same report because it is the same question — "will this order work"
+    # — and because `restriction_map` existed alongside this function without
+    # ever being consulted by it.
+    site_hits = 0
+    for enzyme, site in (_FORBIDDEN_SITES if forbidden_sites is None
+                         else [(e, _ENZYME_SITES.get(e, e)) for e in forbidden_sites]):
+        for strand_site in {site, _revcomp(site)}:
+            start = 0
+            while True:
+                hit = seq.find(strand_site, start)
+                if hit < 0:
+                    break
+                site_hits += 1
+                if site_hits <= 20:
+                    issues.append(SynthesisIssue(
+                        "restriction_site", hit + 1, hit + len(strand_site),
+                        f"{enzyme} site {strand_site}", 0.8))
+                start = hit + 1
+
+    # Length. Clonal gene synthesis is quoted per fragment and caps at a few kb;
+    # a 20 kb order is not a hard sequence problem but it is not one order either.
+    length_penalty = min(1.0, max(0.0, (n - max_fragment_nt) / max_fragment_nt))
+    if length_penalty > 0:
+        issues.append(SynthesisIssue(
+            "length", 1, n,
+            f"{n} nt exceeds the {max_fragment_nt} nt single-fragment guide — "
+            f"split into {-(-n // max_fragment_nt)} fragments", length_penalty))
+
+    # Vendors apply pass/fail gates, not a weighted average. A single perfect
+    # repeat above ~100 nt is an unconditional refusal wherever it sits in an
+    # otherwise clean sequence, and a weighted term cannot express that: with the
+    # repeat contributing at most 24% of the total, a 1 kb perfect tandem
+    # duplication scored 0.34 — "moderate" — which is the wrong answer for a
+    # sequence no vendor will make.
+    blocking: List[str] = []
+    if longest_direct >= blocking_repeat_nt:
+        blocking.append(
+            f"{longest_direct} nt perfect direct repeat (>= {blocking_repeat_nt} nt "
+            f"is refused outright, not quoted)")
+    if longest_run >= blocking_homopolymer_nt:
+        blocking.append(f"{longest_run}x homopolymer run")
+    for note in blocking:
+        issues.append(SynthesisIssue("blocking", 1, n, note, 1.0))
+
     metrics = {
         "gc_content": gc_total,
         "worst_gc_deviation": worst_gc_dev,
         "longest_homopolymer": float(longest_run),
         "direct_repeats": float(direct),
+        "longest_direct_repeat": float(longest_direct),
         "inverted_repeats": float(inverted),
         "hairpins": float(hairpins),
+        "restriction_sites": float(site_hits),
+        "length_over_guide": length_penalty,
+        "blocking_issues": float(len(blocking)),
     }
     score = min(1.0,
-                0.30 * min(1.0, worst_gc_dev / 0.25)
-                + 0.20 * min(1.0, max(0, longest_run - homopolymer_length + 1) / 8.0)
-                + 0.20 * min(1.0, direct / 10.0)
-                + 0.15 * min(1.0, inverted / 5.0)
-                + 0.15 * min(1.0, hairpins / 10.0))
+                0.22 * min(1.0, worst_gc_dev / 0.15)
+                + 0.14 * min(1.0, max(0, longest_run - homopolymer_length + 1) / 8.0)
+                + 0.24 * min(1.0, longest_direct / 200.0)
+                + 0.12 * min(1.0, inverted / 5.0)
+                + 0.10 * min(1.0, hairpins / 10.0)
+                + 0.10 * min(1.0, site_hits / 2.0)
+                + 0.08 * length_penalty)
+    if blocking:
+        # Floor rather than override, so the other issues still rank sequences
+        # against each other above the gate.
+        score = max(score, 0.85)
 
     return SynthesisAssessment(
         sequence_length=n, score=float(score), issues=issues,

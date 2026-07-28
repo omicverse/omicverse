@@ -776,3 +776,196 @@ def test_rbs_library_spans_orders_of_magnitude():
     library = sb.rbs_library(cds, n=6, target_range=(1.0, 1000.0))
     rates = library.to_frame()["predicted"]
     assert rates.max() / rates.min() > 100, rates.tolist()
+
+
+# ---------------------------------------------------------------------------
+# functions whose name did not match what they did
+# ---------------------------------------------------------------------------
+
+def test_synthesis_complexity_gates_a_long_perfect_repeat():
+    """A 1 kb perfect tandem duplication scored the same as 20 kb of unrelated
+    sequence, because severity counted merged spans rather than repeat length —
+    and vendors apply pass/fail gates, not a weighted average."""
+    import random
+
+    # one Random, drawn 1000 times — inlining Random(7) inside the generator
+    # builds a fresh seeded generator per character and yields a homopolymer
+    rng = random.Random(7)
+    unit = "".join(rng.choice("ACGT") for _ in range(1000))
+    clean = sb.synthesis_complexity(unit)
+    duplicated = sb.synthesis_complexity(unit + unit)
+    short_repeat = sb.synthesis_complexity(unit + unit[:40])
+
+    assert clean.score < 0.15, clean.score
+    assert duplicated.score > 0.8, duplicated.score
+    assert duplicated.metrics["longest_direct_repeat"] >= 900
+    assert any(i.kind == "blocking" for i in duplicated.issues)
+    assert short_repeat.score < 0.2, "a 40 nt repeat is synthesisable"
+
+
+def test_synthesis_complexity_finds_internal_type_iis_sites():
+    """restriction_map sat in the same package and was never consulted."""
+    seq = "AAAA" + ("GGTCTC" + "ATGCATGCATGCATGCTTAAGG" * 4) * 3
+    report = sb.synthesis_complexity(seq)
+    assert report.metrics["restriction_sites"] >= 3
+    assert any(i.kind == "restriction_site" for i in report.issues)
+
+
+def test_synthesis_complexity_notices_length():
+    long_order = sb.synthesis_complexity("ATGCATGGCCTTAAGCGTACGTTAGCCA" * 715)
+    assert long_order.metrics["length_over_guide"] > 0.5
+    assert any(i.kind == "length" for i in long_order.issues)
+
+
+@pytest.mark.parametrize("n", [4, 8, 12, 20, 24])
+def test_overhang_sets_never_contain_a_reverse_complement_pair(n):
+    """Two overhangs that are each other's reverse complement ligate in the wrong
+    orientation. Above 20 the greedy search returned exactly that — ('ACCC',
+    'GGGT') — and reported it as a merely lower fidelity number."""
+    overhangs = sb.design_overhang_set(n)
+    complement = str.maketrans("ACGT", "TGCA")
+    for overhang in overhangs:
+        assert overhang.translate(complement)[::-1] not in overhangs
+    assert not any(set(o) <= set("AT") for o in overhangs), overhangs
+
+
+def test_overhang_set_first_picks_are_not_low_complexity():
+    """With an empty set every candidate ties at worst-cross 0, so the first pick
+    was decided by lexicographic order and returned AAAC / CCCA / GGGT / TTTG."""
+    overhangs = sb.design_overhang_set(4)
+    for overhang in overhangs:
+        assert max(overhang.count(b) for b in "ACGT") <= 2, overhang
+        assert 1 <= sum(1 for b in overhang if b in "GC") <= 3, overhang
+
+
+def test_a_reverse_complement_pair_is_reported_as_an_invalid_set():
+    report = sb.overhang_fidelity(["AATG", "CATT", "AGGT"])
+    assert report.reverse_complement_pairs
+    assert report.verdict == "invalid set"
+
+
+def test_pathway_search_does_not_answer_import_it(core):
+    """The one-step route to succinate was SUCCt2_2 — import succinate — with
+    dctA named as the gene to express, and three of five routes were
+    transporters."""
+    routes = sb.pathway_search(core, "succ_c")
+    assert routes, "excluding transport must not empty the result"
+    for route in routes:
+        for reaction in route.reactions:
+            assert not reaction.endswith(("t2_2", "t2r", "t3")), route.reactions
+            assert not reaction.startswith("EX_"), route.reactions
+    assert "FRD7" in routes[0].reactions, routes[0].reactions
+
+
+def test_pathway_search_can_still_include_transport_on_request(core):
+    routes = sb.pathway_search(core, "succ_c", exclude_transport=False)
+    assert routes
+
+
+def test_sirna_designs_are_distinct_sites():
+    """It ranked by (-score, position), so n=5 returned positions 81, 82, 83, 96,
+    98 — three 1-nt-shifted copies of one site presented as three designs."""
+    transcript = ("ATGGTTTACATGTTCCAATATGATTCCAGCAGCGATGATTATGGCAGCAGCGATTATGGCAGCAGC"
+                  "GATTATGGCAGCAGCGATTATGGCAGCAGCGATTATGGCAGCAGCGATTATGGCAGCAGCGATT")
+    designs = sb.sirna_design(transcript, n=5)
+    positions = sorted(d.position for d in designs)
+    length = len(designs[0].sense)
+    for earlier, later in zip(positions, positions[1:]):
+        assert later - earlier >= length, positions
+
+
+def test_sirna_ranking_uses_thermodynamic_asymmetry():
+    """The single largest determinant of which strand RISC loads, and nothing in
+    the ranking looked at it."""
+    transcript = ("ATGGTTTACATGTTCCAATATGATTCCAGCAGCGATGATTATGGCAGCAGCGATTATGGCAGCAGC"
+                  "GATTATGGCAGCAGCGATTATGGCAGCAGCGATTATGGCAGCAGCGATTATGGCAGCAGCGATT")
+    designs = sb.sirna_design(transcript, n=3)
+    assert all("asymmetry" in d.criteria for d in designs)
+    inverted = [d for d in designs if d.criteria["asymmetry"] < 0]
+    for design in inverted:
+        assert "passenger strand" in design.criteria.get("warning", "")
+
+
+def test_sirna_accessibility_mode_actually_computes_accessibility():
+    """The docstring promised an accessibility tiebreak; a bare `except Exception
+    -> nan` hid a NameError and the mode silently did nothing."""
+    transcript = ("ATGGTTTACATGTTCCAATATGATTCCAGCAGCGATGATTATGGCAGCAGCGATTATGGCAGCAGC"
+                  "GATTATGGCAGCAGCGATTATGGCAGCAGCGATTATGGCAGCAGCGATTATGGCAGCAGCGATT")
+    designs = sb.sirna_design(transcript, n=2, rank_by_asymmetry=False)
+    for design in designs:
+        value = design.criteria["accessibility"]
+        assert value == value, "nan means the computation was swallowed again"
+
+
+SIGNAL_PANEL = {
+    "PhoA": (21, "MKQSTIALALLPLLFTPVTKARTPEMPVLENRAAQGDITAPGGARRLTGDQTAALRDSLSDKPAKN"),
+    "MalE": (26, "MKIKTGARILALSALTTMMFSASALAKIEEGKLVIWINGDKGYNGLAEVGKKFEKDTGIKVTVEHP"),
+    "lysozyme": (18, "MRSLLILVLCFLPLAALGKVFGRCELAAAMKRHGLDNYRGYSLGNWVCAAKFESNFNTQATNRNT"),
+    "OmpA": (21, "MKKTAIAIAVALAGFATVAQAAPKDNTWYTGAKLGWSQYHDTGFINNNGPTHENQLGAGAFGGYQV"),
+    "proinsulin": (24, "MALWMRLLPLLALLALWGPDPAAAFVNQHLCGSHLVEALYLVCGERGFFYTPKTRREAEDLQVGQ"),
+}
+
+
+def test_signal_peptide_score_is_not_saturated():
+    """h_norm saturates at h_mean >= 2.5, so dozens of geometries tied at 1.000 and
+    the strict `>` kept whichever the loop reached first — the earliest site."""
+    scores = {name: sb.predict_signal_peptide(seq).score
+              for name, (_site, seq) in SIGNAL_PANEL.items()}
+    assert len(set(round(s, 3) for s in scores.values())) > 1, scores
+
+
+def test_signal_peptide_reports_its_alternatives():
+    """A near-tie must be visible: an 8-residue error via mature_sequence silently
+    corrupts any fusion design."""
+    for name, (true_site, seq) in SIGNAL_PANEL.items():
+        result = sb.predict_signal_peptide(seq)
+        assert result.alternatives, name
+        sites = [site for site, _score in result.alternatives]
+        assert true_site in sites, (name, true_site, result.alternatives)
+
+
+def test_asr_method_ml_is_reported_as_what_it_is():
+    """It was never maximum likelihood: no substitution model, no likelihood over
+    branch lengths, and the per-site number is column support not a posterior."""
+    import omicverse as ov
+
+    seqs = {"chicken": "MTYKLILNGKTLKGETTTEAVDAATAEKVFKQYANDNGVDGEWTYDDATKTFTVTE",
+            "turkey": "MTYKLILNGKTLKGETTTEAVDAATAEKVFKQYANDNGVDGEWTYDDATKTFTVTQ",
+            "quail": "MTYKLILNGKTLKGETTTEAVDAATAEKVFKQYANDNGVDGEWSYDDATKTFTVTE",
+            "duck": "MTYKLILNGKTLKGETTTEAVDAATAEKVFKQYANDNGVDGEWTYDEATKTFTVTQ"}
+    alignment = ov.alignment.msa(seqs)
+    assert sb.ancestral_reconstruction(alignment, method="ml").method == \
+        "weighted_consensus"
+    assert sb.ancestral_reconstruction(
+        alignment, method="weighted_consensus").method == "weighted_consensus"
+    assert sb.ancestral_reconstruction(alignment, method="parsimony").method == \
+        "parsimony"
+
+
+def test_asr_warns_when_the_tree_it_was_given_does_nothing():
+    """`tree=` was silently ignored whenever it carried no branch lengths, which
+    is every FastTree result — so passing a tree was decorative."""
+    import omicverse as ov
+
+    seqs = {"a": "MTYKLILNGKTLKGETTTEAVDAATAEKVFKQYANDNG",
+            "b": "MTYKLILNGKTLKGETTTEAVDAATAEKVFKQYANDNH",
+            "c": "MTYKLILNGKTLKGETTTEAVDAATAEKVFKQYANDNK"}
+    alignment = ov.alignment.msa(seqs)
+
+    class TreeWithoutLengths:
+        method = "fasttree"
+        distances = None
+
+    with pytest.warns(UserWarning, match="没有分支长度"):
+        sb.ancestral_reconstruction(alignment, tree=TreeWithoutLengths())
+
+
+def test_binder_ranking_prefers_interface_evidence_over_monomer_plddt():
+    """Ranking on monomer pLDDT ranked on folding confidence, which for an
+    idealised helical bundle is ~94 whether or not it binds anything."""
+    from omicverse.synbio._binder import BinderDesign, denovo_binder
+    import inspect
+
+    source = inspect.getsource(denovo_binder)
+    assert "scrmsd" in source and "iptm" in source, (
+        "the rank key must consider interface evidence")

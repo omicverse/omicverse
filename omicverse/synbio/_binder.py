@@ -185,29 +185,65 @@ def denovo_binder(target_pdb: str, hotspot_res: List[str], binder_length: int = 
                              binder_length=len(seq))
             if validate != "none":
                 d.validation = _validate_binder(seq, target_pdb, target_chain,
-                                                validate, device)
+                                                validate, device,
+                                                backbone_pdb=bb)
             designs.append(d)
 
     def _rank(d: BinderDesign):
-        if d.validation and "plddt" in d.validation:
-            return -d.validation["plddt"]        # higher pLDDT first
-        return d.mpnn_score                       # lower score first
+        """Rank on interface evidence first, monomer confidence last.
+
+        Ranking on ``plddt`` alone ranked on *monomer* folding confidence, which
+        for an idealised helical bundle is ~94 whether or not it binds anything —
+        so the ordering carried essentially no information about the interface.
+        The field's triage criteria are self-consistency RMSD (design backbone vs
+        refold, < ~2 A) and interface confidence (ipTM / PAE_interaction); those
+        come first here when they are available, and monomer pLDDT only breaks
+        remaining ties.
+        """
+        v = d.validation or {}
+        # lower is better for scrmsd, higher for iptm/plddt
+        scrmsd = v.get("scrmsd")
+        iptm = v.get("iptm")
+        return (
+            0 if scrmsd is not None else 1,
+            scrmsd if scrmsd is not None else 0.0,
+            -(iptm if iptm is not None else -1.0),
+            -(v.get("plddt", 0.0)),
+            d.mpnn_score,
+        )
     designs.sort(key=_rank)
     return designs
 
 
 def _validate_binder(seq: str, target_pdb: str, target_chain: str,
-                     mode: str, device) -> Dict:
+                     mode: str, device, backbone_pdb: Optional[str] = None) -> Dict:
     if mode == "esmfold":
         from ._structure import predict_structure
         pred = predict_structure(seq, device=device)
-        return {"plddt": float(pred.mean_plddt) / 100.0}
+        out = {"plddt": float(pred.mean_plddt) / 100.0}
+        # Self-consistency RMSD is what "esmfold validation" means in this field:
+        # refold the designed sequence and compare against the backbone it was
+        # designed onto. Returning monomer pLDDT alone and calling it
+        # self-consistency was a misuse of the term — the RMSD was never computed.
+        if backbone_pdb:
+            try:
+                from ._evaluate import structure_rmsd
+                path = getattr(pred, "path", None)
+                if path:
+                    out["scrmsd"] = float(structure_rmsd(backbone_pdb, path))
+                    out["self_consistent"] = out["scrmsd"] < 2.0
+            except Exception as exc:                     # pragma: no cover
+                out["scrmsd_error"] = f"{type(exc).__name__}: {exc}"
+        return out
     # boltz: co-fold binder + target sequence, score affinity
     from ._boltz import predict_complex
     tgt_seq = _chain_sequence(target_pdb, target_chain)
+    # affinity_binder names the chain whose affinity is wanted; without it the
+    # affinity head never runs and validation='boltz' could not return the
+    # affinity its docstring promised.
     r = predict_complex(
         [{"id": "A", "protein": tgt_seq}, {"id": "B", "protein": seq}],
-        device=device)
+        affinity_binder="B", device=device)
     return {"plddt": r.plddt, "iptm": r.iptm, "affinity": r.affinity}
 
 

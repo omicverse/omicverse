@@ -8,7 +8,14 @@ destabilising substitutions that individual lineages accumulated. It needs a
 sequence family and a tree, not a GPU.
 
 * :func:`ancestral_reconstruction` — infer the sequence at an internal node.
-  ``method='parsimony'`` runs Fitch's algorithm; ``method='ml'`` runs marginal
+  ``method='parsimony'`` runs Fitch's algorithm; ``method='weighted_consensus'``
+  (aliased as ``'ml'`` for continuity) runs a sequence-weighted column consensus.
+  **It is not maximum likelihood** — there is no substitution model and no
+  likelihood over branch lengths — and the per-site number it returns is column
+  support, not a posterior. For real marginal-ML ancestral states use RAxML-NG,
+  IQ-TREE ``--ancestral`` or PAML on a rooted tree; this is a fast approximation
+  for picking which sites deserve a small variant library. It previously claimed
+  marginal
   maximum likelihood over a Poisson/Jukes-Cantor-style amino-acid model, which
   additionally gives a **posterior probability per site** — and those
   probabilities are the useful output, because the ambiguous sites are exactly
@@ -42,7 +49,7 @@ class AncestralSequence:
 
     sequence: str                                  # gaps stripped
     aligned_sequence: str = ""                     # in alignment coordinates
-    method: str = "ml"
+    method: str = "weighted_consensus"
     posterior: List[float] = field(default_factory=list)
     alternatives: Dict[int, List[Tuple[str, float]]] = field(default_factory=dict)
     node: str = "root"
@@ -115,7 +122,7 @@ def _fitch(states: Sequence[set]) -> set:
     aliases=["ancestral_reconstruction", "祖先序列重构", "ASR", "asr",
              "祖先重建", "ancestral_sequence", "热稳定性改造"],
     category="synthetic_biology",
-    description="祖先序列重构(ASR):从一个序列家族的比对推断祖先序列。祖先蛋白通常比后代更热稳定,这是提高热稳定性最可靠的经典手段之一,不需要大模型。method='ml'(默认,边缘极大似然,**给出每个位点的后验概率**)或 'parsimony'(Fitch)。低支持度位点会被单独列出 —— 那些正是值得做成小型变体库的位置,而不是藏在一条序列里。Ancestral sequence reconstruction for thermostability engineering.",
+    description="祖先序列重构(ASR):从一个序列家族的比对推断祖先序列。祖先蛋白通常比后代更热稳定,这是提高热稳定性最可靠的经典手段之一,不需要大模型。method='weighted_consensus'(默认;'ml' 是保留的别名)按序列权重做逐列共识,给出**列支持度**——它不是边缘极大似然,没有替换模型也没有基于分支长度的似然,真要做 ML 祖先态请用 RAxML-NG / IQ-TREE --ancestral / PAML;或 'parsimony'(Fitch)。低支持度位点会被单独列出 —— 那些正是值得做成小型变体库的位置,而不是藏在一条序列里。Ancestral sequence reconstruction for thermostability engineering.",
     examples=[
         "anc = ov.synbio.ancestral_reconstruction(aln)",
         "anc.sequence, anc.mean_posterior, anc.ambiguous_sites()",
@@ -169,9 +176,12 @@ def ancestral_reconstruction(
     -------
     AncestralSequence
     """
-    _VALID = ("ml", "parsimony")
+    _VALID = ("weighted_consensus", "parsimony", "ml")
     if method not in _VALID:
         raise ValueError(f"method must be one of {list(_VALID)}, got {method!r}")
+    if method == "ml":
+        # Kept working, renamed honestly. It was never maximum likelihood.
+        method = "weighted_consensus"
 
     names, ncol = _columns(alignment)
     if len(names) < 3:
@@ -228,6 +238,14 @@ def _sequence_weights(names, tree, weights) -> Dict[str, float]:
         if missing:
             raise ValueError(f"weights 缺少这些序列:{missing}")
         return {n: float(weights[n]) for n in names}
+    if tree is not None and not getattr(tree, "distances", None):
+        import warnings
+        warnings.warn(
+            f"传入的树没有分支长度(method={getattr(tree, 'method', '?')!r}),"
+            f"所以每条序列的权重都是 1.0 —— 这棵树对结果没有任何影响。"
+            f"protein_tree(method='nj') 会带上距离;FastTree 路径目前不填 "
+            f"distances。要靠树加权,请用 NJ 树,或直接传 weights=。",
+            stacklevel=3)
     if tree is not None and getattr(tree, "distances", None):
         # closer sequences say more about the ancestor
         out = {}
