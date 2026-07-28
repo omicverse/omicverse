@@ -12,9 +12,12 @@ design that works and one that works *at the level you wanted*.
   translation initiation rates. ``rbs_strength`` scores one RBS; tuning a pathway
   needs a set that covers a decade or three.
 * :func:`promoter_library` — the same for transcription.
-* :func:`integration_sites` — where in the chromosome to put it. Expression from
-  different loci spans roughly 25% to 500% of a high-copy plasmid, so the site is
-  a design parameter, not a formality.
+* :func:`integration_sites` — where in the chromosome to put it. Across the sites
+  tabulated here expression spans 0.4x to 2.6x **relative to the neutral attTn7
+  landing site** — not relative to a plasmid, and the reference is itself
+  oriC-proximal. Run :func:`check_integration_sites` before trusting the numbers:
+  it reports pairs whose relative expression cannot be explained by gene dosage,
+  and the shipped table has one.
 * :func:`plasmid_burden` — what carrying and expressing the construct costs the
   host, coupled to :func:`~omicverse.synbio.rba` so the cost shows up as a growth
   rate rather than as a vague warning.
@@ -605,7 +608,7 @@ class IntegrationSite:
 #: plasmid across the chromosome — so the site is a design parameter, not a
 #: formality.
 ECOLI_INTEGRATION_SITES: List[Dict[str, object]] = [
-    {"name": "attTn7 (glmS)", "position": 3_925_000, "mechanism": "attTn7",
+    {"name": "attTn7 (glmS)", "position": 3_913_700, "mechanism": "attTn7",
      "relative_expression": 1.0, "essential_nearby": False,
      "note": "the standard neutral site; downstream of glmS, no polar effects"},
     {"name": "attB(HK022)", "position": 1_100_000, "mechanism": "attB",
@@ -629,6 +632,58 @@ ECOLI_INTEGRATION_SITES: List[Dict[str, object]] = [
      "relative_expression": 0.8, "essential_nearby": False,
      "note": "disrupts arabinose catabolism; do not combine with pBAD"},
 ]
+
+
+#: *E. coli* K-12 MG1655 landmarks used to sanity-check the site table.
+ORIC_POSITION = 3_925_744          # documented oriC
+TERC_POSITION = 1_590_000          # replication terminus, roughly opposite
+GENOME_LENGTH = 4_641_652          # NC_000913.3
+
+
+def replichore_fraction(position: int) -> float:
+    """Distance of a locus from *oriC* along its replichore: 0 at the origin,
+    1 at the terminus.
+
+    Gene dosage during fast growth falls with this fraction, so it is the
+    quantity in which a "distance from the origin" argument about expression has
+    to be made. Two sites at the same fraction cannot differ in expression *for
+    that reason*.
+    """
+    offset = abs(int(position) - ORIC_POSITION)
+    offset = min(offset, GENOME_LENGTH - offset)      # shorter way round
+    return min(offset / (GENOME_LENGTH / 2.0), 1.0)
+
+
+def check_integration_sites(sites: Optional[Sequence[Mapping]] = None,
+                            tolerance: float = 0.05) -> Dict[str, str]:
+    """Flag site-table entries whose expression cannot come from gene dosage.
+
+    Returns ``{name: reason}``; empty means the table is self-consistent.
+
+    The table shipped with ``attTn7 (glmS)`` at 3,925,000 and ``near oriC`` at
+    3,925,744 — **744 bp apart** — carrying 1.0x and 2.6x relative expression.
+    There is no dosage gradient over 744 bp, so both numbers could not be right,
+    and nothing noticed. The glmS coordinate is now the real one from
+    NC_000913.3 (glmS spans 3,911,839-3,913,668, so attTn7 sits just downstream at
+    ~3,913,700). That is still only 12 kb from oriC, which is itself worth
+    knowing: the standard "neutral" landing site is oriC-proximal, so expression
+    measured there is not a dosage-neutral baseline.
+    """
+    table = list(sites if sites is not None else ECOLI_INTEGRATION_SITES)
+    problems: Dict[str, str] = {}
+    for i, a in enumerate(table):
+        for b in table[i + 1:]:
+            fa, fb = replichore_fraction(a["position"]), replichore_fraction(b["position"])
+            if abs(fa - fb) > tolerance:
+                continue
+            ea, eb = float(a["relative_expression"]), float(b["relative_expression"])
+            ratio = max(ea, eb) / max(min(ea, eb), 1e-9)
+            if ratio > 1.5:
+                problems[a["name"]] = (
+                    f"与 {b['name']!r} 的复制叉位置几乎相同(replichore 分数 "
+                    f"{fa:.3f} vs {fb:.3f}),相对表达却差 {ratio:.1f} 倍 —— "
+                    f"这个差异不可能来自基因剂量。")
+    return problems
 
 
 @register_function(
@@ -694,9 +749,16 @@ def integration_sites(
             if target_expression <= 0:
                 raise ValueError("target_expression 必须为正。")
             # closeness on a log scale — 2x too high and 2x too low are equally wrong
-            score -= abs(math.log2(expr / target_expression)) / 3.0
+            # Distance from the requested expression is the *primary*
+            # criterion. Dividing the log-ratio by 3 made a 2.1x miss cost 0.35
+            # while a flat essentiality penalty cost 0.40, so asking for 2.5x
+            # returned a 1.2x site first and put the 2.6x site third.
+            score -= abs(math.log2(expr / target_expression))
         if ess and avoid_essential:
-            score -= 0.4
+            # Essentiality is a real risk but a secondary one, and
+            # avoid_essential= already exists for callers who want it excluded
+            # outright. Kept well below a one-octave expression miss.
+            score -= 0.25
             notes.append("邻近必需基因密集 —— 整合可能影响生长,需实测确认。")
         out.append(IntegrationSite(
             name=name, position=int(raw.get("position", 0)), score=score,
@@ -834,7 +896,15 @@ def plasmid_burden(
     # replication cost: plasmid DNA as a fraction of the genome, which competes
     # for the same precursors and polymerase time
     dna_fraction = (copy_number * construct_kb) / genome_kb
-    dna_cost = 0.05 * dna_fraction        # DNA is a small share of biomass cost
+    # DNA replication is a small share of biomass cost. The 0.05 is a coarse
+    # constant, and the consequence is worth stating rather than leaving for the
+    # reader to discover: over a 500-fold sweep in copy number the burden moves
+    # about 3 percentage points, while the expressed-protein fraction moves it
+    # across the whole range. This function is dominated by
+    # `expressed_protein_fraction`, and a sweep that varies copy number and
+    # protein fraction together will be read as a copy-number effect when it is
+    # not one.
+    dna_cost = 0.05 * dna_fraction
 
     remaining = binding * (1.0 - protein_cost - dna_cost)
     if remaining <= 0:
@@ -849,11 +919,20 @@ def plasmid_burden(
         f"proteome: {protein_cost:.1%} to the heterologous protein, "
         f"{dna_cost:.2%} to replicating {copy_number} x {construct_kb} kb, "
         f"against a binding budget of {binding:.4g} g/gDW")
+    if protein_cost > 6.0 * max(dna_cost, 1e-12):
+        notes.append(
+            f"负担的 {100 * protein_cost / max(protein_cost + dna_cost, 1e-12):.0f}% "
+            f"来自表达蛋白,只有 {100 * dna_cost / max(protein_cost + dna_cost, 1e-12):.0f}% "
+            f"来自复制 DNA。要看拷贝数的影响,请**固定** "
+            f"expressed_protein_fraction 单独扫拷贝数 —— 两者一起变时,"
+            f"曲线看起来像拷贝数效应,其实是蛋白比例效应。")
     est = BurdenEstimate(
         growth_unburdened=unburdened.growth, growth_burdened=burdened.growth,
         protein_fraction=expressed_protein_fraction, copy_number=copy_number,
         construct_kb=construct_kb,
         components={"protein": protein_cost, "dna": dna_cost,
+                    "protein_share_of_cost": (
+                        protein_cost / max(protein_cost + dna_cost, 1e-12)),
                     "budget_left": remaining},
         notes=notes)
     if est.burden > 0.2:
@@ -1145,6 +1224,8 @@ def _absolute_adaptiveness(copies: Mapping[str, int],
 
 __all__ = [
     "tai", "TAIResult", "TRNA_COPY_NUMBERS", "DEFAULT_WOBBLE_PENALTIES",
+    "replichore_fraction", "check_integration_sites",
+    "ORIC_POSITION", "TERC_POSITION", "GENOME_LENGTH",
     "check_trna_table", "ECOLI_OPTIMAL_CODONS", "ECOLI_TRNA_TOTALS",
     "rbs_library", "promoter_library", "ExpressionLibrary",
     "integration_sites", "IntegrationSite", "ECOLI_INTEGRATION_SITES",

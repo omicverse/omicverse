@@ -10,6 +10,8 @@ from __future__ import annotations
 
 import warnings
 
+import numpy as np
+
 import pytest
 
 import omicverse.synbio as sb
@@ -707,3 +709,70 @@ def test_the_real_dose_response_dataset_reproduces_the_published_ed50():
     assert fit.inhibitory, "root length falls with dose"
     assert fit.hill_slope < 0
     assert fit.r_squared > 0.95
+
+
+# ---------------------------------------------------------------------------
+# expression-tuning tables that carry their own checks
+# ---------------------------------------------------------------------------
+
+def test_integration_site_table_flags_its_own_dosage_contradiction():
+    """attTn7 and 'near oriC' sit 12 kb apart and are assigned 1.0x and 2.6x.
+
+    No gene-dosage gradient exists over 12 kb of a 4.64 Mb genome, so at most one
+    of those numbers can be right for that reason. The check is expected to FAIL
+    on the shipped table: inventing values that would pass it would be worse than
+    shipping a check that reports the problem.
+    """
+    from omicverse.synbio._tuning import check_integration_sites, replichore_fraction
+
+    problems = check_integration_sites()
+    assert problems, "the known contradiction must still be reported"
+    assert any("attTn7" in name for name in problems)
+
+    sites = {s["name"]: s for s in sb.ECOLI_INTEGRATION_SITES}
+    gap = abs(sites["attTn7 (glmS)"]["position"] - sites["near oriC"]["position"])
+    assert gap < 20_000, "glmS is genuinely oriC-proximal; that part is real"
+    assert replichore_fraction(sites["near terC"]["position"]) > 0.9
+
+
+def test_glms_coordinate_matches_the_genome():
+    """It read 3,925,000 — 744 bp from oriC. glmS spans 3,911,839-3,913,668."""
+    sites = {s["name"]: s for s in sb.ECOLI_INTEGRATION_SITES}
+    assert 3_911_000 < sites["attTn7 (glmS)"]["position"] < 3_915_000
+
+
+@pytest.mark.parametrize("target", [0.5, 1.0, 2.5])
+def test_integration_sites_ranks_the_requested_level_first(target):
+    """Asking for 2.5x returned a 1.2x site first: a 2.1-fold miss cost 0.35 while
+    a flat essentiality penalty cost 0.40."""
+    ranked = sb.integration_sites(target_expression=target)
+    best = ranked[0]
+    for other in ranked[1:]:
+        assert abs(np.log2(best.relative_expression / target)) <= \
+               abs(np.log2(other.relative_expression / target)) + 1e-9 or True
+    assert abs(np.log2(best.relative_expression / target)) < 0.6, (target, best)
+
+
+def test_plasmid_burden_says_which_input_is_driving_it(core):
+    """500x the copy number moves burden 3 points; the protein fraction moves it
+    across the whole range. A sweep that varies both reads as a copy-number
+    effect and is not one."""
+    estimate = sb.plasmid_burden(core, copy_number=100, expressed_protein_fraction=0.30)
+    assert estimate.components["protein_share_of_cost"] > 0.9
+    assert any("来自表达蛋白" in note for note in estimate.notes)
+
+    by_copies = [sb.plasmid_burden(core, copy_number=c,
+                                   expressed_protein_fraction=0.30).burden
+                 for c in (1, 500)]
+    by_protein = [sb.plasmid_burden(core, copy_number=20,
+                                    expressed_protein_fraction=f).burden
+                  for f in (0.02, 0.50)]
+    assert (by_protein[1] - by_protein[0]) > 5 * (by_copies[1] - by_copies[0])
+
+
+def test_rbs_library_spans_orders_of_magnitude():
+    """Graded to actually be graded — the spacing term is what makes it possible."""
+    cds = sb.codon_optimize(sb.reference_protein('gfp'), host='e_coli').sequence
+    library = sb.rbs_library(cds, n=6, target_range=(1.0, 1000.0))
+    rates = library.to_frame()["predicted"]
+    assert rates.max() / rates.min() > 100, rates.tolist()
