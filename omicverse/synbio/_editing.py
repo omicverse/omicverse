@@ -241,16 +241,39 @@ def crispr_regulation(sequence: str, tss: int, mode: str = "crispri",
 # ---------------------------------------------------------------------------
 @dataclass
 class Cas13Guide:
-    spacer: str             # crRNA spacer (== target RNA, 5'->3')
-    target_rc: str          # reverse complement (what the crRNA base-pairs as)
+    """A Cas13 crRNA and the target site it pairs with.
+
+    .. warning::
+
+       ``spacer`` used to hold the **target** sequence, with the actual crRNA
+       hidden in a field called ``target_rc``, and the docstring asserted that a
+       crRNA spacer *is* the target RNA. It is not — a spacer is complementary to
+       its protospacer, so ordering the old ``.spacer`` gave a sense-strand
+       oligo that cannot guide Cas13. ``spacer`` is now the crRNA, i.e. the
+       sequence to order, and the target lives in :attr:`protospacer`.
+    """
+
+    spacer: str             # the crRNA spacer — this is what you order
+    protospacer: str        # the target RNA site it base-pairs with (5'->3')
     position: int
     gc: float
     pfs: str                # 3' protospacer-flanking base on the target
     accessibility: float    # opening energy of the target site (lower = open)
     score: float
 
+    @property
+    def target_rc(self) -> str:
+        """Deprecated. The crRNA is now :attr:`spacer`."""
+        import warnings
+        warnings.warn(
+            "Cas13Guide.target_rc 已废弃:crRNA 现在就是 .spacer,靶序列在 "
+            ".protospacer。旧版把两者的名字弄反了。",
+            DeprecationWarning, stacklevel=2)
+        return self.spacer
+
     def __repr__(self) -> str:  # pragma: no cover
-        return (f"Cas13Guide(@{self.position} GC={self.gc:.2f} PFS={self.pfs} "
+        return (f"Cas13Guide(crRNA {self.spacer[:12]}… @{self.position} "
+                f"GC={self.gc:.2f} PFS={self.pfs} "
                 f"open={self.accessibility:.1f})")
 
 
@@ -292,8 +315,9 @@ def design_cas13_guides(target_rna: str, spacer_len: int = 28, n: int = 10,
         except Exception:
             acc = 0.0
         out.append(Cas13Guide(
-            spacer=site, target_rc=_rc(site).replace("T", "U"), position=i,
-            gc=gc, pfs=pfs, accessibility=acc, score=-acc))
+            spacer=_rc(site).replace("T", "U"),      # complementary — order this
+            protospacer=site.replace("T", "U"),      # the target site
+            position=i, gc=gc, pfs=pfs, accessibility=acc, score=-acc))
     out.sort(key=lambda g: g.score, reverse=True)
     return out[:n]
 

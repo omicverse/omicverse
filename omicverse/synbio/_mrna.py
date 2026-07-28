@@ -38,9 +38,14 @@ class MRNADesign:
     mrna: str                # designed mRNA (RNA, 5'->3')
     structure: str           # dot-bracket MFE structure
     mfe: float               # folding free energy (kcal/mol; more negative = stabler)
-    cai: float               # codon adaptation index (0..1; higher = better)
+    #: CAI against the requested host, computed by :func:`~omicverse.synbio.cai`
+    #: for every method — so designs from different backends are comparable.
+    cai: float
     method: str
     lam: float = 0.0
+    #: What the backend reported for itself, on its own codon table. Kept because
+    #: it is what the tool printed, but it is *not* comparable across methods.
+    cai_reported_by_tool: Optional[float] = None
 
     def __repr__(self) -> str:  # pragma: no cover
         return (f"MRNADesign(len={len(self.mrna)}nt, MFE={self.mfe:.1f} kcal/mol, "
@@ -119,24 +124,50 @@ def _run_lineardesign(protein: str, lam: float, host: str) -> MRNADesign:
                 pass
     if not mrna:
         raise RuntimeError("LinearDesign 未返回 mRNA:\n" + (proc.stderr or out)[-600:])
+    # Recompute CAI with *our* implementation and the host we were asked for, so
+    # that a baseline design and a LinearDesign design are on one yardstick.
+    # LinearDesign's own CAI comes from its own codon table; reporting the two
+    # side by side as if they were the same quantity made the baseline look worse
+    # on CAI than it is.
     return MRNADesign(protein=protein.upper(), mrna=mrna, structure=struct,
-                      mfe=mfe, cai=cai, method="lineardesign", lam=lam)
+                      mfe=mfe, cai=_cai_of(mrna, host),
+                      cai_reported_by_tool=cai,
+                      method="lineardesign", lam=lam)
+
+
+#: ``host`` names accepted by :func:`mrna_design` mapped to codon-table names.
+_CAI_HOSTS = {"human": "h_sapiens", "yeast": "s_cerevisiae"}
+
+
+def _cai_of(sequence: str, host: str) -> float:
+    """CAI of a designed sequence against the host it was designed for.
+
+    ``cai()`` defaults to ``host='e_coli'``. Calling it without ``host=`` on a
+    human-optimised CDS scored the design against the wrong organism entirely:
+    a human design read 0.656 that way and 0.990 against the human table, which
+    inverted the baseline-versus-LinearDesign comparison.
+    """
+    import warnings
+
+    from ._expression import cai as _cai
+    dna = str(sequence).upper().replace("U", "T")
+    try:
+        return float(_cai(dna, host=_CAI_HOSTS.get(host, "h_sapiens")))
+    except Exception as exc:
+        warnings.warn(
+            f"CAI 没算出来({exc});返回 nan 而不是 0.0 —— 0.0 会被读成"
+            f"'密码子适配极差',而实际情况是没算成。", stacklevel=2)
+        return float("nan")
 
 
 def _baseline_design(protein: str, host: str) -> MRNADesign:
     from ._codon import codon_optimize
     from ._rna import rna_fold
-    host_map = {"human": "h_sapiens", "yeast": "s_cerevisiae"}
-    cds = codon_optimize(protein, host=host_map.get(host, "h_sapiens")).sequence
+    cds = codon_optimize(protein, host=_CAI_HOSTS.get(host, "h_sapiens")).sequence
     fold = rna_fold(cds)
-    try:
-        from ._expression import cai as _cai
-        cai_val = float(_cai(cds))
-    except Exception:
-        cai_val = 0.0
     return MRNADesign(protein=protein.upper(), mrna=cds.replace("T", "U"),
-                      structure=fold.structure, mfe=fold.mfe, cai=cai_val,
-                      method="baseline")
+                      structure=fold.structure, mfe=fold.mfe,
+                      cai=_cai_of(cds, host), method="baseline")
 
 
 @register_function(

@@ -68,6 +68,15 @@ class RBAResult:
     fluxes: Dict[str, float] = field(default_factory=dict)
     total_protein: float = 0.0
     status: str = ""
+    #: Mass actually charged, g protein / gDW. Compare with ``total_protein``:
+    #: if it is far below, the budget is not doing anything.
+    protein_used: float = 0.0
+    notes: List[str] = field(default_factory=list)
+
+    @property
+    def binding(self) -> bool:
+        """Whether the proteome budget actually limited growth."""
+        return self.growth < self.unconstrained_growth - 1e-6
 
     @property
     def cost(self) -> float:
@@ -103,6 +112,8 @@ def rba(
     protein_per_biomass: float = 0.55,
     kcat_default: float = 65.0,
     kcats: Optional[Mapping[str, float]] = None,
+    enzyme_mw: float = 40.0,
+    enzyme_mws: Optional[Mapping[str, float]] = None,
 ) -> RBAResult:
     """Maximise growth subject to a proteome that must also build itself.
 
@@ -176,7 +187,15 @@ def rba(
             prob.Constraint(a + rxn.flux_expression, lb=0, name=f"_rba_n_{rxn.id}"),
         ])
         aux_vars.append(a)
-        enzyme_terms.append(a / (k * 3600.0))    # 1/s -> 1/h
+        # MW x v / (kcat x 3600) is a MASS in g/gDW. Without the molecular
+        # weight the term is v/kcat in **mmol/gDW**, which was then added
+        # directly to a ribosome term in g/gDW — undercharging every enzyme by
+        # roughly its molecular weight (~40x). The proteome then read 97%
+        # ribosome against a real ~20% at mu ~ 0.9 /h, the enzyme/ribosome split
+        # was flat across a 40-fold budget sweep, and the budget did not bind at
+        # all at the physiological 0.55 g/gDW.
+        mw = float((enzyme_mws or {}).get(rxn.id, enzyme_mw))
+        enzyme_terms.append(mw * a / (k * 3600.0))
 
     # ribosome mass required to sustain growth mu
     ribosome_term = biomass.flux_expression * (
@@ -196,9 +215,23 @@ def rba(
     enzyme_mass = 0.0
     for a, rxn_id in zip(aux_vars, [v.name[len("_rba_e_"):] for v in aux_vars]):
         k = float(kcats.get(rxn_id, kcat_default))
-        enzyme_mass += float(a.primal or 0.0) / (k * 3600.0)
+        mw = float((enzyme_mws or {}).get(rxn_id, enzyme_mw))
+        enzyme_mass += mw * float(a.primal or 0.0) / (k * 3600.0)
     ribosome_mass = growth * protein_per_biomass / max(ribosome_efficiency, 1e-9)
     used = enzyme_mass + ribosome_mass
+
+    notes: List[str] = []
+    if growth >= unconstrained - 1e-6:
+        notes.append(
+            f"蛋白预算没有起作用:只用掉 {used:.4g} g/gDW,预算是 {total_protein:.4g}。"
+            f"结果与普通 FBA 相同。核心模型(如 e_coli_core 的 95 个反应)只覆盖蛋白组"
+            f"的一小部分,所以在生理预算 0.55 下几乎不会 binding —— 要么换基因组尺度"
+            f"模型,要么把 total_protein 调到实际用量附近再讨论。")
+    if ribosome_mass > 0 and used > 0 and ribosome_mass / used > 0.8:
+        notes.append(
+            f"核糖体占了蛋白预算的 {100 * ribosome_mass / used:.0f}%,而真实大肠杆菌"
+            f"在 µ≈0.9/h 时核糖体蛋白约占 20%。这个比例过高通常说明酶的分子量没有计入"
+            f"(酶质量必须是 MW x v / (kcat x 3600),单位 g/gDW)。")
 
     return RBAResult(
         growth=growth, unconstrained_growth=unconstrained,
@@ -206,6 +239,7 @@ def rba(
         ribosome_fraction=ribosome_mass / used if used > 0 else 0.0,
         enzyme_fraction=enzyme_mass / used if used > 0 else 0.0,
         fluxes=fluxes, total_protein=total_protein, status=str(sol.status),
+        protein_used=float(used), notes=notes,
     )
 
 

@@ -43,6 +43,12 @@ class Gene:
     beta: float = 100.0      # max regulated production (molecules/min)
     degradation: float = 1.0  # 1/min (protein turnover + dilution)
     inputs: List[str] = field(default_factory=list)  # external inducer names
+    #: How multiple ``inputs`` combine at the promoter: ``'and'`` multiplies the
+    #: Hill terms (both inducers needed), ``'or'`` takes ``1 - Π(1 - hᵢ)``
+    #: (either suffices).
+    input_logic: str = "and"
+    input_K: float = 40.0    # inducer half-max, in inducer units
+    input_n: float = 2.0     # inducer Hill coefficient
 
 
 @dataclass
@@ -84,9 +90,25 @@ class GeneticCircuit:
             eff = max(0.0, level - self.inducers.get(r.regulator, 0.0))
             hill = (eff ** r.n) / (r.K ** r.n + eff ** r.n)
             factor *= (r.K ** r.n) / (r.K ** r.n + eff ** r.n) if r.kind == "repress" else hill
-        for inp in g.inputs:
-            a = self.inducers.get(inp, 0.0)
-            factor *= (a ** 2) / (40.0 ** 2 + a ** 2)
+        if g.inputs:
+            hills = []
+            for inp in g.inputs:
+                a = self.inducers.get(inp, 0.0)
+                hills.append((a ** g.input_n)
+                             / (g.input_K ** g.input_n + a ** g.input_n))
+            if g.input_logic == "or":
+                # either activator suffices — the behaviour of a promoter with
+                # two independent activator sites. Multiplying Hill terms (the
+                # only combination the model used to offer) is AND and cannot
+                # express this, which is why `logic_gate('OR')` was a buffer on
+                # in1 with a second, unconnected gene hanging off in2.
+                combined = 1.0
+                for h in hills:
+                    combined *= (1.0 - h)
+                factor *= (1.0 - combined)
+            else:
+                for h in hills:
+                    factor *= h
         return g.basal + g.beta * factor
 
     def species(self) -> List[str]:
@@ -166,20 +188,43 @@ def repressilator() -> GeneticCircuit:
     return c
 
 
+LOGIC_GATES = ("AND", "OR", "NAND", "NOR", "NOT")
+
+
 def logic_gate(gate: str = "AND") -> GeneticCircuit:
-    """Transcriptional logic gate driven by inducers ``in1`` / ``in2``."""
+    """Transcriptional logic gate driven by inducers ``in1`` / ``in2``.
+
+    The inverting gates get an actual inverting stage: an intermediate repressor
+    that integrates the inputs, which then represses the output. Without it
+    ``NAND`` was byte-identical to ``AND`` and ``NOR`` to ``OR`` — four of the
+    five gates returned the wrong truth table, and ``OR`` was not an OR either,
+    because two Hill terms multiplied are an AND and the second gene ``Y2`` was
+    never combined with ``Y``.
+
+    Output species is always ``Y``. Use
+    :meth:`~GeneticCircuit.set_inducer` to drive ``in1`` / ``in2``; the default
+    half-max is 40 inducer units, so 0 is OFF and 100 is comfortably ON.
+    """
     gate = gate.upper()
+    if gate not in LOGIC_GATES:
+        raise ValueError(f"gate must be one of {list(LOGIC_GATES)}, got {gate!r}")
     c = GeneticCircuit(f"logic_{gate}")
-    c.add_gene("Y", basal=1.0, beta=100.0, degradation=1.0)
-    if gate in ("AND", "NAND"):
+
+    if gate in ("AND", "OR"):
+        c.add_gene("Y", basal=1.0, beta=100.0, degradation=1.0)
         c.genes["Y"].inputs = ["in1", "in2"]
-    elif gate in ("OR", "NOR"):
-        c.genes["Y"].inputs = ["in1"]
-        c.add_gene("Y2", basal=1.0, beta=100.0, degradation=1.0)
-        c.genes["Y2"].inputs = ["in2"]
-    elif gate == "NOT":
+        c.genes["Y"].input_logic = "and" if gate == "AND" else "or"
+    elif gate in ("NAND", "NOR"):
+        # inverting stage: R integrates the inputs, R represses Y
+        c.add_gene("R", basal=0.0, beta=100.0, degradation=1.0)
+        c.genes["R"].inputs = ["in1", "in2"]
+        c.genes["R"].input_logic = "and" if gate == "NAND" else "or"
+        c.add_gene("Y", basal=1.0, beta=100.0, degradation=1.0)
+        c.add_regulation("R", "Y", "repress", K=40, n=2)
+    else:                                     # NOT
         c.add_gene("R", basal=0.0, beta=100.0, degradation=1.0)
         c.genes["R"].inputs = ["in1"]
+        c.add_gene("Y", basal=1.0, beta=100.0, degradation=1.0)
         c.add_regulation("R", "Y", "repress", K=40, n=2)
     return c
 

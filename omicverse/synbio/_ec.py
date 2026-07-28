@@ -52,6 +52,7 @@ def _add_pool_constraints(
     Returns a dict of the created optlang variables/constraints (for
     bookkeeping / later inspection).
     """
+    _strip_ec(model)
     prob = model.problem
     pool_terms = []
     created = {"usage_vars": {}, "constraints": []}
@@ -86,6 +87,67 @@ def _add_pool_constraints(
         created["pool"] = pool
     model.solver.update()
     return created
+
+
+#: A single enzyme above this mass fraction of dry weight is not believable.
+_IMPLAUSIBLE_MASS_FRACTION = 0.25
+
+
+def _warn_impossible_enzyme_mass(model, kcat_map, mw_map) -> None:
+    """Flag a supplied kcat that would need an impossible amount of enzyme.
+
+    At the wild-type flux, ``mass = MW x v / (kcat x 3600)`` g/gDW. A kcat low
+    enough to demand more protein than the cell weighs falsifies itself, and this
+    is the cheapest possible check on a predicted kcat: DLKcat's 0.040 /s for
+    *E. coli* phosphofructokinase implies **2.08 g PfkA per gDW** — 208 % of dry
+    weight — at a WT flux of 7.48 mmol/gDW/h.
+    """
+    import warnings
+
+    if not kcat_map:
+        return
+    try:
+        sol = model.optimize()
+        if sol.status != "optimal":
+            return
+    except Exception:                                    # pragma: no cover
+        return
+    bad = {}
+    for rxn_id, kcat in kcat_map.items():
+        if rxn_id not in sol.fluxes.index or not kcat or float(kcat) <= 0:
+            continue
+        mw = float((mw_map or {}).get(rxn_id, _DEFAULT_MW))
+        mass = mw * abs(float(sol.fluxes[rxn_id])) / (float(kcat) * _SECONDS_PER_HOUR)
+        if mass > _IMPLAUSIBLE_MASS_FRACTION:
+            bad[rxn_id] = mass
+    if bad:
+        detail = ", ".join(f"{r}: {v:.2f} g/gDW" for r, v in
+                           sorted(bad.items(), key=lambda kv: -kv[1])[:4])
+        warnings.warn(
+            f"以下反应的 kcat 低到需要不可能多的酶({detail}) —— 按野生型通量算,"
+            f"单个酶就要占干重的 25% 以上,超过 1.0 则直接不可能。"
+            f"这通常说明 kcat 预测值错了(先去 BRENDA/SABIO-RK 核一下),"
+            f"而不是这个酶真的成了瓶颈。", stacklevel=3)
+
+
+def _strip_ec(model) -> int:
+    """Remove any enzyme-usage variables and pool constraint already on *model*.
+
+    Without this, applying a second kcat map to a model that already carries an
+    enzyme budget raises ``ContainerAlreadyContains: 'e_usage_ACALD'`` — so
+    :func:`apply_kcat`, whose entire purpose is to re-solve a *different* kcat
+    under the *same* protein budget, could not be called at all. That is the only
+    fair way to compare enzyme variants, and it was unreachable.
+
+    Returns how many objects were removed.
+    """
+    doomed = [c for c in model.constraints
+              if c.name.startswith(("ec_pos_", "ec_neg_", "ec_protein_pool"))]
+    doomed += [v for v in model.variables if v.name.startswith("e_usage_")]
+    if doomed:
+        model.remove_cons_vars(doomed)
+        model.solver.update()
+    return len(doomed)
 
 
 def _baseline_enzyme_demand(model, kcat_map, mw_map) -> float:
@@ -185,9 +247,22 @@ def ec_model(
         eff_kcat = {k: float(v) for k, v in kcat_map.items()}
 
     if total_protein is None:
-        demand = _baseline_enzyme_demand(m, eff_kcat, mw_map)
+        # Size the budget from a *reference* kcat applied to every mapped
+        # reaction, NOT from the kcat values under test. Enzyme mass demand goes
+        # as 1/kcat, so auto-sizing off `eff_kcat` made the budget grow as the
+        # tested enzyme got slower — the constraint loosened, and an 830x slower
+        # enzyme predicted 2x *more* growth. The A<->B hinge ran backwards.
+        reference = {rid: float(default_kcat) for rid in eff_kcat}
+        demand = _baseline_enzyme_demand(m, reference, mw_map)
         total_protein = pool_tightness * demand if demand > 0 else 1.0
+        import warnings
+        warnings.warn(
+            f"total_protein 未指定,已按参考 kcat={default_kcat} /s 自动定为 "
+            f"{total_protein:.4g} g/gDW(= {pool_tightness} x 野生型需求)。"
+            f"要比较酶变体,请显式传 total_protein=,或用 apply_kcat() —— "
+            f"它复用已有预算,这才是同一预算下比较 kcat 的做法。", stacklevel=2)
 
+    _warn_impossible_enzyme_mass(model, kcat_map, mw_map)
     created = _add_pool_constraints(m, eff_kcat, mw_map, total_protein)
     created["total_protein"] = float(total_protein)
     created["method"] = method
