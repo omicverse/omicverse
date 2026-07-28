@@ -25,10 +25,31 @@ from typing import Dict, List, Optional
 from .._registry import register_function
 
 # per-metric reliability of the in-silico proxy (for honest reporting)
+#: How much weight each metric can bear. These labels are load-bearing — a
+#: reader ranks the panel by them — so they describe what the metric *can
+#: distinguish*, not how sophisticated the model behind it is.
 _RELIABILITY = {
-    "pLDDT": "high", "EC_confidence": "high", "ddG": "high",
+    "pLDDT": "high", "ddG": "high",
+    # Detects the fold family, not catalysis. An E. coli DHFR with its catalytic
+    # Asp27 removed still scores 1.5.1.3 at 0.993, and a quadruple active-site
+    # knockout scores *higher* than the wild type; only a fully scrambled
+    # sequence fails. It was labelled "high", which invited exactly the reading
+    # that a near-1.0 score means the enzyme still works.
+    "EC_confidence": "low",
     "scRMSD": "high", "ESM_fitness_delta": "medium", "ipTM": "medium",
     "affinity_p_bind": "medium", "kcat": "low", "kcat_delta": "low",
+}
+
+#: What each metric is blind to. Attached to the scorecard so the caveat travels
+#: with the number instead of living in a docstring.
+_BLIND_SPOTS = {
+    "EC_confidence": "只反映折叠家族,不反映催化能力;敲掉催化残基分数几乎不变。",
+    "pLDDT": "单体折叠置信度,与结合、活性、稳定性都无关。",
+    "ESM_fitness_delta": "进化似然,不是稳定性也不是活性;若设计就是用同一模型"
+                         "挑出来的,这个指标是循环的。",
+    "kcat": "序列到 kcat 的预测未经校准;失活突变体常常打分高于野生型。",
+    "scRMSD": "传入野生型结构时,它量的是野生型折叠与变体折叠的差,"
+              "对少数点突变本来就接近 0。",
 }
 
 
@@ -37,6 +58,8 @@ class DesignScorecard:
     metrics: Dict[str, float] = field(default_factory=dict)
     deltas: Dict[str, float] = field(default_factory=dict)   # design − reference
     reliability: Dict[str, str] = field(default_factory=dict)
+    #: What each reported metric cannot see, keyed by metric name.
+    blind_spots: Dict[str, str] = field(default_factory=dict)
     labels: Dict[str, str] = field(default_factory=dict)      # e.g. EC string
     notes: List[str] = field(default_factory=list)            # skipped/failed
 
@@ -47,7 +70,8 @@ class DesignScorecard:
         for k, v in self.metrics.items():
             rows.append({"metric": k, "value": v,
                          "delta_vs_ref": self.deltas.get(k, float("nan")),
-                         "reliability": self.reliability.get(k, "")})
+                         "reliability": self.reliability.get(k, ""),
+                         "blind_to": self.blind_spots.get(k, "")})
         return pd.DataFrame(rows)
 
     def __repr__(self) -> str:  # pragma: no cover
@@ -152,6 +176,9 @@ def evaluate_design(sequence: str, reference: Optional[str] = None,
 
     def _rel(k):
         sc.reliability[k] = _RELIABILITY.get(k, "medium")
+        blind = _BLIND_SPOTS.get(k)
+        if blind:
+            sc.blind_spots[k] = blind
 
     # --- foldability (pLDDT) — also save the fold for the scRMSD step ---
     import tempfile

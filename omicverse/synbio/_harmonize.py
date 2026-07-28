@@ -148,7 +148,22 @@ class HarmonizationResult:
     source_host: str
     target_host: str
     n_changed: int = 0
+    #: Pearson r of ordinal rank, source against harmonised. **Structurally 1.0**
+    #: whenever both hosts use the same genetic code, because the algorithm picks
+    #: the codon *at* the source rank — so it is a description of the method, not
+    #: a check on it. Use :attr:`frequency_correlation`.
     rank_correlation: float = 0.0
+    #: Pearson r of *relative synonymous frequency*, source against harmonised —
+    #: the quantity Angov harmonisation is actually meant to preserve, and the one
+    #: that can fail.
+    frequency_correlation: float = 0.0
+    #: Largest absolute shift in relative synonymous frequency at any codon.
+    max_frequency_shift: float = 0.0
+    #: Codons that are common in the source but rare in the target, as
+    #: ``(position, source_codon, target_codon, target_frequency)``. These are the
+    #: translational pauses harmonisation is supposed to avoid creating.
+    rare_codons_introduced: List[Tuple[int, str, str, float]] = field(
+        default_factory=list)
     source_cai: float = 0.0
     harmonized_cai: float = 0.0
     optimized_cai: float = 0.0
@@ -166,9 +181,12 @@ class HarmonizationResult:
                      "source_rank", "target_rank"]).set_index("position")
 
     def __repr__(self) -> str:  # pragma: no cover
+        rare = (f", {len(self.rare_codons_introduced)} rare codons introduced"
+                if self.rare_codons_introduced else "")
         return (f"HarmonizationResult({self.source_host}->{self.target_host}, "
-                f"{self.n_changed} codons changed, rank r={self.rank_correlation:.3f}, "
-                f"CAI {self.source_cai:.3f}->{self.harmonized_cai:.3f} "
+                f"{self.n_changed} codons changed, frequency r="
+                f"{self.frequency_correlation:.3f}{rare}, "
+                f"CAI in target {self.harmonized_cai:.3f} "
                 f"(optimise would give {self.optimized_cai:.3f}))")
 
 
@@ -250,16 +268,50 @@ def codon_harmonize(
 
     harmonised = "".join(out_codons)
 
-    # how well the rarity profile survived the transfer
+    # how well the rarity profile survived the transfer.
+    # NOTE: the *rank* correlation below is 1.0 by construction — `pick` is the
+    # codon at the source rank, and synonymous families are the same size in both
+    # hosts because they share the genetic code. It is reported for continuity but
+    # it cannot fail, so the frequency correlation is what actually tells you
+    # whether the transfer worked.
     corr = 1.0
     if len(src_r) > 2:
         import numpy as np
         if np.std(src_r) > 0 and np.std(tgt_r) > 0:
             corr = float(np.corrcoef(src_r, tgt_r)[0, 1])
 
+    import numpy as np
+    src_freq: List[float] = []
+    tgt_freq: List[float] = []
+    rare: List[Tuple[int, str, str, float]] = []
+    for position, source_codon, target_codon, _sr, _tr in per_codon:
+        aa = _CODON_TABLE[source_codon]
+        family = _SYNONYMS[aa]
+        s_total = sum(src_usage.get(c, 0.0) for c in family) or 1.0
+        t_total = sum(tgt_usage.get(c, 0.0) for c in family) or 1.0
+        fs = src_usage.get(source_codon, 0.0) / s_total
+        ft = tgt_usage.get(target_codon, 0.0) / t_total
+        src_freq.append(fs)
+        tgt_freq.append(ft)
+        # A codon that is genuinely rare in the host is a translational pause
+        # wherever it lands. CGA and AGG/AGA for arginine are the classic cases —
+        # the ones BL21-CodonPlus / Rosetta strains exist to rescue — and
+        # rank-mapping will happily place one when the source codon sat at the
+        # same ordinal rank. Flagged on the *target* frequency alone, because
+        # that is what stalls the ribosome regardless of where it came from.
+        if ft < 0.10:
+            rare.append((position, source_codon, target_codon, float(ft)))
+    freq_corr = 0.0
+    max_shift = 0.0
+    if len(src_freq) > 2 and np.std(src_freq) > 0 and np.std(tgt_freq) > 0:
+        freq_corr = float(np.corrcoef(src_freq, tgt_freq)[0, 1])
+        max_shift = float(np.max(np.abs(np.asarray(src_freq) - np.asarray(tgt_freq))))
+
     return HarmonizationResult(
         sequence=harmonised, source_host=source_host, target_host=target_host,
         n_changed=changed, rank_correlation=corr,
+        frequency_correlation=freq_corr, max_frequency_shift=max_shift,
+        rare_codons_introduced=rare,
         source_cai=_cai(seq, src_usage),
         harmonized_cai=_cai(harmonised, tgt_usage),
         optimized_cai=_cai(_max_cai(seq, tgt_ranks), tgt_usage),

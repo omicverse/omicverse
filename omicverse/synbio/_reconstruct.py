@@ -834,6 +834,7 @@ def validate_gem(
     *,
     check_blocked: bool = True,
     check_energy_leak: bool = True,
+    check_cycles: bool = True,
 ) -> Dict[str, object]:
     """Run the checks that catch a broken draft.
 
@@ -848,6 +849,9 @@ def validate_gem(
 
     growth = _safe_objective(model)
 
+    # check_mass_balance() returns {} when a metabolite has no formula, so a
+    # draft with unannotated metabolites gets a clean bill of health. Count the
+    # coverage alongside the failures, or "0 unbalanced" is unreadable.
     unbalanced = []
     for rxn in model.reactions:
         if _is_structural(rxn):
@@ -858,6 +862,10 @@ def validate_gem(
             continue
         if imbalance:
             unbalanced.append(rxn.id)
+    without_formula = sorted(m.id for m in model.metabolites
+                             if not getattr(m, "formula", None))
+    without_charge = sorted(m.id for m in model.metabolites
+                            if getattr(m, "charge", None) is None)
 
     produced: Set[str] = set()
     consumed: Set[str] = set()
@@ -881,6 +889,10 @@ def validate_gem(
     if check_energy_leak:
         leak = _energy_leak(model)
 
+    cycles: List[str] = []
+    if check_cycles:
+        cycles = _balanced_cycles(model)
+
     return {
         "growth": growth,
         "grows": growth > 1e-6,
@@ -888,34 +900,104 @@ def validate_gem(
         "n_metabolites": len(model.metabolites),
         "n_genes": len(model.genes),
         "unbalanced": unbalanced,
+        "n_without_formula": len(without_formula),
+        "n_without_charge": len(without_charge),
+        "metabolites_without_formula": without_formula,
         "orphan_metabolites": orphans,
         "blocked": blocked,
         "energy_leak": leak,
+        "balanced_cycles": cycles,
     }
 
 
-def _energy_leak(model) -> Optional[float]:
-    """Max ATP hydrolysis flux with every uptake closed. > 0 means a free-energy
-    generating cycle — almost always an artefact of gap-filling or of a
-    reaction added with the wrong direction."""
-    cobra = _cobra("validate_gem")
-    atpm = None
-    for cand in ("ATPM", "ATPS4r", "ATPM_c"):
+#: Energy currencies MEMOTE probes for free-lunch cycles, as the dissipation
+#: reaction that would consume them if the model can make them from nothing.
+ENERGY_LEAK_PROBES = ("ATPM", "ATPS4r")
+
+
+def _balanced_cycles(model, tolerance: float = 1.0,
+                     max_reactions: int = 400) -> List[str]:
+    """Reactions that can carry flux with every exchange sealed.
+
+    A sealed model has no source and no sink, so any non-zero steady-state flux
+    closes a loop and violates the second law. ``FRD7``/``SUCDi`` in
+    *e_coli_core* is the textbook example and both hit the 1000 flux bound.
+
+    This is distinct from :func:`_energy_leak`: a balanced cycle need not produce
+    ATP, so the energy test cannot see it. ``validate_gem`` claimed to catch
+    gap-filling artefacts while running neither check in a working form.
+
+    Skipped above ``max_reactions`` because it costs one LP per reaction; pass
+    ``check_cycles=False`` to skip it explicitly.
+    """
+    reactions = [r for r in model.reactions if not r.boundary]
+    if len(reactions) > max_reactions:
+        return []
+    looping: List[str] = []
+    try:
+        with model as m:
+            for rxn in m.reactions:
+                if rxn.boundary:
+                    rxn.bounds = (0.0, 0.0)
+                elif rxn.lower_bound > 0.0:
+                    # A sealed model cannot satisfy a forced flux such as the
+                    # ATP maintenance demand, so leaving it in makes every LP
+                    # infeasible and the scan silently finds nothing — the same
+                    # trap that made _energy_leak unable to fail.
+                    rxn.lower_bound = 0.0
+            for rxn in reactions:
+                target = m.reactions.get_by_id(rxn.id)
+                for direction in ("max", "min"):
+                    m.objective = target.id
+                    m.objective.direction = direction
+                    value = m.slim_optimize()
+                    if value == value and abs(float(value)) > tolerance:
+                        looping.append(rxn.id)
+                        break
+    except Exception:                                     # pragma: no cover
+        return []
+    return sorted(set(looping))
+
+
+def _energy_leak(model, probe: str = "ATPM") -> Optional[float]:
+    """Max dissipation flux with every exchange sealed. ``> 0`` is a free lunch.
+
+    A positive value means the network can generate a high-energy compound from
+    nothing, which is almost always an artefact of gap-filling or of a reaction
+    added in the wrong direction.
+
+    Returns ``None`` when the test could not be run — deliberately distinct from
+    ``0.0``, which asserts that there is no leak. The previous implementation
+    conflated the two and so could never report a leak at all: it closed only the
+    *lower* bounds of the exchanges (leaving secretion open) and never relaxed the
+    maintenance reaction's own lower bound. ATPM in essentially every BiGG model
+    carries a fixed non-zero NGAM demand, so with uptake closed the LP is
+    **infeasible**, ``slim_optimize()`` returns nan, and ``0.0 if val != val``
+    turned that nan into a clean bill of health for every model, leaky or not.
+    """
+    _cobra("validate_gem")
+    reaction = None
+    for candidate in (probe,) + ENERGY_LEAK_PROBES:
         try:
-            atpm = model.reactions.get_by_id(cand)
+            reaction = model.reactions.get_by_id(candidate)
             break
         except Exception:
             continue
-    if atpm is None:
+    if reaction is None:
         return None
     try:
         with model as m:
             for rxn in m.reactions:
                 if rxn.boundary:
-                    rxn.lower_bound = 0.0
-            m.objective = atpm.id
-            val = float(m.slim_optimize())
-        return 0.0 if val != val else val
+                    rxn.bounds = (0.0, 0.0)          # sealed, both directions
+            target = m.reactions.get_by_id(reaction.id)
+            target.bounds = (0.0, 1000.0)            # let the LP choose the flux
+            m.objective = target.id
+            solution = m.optimize()
+            if solution.status != "optimal":
+                return None
+            val = float(solution.objective_value)
+        return None if val != val else val
     except Exception:
         return None
 

@@ -334,12 +334,29 @@ class ContextResult:
     inactive_reactions: List[str] = field(default_factory=list)
     removed_reactions: List[str] = field(default_factory=list)
     reaction_expression: Dict[str, Optional[float]] = field(default_factory=dict)
+    #: The biological objective **re-maximised** on the returned model. With
+    #: ``prune=False`` (the default) nothing has been removed and no bound has
+    #: moved, so this is simply the unconstrained wild-type optimum and carries no
+    #: information about the context. Compare :attr:`objective_in_state`.
     objective_value: float = 0.0
+    #: The biological objective attained **in the flux state actually returned**.
+    #: For iMAT this is routinely 0: the MILP optimises expression agreement, not
+    #: growth, so the state it hands back is not a growing one. Quoting
+    #: ``objective_value`` alongside those fluxes described two different LPs.
+    objective_in_state: float = 0.0
+    #: How many reaction bounds differ from the input model.
+    n_bounds_changed: int = 0
     inconsistency: Optional[float] = None       # GIMME
     agreement: Optional[float] = None           # iMAT / INIT
     thresholds: Dict[str, float] = field(default_factory=dict)
     hit_time_limit: bool = False                # MILP stopped early
     solver_status: str = ""
+    notes: List[str] = field(default_factory=list)
+
+    @property
+    def changed_the_model(self) -> bool:
+        """Whether contextualisation actually narrowed the model at all."""
+        return bool(self.n_bounds_changed or self.removed_reactions)
 
     @property
     def n_active(self) -> int:
@@ -584,6 +601,41 @@ def contextualize_gem(
 
     res.reaction_expression = rxn_expr
     res.thresholds = {"threshold": thr, "low": lo, "high": hi}
+
+    # Did anything actually change? A "contextualised" model whose bounds are
+    # identical to the input is the wild-type model, and every number taken from
+    # it is a wild-type number.
+    changed = 0
+    for rxn in res.model.reactions:
+        try:
+            original = model.reactions.get_by_id(rxn.id)
+        except Exception:
+            continue
+        if (abs(rxn.lower_bound - original.lower_bound) > 1e-9
+                or abs(rxn.upper_bound - original.upper_bound) > 1e-9):
+            changed += 1
+    res.n_bounds_changed = changed
+
+    # the objective in the state actually returned, not a re-maximisation
+    objective_ids = [r.id for r in model.reactions
+                     if getattr(r, "objective_coefficient", 0.0)]
+    if objective_ids and res.fluxes:
+        res.objective_in_state = float(sum(
+            res.fluxes.get(rid, 0.0) for rid in objective_ids))
+
+    if not res.changed_the_model:
+        res.notes.append(
+            f"method={res.method!r} 没有改动模型的任何边界,也没有删除反应 —— "
+            f"返回的就是野生型模型,objective_value={res.objective_value:.4f} 就是"
+            f"未约束最优值,与表达数据无关。要得到真正被收窄的模型,传 "
+            f"prune=True(删掉不活跃反应),或自行按 res.inactive_reactions 收紧边界。")
+    if (objective_ids and res.fluxes
+            and abs(res.objective_in_state) < 1e-6 < abs(res.objective_value)):
+        res.notes.append(
+            f"注意:返回的通量状态里目标函数是 {res.objective_in_state:.4g}"
+            f"(不生长),而 objective_value 报的是重新最大化后的 "
+            f"{res.objective_value:.4f} —— 这两个数来自不同的 LP。"
+            f"要讨论这个状态,用 objective_in_state。")
 
     if prune and res.inactive_reactions:
         drop = [r for r in res.inactive_reactions if r not in protected]

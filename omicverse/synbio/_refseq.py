@@ -83,8 +83,10 @@ LYSOZYME_FAMILY: Dict[str, str] = {
         "WIRGCRL"),
 }
 
-#: Human GAPDH coding sequence, opening 480 nt — a real eukaryotic CDS to
-#: harmonise into a bacterial host.
+#: Human GAPDH coding sequence, **opening 162 nt (54 codons)** — a real
+#: eukaryotic CDS to harmonise into a bacterial host. Note the length: codon
+#: harmonisation exists to reproduce ribosomal pausing at *domain boundaries*,
+#: and 54 codons has none, so this is a mechanism demo rather than a design.
 GAPDH_CDS = (
     "ATGGGGAAGGTGAAGGTCGGAGTCAACGGATTTGGTCGTATTGGGCGCCTGGTCACCAGGGC"
     "TGCTTTTAACTCTGGTAAAGTGGATATTGTTGCCATCAATGACCCCTTCATTGACCTCAACT"

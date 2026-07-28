@@ -53,6 +53,11 @@ class RBSResult:
     dG_SD: float
     dG_mRNA: float
     initiation_rate: float   # arbitrary units, proportional to true rate
+    #: Penalty charged for SD-core-to-AUG spacing away from the optimum.
+    dG_spacing: float = 0.0
+    #: Nucleotides between the SD core and the start codon; ``None`` if no
+    #: recognisable SD core was found (then no spacing penalty applies).
+    spacing: Optional[int] = None
 
     def __repr__(self) -> str:  # pragma: no cover
         return (f"RBSResult(rate={self.initiation_rate:.1f} a.u., "
@@ -121,11 +126,51 @@ def rbs_strength(utr_and_cds: str, method: str = "thermodynamic",
     _, dG_mRNA = RNA.fold(fp)             # <=0; a strong hairpin blocks the RBS
     dG_mRNA = float(dG_mRNA)
 
-    # total: SD binding must overcome mRNA unfolding.
-    dG_total = dG_SD - dG_mRNA
+    # Spacing between the SD core and the start codon. Without this term the
+    # score is blind to the single variable rbs_library claims to search: the
+    # spacer length. Sweeping 4->12 nt returned bit-identical rates, so a library
+    # graded on it was graded on nothing.
+    dG_spacing, spacing = _spacing_penalty(sd_region, start)
+
+    # total: SD binding must overcome mRNA unfolding, and pay for bad spacing.
+    dG_total = dG_SD - dG_mRNA + dG_spacing
     rate = 100.0 * math.exp(-_BETA * dG_total)
     return RBSResult(dG_total=dG_total, dG_SD=dG_SD, dG_mRNA=dG_mRNA,
+                     dG_spacing=dG_spacing, spacing=spacing,
                      initiation_rate=rate)
+
+
+#: SD-core-to-AUG spacing that translates best in *E. coli*, in nucleotides.
+OPTIMAL_SD_SPACING = 8
+#: kcal/mol charged per nucleotide² of deviation from :data:`OPTIMAL_SD_SPACING`.
+#: A heuristic quadratic, not a fitted parameter — it reproduces the sharp
+#: published optimum (>10x loss by 4 or 14 nt) without claiming more precision
+#: than that.
+_SPACING_STIFFNESS = 0.10
+
+
+def _spacing_penalty(sd_region: str, start: int):
+    """Energetic penalty for a mis-spaced Shine-Dalgarno core.
+
+    Locates the 6-nt window in ``sd_region`` most complementary to the anti-SD,
+    measures its distance to the start codon, and charges a quadratic penalty for
+    departing from :data:`OPTIMAL_SD_SPACING`.
+
+    Returns ``(dG_spacing, spacing_nt)``; ``spacing`` is ``None`` when no
+    SD-like core is found, in which case no penalty is charged.
+    """
+    core = "AGGAGG"
+    best_score, best_end = -1, None
+    for i in range(0, max(0, len(sd_region) - 5)):
+        window = sd_region[i:i + 6]
+        score = sum(1 for a, b in zip(window, core) if a == b)
+        if score > best_score:
+            best_score, best_end = score, i + 6
+    if best_end is None or best_score < 4:      # no recognisable SD core
+        return 0.0, None
+    spacing = len(sd_region) - best_end
+    penalty = _SPACING_STIFFNESS * float((spacing - OPTIMAL_SD_SPACING) ** 2)
+    return penalty, int(spacing)
 
 
 def _ostir_rbs(utr_and_cds: str, start: Optional[int]) -> RBSResult:
