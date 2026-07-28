@@ -60,6 +60,19 @@ from ._tangram import Tangram
 from ._spatrio import CellMap,CellLoc
 from ._stt import STT
 from ._svg import svg,spatial_neighbors,spatial_autocorr,moranI
+from ._niche import molecular as _niche_molecular
+from . import nb, niche
+from ._neighborhood import (
+    interaction_matrix,
+    nhood_enrichment,
+    centrality_scores,
+    co_occurrence,
+    ripley,
+    sepal,
+    mask_graph,
+    sliding_window,
+    var_by_distance,
+)
 from ._cast import CAST
 from ._cellcharter import cellcharter
 from ._tools import *
@@ -169,4 +182,19 @@ __all__ = [
     'spata2_remove_outliers',
     'spata2_pixels_to_unit',
     'spata2_unit_to_pixels',
+
+    # Arrangement statistics over the spatial graph
+    'interaction_matrix',
+    'nhood_enrichment',
+    'centrality_scores',
+    'co_occurrence',
+    'ripley',
+    'sepal',
+    'mask_graph',
+    'sliding_window',
+    'var_by_distance',
+
+    # Namespaces
+    'nb',
+    'niche',
 ]

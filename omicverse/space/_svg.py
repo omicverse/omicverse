@@ -105,6 +105,7 @@ def spatial_neighbors(
     delaunay: bool = False,
     set_diag: bool = False,
     key_added: str = 'spatial',
+    coord_type: str = 'generic',
     copy: bool = False,
 ):
     r"""Build a spatial neighborhood graph from coordinates stored in ``adata.obsm``.
@@ -124,6 +125,15 @@ def spatial_neighbors(
         delaunay: Whether to build the graph from a Delaunay triangulation of the
             spatial coordinates. When set, *n_neighs* is ignored. Default: False.
         set_diag: Whether to include self-loops in the connectivity matrix. Default: False.
+        coord_type: ``'generic'`` (default) keeps every k-nearest neighbour. ``'grid'``
+            additionally drops edges longer than 1.4 lattice steps, which is what you
+            want on an array platform such as Visium or Stereo-seq: without it, spots
+            on the rim of the tissue reach across the gap to fill their k quota and
+            acquire neighbours they do not touch. On a 400-spot Visium subset the
+            generic graph gives node degrees of 5-10 where the hexagonal lattice
+            allows at most 6. The default is ``'generic'`` so that existing results do
+            not change silently; pass ``'grid'`` for array data, and note that
+            :func:`omicverse.space.sepal` assumes a lattice and needs it.
         key_added: Prefix for the keys added to ``adata.obsp`` and ``adata.uns``. Default: 'spatial'.
         copy: If ``True``, return ``(connectivities, distances)`` as sparse matrices. Default: False.
 
@@ -206,6 +216,26 @@ def spatial_neighbors(
         nn = NearestNeighbors(n_neighbors=n_neighs, algorithm='ball_tree')
         nn.fit(coords)
         dist_mat = nn.kneighbors_graph(coords, n_neighbors=n_neighs, mode='distance')
+
+        if str(coord_type).lower() == 'grid':
+            # On an array platform every real neighbour sits one lattice step
+            # away. Plain k-NN cannot know that, so a spot on the rim of the
+            # tissue reaches across the gap to fill its quota and picks up
+            # neighbours it does not touch: on the full 2688-spot Visium H&E
+            # slide the ungated graph gives node degrees of 5-8, and 5-10 once
+            # the slide is subsampled, where a hexagonal lattice allows 6.
+            #
+            # The cutoff is not delicate. On that slide the neighbour distances
+            # are bimodal -- the lattice step at 138 px and the next ring at
+            # 238 px, with nothing in between -- so every multiplier from 1.2 to
+            # 1.72 yields the identical 14,646-edge graph. 1.4 sits in the middle
+            # of that plateau. Every edge it keeps is also in squidpy's grid
+            # graph (0 edges found here that squidpy does not have).
+            if dist_mat.nnz:
+                step = float(np.median(dist_mat.data))
+                too_long = dist_mat.data > step * 1.4
+                dist_mat.data[too_long] = 0.0
+                dist_mat.eliminate_zeros()
 
     # Symmetrise: edge exists if *either* direction was found
     dist_mat = dist_mat.maximum(dist_mat.T).tocsr()

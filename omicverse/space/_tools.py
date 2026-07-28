@@ -9,6 +9,31 @@ import scanpy as sc
 from .._registry import register_function
 from .._optional import build_optional_dependency_error
 
+__all__ = [
+    "subset_window",
+    "crop_space_visium",
+    "rotate_space_visium",
+    "find_image_offset_phase_correlation_array_input",
+    "find_image_offset_phase_correlation_torch",
+    "map_spatial_auto",
+    "map_spatial_manual",
+    "read_visium_10x",
+    "visium_10x_hd_cellpose_he",
+    "visium_10x_hd_cellpose_expand",
+    "visium_10x_hd_cellpose_gex",
+    "salvage_secondary_labels",
+    "bin2cell",
+    "sync_visium_hd_seg_geometries",
+    "write_visium_hd_cellseg",
+]
+"""Public surface of this module.
+
+``ov.space`` does ``from ._tools import *``. Without this list that star
+import also republished ``np``, ``os``, ``plt``, ``sc``, ``mpl`` and four
+matplotlib symbols as if they were part of the spatial API -- nine of the
+sixty-four public names in ``ov.space`` were other libraries' imports.
+"""
+
 @register_function(
     aliases=["裁剪空间数据", "crop_space_visium", "crop_visium", "空间数据裁剪", "Visium裁剪"],
     category="space",
@@ -50,6 +75,7 @@ from .._optional import build_optional_dependency_error
     ],
     related=["space.crop_space_visium"],
 )
+
 def subset_window(adata, xlim, ylim, basis='spatial'):
     """Subset an AnnData by a rectangular spatial window.
 
