@@ -289,6 +289,7 @@ _LAZY_ATTRS: dict[str, tuple[str, str]] = {
     "doe_design":            ("._dbtl", "doe_design"),
     # --- real measured datasets -------------------------------------------
     "fetch_promoter_library": ("._datasets", "fetch_promoter_library"),
+    "fetch_dose_response_dataset": ("._datasets", "fetch_dose_response_dataset"),
     "PROMOTER_ELEMENTS":     ("._datasets", "PROMOTER_ELEMENTS"),
     # --- designs over discrete part choices --------------------------------
     "orthogonal_array":      ("._discrete", "orthogonal_array"),

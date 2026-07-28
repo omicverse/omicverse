@@ -211,4 +211,53 @@ def fetch_promoter_library(
     return frame.reset_index(drop=True)
 
 
-__all__ = ["fetch_promoter_library", "PROMOTER_ELEMENTS"]
+_RYEGRASS_URL = ("https://raw.githubusercontent.com/cran/drc/master/data/"
+                 "ryegrass.rda")
+
+
+@register_function(
+    aliases=["fetch_dose_response_dataset", "剂量反应数据", "真实剂量数据",
+             "ryegrass", "示例剂量反应"],
+    category="synthetic_biology",
+    description="下载一份**真实测量的**剂量-反应数据(Streibig 的黑麦草实验:阿魏酸浓度对根长的抑制,7 个浓度水平、每级 3–6 个重复,随 R 的 drc 包发布)。用作 dose_response 的输入。它是抑制型响应且带真实重复,所以能看出重复内的散布 —— 用一条平滑的理论曲线演示拟合器,等于没有演示。Fetch a real measured dose-response dataset.",
+    examples=[
+        "data = ov.synbio.fetch_dose_response_dataset()",
+        "fit = ov.synbio.dose_response(data['concentration'], data['response'])",
+    ],
+    related=["synbio.dose_response", "synbio.plot_dose_response",
+             "synbio.fetch_growth_dataset"],
+    requires={},
+    produces={},
+)
+def fetch_dose_response_dataset(cache_dir: Optional[str] = None,
+                                timeout: float = 60.0) -> "pd.DataFrame":
+    """Root length against ferulic acid concentration, 24 measurements.
+
+    The canonical dose-response teaching dataset (Streibig), distributed with the
+    R package *drc*. Returned as ``concentration`` (µM) and ``response`` (root
+    length, cm).
+
+    Fitting it with a four-parameter log-logistic gives ED50 ≈ 3.0 µM, against
+    the ≈ 3.06 µM *drc* reports for the same data — which is the point of using a
+    published dataset rather than a curve drawn from the equation being fitted.
+    """
+    local = _download(_RYEGRASS_URL,
+                      os.path.join(_data_dir(cache_dir), "ryegrass.rda"),
+                      timeout, "剂量-反应示例数据(drc 的 ryegrass)")
+    try:
+        import pyreadr
+    except ImportError as exc:
+        raise ImportError(
+            "这份数据是 R 的 .rda 格式,读取需要 pyreadr(pip install pyreadr)。"
+        ) from exc
+    frame = pyreadr.read_r(local)["ryegrass"]
+    frame = frame.rename(columns={"conc": "concentration", "rootl": "response"})
+    frame = frame[["concentration", "response"]].reset_index(drop=True)
+    frame.attrs["source"] = "Streibig ryegrass assay, distributed with R/drc"
+    frame.attrs["units"] = {"concentration": "µM ferulic acid",
+                            "response": "root length (cm)"}
+    return frame
+
+
+__all__ = ["fetch_promoter_library", "PROMOTER_ELEMENTS",
+           "fetch_dose_response_dataset"]

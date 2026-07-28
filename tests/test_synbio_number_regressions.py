@@ -602,3 +602,108 @@ def test_gibson_arms_refuses_fragments_shorter_than_the_overlap():
 def test_gibson_arms_refuses_too_short_an_overlap():
     with pytest.raises(ValueError, match="20"):
         sb.gibson_arms(FRAGS, overlap=8)
+
+
+# ---------------------------------------------------------------------------
+# growth fitting
+# ---------------------------------------------------------------------------
+
+@pytest.fixture(scope="module")
+def plate_run():
+    od = sb.fetch_growth_dataset()
+    return od, float(od.iloc[0, 1:].mean())
+
+
+def test_a_well_that_never_grew_returns_nan_not_a_huge_rate(plate_run):
+    """mu = slope/OD explodes as OD -> 0, and a 4-parameter sigmoid fits any
+    monotone trace — so a flat well came back at 28 /h, a 1.5-minute doubling
+    time, and topped any nlargest()."""
+    import numpy as np
+
+    od, _blank = plate_run
+    flat = np.full(len(od), 0.05) + np.random.default_rng(0).normal(0, 0.002, len(od))
+    fit = sb.fit_growth_curve(od["time_h"], flat)
+    assert fit.mu_max != fit.mu_max, f"expected nan, got {fit.mu_max}"
+    assert not fit.good_fit
+    assert any("没有长起来" in note for note in fit.notes)
+
+
+def test_no_well_of_a_real_plate_reports_an_impossible_rate(plate_run):
+    """Under `logistic` one real well returned 39.9 /h with good_fit False — but
+    still in the mu_max column, where nlargest finds it."""
+    od, blank = plate_run
+    for model in ("gompertz", "logistic", "richards", "baranyi"):
+        fits = sb.fit_growth_curves(od, blank=blank, model=model)
+        usable = fits["mu_max"].dropna()
+        assert usable.max() < 6.0, (model, usable.max())
+        assert usable.min() > 0.0
+
+
+def test_the_tangent_is_drawn_with_the_curves_own_slope(plate_run):
+    """mu_max is a specific rate (1/h); a tangent on an OD-vs-time axis needs
+    slope_max (OD/h). Using mu_max drew a line 5.95x too steep."""
+    import matplotlib
+    matplotlib.use("Agg")
+
+    od, blank = plate_run
+    fits = sb.fit_growth_curves(od, blank=blank)
+    best = fits["mu_max"].idxmax()
+    fit = sb.fit_growth_curve(od["time_h"], od[best], blank=blank)
+    assert fit.slope_max < fit.mu_max, "this well is the one that exposed it"
+
+    fig, ax = sb.plot_growth_curves(od["time_h"], od[best], fit=fit, blank=blank)
+    axis = ax if not isinstance(ax, (list, tuple)) else ax[0]
+    tangents = [line for line in axis.get_lines() if "OD/h" in (line.get_label() or "")]
+    assert tangents, [line.get_label() for line in axis.get_lines()]
+    xs, ys = tangents[0].get_data()
+    drawn = (ys[-1] - ys[0]) / (xs[-1] - xs[0])
+    assert abs(drawn - fit.slope_max) < 1e-6 * max(1.0, fit.slope_max), (drawn, fit.slope_max)
+
+
+def test_compare_growth_models_marks_the_aic_preferred_one(plate_run):
+    """The default model came last by 233 AIC units while its mu_max was 1.4x the
+    others, and the table said nothing about it."""
+    od, blank = plate_run
+    fits = sb.fit_growth_curves(od, blank=blank)
+    best_well = fits["mu_max"].idxmax()
+    table = sb.compare_growth_models(od["time_h"], od[best_well], blank=blank)
+    assert table["preferred"].sum() == 1
+    assert table.loc[table["preferred"], "aic"].iloc[0] == table["aic"].min()
+    assert table.attrs["preferred_model"] != "gompertz", (
+        "on this plate the AIC preference is not the default")
+    assert table.attrs["mu_max_spread"] > 1.2
+
+
+def test_the_fba_ratio_depends_on_the_growth_model(plate_run):
+    """The '1.3x above the FBA bound' anomaly is a model-selection artefact.
+
+    Gompertz gives measured/FBA = 1.29 and fires the warning; the AIC-preferred
+    model gives 0.91 and does not.
+    """
+    od, blank = plate_run
+    model = sb.load_gem("textbook")
+    ratios = {}
+    for growth_model in ("gompertz", "logistic"):
+        fits = sb.fit_growth_curves(od, blank=blank, model=growth_model)
+        table = sb.compare_growth_to_model(
+            fits.nlargest(3, "mu_max")["mu_max"].to_dict(), model,
+            growth_model=growth_model)
+        ratios[growth_model] = table["measured_over_fba"].max()
+    assert ratios["gompertz"] > 1.05
+    assert ratios["logistic"] < 1.0
+
+
+def test_the_real_dose_response_dataset_reproduces_the_published_ed50():
+    """Checked against drc's own published fit for the same data.
+
+    A dose-response fitter demonstrated on a curve drawn from the equation it is
+    fitting has not been checked against anything.
+    """
+    data = sb.fetch_dose_response_dataset()
+    assert len(data) == 24
+    assert data["concentration"].nunique() == 7
+    fit = sb.dose_response(data["concentration"], data["response"])
+    assert fit.ec50 == pytest.approx(3.06, abs=0.25), fit.ec50
+    assert fit.inhibitory, "root length falls with dose"
+    assert fit.hill_slope < 0
+    assert fit.r_squared > 0.95

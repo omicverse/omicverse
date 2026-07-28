@@ -205,6 +205,9 @@ def fit_growth_curve(
     model: str = "gompertz",
     blank: float = 0.0,
     log_transform: bool = False,
+    min_amplitude: float = 0.05,
+    min_fold_change: float = 1.5,
+    mu_max_ceiling: float = 6.0,
     label: str = "",
     well: str = "",
     maxfev: int = 20000,
@@ -363,6 +366,30 @@ def fit_growth_curve(
             f"R² = {r2:.3f} < 0.95 —— 换个模型试试(compare_growth_models),"
             f"或检查是否有污染、蒸发、或分光光度计的非线性上限。")
 
+    # Amplitude gate. A four-parameter sigmoid fits any monotone trace, so R² is
+    # not quality control: a well whose whole excursion is inside the blank noise
+    # still converges. And µ = slope/OD explodes as OD -> 0, so a flat trace comes
+    # back at 28 /h — a 1.5-minute doubling time — which then tops any nlargest().
+    # NaN rather than a plausible-looking number, because NaN propagates.
+    observed_range = float(np.nanmax(y) - np.nanmin(y))
+    fold_change = (float(np.nanmax(y) / max(np.nanmin(y), 1e-12))
+                   if np.nanmin(y) > 0 else float("inf"))
+    if observed_range < min_amplitude or fold_change < min_fold_change:
+        notes.append(
+            f"OD 只变化了 {observed_range:.4f}(≈{fold_change:.2f} 倍),低于 "
+            f"min_amplitude={min_amplitude} / min_fold_change={min_fold_change} —— "
+            f"这个孔没有长起来。µmax 返回 nan 而不是拟合值:比速率是 slope/OD,"
+            f"OD 趋近 0 时它会爆掉(平坦曲线能给出 28 /h,即 1.5 分钟倍增)。")
+        specific = float("nan")
+        converged = False
+    elif specific > mu_max_ceiling:
+        notes.append(
+            f"拟合出的 µmax = {specific:.3g} /h 超过上限 {mu_max_ceiling} /h"
+            f"(约 {60 * math.log(2) / mu_max_ceiling:.0f} 分钟倍增,已快于任何已知"
+            f"细菌) —— 返回 nan。通常是曲线幅度太小、或 OD 进入了读数器的非线性区。")
+        specific = float("nan")
+        converged = False
+
     return GrowthFit(
         model=model, mu_max=float(specific), slope_max=slope_max,
         lag=float(lag),
@@ -405,7 +432,26 @@ def compare_growth_models(time, od, *, models: Optional[Sequence[str]] = None,
                      "slope_max": fit.slope_max, "lag": fit.lag,
                      "r_squared": fit.r_squared, "rmse": fit.rmse, "aic": aic,
                      "converged": fit.converged, "note": ""})
-    return pd.DataFrame(rows).set_index("model").sort_values("aic")
+    frame = pd.DataFrame(rows).set_index("model").sort_values("aic")
+    # Mark the AIC-preferred model. Without this the table is easy to print and
+    # then ignore: on a real well the default (Gompertz) came last by 233 AIC
+    # units while its mu_max was 1.4x the other three, and nothing said so.
+    usable = frame[frame["converged"] & frame["mu_max"].notna()]
+    if len(usable):
+        best = usable["aic"].idxmin()
+        frame["preferred"] = frame.index == best
+        spread = usable["mu_max"].max() / max(usable["mu_max"].min(), 1e-12)
+        frame.attrs["preferred_model"] = best
+        frame.attrs["mu_max_spread"] = float(spread)
+        frame.attrs["note"] = (
+            f"AIC 最优:{best!r}。可用模型之间 µmax 相差 {spread:.2f} 倍 —— "
+            f"各模型把拐点放在不同高度(Gompertz 在 A/e,logistic 在 A/2),"
+            f"所以它们对'比速率'的定义本就不同。要把 µmax 和 FBA 比,"
+            f"先在这里选模型,再传给 fit_growth_curves(model=...)。")
+    else:
+        frame["preferred"] = False
+        frame.attrs["note"] = "没有模型给出可用的 µmax —— 这个孔大概没有长起来。"
+    return frame
 
 
 @register_function(
@@ -723,6 +769,7 @@ def compare_growth_to_model(
     *,
     total_protein: Optional[float] = 0.55,
     knockouts: Optional[Mapping[str, Sequence[str]]] = None,
+    growth_model: str = "gompertz",
 ) -> "pd.DataFrame":
     """Measured µmax beside FBA, RBA and (optionally) MOMA predictions.
 
@@ -740,6 +787,12 @@ def compare_growth_to_model(
         FBA and MOMA predictions *for that deletion* rather than for wild type.
         Without this every row is compared against the wild-type prediction,
         which is only meaningful for wild-type wells.
+    growth_model
+        Recorded in ``.attrs`` and named in the ratio warning, because the choice
+        moves the answer: on the same plate and the same GEM, Gompertz gives
+        measured/FBA = 1.29 and Richards or Baranyi give 0.91. The models place the
+        inflection at different heights, so they disagree about what "the" specific
+        rate is by about 1.4x — see :func:`compare_growth_models`.
 
     Returns
     -------
@@ -797,12 +850,18 @@ def compare_growth_to_model(
         rows.append(row)
 
     out = pd.DataFrame(rows).set_index("label")
+    out.attrs["growth_model"] = growth_model
     exceed = out[out.get("measured_over_fba", pd.Series(dtype=float)) > 1.05]
     if len(exceed):
         out.attrs["warning"] = (
             f"{len(exceed)} 个样品的实测 µmax 超过 FBA 上界 5% 以上 —— FBA 是"
-            f"化学计量上界,实测不该超过它。检查培养基约束是否比实际更严、"
-            f"OD 到干重的换算,或时间单位。")
+            f"化学计量上界,实测不该超过它。按先后顺序查:"
+            f"(1) 生长模型的选择 —— 这些 µmax 来自 {growth_model!r},换成 AIC 更优的"
+            f"模型可能整体降低约 1.4 倍,先跑 compare_growth_models;"
+            f"(2) 培养基约束是否比实际更严(模型的碳源上限);"
+            f"(3) 时间单位是否都是小时。"
+            f"注意:OD 到干重的换算不会改变这个比值 —— µmax 是比速率,"
+            f"OD 与干重之间的任何常数因子都会约掉。")
     return out
 
 
@@ -864,14 +923,20 @@ def plot_growth_curves(time, od=None, fit=None, *, blank: float = 0.0,
         dense = np.linspace(float(np.nanmin(t)), float(np.nanmax(t)), 300)
         ax.plot(dense, fit.predict(dense), "-", color="#E41A1C", lw=1.6,
                 label=f"{fit.model} (R²={fit.r_squared:.3f})")
-        # the µmax tangent, whose time-axis intercept *is* the lag
-        if fit.mu_max > 0 and fit.carrying_capacity > 0:
-            t_inf = fit.lag + fit.carrying_capacity / (fit.mu_max * math.e)
+        # The tangent lives on an OD-vs-time axis, so its slope is slope_max
+        # (OD/h) — NOT mu_max, which is a *specific* rate in 1/h. Using mu_max
+        # drew a line 5.95x too steep on a real well, and put the inflection at
+        # 5.60 h instead of 6.35 h. The line was algebraically consistent with the
+        # lag but was not tangent to the fitted curve, so it could not do the job
+        # the caption claimed for it.
+        if fit.slope_max > 0 and fit.carrying_capacity > 0:
+            t_inf = fit.lag + fit.carrying_capacity / (fit.slope_max * math.e)
             y_inf = float(fit.predict(np.array([t_inf]))[0])
             span = np.array([fit.lag, min(t_inf + 2.0, float(np.nanmax(t)))])
-            ax.plot(span, y_inf + fit.mu_max * (span - t_inf), "--",
+            ax.plot(span, y_inf + fit.slope_max * (span - t_inf), "--",
                     color="#4DAF4A", lw=1.2,
-                    label=f"µmax = {fit.mu_max:.3f} /h")
+                    label=f"tangent: {fit.slope_max:.3f} OD/h "
+                          f"(µmax = {fit.mu_max:.3f} /h)")
             ax.axvline(fit.lag, ls=":", color="#984EA3", lw=1.1,
                        label=f"lag = {fit.lag:.2f} h")
     ax.set_xlabel("time (h)")
