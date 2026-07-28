@@ -22,6 +22,7 @@ import matplotlib
 import numpy as np
 import pandas as pd
 import pytest
+from scipy.integrate import trapezoid  # np.trapz is gone in numpy 2
 
 matplotlib.use("Agg")
 import matplotlib.pyplot as plt  # noqa: E402
@@ -379,7 +380,7 @@ class TestDistribution:
     def test_kde_curve_integrates_to_one(self, cells):
         _, curves = kdeplot(cells, "score", return_stats=True)
         grid, density = curves[None]
-        assert np.trapz(density, grid) == pytest.approx(1.0, abs=0.02)
+        assert trapezoid(density, grid) == pytest.approx(1.0, abs=0.02)
 
     def test_kde_two_dimensions_rejects_hue(self, cells):
         with pytest.raises(ValueError, match="one group per axes"):
