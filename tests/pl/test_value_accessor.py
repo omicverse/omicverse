@@ -374,3 +374,42 @@ class TestRegistryCoverage:
         frame = pd.DataFrame({"a": [1.0, 2.0], "g": ["x", "y"]})
         assert isinstance(pl.as_plotdata(frame), pl.PlotData)
         assert isinstance(pl.ObsView(frame), pl.ObsView)
+
+
+class TestMosaicPanelKeys:
+    """A panel must be reachable by the tag printed on it, grid or mosaic."""
+
+    def test_grid_keys_are_the_tags(self):
+        from omicverse.pl import multipanel
+
+        fig, axes = multipanel((2, 2), width=180, height=120)
+        assert {"a", "b", "c", "d"} <= set(axes)
+        plt.close(fig)
+
+    def test_mosaic_accepts_both_its_own_key_and_the_printed_tag(self):
+        """Regression: `axes['a']` raised KeyError on a mosaic but not a grid."""
+        from omicverse.pl import multipanel
+
+        fig, axes = multipanel("AAB\nCDB", width=180, height=95)
+        assert {"A", "B", "C", "D"} <= set(axes)
+        assert {"a", "b", "c", "d"} <= set(axes)
+        # reading order: A spans the top-left, so it carries tag 'a'
+        assert axes["a"] is axes["A"]
+        plt.close(fig)
+
+    def test_a_mosaic_that_uses_lowercase_keeps_its_own_meaning(self):
+        """An alias must never shadow a key the mosaic actually declared."""
+        from omicverse.pl import multipanel
+
+        fig, axes = multipanel("ab\ncd", width=180, height=120)
+        # 'a' is the caller's own panel, not an alias onto a different one
+        assert axes["a"] is not axes["b"]
+        assert len({id(v) for v in axes.values()}) == 4
+        plt.close(fig)
+
+    def test_labels_off_leaves_grid_tuples(self):
+        from omicverse.pl import multipanel
+
+        fig, axes = multipanel((1, 2), width=180, height=60, label=False)
+        assert set(axes) == {(0, 0), (0, 1)}
+        plt.close(fig)

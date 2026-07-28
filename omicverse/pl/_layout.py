@@ -285,9 +285,12 @@ def multipanel(layout: Union[int, Tuple[int, int], str, Sequence[Sequence[Any]]]
 
     Returns
     -------
-    ``(fig, axes)`` where ``axes`` is a dict. For a mosaic the keys are the
-    mosaic keys; for a grid they are the panel labels (``'a'``, ``'b'``, ...),
-    or ``(row, col)`` tuples when ``label=False``.
+    ``(fig, axes)`` where ``axes`` is a dict.
+
+    A panel is always reachable by **the tag printed on it** — ``axes['a']``,
+    ``axes['b']``, ... For a mosaic the mosaic's own keys work too, so
+    ``'AAB\nCDB'`` gives both ``axes['A']`` and ``axes['a']`` for the same
+    axes. With ``label=False`` a grid is keyed by ``(row, col)`` tuples.
     """
     if isinstance(layout, int):
         import math
@@ -347,6 +350,14 @@ def multipanel(layout: Union[int, Tuple[int, int], str, Sequence[Sequence[Any]]]
     if labels is not None:
         for ax, text in zip(ordered, labels):
             add_panel_label(ax, text, **(dict(label_kw) if label_kw else {}))
+        # A mosaic is keyed by its own letters ('A'), but the tag drawn on the
+        # panel is 'a' — so `ax['a']` failed on a mosaic and worked on a grid.
+        # Alias the printed tag onto the same axes unless the mosaic already
+        # claims that key, so a panel is always reachable by what the reader
+        # sees on it.
+        for ax, text in zip(ordered, labels):
+            if text not in axes:
+                axes[text] = ax
 
     return fig, axes
 
