@@ -191,8 +191,24 @@ def violin(
             _key = keys[0]
         else:
             _key = keys
+        # Resolve the values here rather than handing the container over:
+        # _violin_kde reads a name through the plain accessor, which knows
+        # nothing about `layer` or `use_raw`, so passing the AnnData through
+        # silently plotted .X whatever the caller asked for.
+        from ._plotdata import get_values as _get_values
+
+        _use_raw = use_raw
+        if _use_raw is None:
+            _use_raw = getattr(adata, "raw", None) is not None and layer is None
+        _y = _get_values(adata, _key,
+                         layer=None if _use_raw else layer,
+                         use_raw=True if _use_raw else None)
+        _x = _get_values(adata, groupby) if groupby is not None else None
+        _hue = _get_values(adata, hue) if hue is not None else None
         return _violin_kde(
-            adata, x=groupby, y=_key, hue=hue, hue_order=hue_order,
+            None, x=_x, y=_y, hue=_hue, hue_order=hue_order,
+            xlabel=groupby or "", ylabel=_key,
+            legend_title=hue,
             order=order, split=split, inner=inner,
             cut=2.0 if cut is None else cut, clip=clip,
             scale="width" if scale is None else scale, orient=orient,
@@ -531,6 +547,14 @@ def _extract_data_from_adata(adata, keys, groupby, layer, use_raw):
     # Default behavior: use raw if it exists and use_raw is not explicitly False
     if use_raw is None:
         use_raw = hasattr(adata, 'raw') and adata.raw is not None
+        if use_raw and layer is not None:
+            # Long-standing behaviour is that .raw wins, which quietly threw
+            # away an explicit `layer=`. Keep the behaviour, lose the silence.
+            print(
+                f"violin: `.raw` is present so it takes precedence and "
+                f"layer={layer!r} is ignored. Pass use_raw=False to read the "
+                f"layer instead."
+            )
 
     data_dict = {}
 

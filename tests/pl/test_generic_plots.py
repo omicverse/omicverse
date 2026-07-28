@@ -959,3 +959,110 @@ class TestViolinMerge:
         assert points < len(cells), "the strip overlay was inherited from violin"
         assert ax.get_lines(), "the inner quartile box is missing"
         plt.close("all")
+
+
+class TestViolinAnnDataPaths:
+    """The AnnData features must survive on the new code path too.
+
+    Delegating to the kernel-density renderer originally handed the AnnData
+    over by reference, and that renderer resolves a name through the plain
+    accessor, which knows nothing about `layer` or `use_raw`. So
+    ``violin(adata, keys='GENE', layer='counts', test='auto')`` silently
+    plotted ``.X``. The values are asserted here, not just that it ran.
+    """
+
+    X_VALUE, LAYER_VALUE, RAW_VALUE = 0.0, 100.0, 50.0
+
+    @classmethod
+    def _adata(cls):
+        anndata = pytest.importorskip("anndata")
+
+        rng = np.random.default_rng(0)
+        n = 200
+        obs = pd.DataFrame({"celltype": rng.choice(["a", "b"], n),
+                            "cond": rng.choice(["x", "y"], n)})
+        out = anndata.AnnData(np.full((n, 2), cls.X_VALUE, dtype=np.float32),
+                              obs=obs)
+        out.var_names = ["GENE0", "GENE1"]
+        out.layers["counts"] = np.full((n, 2), cls.LAYER_VALUE, dtype=np.float32)
+        raw = out.copy()
+        raw.X = np.full((n, 2), cls.RAW_VALUE, dtype=np.float32)
+        out.raw = raw
+        return out
+
+    @staticmethod
+    def _drawn_median(ax):
+        from matplotlib.collections import PolyCollection
+
+        bodies = [c for c in ax.collections if isinstance(c, PolyCollection)]
+        assert bodies, "nothing drawn"
+        return float(np.median(np.concatenate(
+            [c.get_paths()[0].vertices[:, 1] for c in bodies])))
+
+    @pytest.mark.parametrize("advanced", [{}, {"test": "auto"}])
+    def test_layer_is_honoured_on_both_paths(self, advanced):
+        from omicverse.pl import violin
+
+        ax = violin(self._adata(), keys="GENE0", groupby="celltype",
+                    layer="counts", use_raw=False, show=False, **advanced)
+        assert self._drawn_median(ax) == pytest.approx(self.LAYER_VALUE, abs=1)
+        plt.close("all")
+
+    @pytest.mark.parametrize("advanced", [{}, {"test": "auto"}])
+    def test_use_raw_is_honoured_on_both_paths(self, advanced):
+        from omicverse.pl import violin
+
+        ax = violin(self._adata(), keys="GENE0", groupby="celltype",
+                    use_raw=True, show=False, **advanced)
+        assert self._drawn_median(ax) == pytest.approx(self.RAW_VALUE, abs=1)
+        plt.close("all")
+
+    @pytest.mark.parametrize("advanced", [{}, {"test": "auto"}])
+    def test_use_raw_false_reads_x_on_both_paths(self, advanced):
+        from omicverse.pl import violin
+
+        ax = violin(self._adata(), keys="GENE0", groupby="celltype",
+                    use_raw=False, show=False, **advanced)
+        assert self._drawn_median(ax) == pytest.approx(self.X_VALUE, abs=1)
+        plt.close("all")
+
+    def test_an_ignored_layer_is_announced(self, capsys):
+        """`.raw` wins by default, which used to discard `layer=` in silence."""
+        from omicverse.pl import violin
+
+        violin(self._adata(), keys="GENE0", groupby="celltype",
+               layer="counts", show=False)
+        assert "layer='counts' is ignored" in capsys.readouterr().out
+        plt.close("all")
+
+    def test_gene_only_in_raw_still_resolves(self):
+        from omicverse.pl import violin
+
+        full = self._adata()
+        subset = full[:, ["GENE0"]].copy()
+        # `.raw = full` would store full.X, not full.raw.X — take the raw
+        # values explicitly so the assertion below can tell them apart
+        subset.raw = full.raw.to_adata()
+        ax = violin(subset, keys="GENE1", groupby="celltype", use_raw=True,
+                    show=False)
+        assert self._drawn_median(ax) == pytest.approx(self.RAW_VALUE, abs=1)
+        plt.close("all")
+
+    def test_hue_keeps_its_column_name_in_the_legend(self):
+        """Resolving hue to an array lost the label it was named after."""
+        from omicverse.pl import violin
+
+        ax = violin(self._adata(), keys="GENE0", groupby="celltype",
+                    hue="cond", split=True)
+        legend = ax.get_legend()
+        assert legend is not None and legend.get_title().get_text() == "cond"
+        plt.close("all")
+
+    def test_axis_labels_survive_the_delegation(self):
+        from omicverse.pl import violin
+
+        ax = violin(self._adata(), keys="GENE0", groupby="celltype",
+                    test="auto")
+        assert ax.get_xlabel() == "celltype"
+        assert ax.get_ylabel() == "GENE0"
+        plt.close("all")
