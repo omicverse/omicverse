@@ -21,7 +21,7 @@ from typing import Any, Dict, Mapping, Optional, Tuple
 import numpy as np
 import pandas as pd
 
-__all__ = ["as_frame", "group_levels", "resolve_columns"]
+__all__ = ["as_frame", "default_palette", "group_levels", "resolve_columns"]
 
 
 def as_frame(data: Any) -> Optional[pd.DataFrame]:
@@ -112,6 +112,15 @@ def resolve_columns(data: Any = None,
     one was given), suitable for axis labels.
     """
     frame = as_frame(data)
+    # With an AnnData the name may be a gene rather than an obs column, so
+    # resolve through PlotData, which checks metadata first and features next.
+    getter = None
+    if (data is not None and not isinstance(data, (pd.DataFrame, Mapping))
+            and hasattr(data, "var_names")):
+        from ._plotdata import as_plotdata
+
+        getter = as_plotdata(data).values
+
     columns: Dict[str, np.ndarray] = {}
     names: Dict[str, str] = {}
 
@@ -125,7 +134,10 @@ def resolve_columns(data: Any = None,
                     f"as the first argument. Either pass a DataFrame/AnnData, "
                     f"or give `{key}` as an array of values."
                 )
-            columns[key] = _lookup(frame, spec, key)
+            if getter is not None and spec not in frame.columns:
+                columns[key] = getter(spec)
+            else:
+                columns[key] = _lookup(frame, spec, key)
             names[key] = spec
         elif isinstance(spec, pd.Series):
             columns[key] = spec.reset_index(drop=True)
@@ -155,3 +167,23 @@ def resolve_columns(data: Any = None,
             out.attrs["n_dropped"] = before - len(out)
     out = out.reset_index(drop=True)
     return out, names
+
+
+def default_palette(n: int, palette: Any = None) -> list:
+    """``n`` distinct colours: the ov palette, a named colormap, or a list."""
+    import matplotlib.pyplot as plt
+
+    if palette is None:
+        from ._palette import sc_color
+
+        base = list(sc_color)
+    elif isinstance(palette, str):
+        cmap = plt.get_cmap(palette)
+        base = [cmap(i / max(n - 1, 1)) for i in range(n)]
+    else:
+        base = list(palette)
+    if not base:
+        raise ValueError("`palette` is empty.")
+    if len(base) < n:
+        base = (base * (n // len(base) + 1))[:n]
+    return base[:n]

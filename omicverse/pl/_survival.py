@@ -26,7 +26,8 @@ import numpy as np
 import pandas as pd
 
 from .._registry import register_function
-from ._stats_common import as_frame, group_levels, resolve_columns
+from ._stats_common import (as_frame, default_palette, group_levels,
+                            resolve_columns)
 
 __all__ = [
     "kaplan_meier",
@@ -483,19 +484,8 @@ def grays_test(time: Sequence[float],
 # --------------------------------------------------------------------------
 
 
-def _default_palette(n: int, palette=None) -> List[str]:
-    if palette is None:
-        from ._palette import sc_color
-
-        base = list(sc_color)
-    elif isinstance(palette, str):
-        cmap = plt.get_cmap(palette)
-        base = [cmap(i / max(n - 1, 1)) for i in range(n)]
-    else:
-        base = list(palette)
-    if len(base) < n:
-        base = (base * (n // len(base) + 1))[:n]
-    return base[:n]
+#: kept as a private alias — several modules import it from here
+_default_palette = default_palette
 
 
 def _format_p(p: float) -> str:

@@ -1,5 +1,6 @@
 from ._scatterplot_backend import _embedding
 from .._registry import register_function
+from ._plotdata import accepts_frame
 import collections.abc as cabc
 from copy import copy
 from numbers import Integral
@@ -365,6 +366,7 @@ def embedding(
     ],
     related=["pl.embedding", "tl.leiden"]
 )
+@accepts_frame
 def cellproportion(adata:AnnData,celltype_clusters:str,groupby:str,
                        groupby_li=None,figsize:tuple=(4,6),
                        ticks_fontsize:int=12,labels_fontsize:int=12,ax=None,
@@ -1467,6 +1469,7 @@ def plot_boxplots(  # pragma: no cover
             return None
         
 
+@accepts_frame
 def cellstackarea(adata,celltype_clusters:str,groupby:str,
                        groupby_li=None,figsize:tuple=(4,6),
                        ticks_fontsize:int=12,labels_fontsize:int=12,ax=None,

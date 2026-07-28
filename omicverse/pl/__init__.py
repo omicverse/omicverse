@@ -28,6 +28,11 @@ Key modules:
     _flowsig: Flow cytometry-style visualizations
     _embedding: Dimensionality reduction visualizations
     _density: Density and distribution plots
+    _categorical: barplot/stripplot/violinplot/stackplot/pie/donut/slope (table in)
+    _distribution: histplot/kdeplot/ridgeplot/qqplot
+    _relational: scatterplot/lineplot/regplot
+    _stats_tests: compare_groups + significance brackets
+    _plotdata: as_plotdata / accepts_frame — AnnData plots that also take a table
     _survival: Kaplan-Meier and Aalen-Johansen curves, log-rank / Gray's test
     _classification: ROC curves and confusion matrices
     _forest: forest plots and fixed/random-effects meta-analysis
@@ -281,6 +286,20 @@ from ._survival import (
 )
 from ._classification import confusion, roc, roc_auc_ci
 from ._forest import forest, meta_analysis
+from ._stats_tests import add_stat_annotation, compare_groups, format_pvalue
+from ._categorical import (
+    barplot,
+    donutplot,
+    lollipopplot,
+    pieplot,
+    slopeplot,
+    stackplot,
+    stripplot,
+    violinplot,
+)
+from ._distribution import histplot, kdeplot, qqplot, ridgeplot
+from ._relational import lineplot, regplot, scatterplot
+from ._plotdata import ObsView, PlotData, accepts_frame, as_plotdata
 
 
 def curved_graph(*args, **kwargs):
@@ -523,4 +542,31 @@ __all__ = [
     # @ _forest — effect sizes and meta-analysis
     "forest",
     "meta_analysis",
+    # @ _stats_tests — group comparison and significance brackets
+    "compare_groups",
+    "add_stat_annotation",
+    "format_pvalue",
+    # @ _categorical — generic categorical plots (table in, no AnnData)
+    "barplot",
+    "stripplot",
+    "violinplot",
+    "stackplot",
+    "lollipopplot",
+    "pieplot",
+    "donutplot",
+    "slopeplot",
+    # @ _distribution
+    "histplot",
+    "kdeplot",
+    "ridgeplot",
+    "qqplot",
+    # @ _relational
+    "scatterplot",
+    "lineplot",
+    "regplot",
+    # @ _plotdata — let AnnData-shaped plots take a table
+    "as_plotdata",
+    "accepts_frame",
+    "PlotData",
+    "ObsView",
 ]
