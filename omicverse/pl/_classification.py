@@ -43,6 +43,20 @@ def _midrank(x: np.ndarray) -> np.ndarray:
     return out
 
 
+@register_function(
+    aliases=["AUC置信区间", "roc_auc_ci", "delong", "AUC区间", "auc_ci"],
+    category="pl",
+    description=(
+        "AUC with a DeLong confidence interval — the analytic interval R's pROC computes, not a bootstrap approximation"
+    ),
+    examples=[
+        'res = ov.pl.roc_auc_ci(y_true, y_score)',
+        'print(res["auc"], res["lower"], res["upper"])',
+        '# one class against the rest',
+        'ov.pl.roc_auc_ci(labels, scores, pos_label="tumour")',
+    ],
+    related=["pl.roc", "pl.confusion"],
+)
 def roc_auc_ci(y_true: Sequence[Any],
                y_score: Sequence[float],
                *,

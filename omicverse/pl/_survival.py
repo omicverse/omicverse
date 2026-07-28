@@ -55,6 +55,20 @@ def _event_table(time: np.ndarray, indicator: np.ndarray) -> Dict[str, np.ndarra
             "n_censor": n_censor}
 
 
+@register_function(
+    aliases=["KM估计", "kaplan_meier", "生存估计", "product_limit", "乘积极限估计"],
+    category="pl",
+    description=(
+        "Kaplan-Meier product-limit estimator with a log-log confidence band, median and its Brookmeyer-Crowley interval — numbers only, no plot"
+    ),
+    examples=[
+        'fit = ov.pl.kaplan_meier(df["months"], df["dead"])',
+        'print(fit["median"], fit["median_ci"])',
+        '# the curve itself, for a custom figure',
+        'ax.step(fit["timeline"], fit["survival"], where="post")',
+    ],
+    related=["pl.survival", "pl.logrank_test", "pl.aalen_johansen"],
+)
 def kaplan_meier(time: Sequence[float],
                  event: Sequence[Any],
                  *,
@@ -165,6 +179,20 @@ def _at_risk(time: np.ndarray, query: np.ndarray) -> np.ndarray:
     return np.array([(time >= q).sum() for q in query], dtype=int)
 
 
+@register_function(
+    aliases=["log-rank检验", "logrank_test", "生存差异检验", "mantel_cox", "风险比"],
+    category="pl",
+    description=(
+        "Multivariate log-rank (Mantel-Cox) test with the Mantel-Haenszel hazard ratio for two groups; `groups=` fixes which level is the reference"
+    ),
+    examples=[
+        'res = ov.pl.logrank_test(df["months"], df["dead"], df["arm"])',
+        'print(res["pvalue"], res["hazard_ratio"])',
+        '# choose the reference explicitly',
+        'res = ov.pl.logrank_test(t, e, g, groups=["advanced", "early"])',
+    ],
+    related=["pl.survival", "pl.kaplan_meier", "pl.grays_test"],
+)
 def logrank_test(time: Sequence[float],
                  event: Sequence[Any],
                  group: Sequence[Any],
@@ -259,6 +287,20 @@ def logrank_test(time: Sequence[float],
     return out
 
 
+@register_function(
+    aliases=["AJ估计", "aalen_johansen", "累积发病率估计", "竞争风险估计", "CIF"],
+    category="pl",
+    description=(
+        "Aalen-Johansen cumulative incidence for one cause under competing risks, with the delta-method variance — the correct alternative to 1 - KM"
+    ),
+    examples=[
+        'fit = ov.pl.aalen_johansen(df["months"], df["cause"], cause=1)',
+        'print(fit["cif"][-1])',
+        '# how wrong the naive estimator would have been',
+        'km = ov.pl.kaplan_meier(df["months"], df["cause"] == 1)',
+    ],
+    related=["pl.cumulative_incidence", "pl.grays_test", "pl.kaplan_meier"],
+)
 def aalen_johansen(time: Sequence[float],
                    event: Sequence[Any],
                    cause: Any = 1,
@@ -379,6 +421,20 @@ def _subdistribution_curves(t: np.ndarray, codes: np.ndarray, cause: Any):
     return times, surv, cif
 
 
+@register_function(
+    aliases=["Gray检验", "grays_test", "gray_test", "竞争风险检验", "次分布检验"],
+    category="pl",
+    description=(
+        "Gray's test for equality of cumulative incidence functions — the test that matches what a competing-risk plot shows, unlike a plain log-rank"
+    ),
+    examples=[
+        'res = ov.pl.grays_test(df["months"], df["cause"], df["arm"], cause=1)',
+        'print(res["pvalue"])',
+        '# contrast with the cause-specific log-rank, a different question',
+        'ov.pl.logrank_test(df["months"], df["cause"] == 1, df["arm"])',
+    ],
+    related=["pl.cumulative_incidence", "pl.aalen_johansen", "pl.logrank_test"],
+)
 def grays_test(time: Sequence[float],
                event: Sequence[Any],
                group: Sequence[Any],

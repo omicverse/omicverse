@@ -296,3 +296,81 @@ class TestSurface:
             "ad-hoc value fetching is back; route it through "
             f"ov.pl.get_values instead: {offenders}"
         )
+
+
+class TestRegistryCoverage:
+    """Every public name in the new ov.pl modules must be discoverable.
+
+    The registry is how an agent finds a capability it was not told about, so
+    an exported function that is not in it is invisible — which is how
+    ``kaplan_meier``, ``get_values`` and eleven others were shipped
+    undiscoverable in the first place.
+    """
+
+    #: the modules added by the statistics / layout / adapter work
+    MODULES = ("_survival", "_classification", "_forest", "_layout",
+               "_stats_tests", "_categorical", "_distribution", "_relational",
+               "_plotdata")
+
+    def _public_names(self, callables_only: bool = True):
+        """Public names of the new modules, keyed to the module they live in.
+
+        ``callables_only`` skips data constants such as ``JOURNAL_WIDTH_MM``
+        and ``EDITABLE_TEXT_RCPARAMS``: the registry indexes *capabilities an
+        agent can invoke*, and a dict of column widths is not one. They still
+        have to be exported, which the export test checks.
+        """
+        import importlib
+
+        names = {}
+        for module_name in self.MODULES:
+            module = importlib.import_module(f"omicverse.pl.{module_name}")
+            for name in getattr(module, "__all__", []):
+                if callables_only and not callable(getattr(module, name, None)):
+                    continue
+                names[name] = module_name
+        return names
+
+    def test_every_public_name_is_exported(self):
+        import omicverse.pl as pl
+
+        missing = [f"{n} ({m})" for n, m
+                   in self._public_names(callables_only=False).items()
+                   if n not in pl.__all__]
+        assert not missing, f"exported from the module but not from ov.pl: {missing}"
+
+    def test_every_public_name_is_registered(self):
+        import omicverse.pl  # noqa: F401
+
+        from omicverse._registry import get_registry
+
+        registered = {str(entry.get("full_name")).rsplit(".", 1)[-1]
+                      for entry in get_registry().get_by_category("pl")}
+        missing = sorted(n for n in self._public_names() if n not in registered)
+        assert not missing, (
+            "public but undiscoverable — add @register_function to: "
+            f"{missing}"
+        )
+
+    def test_registered_entries_carry_usable_metadata(self):
+        import omicverse.pl  # noqa: F401
+
+        from omicverse._registry import get_registry
+
+        public = set(self._public_names())
+        thin = []
+        for entry in get_registry().get_by_category("pl"):
+            name = str(entry.get("full_name")).rsplit(".", 1)[-1]
+            if name not in public:
+                continue
+            if not entry.get("description") or not entry.get("aliases"):
+                thin.append(name)
+        assert not thin, f"registered with no description or aliases: {thin}"
+
+    def test_classes_survive_the_decorator(self):
+        """``@register_function`` must not turn a class into a function."""
+        import omicverse.pl as pl
+
+        frame = pd.DataFrame({"a": [1.0, 2.0], "g": ["x", "y"]})
+        assert isinstance(pl.as_plotdata(frame), pl.PlotData)
+        assert isinstance(pl.ObsView(frame), pl.ObsView)

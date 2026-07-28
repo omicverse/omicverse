@@ -37,6 +37,19 @@ _CATEGORICAL_TESTS = {"fisher", "chi2"}
 _STAR_CUTOFFS = ((1e-4, "****"), (1e-3, "***"), (1e-2, "**"), (0.05, "*"))
 
 
+@register_function(
+    aliases=["P值格式化", "format_pvalue", "显著性星号", "p_value_stars", "星号标注"],
+    category="pl",
+    description=(
+        "Render a P value as stars, as a number, or as both — the same formatting the significance brackets use"
+    ),
+    examples=[
+        "ov.pl.format_pvalue(0.003)            # -> '**'",
+        'ov.pl.format_pvalue(0.003, "value")   # -> \'P = 0.003\'',
+        'ov.pl.format_pvalue(1e-8, "full")     # -> \'**** (P = 1.0e-08)\'',
+    ],
+    related=["pl.compare_groups", "pl.add_stat_annotation"],
+)
 def format_pvalue(p: float, style: str = "star") -> str:
     """Render a P value as stars, as a number, or as both.
 

@@ -25,6 +25,20 @@ from ._stats_common import as_frame, resolve_columns
 __all__ = ["meta_analysis", "forest"]
 
 
+@register_function(
+    aliases=["元分析", "meta_analysis", "meta分析", "效应量合并", "随机效应模型"],
+    category="pl",
+    description=(
+        "Pool effect estimates by inverse variance — fixed effect or DerSimonian-Laird random effects — with Q, I-squared and tau-squared"
+    ),
+    examples=[
+        'pooled = ov.pl.meta_analysis(res["logHR"], res["se"], method="random")',
+        'print(pooled["estimate"], pooled["I2"])',
+        '# fixed effect, when the studies really are replicates',
+        'ov.pl.meta_analysis(est, se, method="fixed")',
+    ],
+    related=["pl.forest", "pl.survival"],
+)
 def meta_analysis(estimate: Sequence[float],
                   se: Sequence[float],
                   *,

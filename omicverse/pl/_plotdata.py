@@ -27,6 +27,8 @@ from typing import Any, Callable, Iterable, List, Optional, Sequence
 import numpy as np
 import pandas as pd
 
+from .._registry import register_function
+
 __all__ = ["PlotData", "ObsView", "as_plotdata", "accepts_frame", "get_values",
            "get_matrix"]
 
@@ -88,6 +90,23 @@ def _pick_matrix(data: Any, key: str, layer: Optional[str],
     return None, None, None
 
 
+@register_function(
+    aliases=["取值", "get_values", "取表达值", "fetch_values", "obs_vector", "基因取值"],
+    category="pl",
+    description=(
+        "Resolve one name to numbers — an .obs column or a feature — with explicit layer / use_raw rules, always returning a 1-D dense array"
+    ),
+    examples=[
+        'values = ov.pl.get_values(adata, "CD3D")       # a gene, from .X',
+        'values = ov.pl.get_values(adata, "leiden")     # a column of .obs',
+        '# from a layer, or forced from .raw',
+        'ov.pl.get_values(adata, "CD3D", layer="counts")',
+        'ov.pl.get_values(adata, "CD3D", use_raw=True)',
+        '# a DataFrame works too',
+        'ov.pl.get_values(df, "score")',
+    ],
+    related=["pl.get_matrix", "pl.as_plotdata", "pl.violinplot"],
+)
 def get_values(data: Any, key: str, *, layer: Optional[str] = None,
                use_raw: Optional[bool] = None,
                dense: bool = True) -> np.ndarray:
@@ -176,6 +195,20 @@ def _raise_unknown_key(data, frame, key, use_raw):
     )
 
 
+@register_function(
+    aliases=["取值矩阵", "get_matrix", "批量取值", "expression_matrix", "多基因取值"],
+    category="pl",
+    description=(
+        "Resolve several names at once into an (n_obs, n_keys) dense array, reading each underlying matrix only once"
+    ),
+    examples=[
+        'block = ov.pl.get_matrix(adata, ["CD3D", "NKG7", "MS4A1"])',
+        'block.shape                                     # (n_obs, 3)',
+        '# metadata and features can be mixed',
+        'ov.pl.get_matrix(adata, ["n_genes", "CD3D"])',
+    ],
+    related=["pl.get_values", "pl.dotplot", "pl.as_plotdata"],
+)
 def get_matrix(data: Any, keys: Sequence[str], *, layer: Optional[str] = None,
                use_raw: Optional[bool] = None) -> np.ndarray:
     r"""Read several names at once into an ``(n_obs, len(keys))`` array.
@@ -194,6 +227,20 @@ def get_matrix(data: Any, keys: Sequence[str], *, layer: Optional[str] = None,
     return np.column_stack(columns).astype(float, copy=False)
 
 
+@register_function(
+    aliases=["绘图数据", "PlotData", "统一数据视图", "plot_data_view"],
+    category="pl",
+    description=(
+        "Uniform read access to metadata and feature values, whatever the underlying container — returned by ov.pl.as_plotdata"
+    ),
+    examples=[
+        'view = ov.pl.as_plotdata(adata)',
+        'view.obs, view.var_names, view.n_obs',
+        'view.values("CD3D", layer="counts")',
+        'view.has("leiden")',
+    ],
+    related=["pl.as_plotdata", "pl.get_values"],
+)
 class PlotData:
     """Uniform read access to metadata and feature values.
 
@@ -267,6 +314,22 @@ class PlotData:
                 f"columns, {len(self.var_names)} features)")
 
 
+@register_function(
+    aliases=["数据适配", "as_plotdata", "plot_data", "容器适配", "统一取值接口"],
+    category="pl",
+    description=(
+        "Wrap an AnnData / DataFrame / dict / array in a PlotData — one values() accessor that resolves metadata first and features second"
+    ),
+    examples=[
+        'view = ov.pl.as_plotdata(adata)',
+        'view.values("CD3D")            # a gene',
+        'view.values("leiden")          # a column of .obs',
+        'view.embedding("umap")         # coordinates',
+        '# the same accessor over a plain table',
+        'ov.pl.as_plotdata(df).values("score")',
+    ],
+    related=["pl.get_values", "pl.accepts_frame", "pl.PlotData"],
+)
 def as_plotdata(data: Any, *, obs: Optional[pd.DataFrame] = None,
                 obsm: Optional[Any] = None,
                 layer: Optional[str] = None) -> PlotData:
@@ -334,6 +397,20 @@ def as_plotdata(data: Any, *, obs: Optional[pd.DataFrame] = None,
     )
 
 
+@register_function(
+    aliases=["元数据视图", "ObsView", "obs视图", "metadata_view"],
+    category="pl",
+    description=(
+        "An AnnData-shaped, metadata-only view over a DataFrame — exposes .obs / .uns / .obs_names and raises an actionable error on .X"
+    ),
+    examples=[
+        'view = ov.pl.ObsView(df)',
+        'view.obs, view.uns, view.shape',
+        '# reaching for expression fails immediately, naming the problem',
+        "view.X   # AttributeError: ... has no 'X'. Pass an AnnData ...",
+    ],
+    related=["pl.accepts_frame", "pl.as_plotdata"],
+)
 class ObsView:
     """An ``AnnData``-shaped, metadata-only view over a ``DataFrame``.
 
@@ -399,6 +476,22 @@ class ObsView:
         return f"ObsView({self.n_obs} rows x {self.obs.shape[1]} columns)"
 
 
+@register_function(
+    aliases=["表格适配器", "accepts_frame", "接受DataFrame", "adata去耦", "frame_decorator"],
+    category="pl",
+    description=(
+        "Decorator that lets a metadata-only AnnData plot also take a DataFrame, by wrapping it in an ObsView"
+    ),
+    examples=[
+        'from omicverse.pl import accepts_frame',
+        '@accepts_frame',
+        'def my_plot(adata, groupby):',
+        '    return adata.obs[groupby].value_counts()',
+        '# now a DataFrame works wherever an AnnData did',
+        'my_plot(df, groupby="sample")',
+    ],
+    related=["pl.as_plotdata", "pl.ObsView", "pl.cellproportion"],
+)
 def accepts_frame(func: Optional[Callable] = None, *, argument: int = 0):
     r"""Let a metadata-only ``AnnData`` plot also take a ``DataFrame``.
 
