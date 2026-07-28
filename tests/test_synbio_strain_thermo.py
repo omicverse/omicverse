@@ -144,11 +144,31 @@ def test_unproducible_target_is_reported(model):
 # thermodynamically constrained FBA
 # ---------------------------------------------------------------------------
 
-def test_directionality_finds_dg_data_and_constrains_something(model):
+def test_directionality_finds_dg_data_and_classifies_reactions(model):
+    """The screen must estimate ΔG and classify what it finds.
+
+    It must *not* be asserted that something gets constrained: on
+    ``e_coli_core`` with the corrected ΔfG'° table every direction the screen
+    rules out is already closed in the model, so the honest answer is "nothing
+    new". The earlier version of this test demanded a non-empty
+    ``blocked_reverse`` and was satisfied by exactly that no-op — which is how
+    ``n_constrained=1`` came to be reported for a model whose bounds never moved.
+    """
     res = sb.thermo_fba(model, method="directionality")
     assert res.dg_range, "no reaction got a ΔG estimate"
     assert res.method == "directionality"
-    assert res.blocked_forward or res.blocked_reverse, "nothing was constrained"
+    classified = (res.blocked_forward + res.blocked_reverse
+                  + res.already_irreversible)
+    assert classified, "the screen ruled nothing out in either direction"
+
+
+def test_n_constrained_counts_only_bounds_that_actually_moved(model):
+    """A direction that was already closed is not a new constraint."""
+    res = sb.thermo_fba(model, method="directionality")
+    assert res.n_constrained == len(res.blocked_forward) + len(res.blocked_reverse)
+    overlap = set(res.already_irreversible) & (
+        set(res.blocked_forward) | set(res.blocked_reverse))
+    assert not overlap, f"reported both as already-closed and as newly blocked: {overlap}"
 
 
 def test_directionality_never_increases_the_objective(model):
@@ -156,6 +176,48 @@ def test_directionality_never_increases_the_objective(model):
     res = sb.thermo_fba(model, method="directionality")
     assert res.objective_value <= res.unconstrained_objective + 1e-6
     assert res.cost >= -1e-9
+
+
+def test_directionality_never_relaxes_a_forced_flux(model):
+    """Regression: blocking a direction must clamp the bound, not assign it.
+
+    ``ATPM`` carries the non-growth-associated maintenance demand with bounds
+    ``(8.39, 1000)``. Implementing "the reverse direction is infeasible" as
+    ``lower_bound = 0.0`` deleted that demand, and the *constrained* model then
+    grew at 0.9166 /h against an unconstrained 0.8739.
+    """
+    res = sb.thermo_fba(model, method="directionality")
+    assert "ATPM" not in res.blocked_reverse, (
+        "ATPM's lower bound is already positive; clamping cannot change it, so "
+        "it must not be reported as newly constrained")
+    for rid in res.blocked_forward + res.blocked_reverse:
+        original = model.reactions.get_by_id(rid).bounds
+        assert original[0] <= 0.0 or original[1] >= 0.0, rid
+
+
+def test_dgf_table_matches_known_reaction_energies():
+    """The built-in formation-energy table must reproduce textbook ΔG'°."""
+    from omicverse.synbio._thermo import check_dgf_table
+    assert not check_dgf_table(), check_dgf_table()
+
+
+def test_atp_hydrolysis_is_exergonic():
+    """The single number that exposed the old table: it read +51.5 kJ/mol."""
+    dg = sb.reaction_dg({"atp": -1, "h2o": -1, "adp": 1, "pi": 1})
+    assert -40.0 < dg < -25.0, f"ATP hydrolysis ΔG'° = {dg:.1f}, expected ~-30"
+
+
+def test_mdf_ignores_protons_and_water():
+    """ΔG'° is already pH-7 transformed, so H+ must not enter the quotient."""
+    route = {"FUM": {"mal__L": -1, "fum": 1, "h2o": 1},
+             "MDH": {"oaa": -1, "nadh": -1, "h": -1, "mal__L": 1, "nad": 1}}
+    dg0 = {r: sb.reaction_dg(s) for r, s in route.items()}
+    with pytest.warns(UserWarning, match="重复计"):
+        pinned = sb.max_min_driving_force(route, dg0, fixed={"h": 1e-7, "h2o": 1.0})
+    bare = sb.max_min_driving_force(route, dg0)
+    assert pinned.mdf == pytest.approx(bare.mdf, abs=1e-6), (
+        "pinning H+/H2O changed the MDF, so they are still in the quotient")
+    assert "h" not in pinned.concentrations
 
 
 def test_tmfa_is_at_least_as_strict_as_per_reaction_directionality(model):

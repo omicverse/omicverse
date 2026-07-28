@@ -24,16 +24,70 @@ from .._registry import register_function
 
 _RT = 2.579  # kJ/mol at 298.15 K
 
-# tiny ΔGf'° table (kJ/mol, pH7, I=0.1M) for a few central-metabolism species —
+# Transformed standard formation energies ΔfG'° (kJ/mol) at pH 7, I = 0.25 M —
 # a baseline so reaction_dg runs offline; NOT a substitute for eQuilibrator.
+#
+# These MUST be *transformed* (ΔfG'°) values, and mixing in an untransformed
+# ΔfG° for even one species corrupts every reaction that species appears in. An
+# earlier version of this table did exactly that: it carried the untransformed
+# ΔfG° of liquid water (-237.2 instead of -155.66) and untransformed values for
+# glucose (-915.9 vs -426.71) and the sugar phosphates, so ATP hydrolysis came
+# out at **+51.5 kJ/mol — endergonic**. Six of the eleven reactions in
+# ``DGF_VALIDATION`` were wrong, four of them by more than 40 kJ/mol.
+#
+# ``nadh`` is +60.6 relative to ``nad`` = 0. That value is not a formation
+# energy in isolation; it is fixed by the requirement that the NAD-linked
+# reactions come out right, and three independent ones (LDH, MDH, fumarate
+# reduction) agree on it to better than 1.5 kJ/mol. The previous +22.6 put every
+# NAD-linked reaction ~38 kJ/mol out, with the sign depending on which side NADH
+# sat — which is why malate dehydrogenase read +71.3 against a literature +29.7.
+#
+# Anything added here must keep ``check_dgf_table()`` passing.
 _DGF = {
-    "atp": -2298.2, "adp": -1424.7, "amp": -550.9, "pi": -1059.2,
-    "glc__D": -915.9, "g6p": -1763.9, "f6p": -1760.8, "fdp": -2601.4,
-    "pyr": -472.3, "pep": -1263.7, "lac__D": -516.7, "accoa": -178.4,
-    "co2": -386.0, "h2o": -237.2, "nad": 0.0, "nadh": 22.6, "h": 0.0,
-    "succ": -690.4, "fum": -604.2, "mal__L": -843.1, "oaa": -794.4,
-    "akg": -793.3, "cit": -1165.6, "icit": -1160.0, "glx": -468.6,
+    "atp": -2292.50, "adp": -1424.70, "amp": -554.83, "pi": -1059.49,
+    "glc__D": -426.71, "g6p": -1318.92, "f6p": -1315.74, "fdp": -2202.73,
+    "pyr": -352.40, "pep": -1185.68, "lac__D": -316.90, "accoa": -178.4,
+    "co2": -386.02, "h2o": -155.66, "nad": 0.0, "nadh": 60.6, "h": 0.0,
+    "succ": -530.53, "fum": -521.97, "mal__L": -682.85, "oaa": -713.42,
+    "akg": -633.55, "cit": -963.46, "icit": -955.70, "glx": -468.6,
 }
+
+#: Reactions with well-established ΔG'° (pH 7), used to validate :data:`_DGF`.
+#: ``(label, stoichiometry, literature ΔG'° in kJ/mol)``.
+DGF_VALIDATION = (
+    ("ATP hydrolysis", {"atp": -1, "h2o": -1, "adp": 1, "pi": 1}, -30.5),
+    ("phosphoglucose isomerase", {"g6p": -1, "f6p": 1}, 2.5),
+    ("phosphofructokinase", {"f6p": -1, "atp": -1, "fdp": 1, "adp": 1}, -14.2),
+    ("hexokinase", {"glc__D": -1, "atp": -1, "g6p": 1, "adp": 1}, -16.7),
+    ("pyruvate kinase", {"pep": -1, "adp": -1, "pyr": 1, "atp": 1}, -31.4),
+    ("lactate dehydrogenase",
+     {"pyr": -1, "nadh": -1, "h": -1, "lac__D": 1, "nad": 1}, -25.1),
+    ("fumarase", {"fum": -1, "h2o": -1, "mal__L": 1}, -3.6),
+    ("malate dehydrogenase",
+     {"mal__L": -1, "nad": -1, "oaa": 1, "nadh": 1, "h": 1}, 29.7),
+    ("aconitase", {"cit": -1, "icit": 1}, 6.3),
+    ("PEP carboxylase",
+     {"pep": -1, "co2": -1, "h2o": -1, "oaa": 1, "pi": 1}, -40.3),
+    ("fumarate reduction",
+     {"fum": -1, "nadh": -1, "h": -1, "succ": 1, "nad": 1}, -67.7),
+)
+
+
+def check_dgf_table(tolerance: float = 8.0) -> Dict[str, float]:
+    """Residuals of the built-in ΔfG'° table against :data:`DGF_VALIDATION`.
+
+    Returns ``{label: table_value - literature_value}`` for every reaction whose
+    residual exceeds ``tolerance`` kJ/mol — so an empty dict means the table is
+    consistent with all of them. Exposed rather than kept in the test suite
+    because a formation-energy table is exactly the kind of data that rots
+    silently: every number it produces looks like a number.
+    """
+    bad = {}
+    for label, stoich, literature in DGF_VALIDATION:
+        value = sum(coeff * _DGF[m] for m, coeff in stoich.items())
+        if abs(value - literature) > tolerance:
+            bad[label] = float(value - literature)
+    return bad
 
 
 def _clean(mid: str) -> str:
@@ -146,14 +200,17 @@ class MDFResult:
     bottleneck: str                   # limiting reaction id
     concentrations: Dict[str, float]  # optimal metabolite concentrations (M)
     driving_forces: Dict[str, float]  # per-reaction -ΔG' (kJ/mol)
+    cofactor_ratios: Dict[str, float] = field(default_factory=dict)
+    notes: List[str] = field(default_factory=list)
 
     @property
     def feasible(self) -> bool:
         return self.mdf > 0
 
     def __repr__(self) -> str:  # pragma: no cover
+        warn = "  [see .notes]" if self.notes else ""
         return (f"MDFResult(MDF={self.mdf:.2f} kJ/mol, feasible={self.feasible}, "
-                f"bottleneck={self.bottleneck!r})")
+                f"bottleneck={self.bottleneck!r}){warn}")
 
 
 @register_function(
@@ -200,14 +257,34 @@ def max_min_driving_force(
         raise ImportError(
             "ov.synbio.max_min_driving_force 需要 optlang(随 cobra 安装)。") from exc
 
+    import math
+    import warnings
+
     fixed = dict(fixed or {})
-    mets = sorted({m for r in reactions.values() for m in r})
+    notes: List[str] = []
+
+    # H+ and H2O must NOT enter the reaction quotient. dG0 here is the
+    # *transformed* ΔG'° at pH 7, which already carries the proton term, and
+    # water's activity is 1 in dilute solution. Including them double-counts:
+    # with h pinned at 1e-7 a reaction with one H+ on the product side picks up
+    # -RT*ln(1e-7) = +41.6 kJ/mol of driving force that does not exist.
+    ignored = {m for m in {m for r in reactions.values() for m in r}
+               if _clean(m) in ("h", "h2o")}
+    pinned_ignored = sorted(m for m in ignored if m in fixed)
+    if pinned_ignored:
+        warnings.warn(
+            f"fixed 里的 {pinned_ignored} 被忽略:ΔG'° 已经是 pH 7 转换过的值,"
+            f"H+ 再进反应商会重复计一次(每个 H+ 约 41.6 kJ/mol),"
+            f"水在稀溶液里活度为 1。", stacklevel=2)
+    for m in ignored:
+        fixed.pop(m, None)
+
+    mets = sorted({m for r in reactions.values() for m in r} - ignored)
     Model, Var, Constr, Obj = (optlang.Model, optlang.Variable,
                                optlang.Constraint, optlang.Objective)
     model = Model(name="MDF")
 
     # log-concentration variables (natural log)
-    import math
     lx = {}
     for m in mets:
         if m in fixed:
@@ -218,9 +295,13 @@ def max_min_driving_force(
     B = Var("B")                         # the min driving force to maximise
     model.add(list(lx.values()) + [B])
 
+    def quotient(stoich, value_of):
+        return sum(coeff * value_of(m) for m, coeff in stoich.items()
+                   if m not in ignored)
+
     # for each reaction: driving force df_r = -(dg0_r + RT * sum S*x) >= B
     for rid, stoich in reactions.items():
-        expr = dg0[rid] + _RT * sum(coeff * lx[m] for m, coeff in stoich.items())
+        expr = dg0[rid] + _RT * quotient(stoich, lambda m: lx[m])
         # -expr >= B  ->  -expr - B >= 0
         model.add(Constr(-expr - B, lb=0, name=f"df_{rid}"))
     model.objective = Obj(B, direction="max")
@@ -229,13 +310,35 @@ def max_min_driving_force(
     conc = {m: float(np.exp(lx[m].primal)) for m in mets}
     dfs = {}
     for rid, stoich in reactions.items():
-        val = -(dg0[rid] + _RT * sum(coeff * math.log(conc[m])
-                                     for m, coeff in stoich.items()))
-        dfs[rid] = float(val)
+        dfs[rid] = float(-(dg0[rid]
+                           + _RT * quotient(stoich, lambda m: math.log(conc[m]))))
     mdf = float(B.primal)
     bottleneck = min(dfs, key=dfs.get) if dfs else ""
+
+    # The LP will drive any unpinned cofactor pair to the corners of
+    # [c_min, c_max] because that is free driving force. A ratio of 1e4 is not a
+    # cell; report it rather than let a "feasible" verdict rest on it.
+    ratios: Dict[str, float] = {}
+    for num, den, low, high in (("nadh", "nad", 0.01, 1.0),
+                                ("nadph", "nadp", 0.5, 100.0),
+                                ("atp", "adp", 1.0, 100.0),
+                                ("accoa", "coa", 0.1, 10.0)):
+        keys = {_clean(m): m for m in conc}
+        if num in keys and den in keys and conc[keys[den]] > 0:
+            ratio = conc[keys[num]] / conc[keys[den]]
+            ratios[f"{num}/{den}"] = float(ratio)
+            unpinned = keys[num] not in fixed or keys[den] not in fixed
+            if unpinned and not (low <= ratio <= high):
+                notes.append(
+                    f"{num}/{den} = {ratio:.3g},生理范围约 {low}–{high}。"
+                    f"这个比值是 LP 自己选的,不是细胞里的值 —— 把它 fixed= 到实测"
+                    f"比值再看 MDF 是否还为正。")
+    if ratios and notes:
+        notes.append(
+            "MDF 为正但依赖非生理的辅因子比值时,通路实际上不可行。")
+
     return MDFResult(mdf=mdf, bottleneck=bottleneck, concentrations=conc,
-                     driving_forces=dfs)
+                     driving_forces=dfs, cofactor_ratios=ratios, notes=notes)
 
 
 @register_function(
@@ -289,6 +392,7 @@ class ThermoFBAResult:
     fluxes: Dict[str, float] = field(default_factory=dict)
     unconstrained_objective: float = 0.0
     blocked_forward: List[str] = field(default_factory=list)
+    already_irreversible: List[str] = field(default_factory=list)
     blocked_reverse: List[str] = field(default_factory=list)
     dg_range: Dict[str, tuple] = field(default_factory=dict)
     dg_prime: Dict[str, float] = field(default_factory=dict)
@@ -439,17 +543,46 @@ def thermo_fba(
     work = model.copy()
 
     if method == "directionality":
-        blocked_f, blocked_r = [], []
+        blocked_f, blocked_r, conflicts, already = [], [], [], []
         for rid, (lo, hi) in ranges.items():
             rxn = work.reactions.get_by_id(rid)
+            # Clamp, never assign. Assigning `lower_bound = 0.0` is a tightening
+            # only when the existing lower bound is negative; on a reaction with
+            # a forced minimum forward flux it *widens* the bound. ATPM in
+            # e_coli_core has bounds (8.39, 1000) — the non-growth-associated
+            # maintenance demand — so `lower_bound = 0.0` deleted the ATP
+            # maintenance requirement and the "thermodynamically constrained"
+            # model then grew at 0.9166 /h against an unconstrained 0.8739. A
+            # constraint that raises the objective is not a constraint.
             if lo > 0:
                 # Even at the most favourable concentrations the forward
                 # direction is uphill — it cannot carry flux.
-                rxn.upper_bound = 0.0
-                blocked_f.append(rid)
+                if rxn.lower_bound > 0:
+                    conflicts.append(rid)
+                    continue
+                if rxn.upper_bound > 0:          # only report a real change
+                    rxn.upper_bound = 0.0
+                    blocked_f.append(rid)
+                else:
+                    already.append(rid)
             elif hi < 0:
-                rxn.lower_bound = 0.0
-                blocked_r.append(rid)
+                if rxn.upper_bound < 0:
+                    conflicts.append(rid)
+                    continue
+                if rxn.lower_bound < 0:
+                    rxn.lower_bound = 0.0
+                    blocked_r.append(rid)
+                else:
+                    already.append(rid)
+        if already:
+            notes_dir = (f"{len(already)} 个反应的该方向本来就已经关着"
+                         f"({already[:6]}),没有新增约束 —— 不计入 n_constrained。")
+        if conflicts:
+            warnings.warn(
+                f"{len(conflicts)} 个反应的模型边界强制要求某个方向的通量,而热力学"
+                f"判定该方向不可行:{conflicts[:6]}。已跳过而非改动它们的边界 —— "
+                f"这类冲突要么是 ΔG'° 估计错了,要么是模型里的强制通量(如维持"
+                f"需求 ATPM)本来就不该参与方向性筛查。", stacklevel=2)
         sol = work.optimize()
         obj = float(sol.objective_value or 0.0)
         return ThermoFBAResult(
@@ -457,6 +590,7 @@ def thermo_fba(
             fluxes={k: float(v) for k, v in sol.fluxes.items()},
             unconstrained_objective=unconstrained,
             blocked_forward=blocked_f, blocked_reverse=blocked_r,
+            already_irreversible=already,
             dg_range=ranges, method="directionality",
             n_constrained=len(blocked_f) + len(blocked_r), status=str(sol.status),
         )

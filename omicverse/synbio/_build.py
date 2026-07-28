@@ -671,11 +671,25 @@ class ThermocyclerProgram:
     polymerase: str = "q5"
     notes: List[str] = field(default_factory=list)
 
+    #: Steps that run once per programme rather than once per cycle.
+    ONCE_ONLY = ("initial", "final_extension")
+
     @property
     def total_minutes(self) -> float:
-        per_cycle = sum(s for _, _, s in self.steps if _ != "initial")
-        return (sum(s for name, _, s in self.steps if name == "initial")
-                + self.cycles * per_cycle) / 60.0
+        """Wall-clock runtime of the programme, in minutes.
+
+        The obvious spelling of this is a trap: ``sum(s for _, _, s in
+        self.steps if _ != "initial")`` rebinds ``_`` to the *temperature* while
+        unpacking, so the condition compares a float against a string, is always
+        true, and folds the initial denaturation and the final extension into
+        every cycle. That reported 95.5 minutes for a 22.5-minute programme.
+        """
+        once = set(self.ONCE_ONLY)
+        per_cycle = sum(seconds for name, _temp, seconds in self.steps
+                        if name not in once)
+        one_off = sum(seconds for name, _temp, seconds in self.steps
+                      if name in once)
+        return (one_off + self.cycles * per_cycle) / 60.0
 
     def to_frame(self) -> "pd.DataFrame":
         import pandas as pd

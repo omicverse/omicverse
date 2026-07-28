@@ -50,11 +50,20 @@ def _revcomp(seq: str) -> str:
 # uses; they were originally fitted against E. coli and S. cerevisiae expression
 # data and are the reason species-specific variants (stAI, gtAI) exist at all —
 # so they are exposed as a parameter rather than hard-wired.
+#: Wobble penalties from dos Reis, Savva & Wernisch (2004), keyed
+#: **codon-base : anticodon-base** — the opposite order to the paper, which
+#: writes them anticodon-first. The values below are transposed accordingly.
+#:
+#: Getting that transposition wrong is easy and silent: an earlier version
+#: carried the paper's ``s(G:U) = 0.41`` under the key ``"G:U"`` even though this
+#: dict means by that key "codon ending G, read by U34" — which the paper calls
+#: ``s(U:G) = 0.68``. The two penalties were therefore swapped, under-weighting
+#: every U-ending codon and over-weighting every G-ending one.
 DEFAULT_WOBBLE_PENALTIES: Dict[str, float] = {
-    "G:U": 0.41,     # codon ending G read by U34 anticodon
-    "I:C": 0.28,     # inosine reading C
-    "I:A": 0.9999,   # inosine reading A
-    "U:G": 0.68,     # codon ending U read by G34
+    "G:U": 0.68,     # codon ending G read by U34 anticodon  = paper's s(U:G)
+    "I:C": 0.28,     # codon ending C read by inosine        = paper's s(I:C)
+    "I:A": 0.9999,   # codon ending A read by inosine        = paper's s(I:A)
+    "U:G": 0.41,     # codon ending U read by G34 anticodon  = paper's s(G:U)
 }
 
 #: tRNA gene copy numbers, keyed by anticodon, for two reference organisms.
@@ -62,27 +71,42 @@ DEFAULT_WOBBLE_PENALTIES: Dict[str, float] = {
 #: fitted parameters. Supply your own for any other host — that is the whole
 #: point of a *species-specific* index.
 TRNA_COPY_NUMBERS: Dict[str, Dict[str, int]] = {
+    # Counted from the RefSeq annotation of *E. coli* K-12 MG1655 (NC_000913.3):
+    # every one of the 86 annotated tRNA genes was located, its anticodon read
+    # out of the anticodon loop (U33 immediately 5', purine immediately 3'), and
+    # checked against the amino acid in the /product qualifier. 82 resolved
+    # unambiguously, plus proM (TGG), the two lysidine-modified ileX/ileY (keyed
+    # TAT because the modified C34 reads AUA), and selC (excluded).
+    #
+    # The previous table was wrong for 14 of the 20 amino acids: it put the gene
+    # count on the A-starting anticodon where *E. coli* actually uses a G- or
+    # T-starting one — ``CTT: 6`` for lysine, when MG1655 has six lysT/V/W/Y/Z/Q
+    # genes with anticodon **UUU** and no CUU-anticodon tRNA at all. The
+    # per-amino-acid totals gave it away: 7 alanine and 9 glycine genes against a
+    # real 5 and 6, and 89 genes against a real 86. The effect was to make the
+    # *minor* codon of Lys/Asn/Glu/Asp/Phe/Ile score higher than the major one,
+    # so tAI ranked E. coli's preferred AAA as its worst lysine codon.
     "e_coli": {
-        "AGC": 4, "GGC": 0, "CGC": 0, "TGC": 3,   # Ala
-        "ACG": 4, "CCG": 1, "CCT": 1, "TCG": 0, "TCT": 1, "GCG": 0,  # Arg
-        "ATT": 4, "GTT": 0,                        # Asn
-        "ATC": 3, "GTC": 0,                        # Asp
-        "ACA": 1, "GCA": 0,                        # Cys
+        "TGC": 3, "GGC": 2,                        # Ala (alaT/U/V, alaW/X)
+        "ACG": 4, "CCG": 1, "CCT": 1, "TCT": 1,   # Arg
+        "GTT": 4,                                  # Asn (asnT/U/V/W)
+        "GTC": 3,                                  # Asp (aspT/U/V)
+        "GCA": 1,                                  # Cys (cysT)
         "CTG": 2, "TTG": 2,                        # Gln
-        "CTC": 2, "TTC": 2,                        # Glu
-        "ACC": 4, "CCC": 1, "GCC": 3, "TCC": 1,   # Gly
-        "ATG": 1, "GTG": 0,                        # His
-        "AAT": 3, "GAT": 0, "CAT": 1,              # Ile
-        "CAA": 1, "TAA": 1, "CAG": 4, "TAG": 1, "GAG": 0,  # Leu
-        "CTT": 6, "TTT": 0,                        # Lys
-        "CAT_M": 8,                                # Met (elongator+initiator)
-        "AAA": 2, "GAA": 0,                        # Phe
-        "AGG": 1, "CGG": 1, "GGG": 0, "TGG": 1,   # Pro
-        "AGA": 2, "CGA": 0, "GGA": 0, "TGA": 1, "ACT": 1, "GCT": 0,  # Ser
-        "AGT": 2, "CGT": 1, "GGT": 0, "TGT": 1,   # Thr
-        "CCA": 1,                                  # Trp
-        "ATA": 3, "GTA": 0,                        # Tyr
-        "AAC": 5, "CAC": 0, "GAC": 2, "TAC": 0,   # Val
+        "TTC": 4,                                  # Glu (gltT/U/V/W)
+        "GCC": 4, "CCC": 1, "TCC": 1,             # Gly
+        "GTG": 1,                                  # His (hisR)
+        "GAT": 3, "TAT": 2,                        # Ile (ileT/U/V; ileX/Y lysidine)
+        "CAG": 4, "CAA": 1, "TAA": 1, "TAG": 1, "GAG": 1,  # Leu
+        "TTT": 6,                                  # Lys (lysT/V/W/Y/Z/Q)
+        "CAT": 6,                                  # Met (elongator + initiator)
+        "GAA": 2,                                  # Phe (pheU/V)
+        "CGG": 1, "GGG": 1, "TGG": 1,             # Pro (proK/L/M)
+        "GGA": 2, "CGA": 1, "TGA": 1, "GCT": 1,   # Ser
+        "GGT": 2, "CGT": 1, "TGT": 1,             # Thr
+        "CCA": 1,                                  # Trp (trpT)
+        "GTA": 3,                                  # Tyr (tyrT/U/V)
+        "TAC": 5, "GAC": 2,                        # Val
     },
     "s_cerevisiae": {
         "AGC": 11, "GGC": 0, "CGC": 0, "TGC": 5,
@@ -241,7 +265,11 @@ def tai(
         elif third == "A":                            # A3 also read by I34
             w += (1.0 - s["I:A"]) * copies.get(_revcomp(codon[:2] + "T"), 0)
         elif third == "G":                            # G3 also read by U34
-            w += (1.0 - s["G:U"]) * copies.get(_revcomp(codon[:2] + "T"), 0)
+            # The U34 reader's *gene* anticodon starts with T, i.e. it is
+            # revcomp(XY + "A") — not revcomp(XY + "T"), which is the A34/inosine
+            # gene and cannot pair with G3. Looking up the wrong tRNA left every
+            # G-ending codon whose exact anticodon is absent at weight zero.
+            w += (1.0 - s["G:U"]) * copies.get(_revcomp(codon[:2] + "A"), 0)
         W[codon] = w
 
     w_max = max(W.values()) if W else 1.0
@@ -1026,8 +1054,98 @@ def plot_integration_sites(sites: Sequence[IntegrationSite], ax=None):
     return fig, ax
 
 
+#: Codons preferred in highly expressed *E. coli* genes (Ikemura 1981;
+#: Sharp & Li 1987). tAI is a tRNA-availability index, not a usage index, so it
+#: is *not* expected to reproduce all of these — see :func:`check_trna_table`.
+ECOLI_OPTIMAL_CODONS: Dict[str, str] = {
+    "A": "GCT", "R": "CGT", "N": "AAC", "D": "GAC", "C": "TGC", "Q": "CAG",
+    "E": "GAA", "G": "GGT", "H": "CAC", "I": "ATC", "L": "CTG", "K": "AAA",
+    "F": "TTC", "P": "CCG", "T": "ACC", "Y": "TAC", "V": "GTT",
+}
+
+#: Number of tRNA genes per amino acid in *E. coli* K-12 MG1655, counted from
+#: NC_000913.3 — a hard constraint on :data:`TRNA_COPY_NUMBERS`.
+ECOLI_TRNA_TOTALS: Dict[str, int] = {
+    "A": 5, "R": 7, "N": 4, "D": 3, "C": 1, "Q": 4, "E": 4, "G": 6, "H": 1,
+    "I": 5, "L": 8, "K": 6, "M": 6, "F": 2, "P": 3, "S": 5, "T": 4, "W": 1,
+    "Y": 3, "V": 7,
+}
+
+
+def check_trna_table(host: str = "e_coli", min_optimal: int = 12) -> Dict[str, object]:
+    """Sanity-check a tRNA copy-number table. Empty result means it passed.
+
+    Two independent checks, both of which the previous *E. coli* table failed:
+
+    * **Gene totals per amino acid** against :data:`ECOLI_TRNA_TOTALS`. This is
+      the check that exposes a transposed table without needing any expression
+      data — the old one implied 7 alanine and 9 glycine tRNA genes where the
+      genome has 5 and 6, and 89 genes in total against a real 86.
+    * **Agreement with :data:`ECOLI_OPTIMAL_CODONS`**: how many amino acids have
+      their highly-expressed-gene codon ranked first by tAI weight. Currently
+      14 of 17. It is deliberately *not* required to be 17: tAI weights count
+      tRNA genes, and for the four-fold families (Ala, Gly, Val) *E. coli* has
+      more of the tRNA that reads the A-ending codon than the one Ikemura found
+      preferred. Requiring 17 would mean tuning the wobble penalties until they
+      reproduced a different index, which is the opposite of the point.
+
+    Returns a dict of failures, so ``not check_trna_table()`` is the assertion.
+    """
+    problems: Dict[str, object] = {}
+    if host not in TRNA_COPY_NUMBERS:
+        return {"host": f"{host!r} not in TRNA_COPY_NUMBERS"}
+    copies = TRNA_COPY_NUMBERS[host]
+
+    if host == "e_coli":
+        totals: Dict[str, int] = {}
+        for anticodon, n in copies.items():
+            aa = _CODON_TABLE_MIN.get(_revcomp(anticodon))
+            if aa and aa != "*":
+                totals[aa] = totals.get(aa, 0) + n
+        wrong = {aa: (totals.get(aa, 0), want)
+                 for aa, want in ECOLI_TRNA_TOTALS.items()
+                 if totals.get(aa, 0) != want}
+        if wrong:
+            problems["gene_totals"] = wrong
+
+        weights = _absolute_adaptiveness(copies, DEFAULT_WOBBLE_PENALTIES)
+        hit = []
+        for aa, best in ECOLI_OPTIMAL_CODONS.items():
+            family = {c: weights[c] for c, a in _CODON_TABLE_MIN.items()
+                      if a == aa and c in weights}
+            if family and max(family, key=family.get) == best:
+                hit.append(aa)
+        if len(hit) < min_optimal:
+            problems["optimal_codons"] = (
+                f"{len(hit)}/{len(ECOLI_OPTIMAL_CODONS)} optimal codons rank "
+                f"first, expected at least {min_optimal}")
+    return problems
+
+
+def _absolute_adaptiveness(copies: Mapping[str, int],
+                           penalties: Mapping[str, float]) -> Dict[str, float]:
+    """Per-codon absolute adaptiveness W — the core of :func:`tai`."""
+    W: Dict[str, float] = {}
+    for codon, aa in _CODON_TABLE_MIN.items():
+        if aa == "*":
+            continue
+        third = codon[2]
+        w = float(copies.get(_revcomp(codon), 0))
+        if third == "T":
+            w += (1.0 - penalties["U:G"]) * copies.get(_revcomp(codon[:2] + "C"), 0)
+        elif third == "C":
+            w += (1.0 - penalties["I:C"]) * copies.get(_revcomp(codon[:2] + "T"), 0)
+        elif third == "A":
+            w += (1.0 - penalties["I:A"]) * copies.get(_revcomp(codon[:2] + "T"), 0)
+        elif third == "G":
+            w += (1.0 - penalties["G:U"]) * copies.get(_revcomp(codon[:2] + "A"), 0)
+        W[codon] = w
+    return W
+
+
 __all__ = [
     "tai", "TAIResult", "TRNA_COPY_NUMBERS", "DEFAULT_WOBBLE_PENALTIES",
+    "check_trna_table", "ECOLI_OPTIMAL_CODONS", "ECOLI_TRNA_TOTALS",
     "rbs_library", "promoter_library", "ExpressionLibrary",
     "integration_sites", "IntegrationSite", "ECOLI_INTEGRATION_SITES",
     "plasmid_burden", "BurdenEstimate",
