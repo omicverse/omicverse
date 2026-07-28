@@ -124,7 +124,12 @@ def Stats_Spatial_Net(adata):
 
 
 def mclust_R(adata, num_cluster, modelNames='EEE', used_obsm='STAGATE', random_seed=666):
-    """Cluster an AnnData embedding with the pure-Python pymclustR backend."""
+    """Cluster an AnnData embedding with the pure-Python pymclustR backend.
+
+    The name is kept for backward compatibility; nothing here calls R any
+    more. See :func:`omicverse.external._pymclustr.fit_pymclustr` for where
+    the substitution is and is not numerically transparent.
+    """
     labels, _ = fit_pymclustr(
         adata.obsm[used_obsm],
         n_components=num_cluster,

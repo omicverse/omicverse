@@ -384,7 +384,11 @@ def cluster_post_process(adata, platform, k_neighbors = None, min_distance = Non
 
 
 def mclust(data, num_cluster, modelNames = 'EEE', random_seed = 818):
-    """Cluster data with pymclustR while preserving R's 1-based labels."""
+    """Cluster data with pymclustR while preserving R's 1-based labels.
+
+    See :func:`omicverse.external._pymclustr.fit_pymclustr` for where the
+    substitution for R ``mclust`` is and is not numerically transparent.
+    """
     labels, _ = fit_pymclustr(
         data,
         n_components=num_cluster,

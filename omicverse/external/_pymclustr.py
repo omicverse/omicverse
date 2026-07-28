@@ -1,4 +1,20 @@
-"""Shared adapter for the optional :mod:`pymclustR` backend."""
+"""Shared adapter for the optional :mod:`pymclustR` backend.
+
+This replaces the ``rpy2`` bridge the spatial wrappers used to embed, so an R
+installation is no longer required. For the ``EEE`` model those wrappers all
+default to, the substitution is numerically transparent: on a real 700-cell
+PCA embedding, ``pymclustR`` and R ``mclust`` 6.1.2 agree on log-likelihood
+and BIC to six decimals and place every cell in the same cluster (ARI 1.0) at
+both G=5 and G=7.
+
+That does not hold for every covariance model. ``pymclustR``'s own R-parity
+suite holds ``EVE`` and ``VVE`` only to a 50% log-likelihood tolerance and a
+55% label-agreement floor, because those two share one orientation matrix
+across components and their likelihood surface has several stationary points —
+R's Browne-McNicholas MM optimiser and ``pymclustR``'s Stiefel gradient
+descent can converge to different maxima. Callers who pass ``EVE`` or ``VVE``
+through ``model_names`` should not expect their previous R-derived labels.
+"""
 
 from __future__ import annotations
 
