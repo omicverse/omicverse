@@ -45,6 +45,7 @@ Quick-start
 >>> # --- single-cell TCR/BCR ---
 >>> adata = ov.airr.read_10x_vdj('filtered_contig_annotations.csv')
 >>> ov.airr.chain_qc(adata)
+>>> adata = ov.airr.filter_chains(adata, keep='paired')  # keep dual-TCR cells
 >>> ov.airr.define_clonotypes(adata)
 >>> ov.airr.clonal_expansion(adata)
 >>> ov.airr.clonotype_network(adata, min_cells=2)
@@ -61,7 +62,7 @@ Pipeline stages
 ---------------
 I/O                       ``read_10x_vdj``, ``read_airr``, ``read_tracer``,
                           ``from_airr_array``, ``simulate_airr``
-Single-cell QC            ``chain_qc``
+Single-cell QC            ``chain_qc``, ``filter_chains``
 Clonotypes (single-cell)  ``ir_dist``, ``define_clonotypes``,
                           ``define_clonotype_clusters``,
                           ``clonal_expansion``, ``clonotype_network``,
@@ -116,6 +117,7 @@ _LAZY_ATTRS: dict[str, tuple[str, str]] = {
     "airr_obs_columns":          (".io", "airr_obs_columns"),
     # --- single-cell QC ---
     "chain_qc":                  ("._qc", "chain_qc"),
+    "filter_chains":             ("._qc", "filter_chains"),
     # --- clonotypes (single-cell) ---
     "ir_dist":                   ("._clonotype", "ir_dist"),
     "define_clonotypes":         ("._clonotype", "define_clonotypes"),

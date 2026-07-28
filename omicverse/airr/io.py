@@ -62,7 +62,7 @@ _BCR_LOCI = {"IGH", "IGK", "IGL"}
 
 def airr_obs_columns() -> list[str]:
     """Return the full ordered list of per-cell AIRR ``obs`` columns."""
-    cols: list[str] = ["has_ir", "receptor_type"]
+    cols: list[str] = ["has_ir", "receptor_type", "multi_chain"]
     for slot in _CHAIN_SLOTS:
         for field in _CHAIN_FIELDS:
             cols.append(f"{slot}_{field}")
@@ -137,7 +137,10 @@ def _contigs_to_cells(contigs: pd.DataFrame) -> pd.DataFrame:
 
     For every cell the chains are split into the VJ and VDJ receptor arms;
     within each arm chains are ranked by ``duplicate_count`` and the top two
-    kept as the primary / secondary slot.
+    kept as the primary / secondary slot. Cells that carried more than two
+    chains in either arm are flagged in ``multi_chain`` — without it the
+    overflow would be indistinguishable from a genuine dual-receptor cell
+    once the extra contigs are dropped.
     """
     contigs = contigs.copy()
 
@@ -178,6 +181,8 @@ def _contigs_to_cells(contigs: pd.DataFrame) -> pd.DataFrame:
                 rec[f"{slot}_locus"] = contig.get("locus")
                 rec[f"{slot}_duplicate_count"] = contig.get("duplicate_count")
                 rec[f"{slot}_productive"] = _is_productive(contig.get("productive"))
+
+        rec["multi_chain"] = "True" if (len(vj) > 2 or len(vdj) > 2) else "False"
 
         loci = set(sub["locus"]) - {"NONE"}
         has_tcr = bool(loci & _TCR_LOCI)
