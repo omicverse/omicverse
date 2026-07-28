@@ -15,7 +15,8 @@ import numpy as np
 import pandas as pd
 
 from .._registry import register_function
-from ._stats_common import as_frame
+from ._plot_backend import style_axes
+from ._stats_common import as_frame, font_size
 
 __all__ = ["roc_auc_ci", "roc", "confusion"]
 
@@ -197,7 +198,7 @@ def roc(data: Any = None,
         title: Optional[str] = None,
         legend: bool = True,
         legend_loc: str = "lower right",
-        fontsize: float = 9,
+        fontsize: Optional[float] = None,
         linewidth: float = 1.6,
         return_stats: bool = False):
     r"""Plot one or more ROC curves.
@@ -352,14 +353,14 @@ def roc(data: Any = None,
     ax.set_xlim(-0.01, 1.01)
     ax.set_ylim(-0.01, 1.01)
     ax.set_aspect("equal", adjustable="box")
-    ax.set_xlabel(xlabel, fontsize=fontsize + 1)
-    ax.set_ylabel(ylabel, fontsize=fontsize + 1)
+    ax.set_xlabel(xlabel, fontsize=font_size(fontsize, "label"))
+    ax.set_ylabel(ylabel, fontsize=font_size(fontsize, "label"))
     if title:
-        ax.set_title(title, fontsize=fontsize + 2)
-    ax.tick_params(labelsize=fontsize)
-    ax.spines[["right", "top"]].set_visible(False)
+        ax.set_title(title, fontsize=font_size(fontsize, "title"))
+    ax.tick_params(labelsize=font_size(fontsize))
+    style_axes(ax)
     if legend:
-        ax.legend(loc=legend_loc, frameon=False, fontsize=fontsize - 1)
+        ax.legend(loc=legend_loc, frameon=False, fontsize=font_size(fontsize, "tick", -1))
 
     return (ax, {"curves": curves}) if return_stats else ax
 
@@ -399,7 +400,7 @@ def confusion(data: Any = None,
               xlabel: str = "Predicted",
               ylabel: str = "True",
               title: Optional[str] = None,
-              fontsize: float = 9,
+              fontsize: Optional[float] = None,
               return_stats: bool = False):
     r"""Plot a confusion matrix.
 
@@ -474,10 +475,10 @@ def confusion(data: Any = None,
 
     image = ax.imshow(matrix, cmap=cmap, aspect="equal",
                       vmin=0, vmax=matrix.max() if matrix.size else 1)
-    ax.set_xticks(range(n), labels, rotation=45, ha="right", fontsize=fontsize)
-    ax.set_yticks(range(n), labels, fontsize=fontsize)
-    ax.set_xlabel(xlabel, fontsize=fontsize + 1)
-    ax.set_ylabel(ylabel, fontsize=fontsize + 1)
+    ax.set_xticks(range(n), labels, rotation=45, ha="right", fontsize=font_size(fontsize))
+    ax.set_yticks(range(n), labels, fontsize=font_size(fontsize))
+    ax.set_xlabel(xlabel, fontsize=font_size(fontsize, "label"))
+    ax.set_ylabel(ylabel, fontsize=font_size(fontsize, "label"))
 
     if annot:
         if annot_fmt is None:
@@ -492,7 +493,7 @@ def confusion(data: Any = None,
                     pct = counts[i, j] / row_totals[i] * 100 if row_totals[i] else 0
                     text = f"{counts[i, j]:d}\n{pct:.1f}%"
                 ax.text(j, i, text, ha="center", va="center",
-                        fontsize=fontsize - 1,
+                        fontsize=font_size(fontsize, "tick", -1),
                         color="white" if value > threshold else "black")
 
     if grid:
@@ -522,12 +523,12 @@ def confusion(data: Any = None,
         values = np.column_stack([precision, recall, f1])
         strip.imshow(values, cmap="Greys", vmin=0, vmax=1, aspect="auto")
         strip.set_xticks(range(3), ["Prec", "Rec", "F1"], rotation=45,
-                         ha="right", fontsize=fontsize - 1)
+                         ha="right", fontsize=font_size(fontsize, "tick", -1))
         strip.set_yticks([])
         for i in range(n):
             for j in range(3):
                 strip.text(j, i, f"{values[i, j]:.2f}", ha="center",
-                           va="center", fontsize=fontsize - 2,
+                           va="center", fontsize=font_size(fontsize, "tick", -2),
                            color="white" if values[i, j] > 0.6 else "black")
         for spine in strip.spines.values():
             spine.set_visible(False)
@@ -541,12 +542,12 @@ def confusion(data: Any = None,
                 [1.48, 0.0, 0.045, 1.0]))
         else:
             cbar = ax.figure.colorbar(image, ax=ax, fraction=0.046, pad=0.04)
-        cbar.ax.tick_params(labelsize=fontsize - 1)
-        cbar.set_label("fraction" if normalize else "count", fontsize=fontsize)
+        cbar.ax.tick_params(labelsize=font_size(fontsize) - 1)
+        cbar.set_label("fraction" if normalize else "count", fontsize=font_size(fontsize))
 
     if title is None:
         title = (f"accuracy {stats['accuracy']:.3f} | balanced "
                  f"{stats['balanced_accuracy']:.3f} | kappa {stats['kappa']:.3f}")
-    ax.set_title(title, fontsize=fontsize, pad=8)
+    ax.set_title(title, fontsize=font_size(fontsize), pad=8)
 
     return (ax, stats) if return_stats else ax

@@ -20,7 +20,8 @@ import numpy as np
 import pandas as pd
 
 from .._registry import register_function
-from ._stats_common import as_frame, resolve_columns
+from ._plot_backend import style_axes
+from ._stats_common import as_frame, font_size, resolve_columns
 
 __all__ = ["meta_analysis", "forest"]
 
@@ -181,7 +182,7 @@ def forest(data: Any = None,
            xlabel: Optional[str] = None,
            title: Optional[str] = None,
            xlim: Optional[Tuple[float, float]] = None,
-           fontsize: float = 9,
+           fontsize: Optional[float] = None,
            return_stats: bool = False):
     r"""Draw a forest plot.
 
@@ -368,7 +369,7 @@ def forest(data: Any = None,
         ax.set_xscale("log")
 
     ax.set_yticks(yticks)
-    ax.set_yticklabels(yticklabels, fontsize=fontsize)
+    ax.set_yticklabels(yticklabels, fontsize=font_size(fontsize))
     for tick, row in zip(ax.get_yticklabels(), rows):
         if row["kind"] == "header":
             tick.set_fontweight("bold")
@@ -396,7 +397,7 @@ def forest(data: Any = None,
             if p_text:
                 text += f"   P={p_text}"
             ax.text(annotate_x, y, text, transform=transform, va="center",
-                    ha="left", fontsize=fontsize - 0.5,
+                    ha="left", fontsize=font_size(fontsize, "tick", -0.5),
                     fontstyle="italic" if row["kind"] == "summary" else "normal")
 
     if meta and "meta" in stats:
@@ -408,7 +409,7 @@ def forest(data: Any = None,
         # placed in the blank strip below the last row, inside the axes, so it
         # can never collide with the tick labels however tall the figure is
         ax.text(0.005, -0.62, het, transform=ax.get_yaxis_transform(),
-                va="center", ha="left", fontsize=fontsize - 1, color="0.35")
+                va="center", ha="left", fontsize=font_size(fontsize, "tick", -1), color="0.35")
 
     if xlim is not None:
         ax.set_xlim(*xlim)
@@ -423,16 +424,17 @@ def forest(data: Any = None,
         # renders 0.7 and 1.5 as "1"; %g keeps each tick readable instead
         ax.xaxis.set_major_formatter(FuncFormatter(lambda v, _: f"{v:g}"))
         ax.xaxis.set_minor_formatter(plt.NullFormatter())
-    ax.tick_params(axis="x", labelsize=fontsize)
+    ax.tick_params(axis="x", labelsize=font_size(fontsize))
 
     if xlabel is None:
         xlabel = names.get("estimate", "Effect size")
         if log_scale:
             xlabel = f"{xlabel} (ratio scale)"
-    ax.set_xlabel(xlabel, fontsize=fontsize + 1)
+    ax.set_xlabel(xlabel, fontsize=font_size(fontsize, "label"))
     if title:
-        ax.set_title(title, fontsize=fontsize + 2)
-    ax.spines[["right", "top", "left"]].set_visible(False)
+        ax.set_title(title, fontsize=font_size(fontsize, "title"))
+    style_axes(ax, spines=False)
+    ax.spines["bottom"].set_visible(True)
     ax.tick_params(axis="y", length=0)
 
     stats["rows"] = pd.DataFrame(

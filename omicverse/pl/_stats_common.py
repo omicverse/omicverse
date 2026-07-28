@@ -21,8 +21,8 @@ from typing import Any, Dict, Mapping, Optional, Tuple
 import numpy as np
 import pandas as pd
 
-__all__ = ["as_frame", "default_palette", "group_levels", "kde_curve",
-           "resolve_columns"]
+__all__ = ["as_frame", "default_palette", "font_size", "font_sizes",
+           "group_levels", "kde_curve", "resolve_columns"]
 
 
 def as_frame(data: Any) -> Optional[pd.DataFrame]:
@@ -223,3 +223,47 @@ def kde_curve(values, *, cut: float = 2.0, gridsize: int = 200,
         high = min(high, clip[1]) if clip[1] is not None else high
     grid = _np.linspace(low, high, gridsize)
     return grid, kernel(grid)
+
+
+def font_sizes(fontsize=None) -> Dict[str, float]:
+    """Label / tick / title / legend point sizes.
+
+    With ``fontsize=None`` — the default everywhere in ``ov.pl`` — the sizes
+    come from the rcParams that :func:`~omicverse.pl.plot_set` configured, so
+    a figure follows whatever the user set globally instead of a second,
+    hard-coded scale living inside the plotting functions.
+
+    An explicit ``fontsize`` overrides all four, keeping the tick size and
+    deriving the rest, which is what a caller passing ``fontsize=6`` for a
+    small panel means.
+    """
+    import matplotlib.pyplot as _plt
+    from matplotlib.font_manager import FontProperties as _FontProperties
+
+    def _points(value) -> float:
+        return float(_FontProperties(size=value).get_size_in_points())
+
+    if fontsize is None:
+        rc = _plt.rcParams
+        return {
+            "label": _points(rc["axes.labelsize"]),
+            "tick": _points(rc["xtick.labelsize"]),
+            "title": _points(rc["axes.titlesize"]),
+            "legend": _points(rc["legend.fontsize"]),
+        }
+    size = float(fontsize)
+    return {"label": size + 1, "tick": size, "title": size + 2,
+            "legend": size}
+
+
+def font_size(fontsize=None, role: str = "tick", delta: float = 0.0) -> float:
+    """One size from :func:`font_sizes`, optionally nudged by ``delta``.
+
+    ``role`` is ``'tick'`` (default), ``'label'``, ``'title'`` or ``'legend'``.
+    """
+    sizes = font_sizes(fontsize)
+    if role not in sizes:
+        raise ValueError(
+            f"`role` must be one of {sorted(sizes)}, got {role!r}."
+        )
+    return max(sizes[role] + delta, 1.0)

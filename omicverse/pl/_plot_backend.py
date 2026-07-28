@@ -522,6 +522,66 @@ def blue_palette()->list:
     examples=['texts = ov.utils.plot_text_set(texts, text_knock=0.6, text_maxsize=12)'],
     related=['bulk.geneset_plot_multi', 'utils.plot_cellproportion']
 )
+@register_function(
+    aliases=["坐标轴样式", "style_axes", "spine_style", "外移边框", "ov_frame"],
+    category="pl",
+    description=(
+        "Apply the OmicVerse axes convention — top/right spines hidden, "
+        "left/bottom offset outward by 10 points, grid off"
+    ),
+    examples=[
+        "fig, ax = plt.subplots()",
+        "ax.plot(x, y)",
+        "ov.pl.style_axes(ax)",
+        "# keep the spines where they are, just hide the top and right",
+        "ov.pl.style_axes(ax, outward=0)",
+        "# an image or a pie has no meaningful frame",
+        "ov.pl.style_axes(ax, spines=False)",
+    ],
+    related=["pl.plot_set", "pl.figure", "pl.multipanel"],
+)
+def style_axes(ax, *, outward: float = 10, spines: bool = True,
+               grid: bool = False, top: bool = False, right: bool = False):
+    r"""Apply the OmicVerse frame convention to an axes.
+
+    The house look — top and right spines hidden, the remaining two pushed
+    ``outward`` points away from the data, no grid — was written inline in
+    several plotting functions. This is that same code in one place, so a new
+    plot does not have to reinvent it and cannot drift from it.
+
+    Arguments
+    ---------
+    ax
+        Axes to style.
+    outward
+        Points to offset the left and bottom spines. ``10`` is the OmicVerse
+        convention; ``0`` leaves them against the data.
+    spines
+        ``False`` hides all four — right for an image, a pie, or anything
+        where a frame carries no information.
+    grid
+        Whether to draw the grid. Off by default, as elsewhere in ``ov.pl``.
+    top, right
+        Show those spines instead of hiding them.
+
+    Returns
+    -------
+    The same ``Axes``, so it can be chained.
+    """
+    ax.grid(grid)
+    ax.spines["top"].set_visible(bool(top))
+    ax.spines["right"].set_visible(bool(right))
+    if not spines:
+        for side in ("left", "bottom"):
+            ax.spines[side].set_visible(False)
+        return ax
+    for side in ("left", "bottom"):
+        ax.spines[side].set_visible(True)
+        if outward:
+            ax.spines[side].set_position(("outward", float(outward)))
+    return ax
+
+
 def plot_text_set(text, text_knock=2, text_maxsize=20):
     r"""Format text for plotting by adding line breaks.
     
@@ -582,122 +642,45 @@ def ticks_range(x,width):
         ticks=nticks+[0]+pticks
     return ticks
 
-def plot_boxplot(data,hue,x_value,y_value,width=0.6,title='',
-                 figsize=(6,3),palette=None,fontsize=10,
-                 legend_bbox=(1, 0.55),legend_ncol=1,):
-    r"""Create boxplot with jittered points for grouped data.
-    
-    Parameters
-    ----------
-    data:pd.DataFrame
-        Input table containing numeric values and grouping columns.
-    hue:str
-        Column name used for color grouping.
-    x_value:str
-        Column name used for x-axis category.
-    y_value:str
-        Column name containing numeric values.
-    width:float
-        Width of each box element.
-    title:str
-        Plot title.
-    figsize:tuple
-        Figure size.
-    palette:list or None
-        Color list for hue groups.
-    fontsize:int
-        Font size for labels and ticks.
-    legend_bbox:tuple
-        Legend anchor location.
-    legend_ncol:int
-        Number of legend columns.
-        
-    Returns
-    -------
-    Tuple[matplotlib.figure.Figure,matplotlib.axes.Axes]
-        Figure and axes containing grouped boxplot.
+def plot_boxplot(data, hue, x_value, y_value, width=0.6, title='',
+                 figsize=(6, 3), palette=None, fontsize=10,
+                 legend_bbox=(1, 0.55), legend_ncol=1, hue_order=None):
+    r"""Deprecated alias of :func:`omicverse.pl.boxplot`.
+
+    This was an earlier, shorter implementation of the same plot. It is now a
+    forwarding shim so there is one boxplot in ``ov.pl`` rather than two that
+    drift apart.
+
+    Two things are preserved so existing callers see the same figure:
+    ``width`` keeps its old default of 0.6, and ``hue_order`` defaults to the
+    order the hue levels first appear in ``data`` — which is what this
+    function did — rather than to ``boxplot``'s alphabetical order. Pass
+    ``hue_order`` explicitly to override.
+
+    The x categories are now sorted, which they were not before. That is the
+    one visible change, and it is a fix: the old order came from however the
+    rows happened to be grouped.
     """
+    from warnings import warn
 
-    #获取需要分割的数据
-    hue=hue
-    hue_datas=list(set(data[hue]))
+    warn(
+        "`ov.pl.plot_boxplot` is deprecated and will be removed in a future "
+        "release; use `ov.pl.boxplot` instead.",
+        DeprecationWarning,
+        stacklevel=2,
+    )
+    from ._bulk import boxplot as _boxplot
 
-    #获取箱线图的横坐标
-    x=x_value
-    ticks=list(set(data[x]))
+    if hue_order is None:
+        import pandas as _pd
 
-    #在这个数据中，我们有6个不同的癌症，每个癌症都有2个基因（2个箱子）
-    #所以我们需要得到每一个基因的6个箱线图位置，6个散点图的抖动
-    plot_data1={}#字典里的每一个元素就是每一个基因的所有值
-    plot_data_random1={}#字典里的每一个元素就是每一个基因的随机20个值
-    plot_data_xs1={}#字典里的每一个元素就是每一个基因的20个抖动值
+        hue_order = list(_pd.unique(_pd.Series(data[hue]).dropna()))
+    return _boxplot(data, hue=hue, x_value=x_value, y_value=y_value,
+                    width=width, title=title, figsize=figsize,
+                    palette=palette, fontsize=fontsize,
+                    legend_bbox=legend_bbox, legend_ncol=legend_ncol,
+                    hue_order=hue_order)
 
-
-    #箱子的参数
-    #width=0.6
-    y=y_value
-    for hue_data,num in zip(hue_datas,ticks_range(len(hue_datas),width)):
-        data_a=[]
-        data_a_random=[]
-        data_a_xs=[]
-        for i,k in zip(ticks,range(len(ticks))):
-            test_data=data.loc[((data[x]==i)&(data[hue]==hue_data)),y].tolist()
-            data_a.append(test_data)
-            if len(test_data)<20:
-                data_size=len(test_data)
-            else:
-                data_size=20
-            random_data=random.sample(test_data,data_size)
-            data_a_random.append(random_data)
-            data_a_xs.append(np.random.normal(k*len(hue_datas)+num, 0.04, len(random_data)))
-        #data_a=np.array(data_a)
-        data_a_random=np.array(data_a_random)
-        plot_data1[hue_data]=data_a 
-        plot_data_random1[hue_data]=data_a_random
-        plot_data_xs1[hue_data]=data_a_xs
-
-    fig, ax = plt.subplots(figsize=figsize)
-    #色卡
-    if palette==None:
-        palette=pyomic_palette()
-    #palette=["#a64d79","#674ea7"]
-    #绘制箱线图
-    for hue_data,hue_color,num in zip(hue_datas,palette,ticks_range(len(hue_datas),width)):
-        b1=ax.boxplot(plot_data1[hue_data], 
-                    positions=np.array(range(len(ticks)))*len(hue_datas)+num, 
-                    sym='', 
-                    widths=width,)
-        plt.setp(b1['boxes'], color=hue_color)
-        plt.setp(b1['whiskers'], color=hue_color)
-        plt.setp(b1['caps'], color=hue_color)
-        plt.setp(b1['medians'], color=hue_color)
-
-        clevels = np.linspace(0., 1., len(plot_data_random1[hue_data]))
-        for x, val, clevel in zip(plot_data_xs1[hue_data], plot_data_random1[hue_data], clevels):
-            plt.scatter(x, val,c=hue_color,alpha=0.4)
-
-    #坐标轴字体
-    #fontsize=10
-    #修改横坐标
-    ax.set_xticks(range(0, len(ticks) * len(hue_datas), len(hue_datas)), ticks,fontsize=fontsize)
-    #修改纵坐标
-    yticks=ax.get_yticks()
-    ax.set_yticks(yticks[yticks>=0],yticks[yticks>=0],fontsize=fontsize)
-
-    labels = hue_datas  #legend标签列表，上面的color即是颜色列表
-    color = palette
-    #用label和color列表生成mpatches.Patch对象，它将作为句柄来生成legend
-    patches = [ mpatches.Patch(color=color[i], label="{:s}".format(labels[i]) ) for i in range(len(hue_datas)) ] 
-    ax.legend(handles=patches,bbox_to_anchor=legend_bbox, ncol=legend_ncol,fontsize=fontsize)
-
-    #设置标题
-    ax.set_title(title,fontsize=fontsize+1)
-    #设置spines可视化情况
-    ax.spines['top'].set_visible(False)
-    ax.spines['right'].set_visible(False)
-    ax.spines['bottom'].set_visible(True)
-    ax.spines['left'].set_visible(True)
-    return fig,ax
 
 def plot_network(G:nx.Graph,G_type_dict:dict,G_color_dict:dict,pos_type:str='spring',pos_dim:int=2,
                 figsize:tuple=(4,4),pos_scale:int=10,pos_k=None,pos_alpha:float=0.4,

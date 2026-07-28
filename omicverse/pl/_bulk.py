@@ -5,6 +5,7 @@ import matplotlib.patches as mpatches
 import matplotlib.pyplot as plt
 import matplotlib
 from .._registry import register_function
+from ._plot_backend import style_axes
 
 @register_function(
     aliases=["火山图", "volcano", "volcano_plot", "差异基因可视化", "火山图绘制"],
@@ -304,13 +305,7 @@ def volcano(result,pval_name='qvalue',fc_name='log2FC',pval_max=None,FC_max=None
         fontweight='normal'
         )
 
-    plt.grid(False)
-    ax.spines['top'].set_visible(False)
-    ax.spines['right'].set_visible(False)
-    ax.spines['bottom'].set_visible(True)
-    ax.spines['left'].set_visible(True)
-    ax.spines['left'].set_position(('outward', 10))
-    ax.spines['bottom'].set_position(('outward', 10))
+    style_axes(ax)
 
 
     from adjustText import adjust_text
@@ -714,13 +709,7 @@ def boxplot(data,hue,x_value,y_value,width=0.3,title='',
     #设置标题
     ax.set_title(title,fontsize=fontsize+1)
     #设置spines可视化情况
-    plt.grid(False)
-    ax.spines['top'].set_visible(False)
-    ax.spines['right'].set_visible(False)
-    ax.spines['bottom'].set_visible(True)
-    ax.spines['left'].set_visible(True)
-    ax.spines['left'].set_position(('outward', 10))
-    ax.spines['bottom'].set_position(('outward', 10))
+    style_axes(ax)
     
     return fig,ax
 

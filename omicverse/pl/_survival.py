@@ -26,8 +26,9 @@ import numpy as np
 import pandas as pd
 
 from .._registry import register_function
-from ._stats_common import (as_frame, default_palette, group_levels,
-                            resolve_columns)
+from ._plot_backend import style_axes
+from ._stats_common import (as_frame, default_palette, font_size,
+                            group_levels, resolve_columns)
 
 __all__ = [
     "kaplan_meier",
@@ -587,11 +588,11 @@ def _draw_risk_table(ax_risk, times, labels, counts, colors, fontsize,
     ax_risk.set_ylim(-0.5, n - 0.5)
     ax_risk.invert_yaxis()
     ax_risk.set_yticks(range(n))
-    ax_risk.set_yticklabels(labels, fontsize=fontsize)
+    ax_risk.set_yticklabels(labels, fontsize=font_size(fontsize))
     for tick, color in zip(ax_risk.get_yticklabels(), colors):
         tick.set_color(color)
     ax_risk.set_xticks(times)
-    ax_risk.set_xticklabels([f"{v:g}" for v in times], fontsize=fontsize + 0.5)
+    ax_risk.set_xticklabels([f"{v:g}" for v in times], fontsize=font_size(fontsize) + 0.5)
     ax_risk.tick_params(axis="x", length=0, labelbottom=True)
     ax_risk.tick_params(axis="y", length=0)
     for spine in ax_risk.spines.values():
@@ -602,11 +603,11 @@ def _draw_risk_table(ax_risk, times, labels, counts, colors, fontsize,
             rel = (x - xlim[0]) / span
             ha = "left" if rel < 0.02 else ("right" if rel > 0.98 else "center")
             ax_risk.text(x, row, f"{int(value)}", ha=ha, va="center",
-                         fontsize=fontsize)
+                         fontsize=font_size(fontsize))
     ax_risk.set_ylabel("")
     if xlabel:
-        ax_risk.set_xlabel(xlabel, fontsize=fontsize + 1.5)
-    ax_risk.set_title("Number at risk", fontsize=fontsize, loc="left", pad=3)
+        ax_risk.set_xlabel(xlabel, fontsize=font_size(fontsize, "label", 0.5))
+    ax_risk.set_title("Number at risk", fontsize=font_size(fontsize), loc="left", pad=3)
 
 
 def _step_ci(ax, x, lo, hi, color, alpha):
@@ -665,7 +666,7 @@ def survival(data: Any = None,
              ylim: Optional[Tuple[float, float]] = None,
              legend: bool = True,
              legend_loc: str = "best",
-             fontsize: float = 9,
+             fontsize: Optional[float] = None,
              linewidth: float = 1.6,
              return_stats: bool = False):
     r"""Plot Kaplan-Meier survival curves.
@@ -778,7 +779,7 @@ def survival(data: Any = None,
             )
     if annotation:
         ax.text(0.98, 0.98, "\n".join(annotation), transform=ax.transAxes,
-                ha="right", va="top", fontsize=fontsize,
+                ha="right", va="top", fontsize=font_size(fontsize),
                 bbox=dict(boxstyle="round,pad=0.3", facecolor="white",
                           edgecolor="0.8", alpha=0.85))
 
@@ -789,21 +790,21 @@ def survival(data: Any = None,
         ax.set_yticklabels([f"{v:.0f}" for v in np.linspace(0, 100, 6)])
     time_label = xlabel if xlabel is not None else names.get("time", "Time")
     if ax_risk is None:
-        ax.set_xlabel(time_label, fontsize=fontsize + 1)
+        ax.set_xlabel(time_label, fontsize=font_size(fontsize, "label"))
     else:
         # the risk table below carries the time axis instead
         ax.tick_params(axis="x", labelbottom=False)
     ax.set_ylabel(
         ylabel if ylabel is not None
         else ("Survival probability (%)" if percent else "Survival probability"),
-        fontsize=fontsize + 1,
+        fontsize=font_size(fontsize, "label"),
     )
     if title:
-        ax.set_title(title, fontsize=fontsize + 2)
-    ax.tick_params(labelsize=fontsize)
-    ax.spines[["right", "top"]].set_visible(False)
+        ax.set_title(title, fontsize=font_size(fontsize, "title"))
+    ax.tick_params(labelsize=font_size(fontsize))
+    style_axes(ax)
     if legend and "group" in frame:
-        ax.legend(loc=legend_loc, frameon=False, fontsize=fontsize)
+        ax.legend(loc=legend_loc, frameon=False, fontsize=font_size(fontsize))
 
     if ax_risk is not None:
         ticks = (np.asarray(risk_table_times, dtype=float)
@@ -812,7 +813,7 @@ def survival(data: Any = None,
                                   if ax.get_xlim()[0] <= v <= ax.get_xlim()[1]]))
         counts = [_at_risk(t[g == level], ticks) for level in levels]
         _draw_risk_table(ax_risk, ticks, [str(lv) for lv in levels], counts,
-                         colors, fontsize - 0.5, ax.get_xlim(), time_label)
+                         colors, font_size(fontsize, "tick", -0.5), ax.get_xlim(), time_label)
         ax_risk.set_xlim(ax.get_xlim())
 
     return (ax, stats) if return_stats else ax
@@ -865,7 +866,7 @@ def cumulative_incidence(data: Any = None,
                          ylim: Optional[Tuple[float, float]] = None,
                          legend: bool = True,
                          legend_loc: str = "best",
-                         fontsize: float = 9,
+                         fontsize: Optional[float] = None,
                          linewidth: float = 1.6,
                          return_stats: bool = False):
     r"""Plot cumulative incidence functions under competing risks.
@@ -953,7 +954,7 @@ def cumulative_incidence(data: Any = None,
         result = grays_test(t, e, g, causes[0], groups=levels)
         stats.update(result)
         ax.text(0.02, 0.98, f"Gray's test {_format_p(result['pvalue'])}",
-                transform=ax.transAxes, ha="left", va="top", fontsize=fontsize,
+                transform=ax.transAxes, ha="left", va="top", fontsize=font_size(fontsize),
                 bbox=dict(boxstyle="round,pad=0.3", facecolor="white",
                           edgecolor="0.8", alpha=0.85))
 
@@ -968,20 +969,20 @@ def cumulative_incidence(data: Any = None,
         ax.set_yticklabels([f"{v * 100:.0f}" for v in ticks])
     time_label = xlabel if xlabel is not None else names.get("time", "Time")
     if ax_risk is None:
-        ax.set_xlabel(time_label, fontsize=fontsize + 1)
+        ax.set_xlabel(time_label, fontsize=font_size(fontsize, "label"))
     else:
         ax.tick_params(axis="x", labelbottom=False)
     ax.set_ylabel(
         ylabel if ylabel is not None
         else ("Cumulative incidence (%)" if percent else "Cumulative incidence"),
-        fontsize=fontsize + 1,
+        fontsize=font_size(fontsize, "label"),
     )
     if title:
-        ax.set_title(title, fontsize=fontsize + 2)
-    ax.tick_params(labelsize=fontsize)
-    ax.spines[["right", "top"]].set_visible(False)
+        ax.set_title(title, fontsize=font_size(fontsize, "title"))
+    ax.tick_params(labelsize=font_size(fontsize))
+    style_axes(ax)
     if legend:
-        ax.legend(loc=legend_loc, frameon=False, fontsize=fontsize)
+        ax.legend(loc=legend_loc, frameon=False, fontsize=font_size(fontsize))
 
     if ax_risk is not None:
         ticks = (np.asarray(risk_table_times, dtype=float)
@@ -990,7 +991,7 @@ def cumulative_incidence(data: Any = None,
                                   if ax.get_xlim()[0] <= v <= ax.get_xlim()[1]]))
         counts = [_at_risk(t[mask], ticks) for _, mask, _, _ in series]
         _draw_risk_table(ax_risk, ticks, [lab for *_, lab in series], counts,
-                         colors, fontsize - 0.5, ax.get_xlim(), time_label)
+                         colors, font_size(fontsize, "tick", -0.5), ax.get_xlim(), time_label)
         ax_risk.set_xlim(ax.get_xlim())
 
     return (ax, stats) if return_stats else ax

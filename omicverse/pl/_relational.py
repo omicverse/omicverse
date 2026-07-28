@@ -14,7 +14,9 @@ import numpy as np
 import pandas as pd
 
 from .._registry import register_function
-from ._stats_common import as_frame, default_palette, group_levels, resolve_columns
+from ._plot_backend import style_axes
+from ._stats_common import (as_frame, default_palette, font_size,
+                            group_levels, resolve_columns)
 
 __all__ = ["scatterplot", "lineplot", "regplot"]
 
@@ -104,7 +106,7 @@ def scatterplot(data: Any = None,
                 legend: bool = True,
                 legend_title: Optional[str] = None,
                 colorbar_label: Optional[str] = None,
-                fontsize: float = 9,
+                fontsize: Optional[float] = None,
                 return_stats: bool = False):
     r"""Plain y-against-x scatter.
 
@@ -186,21 +188,21 @@ def scatterplot(data: Any = None,
                            label=str(level), rasterized=rasterized)
             if legend:
                 ax.legend(title=legend_title or names.get("hue"), frameon=False,
-                          fontsize=fontsize, title_fontsize=fontsize)
+                          fontsize=font_size(fontsize), title_fontsize=font_size(fontsize))
     else:
         ax.scatter(xs, ys, s=sizes, color="#1F577B", alpha=alpha,
                    edgecolor=edgecolor, linewidths=0, rasterized=rasterized)
 
     if mappable is not None:
         bar = ax.figure.colorbar(mappable, ax=ax, fraction=0.04, pad=0.03)
-        bar.set_label(colorbar_label or "", fontsize=fontsize)
-        bar.ax.tick_params(labelsize=fontsize - 1)
+        bar.set_label(colorbar_label or "", fontsize=font_size(fontsize))
+        bar.ax.tick_params(labelsize=font_size(fontsize) - 1)
 
     if corr:
         value, pvalue, symbol = _correlation(xs, ys, corr)
         results.update(correlation=value, pvalue=pvalue, method=corr)
         ax.text(0.03, 0.97, _format_corr(value, pvalue, symbol),
-                transform=ax.transAxes, va="top", ha="left", fontsize=fontsize)
+                transform=ax.transAxes, va="top", ha="left", fontsize=font_size(fontsize))
     if diagonal:
         lo = min(xs.min(), ys.min())
         hi = max(xs.max(), ys.max())
@@ -212,13 +214,13 @@ def scatterplot(data: Any = None,
         ax.set_yscale("log")
 
     ax.set_xlabel(xlabel if xlabel is not None else names.get("x", ""),
-                  fontsize=fontsize + 1)
+                  fontsize=font_size(fontsize, "label"))
     ax.set_ylabel(ylabel if ylabel is not None else names.get("y", ""),
-                  fontsize=fontsize + 1)
+                  fontsize=font_size(fontsize, "label"))
     if title:
-        ax.set_title(title, fontsize=fontsize + 2)
-    ax.tick_params(labelsize=fontsize)
-    ax.spines[["right", "top"]].set_visible(False)
+        ax.set_title(title, fontsize=font_size(fontsize, "title"))
+    ax.tick_params(labelsize=font_size(fontsize))
+    style_axes(ax)
     return (ax, results) if return_stats else ax
 
 
@@ -275,7 +277,7 @@ def lineplot(data: Any = None,
              title: Optional[str] = None,
              legend: bool = True,
              legend_title: Optional[str] = None,
-             fontsize: float = 9,
+             fontsize: Optional[float] = None,
              return_stats: bool = False):
     r"""Line plot, aggregating repeated measurements at each x.
 
@@ -339,16 +341,16 @@ def lineplot(data: Any = None,
     if log_y:
         ax.set_yscale("log")
     ax.set_xlabel(xlabel if xlabel is not None else names.get("x", ""),
-                  fontsize=fontsize + 1)
+                  fontsize=font_size(fontsize, "label"))
     ax.set_ylabel(ylabel if ylabel is not None else names.get("y", ""),
-                  fontsize=fontsize + 1)
+                  fontsize=font_size(fontsize, "label"))
     if title:
-        ax.set_title(title, fontsize=fontsize + 2)
-    ax.tick_params(labelsize=fontsize)
-    ax.spines[["right", "top"]].set_visible(False)
+        ax.set_title(title, fontsize=font_size(fontsize, "title"))
+    ax.tick_params(labelsize=font_size(fontsize))
+    style_axes(ax)
     if legend and len(hues) > 1:
         ax.legend(title=legend_title or names.get("hue"), frameon=False,
-                  fontsize=fontsize, title_fontsize=fontsize)
+                  fontsize=font_size(fontsize), title_fontsize=font_size(fontsize))
 
     result = pd.concat(tables, ignore_index=True) if tables else pd.DataFrame()
     return (ax, result) if return_stats else ax
@@ -396,7 +398,7 @@ def regplot(data: Any = None,
             title: Optional[str] = None,
             legend: bool = True,
             legend_title: Optional[str] = None,
-            fontsize: float = 9,
+            fontsize: Optional[float] = None,
             return_stats: bool = False):
     r"""Scatter plus a fitted trend.
 
@@ -501,17 +503,17 @@ def regplot(data: Any = None,
             lines.append(format_pvalue(entry["pvalue"], "value"))
         if lines:
             ax.text(0.03, 0.97, "\n".join(lines), transform=ax.transAxes,
-                    va="top", ha="left", fontsize=fontsize)
+                    va="top", ha="left", fontsize=font_size(fontsize))
 
     ax.set_xlabel(xlabel if xlabel is not None else names.get("x", ""),
-                  fontsize=fontsize + 1)
+                  fontsize=font_size(fontsize, "label"))
     ax.set_ylabel(ylabel if ylabel is not None else names.get("y", ""),
-                  fontsize=fontsize + 1)
+                  fontsize=font_size(fontsize, "label"))
     if title:
-        ax.set_title(title, fontsize=fontsize + 2)
-    ax.tick_params(labelsize=fontsize)
-    ax.spines[["right", "top"]].set_visible(False)
+        ax.set_title(title, fontsize=font_size(fontsize, "title"))
+    ax.tick_params(labelsize=font_size(fontsize))
+    style_axes(ax)
     if legend and len(hues) > 1:
         ax.legend(title=legend_title or names.get("hue"), frameon=False,
-                  fontsize=fontsize, title_fontsize=fontsize)
+                  fontsize=font_size(fontsize), title_fontsize=font_size(fontsize))
     return (ax, results) if return_stats else ax

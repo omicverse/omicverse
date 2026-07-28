@@ -413,3 +413,138 @@ class TestMosaicPanelKeys:
         fig, axes = multipanel((1, 2), width=180, height=60, label=False)
         assert set(axes) == {(0, 0), (0, 1)}
         plt.close(fig)
+
+
+class TestHouseStyle:
+    """The new plots must follow ov.plot_set, not a second style system."""
+
+    @staticmethod
+    def _frame():
+        rng = np.random.default_rng(3)
+        return pd.DataFrame({"g": np.repeat(list("abcd"), 25),
+                             "v": rng.normal(size=100),
+                             "w": rng.lognormal(size=100)})
+
+    def test_style_axes_applies_the_convention(self):
+        import omicverse.pl as pl
+
+        fig, ax = plt.subplots()
+        pl.style_axes(ax)
+        assert not ax.spines["top"].get_visible()
+        assert not ax.spines["right"].get_visible()
+        for side in ("left", "bottom"):
+            assert ax.spines[side].get_position() == ("outward", 10.0)
+        plt.close(fig)
+
+    def test_style_axes_can_drop_the_frame_entirely(self):
+        import omicverse.pl as pl
+
+        fig, ax = plt.subplots()
+        pl.style_axes(ax, spines=False)
+        assert not any(ax.spines[s].get_visible() for s in ax.spines)
+        plt.close(fig)
+
+    @pytest.mark.parametrize("call", [
+        lambda pl, d: pl.barplot(d, "g", "v"),
+        lambda pl, d: pl.violinplot(d, "g", "v"),
+        lambda pl, d: pl.stripplot(d, "g", "v"),
+        lambda pl, d: pl.scatterplot(d, "w", "v"),
+        lambda pl, d: pl.histplot(d, "v"),
+        lambda pl, d: pl.regplot(d, "w", "v"),
+    ])
+    def test_generic_plots_use_the_house_frame(self, call):
+        import omicverse.pl as pl
+
+        ax = call(pl, self._frame())
+        assert not ax.spines["top"].get_visible()
+        assert ax.spines["left"].get_position() == ("outward", 10.0)
+        plt.close("all")
+
+    @pytest.mark.parametrize("configured", [9, 14, 18])
+    def test_font_size_follows_plot_set(self, configured):
+        """Regression: the new plots hard-coded fontsize=9 of their own."""
+        import omicverse.pl as pl
+
+        with plt.rc_context({"axes.labelsize": configured,
+                             "xtick.labelsize": configured - 1,
+                             "axes.titlesize": configured + 2}):
+            ax = pl.barplot(self._frame(), "g", "v", title="t")
+            assert ax.xaxis.label.get_size() == pytest.approx(configured)
+            assert ax.title.get_size() == pytest.approx(configured + 2)
+        plt.close("all")
+
+    def test_explicit_fontsize_still_overrides(self):
+        import omicverse.pl as pl
+
+        with plt.rc_context({"axes.labelsize": 20}):
+            ax = pl.barplot(self._frame(), "g", "v", fontsize=6)
+            assert ax.xaxis.label.get_size() == pytest.approx(7)  # 6 + 1
+        plt.close("all")
+
+    def test_font_size_resolves_named_rcparam_sizes(self):
+        import omicverse.pl as pl
+
+        with plt.rc_context({"font.size": 10, "axes.labelsize": "large"}):
+            assert pl.font_size(None, "label") > 10
+
+
+class TestDeprecatedAliases:
+    """Legacy names must keep working, warn, and render the modern plot."""
+
+    @staticmethod
+    def _frame():
+        rng = np.random.default_rng(4)
+        return pd.DataFrame({
+            "Gene": np.repeat(["GENE1", "GENE2"], 40),
+            "Type": np.tile(np.repeat(["Treatment", "Control"], 20), 2),
+            "Value": rng.normal(5, 1, 80),
+        })
+
+    def test_plot_boxplot_warns_and_forwards(self):
+        import omicverse.pl as pl
+
+        with pytest.warns(DeprecationWarning, match="plot_boxplot"):
+            fig, ax = pl.plot_boxplot(self._frame(), hue="Type",
+                                      x_value="Gene", y_value="Value")
+        assert ax is not None
+        plt.close("all")
+
+    def test_plot_boxplot_keeps_the_old_hue_order(self):
+        """`boxplot` sorts hue levels; the old function did not.
+
+        Flipping them would silently swap Treatment and Control in the
+        DESeq2 plots that call this through ov.bulk.
+        """
+        import omicverse.pl as pl
+
+        with pytest.warns(DeprecationWarning):
+            _, ax = pl.plot_boxplot(self._frame(), hue="Type",
+                                    x_value="Gene", y_value="Value")
+        labels = [t.get_text() for t in ax.get_legend().get_texts()]
+        assert labels == ["Treatment", "Control"]
+        plt.close("all")
+
+    def test_explicit_hue_order_still_wins(self):
+        import omicverse.pl as pl
+
+        with pytest.warns(DeprecationWarning):
+            _, ax = pl.plot_boxplot(self._frame(), hue="Type", x_value="Gene",
+                                    y_value="Value",
+                                    hue_order=["Control", "Treatment"])
+        labels = [t.get_text() for t in ax.get_legend().get_texts()]
+        assert labels == ["Control", "Treatment"]
+        plt.close("all")
+
+    @pytest.mark.parametrize("name", ["violin_old", "violin_box"])
+    def test_legacy_violins_warn(self, name):
+        import omicverse.pl as pl
+
+        adata = pytest.importorskip("anndata").AnnData(
+            np.zeros((40, 1), dtype=np.float32),
+            obs=pd.DataFrame({"g": np.repeat(list("ab"), 20),
+                              "v": np.random.default_rng(0).normal(size=40)}),
+        )
+        adata.var_names = ["gene"]
+        with pytest.warns(DeprecationWarning, match=name):
+            getattr(pl, name)(adata, keys="v", groupby="g")
+        plt.close("all")

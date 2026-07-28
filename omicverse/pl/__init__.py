@@ -247,6 +247,7 @@ from ._plot_backend import (
     palette,
     plot_set,
     plotset,
+    style_axes,
     ov_plot_set,
     style,
     plot_text_set,
@@ -302,6 +303,7 @@ from ._distribution import histplot, kdeplot, qqplot, ridgeplot
 from ._relational import lineplot, regplot, scatterplot
 from ._plotdata import (ObsView, PlotData, accepts_frame, as_plotdata,
                         get_matrix, get_values)
+from ._stats_common import font_size, font_sizes, kde_curve
 
 
 def curved_graph(*args, **kwargs):
@@ -490,6 +492,7 @@ __all__ = [
     "palette",
     "plot_set",
     "plotset",
+    "style_axes",
     "ov_plot_set",
     "style",
     "plot_text_set",
@@ -571,6 +574,9 @@ __all__ = [
     "accepts_frame",
     "get_values",
     "get_matrix",
+    "font_size",
+    "font_sizes",
+    "kde_curve",
     "PlotData",
     "ObsView",
 ]

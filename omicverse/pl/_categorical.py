@@ -24,8 +24,9 @@ import numpy as np
 import pandas as pd
 
 from .._registry import register_function
-from ._stats_common import (as_frame, default_palette, group_levels,
-                            kde_curve, resolve_columns)
+from ._plot_backend import style_axes
+from ._stats_common import (as_frame, default_palette, font_size,
+                            group_levels, kde_curve, resolve_columns)
 
 __all__ = [
     "barplot", "stripplot", "violinplot", "stackplot", "lollipopplot",
@@ -68,24 +69,24 @@ def _finish(ax, *, levels, names, xlabel, ylabel, title, fontsize, orient,
     if categorical_axis:
         if orient == "v":
             ax.set_xticks(range(len(levels)))
-            ax.set_xticklabels(labels, fontsize=fontsize,
+            ax.set_xticklabels(labels, fontsize=font_size(fontsize),
                                rotation=rotation,
                                ha="right" if rotation else "center")
         else:
             ax.set_yticks(range(len(levels)))
-            ax.set_yticklabels(labels, fontsize=fontsize)
+            ax.set_yticklabels(labels, fontsize=font_size(fontsize))
     cat_label = xlabel if xlabel is not None else names.get("x", "")
     val_label = ylabel if ylabel is not None else names.get("y", "")
     if orient == "v":
-        ax.set_xlabel(cat_label, fontsize=fontsize + 1)
-        ax.set_ylabel(val_label, fontsize=fontsize + 1)
+        ax.set_xlabel(cat_label, fontsize=font_size(fontsize, "label"))
+        ax.set_ylabel(val_label, fontsize=font_size(fontsize, "label"))
     else:
-        ax.set_ylabel(cat_label, fontsize=fontsize + 1)
-        ax.set_xlabel(val_label, fontsize=fontsize + 1)
+        ax.set_ylabel(cat_label, fontsize=font_size(fontsize, "label"))
+        ax.set_xlabel(val_label, fontsize=font_size(fontsize, "label"))
     if title:
-        ax.set_title(title, fontsize=fontsize + 2)
-    ax.tick_params(labelsize=fontsize)
-    ax.spines[["right", "top"]].set_visible(False)
+        ax.set_title(title, fontsize=font_size(fontsize, "title"))
+    ax.tick_params(labelsize=font_size(fontsize))
+    style_axes(ax)
 
 
 def _hue_legend(ax, hues, colors, title, fontsize, show):
@@ -95,8 +96,8 @@ def _hue_legend(ax, hues, colors, title, fontsize, show):
 
     ax.legend(handles=[Patch(facecolor=c, label=str(h))
                        for h, c in zip(hues, colors)],
-              title=title, frameon=False, fontsize=fontsize,
-              title_fontsize=fontsize)
+              title=title, frameon=False, fontsize=font_size(fontsize),
+              title_fontsize=font_size(fontsize))
 
 
 def _maybe_annotate(ax, frame, levels, test, correction, style, hide_ns,
@@ -110,7 +111,7 @@ def _maybe_annotate(ax, frame, levels, test, correction, style, hide_ns,
         ax, value=frame["y"].to_numpy(dtype=float),
         group=frame["x"].to_numpy(), order=levels, test=test,
         correction=correction, style=style, hide_ns=hide_ns, orient=orient,
-        fontsize=fontsize, return_stats=True,
+        fontsize=font_size(fontsize), return_stats=True,
     )
     return results
 
@@ -215,7 +216,7 @@ def barplot(data: Any = None,
             legend: bool = True,
             legend_title: Optional[str] = None,
             rotation: float = 0,
-            fontsize: float = 9,
+            fontsize: Optional[float] = None,
             random_state: int = 0,
             return_stats: bool = False):
     r"""Bars of a per-category summary, with error bars.
@@ -365,7 +366,7 @@ def stripplot(data: Any = None,
               legend: bool = True,
               legend_title: Optional[str] = None,
               rotation: float = 0,
-              fontsize: float = 9,
+              fontsize: Optional[float] = None,
               random_state: int = 0,
               return_stats: bool = False):
     r"""Every observation as a jittered point.
@@ -497,7 +498,7 @@ def violinplot(data: Any = None,
                legend: bool = True,
                legend_title: Optional[str] = None,
                rotation: float = 0,
-               fontsize: float = 9,
+               fontsize: Optional[float] = None,
                random_state: int = 0,
                return_stats: bool = False):
     r"""Kernel-density violins per category.
@@ -712,7 +713,7 @@ def stackplot(data: Any = None,
               legend_title: Optional[str] = None,
               legend_out: bool = True,
               rotation: float = 45,
-              fontsize: float = 9,
+              fontsize: Optional[float] = None,
               return_stats: bool = False):
     r"""Stacked composition bars.
 
@@ -789,7 +790,7 @@ def stackplot(data: Any = None,
                             fontsize=fontsize)
         else:
             ax.legend(title=legend_title or names.get("hue"), frameon=False,
-                      fontsize=fontsize)
+                      fontsize=font_size(fontsize))
     return (ax, matrix) if return_stats else ax
 
 
@@ -832,7 +833,7 @@ def lollipopplot(data: Any = None,
                  ylabel: Optional[str] = None,
                  title: Optional[str] = None,
                  colorbar_label: Optional[str] = None,
-                 fontsize: float = 9,
+                 fontsize: Optional[float] = None,
                  return_stats: bool = False):
     r"""Stem-and-dot chart of one value per label.
 
@@ -909,8 +910,8 @@ def lollipopplot(data: Any = None,
             rotation=0 if orient == "h" else 45)
     if "c" in table:
         bar = ax.figure.colorbar(points, ax=ax, fraction=0.035, pad=0.03)
-        bar.set_label(colorbar_label or "", fontsize=fontsize)
-        bar.ax.tick_params(labelsize=fontsize - 1)
+        bar.set_label(colorbar_label or "", fontsize=font_size(fontsize))
+        bar.ax.tick_params(labelsize=font_size(fontsize) - 1)
     ax.spines["left" if orient == "h" else "bottom"].set_visible(orient != "h")
     table = table.rename(columns={"x": "label", "y": "value", "c": "color_by"})
     return (ax, table) if return_stats else ax
@@ -936,7 +937,7 @@ def _pie(values, labels, colors, *, hole, ax, start_angle, percent, counts,
         explode=explode, labeldistance=label_distance,
         wedgeprops=dict(width=1.0 - hole, edgecolor=edgecolor,
                         linewidth=linewidth),
-        textprops=dict(fontsize=fontsize),
+        textprops=dict(fontsize=font_size(fontsize)),
     )
     if percent:
         for wedge, value in zip(wedges, values):
@@ -944,7 +945,7 @@ def _pie(values, labels, colors, *, hole, ax, start_angle, percent, counts,
             radius = 1.0 - (1.0 - hole) * (1 - pct_distance)
             ax.text(radius * np.cos(angle), radius * np.sin(angle),
                     f"{100 * value / total:.0f}%", ha="center", va="center",
-                    fontsize=fontsize - 1, color="white", weight="bold")
+                    fontsize=font_size(fontsize, "tick", -1), color="white", weight="bold")
     return wedges
 
 
@@ -988,7 +989,7 @@ def pieplot(data: Any = None,
             ax=None,
             figsize: Optional[Tuple[float, float]] = None,
             title: Optional[str] = None,
-            fontsize: float = 9,
+            fontsize: Optional[float] = None,
             return_stats: bool = False):
     r"""Pie chart of a composition.
 
@@ -1049,7 +1050,7 @@ def pieplot(data: Any = None,
                   hole=hole, ax=ax, start_angle=start_angle,
                   percent=percent_inside, counts=True,
                   label_style="none" if legend else label_style,
-                  fontsize=fontsize, explode=explode, edgecolor=edgecolor,
+                  fontsize=font_size(fontsize), explode=explode, edgecolor=edgecolor,
                   linewidth=linewidth, pct_distance=pct_distance,
                   label_distance=label_distance)
     if legend:
@@ -1058,13 +1059,13 @@ def pieplot(data: Any = None,
                   [f"{name}  ({100 * value / total:.1f}%)"
                    for name, value in series.items()],
                   loc=legend_loc, bbox_to_anchor=(1.0, 0.5), frameon=False,
-                  fontsize=fontsize)
+                  fontsize=font_size(fontsize))
     if centre_text:
         ax.text(0, 0, centre_text, ha="center", va="center",
-                fontsize=fontsize + 2)
+                fontsize=font_size(fontsize, "title"))
     ax.set_aspect("equal")
     if title:
-        ax.set_title(title, fontsize=fontsize + 2)
+        ax.set_title(title, fontsize=font_size(fontsize, "title"))
     shares = series / series.sum()
     return (ax, shares) if return_stats else ax
 
@@ -1140,7 +1141,7 @@ def slopeplot(data: Any = None,
               xlabel: Optional[str] = None,
               ylabel: Optional[str] = None,
               title: Optional[str] = None,
-              fontsize: float = 9,
+              fontsize: Optional[float] = None,
               return_stats: bool = False):
     r"""One line per subject across conditions.
 
@@ -1204,7 +1205,7 @@ def slopeplot(data: Any = None,
         if label_points:
             ax.annotate(str(name), (xs[-1], values[valid][-1]),
                         textcoords="offset points", xytext=(4, 0),
-                        fontsize=fontsize - 2, va="center")
+                        fontsize=font_size(fontsize, "tick", -2), va="center")
 
     if summary:
         if summary not in {"mean", "median"}:
@@ -1215,16 +1216,16 @@ def slopeplot(data: Any = None,
                 label=summary)
 
     ax.set_xticks(range(len(levels)))
-    ax.set_xticklabels([str(level) for level in levels], fontsize=fontsize)
+    ax.set_xticklabels([str(level) for level in levels], fontsize=font_size(fontsize))
     ax.set_xlim(-0.35, len(levels) - 0.65)
     ax.set_xlabel(xlabel if xlabel is not None else names.get("x", ""),
-                  fontsize=fontsize + 1)
+                  fontsize=font_size(fontsize, "label"))
     ax.set_ylabel(ylabel if ylabel is not None else names.get("y", ""),
-                  fontsize=fontsize + 1)
+                  fontsize=font_size(fontsize, "label"))
     if title:
-        ax.set_title(title, fontsize=fontsize + 2)
-    ax.tick_params(labelsize=fontsize)
-    ax.spines[["right", "top"]].set_visible(False)
+        ax.set_title(title, fontsize=font_size(fontsize, "title"))
+    ax.tick_params(labelsize=font_size(fontsize))
+    style_axes(ax)
 
     stats: Dict[str, Any] = {"wide": wide, "n_complete": int(len(complete))}
     if test:
@@ -1241,5 +1242,5 @@ def slopeplot(data: Any = None,
         ax.text(0.5, 1.01, f"{label}: {format_pvalue(pvalue, 'value')} "
                            f"(n={len(complete)})",
                 transform=ax.transAxes, ha="center", va="bottom",
-                fontsize=fontsize)
+                fontsize=font_size(fontsize))
     return (ax, stats) if return_stats else ax

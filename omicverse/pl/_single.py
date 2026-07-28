@@ -2,6 +2,7 @@ from ._scatterplot_backend import _embedding
 from .._registry import register_function
 from ._plotdata import get_values
 from ._plotdata import accepts_frame
+from ._plot_backend import style_axes
 import collections.abc as cabc
 from copy import copy
 from numbers import Integral
@@ -932,13 +933,7 @@ def bardotplot(adata,groupby,color,figsize=(8,3),return_values=False,
                    **scatter_kwargs)
 
 
-    plt.grid(False)
-    ax.spines['top'].set_visible(False)
-    ax.spines['right'].set_visible(False)
-    ax.spines['bottom'].set_visible(True)
-    ax.spines['left'].set_visible(True)
-    ax.spines['left'].set_position(('outward', 10))
-    ax.spines['bottom'].set_position(('outward', 10))
+    style_axes(ax)
 
     plt.xticks(rotation=xticks_rotation,fontsize=fontsize)
     plt.xlabel(xlabel,fontsize=fontsize+1)
@@ -1116,13 +1111,7 @@ def single_group_boxplot(adata,
     yticks = ax.get_yticks()
     ax.set_title(title, fontsize=fontsize+1,)
     plt.ylabel(ylabel, fontsize=fontsize+1, )
-    plt.grid(False)
-    ax.spines['top'].set_visible(False)
-    ax.spines['right'].set_visible(False)
-    ax.spines['bottom'].set_visible(True)
-    ax.spines['left'].set_visible(True)
-    ax.spines['left'].set_position(('outward', 10))
-    ax.spines['bottom'].set_position(('outward', 10))
+    style_axes(ax)
 
     if legend_plot == True:
         labels = list(plot_data.keys())
@@ -1582,13 +1571,7 @@ def violin_old(adata,keys=None,groupby=None,ax=None,figsize=(4,4),fontsize=13,
         fontsize=fontsize,
         **kwargs,
     )
-    plt.grid(False)
-    ax.spines['top'].set_visible(False)
-    ax.spines['right'].set_visible(False)
-    ax.spines['bottom'].set_visible(True)
-    ax.spines['left'].set_visible(True)
-    ax.spines['left'].set_position(('outward', 10))
-    ax.spines['bottom'].set_position(('outward', 10))
+    style_axes(ax)
     if ticks_fontsize==None:
         ticks_fontsize=fontsize-1
 
