@@ -105,6 +105,109 @@ class AssemblyResult:
     requires={},
     produces={},
 )
+@register_function(
+    aliases=["domesticate", "加酶切位点", "驯化片段", "flank_fragments",
+             "add_typeIIS_sites", "golden_gate_ready"],
+    category="synthetic_biology",
+    description="给片段两端加上 Type IIS 识别位点和指定的 4 nt 悬挂端,使其可用于 Golden Gate 组装 —— 这是设计到组装之间必做的一步('驯化'),不做 golden_gate 会直接拒绝片段。悬挂端按相邻片段首尾相接的顺序串起来:第 i 个片段的右端与第 i+1 个的左端用同一个悬挂端,最后一个的右端接回第一个的左端(环状)。同时检查片段内部是否已含该酶的位点 —— 内部位点会被酶切开,必须先在密码子层面去掉。Add Type IIS sites and overhangs so fragments can be Golden Gate assembled.",
+    examples=[
+        "ready = ov.synbio.domesticate([promoter, cds, term], overhangs=['AATG','AGGT','GCTT'])",
+        "asm = ov.synbio.golden_gate(ready)",
+    ],
+    related=["synbio.golden_gate", "synbio.design_overhang_set",
+             "synbio.overhang_fidelity", "synbio.restriction_map"],
+    requires={},
+    produces={},
+)
+def domesticate(fragments: Sequence[str], overhangs: Sequence[str],
+                enzyme: str = "BsaI", spacer: str = "A") -> List[str]:
+    """Flank each fragment with a Type IIS site and its junction overhangs.
+
+    ``overhangs[i]`` becomes the junction between fragment *i* and fragment
+    *i+1*, and the last wraps round to close the circle — so ``len(overhangs)``
+    must equal ``len(fragments)``.
+
+    Raises if a fragment already contains the enzyme's recognition site on either
+    strand: an internal site is cut by the enzyme and destroys the assembly, and
+    it cannot be fixed here — it has to be removed upstream, which for a coding
+    sequence means ``codon_optimize(..., avoid_enzymes=[enzyme])``.
+    """
+    site = {"BsaI": "GGTCTC", "BsmBI": "CGTCTC", "BbsI": "GAAGAC"}.get(
+        enzyme, "GGTCTC")
+    rsite = _revcomp(site)
+    frags = [str(f).upper().replace("U", "T") for f in fragments]
+    overs = [str(o).upper().replace("U", "T") for o in overhangs]
+    if len(overs) != len(frags):
+        raise ValueError(
+            f"{len(frags)} 个片段需要 {len(frags)} 个悬挂端(每个连接一个,最后一个"
+            f"闭合成环),给了 {len(overs)} 个。")
+    for over in overs:
+        if len(over) != 4:
+            raise ValueError(f"悬挂端必须是 4 nt,得到 {over!r}")
+    if len(set(overs)) != len(overs):
+        raise ValueError(f"悬挂端有重复,连接会错配:{overs}")
+
+    ready: List[str] = []
+    for i, frag in enumerate(frags):
+        for found, where in ((frag.find(site), "正向"), (frag.find(rsite), "反向")):
+            if found >= 0:
+                raise ValueError(
+                    f"第 {i + 1} 个片段内部第 {found} 位含 {enzyme} 位点"
+                    f"({where}) —— 酶会把片段切开。这一步无法修正:编码序列请用 "
+                    f"codon_optimize(..., avoid_enzymes=['{enzyme}']) 重新生成,"
+                    f"非编码片段请换一个酶或改序列。")
+        left = overs[i - 1]                      # closes with the previous one
+        right = overs[i]
+        ready.append(site + spacer + left + frag + right + spacer + rsite)
+    return ready
+
+
+@register_function(
+    aliases=["gibson_arms", "加同源臂", "Gibson同源臂", "overlap_arms",
+             "gibson_ready", "设计重叠区"],
+    category="synthetic_biology",
+    description="给片段两端加上与相邻片段的同源重叠区,使其可用于 Gibson/NEBuilder 组装 —— 与 Golden Gate 的驯化(domesticate)对应的必做一步,不做 gibson_assembly 会直接拒绝片段。每个片段的 3' 端接上下一个片段的前 overlap 个碱基;circular=True 时最后一个接回第一个。这些重叠区就是订购引物时要加的 5' 尾巴。Add homology arms so fragments can be Gibson assembled.",
+    examples=[
+        "ready = ov.synbio.gibson_arms([promoter, cds, term], overlap=25)",
+        "asm = ov.synbio.gibson_assembly(ready)",
+    ],
+    related=["synbio.gibson_assembly", "synbio.domesticate",
+             "synbio.design_primers"],
+    requires={},
+    produces={},
+)
+def gibson_arms(fragments: Sequence[str], overlap: int = 25,
+                circular: bool = True) -> List[str]:
+    """Append each fragment's downstream neighbour's first ``overlap`` bases.
+
+    These arms are what you actually order as 5' tails on the amplification
+    primers. ``gibson_assembly`` refuses fragments without them, which is correct
+    — Gibson joins by annealing chewed-back ends, and blunt fragments have nothing
+    to anneal to.
+    """
+    frags = [str(f).upper().replace("U", "T") for f in fragments]
+    if len(frags) < 2:
+        raise ValueError("Gibson 组装至少需要 2 个片段。")
+    if overlap < 15:
+        raise ValueError(
+            f"同源重叠区 {overlap} bp 太短;Gibson 通常用 20–40 bp,"
+            f"gibson_assembly 的下限是 20。")
+    for i, frag in enumerate(frags):
+        if len(frag) < overlap:
+            raise ValueError(
+                f"第 {i + 1} 个片段只有 {len(frag)} bp,短于 {overlap} bp 的重叠区 —— "
+                f"这么短的片段应该直接合成成寡核苷酸,不走 Gibson。")
+    ready: List[str] = []
+    last = len(frags) if circular else len(frags) - 1
+    for i, frag in enumerate(frags):
+        if i < last:
+            neighbour = frags[(i + 1) % len(frags)]
+            ready.append(frag + neighbour[:overlap])
+        else:
+            ready.append(frag)
+    return ready
+
+
 def golden_gate(fragments: Sequence[str], enzyme: str = "BsaI") -> AssemblyResult:
     """Simulate a Golden Gate assembly.
 
@@ -313,6 +416,8 @@ def read_genbank(path: str) -> Tuple[str, List[Dict]]:
     return str(rec.seq), feats
 
 
-__all__ = ["restriction_map", "golden_gate", "gibson_assembly",
+__all__ = [
+    "gibson_arms",
+    "domesticate","restriction_map", "golden_gate", "gibson_assembly",
            "annotate_construct", "write_genbank", "read_genbank",
            "AssemblyResult"]

@@ -302,6 +302,8 @@ _LAZY_ATTRS: dict[str, tuple[str, str]] = {
     "plot_design_balance":   ("._discrete", "plot_design_balance"),
     "plot_round_progress":   ("._discrete", "plot_round_progress"),
     "lookup_combination":    ("._discrete", "lookup_combination"),
+    "domesticate":           ("._assembly", "domesticate"),
+    "gibson_arms":           ("._assembly", "gibson_arms"),
     "compare_part_effects":  ("._discrete", "compare_part_effects"),
     "DISCRETE_DESIGNS":      ("._discrete", "DISCRETE_DESIGNS"),
     "Design":                ("._dbtl", "Design"),

@@ -545,3 +545,60 @@ def test_reconstruct_gem_rejects_a_proteome_that_does_not_exist(core):
 
     report = sb.reconstruct_gem(None, template=core, gene_map=gene_map)
     assert report.n_reactions < len(core.reactions), "nothing was carved"
+
+
+# ---------------------------------------------------------------------------
+# fragment preparation — the step between a design and an assembly
+# ---------------------------------------------------------------------------
+
+FRAGS = ["ATGAAACGCATTGCACTGGTTACC" * 3,
+         "GGCCTGGCAATTGCACGCGCACTG" * 3,
+         "AAAAAAGGCCGCTTTTGCGGCCTTTTTTTAAA"]
+
+
+def test_domesticated_fragments_assemble():
+    """golden_gate refuses raw fragments, and there was no function to prepare
+    them — so the step between a design and an assembly had to be written by hand
+    in every notebook that needed it."""
+    overhangs = sb.design_overhang_set(3)
+    with pytest.raises(ValueError, match="Type IIS"):
+        sb.golden_gate(FRAGS)
+    ready = sb.domesticate(FRAGS, overhangs=overhangs)
+    assembled = sb.golden_gate(ready)
+    assert assembled.circular
+    assert len(assembled.sequence) >= sum(len(f) for f in FRAGS)
+
+
+def test_domesticate_refuses_an_internal_enzyme_site():
+    """An internal site is cut by the enzyme and cannot be fixed at this stage."""
+    with pytest.raises(ValueError, match="内部"):
+        sb.domesticate(["GGTCTCAAAATGAAACGC"], overhangs=["AATG"])
+
+
+def test_domesticate_checks_the_overhang_set():
+    with pytest.raises(ValueError, match="悬挂端"):
+        sb.domesticate(FRAGS, overhangs=["AATG", "AGGT"])
+    with pytest.raises(ValueError, match="重复"):
+        sb.domesticate(FRAGS, overhangs=["AATG", "AATG", "AGGT"])
+    with pytest.raises(ValueError, match="4 nt"):
+        sb.domesticate(FRAGS, overhangs=["AAT", "AGGT", "GCTT"])
+
+
+def test_gibson_arms_make_fragments_assemblable():
+    with pytest.raises(ValueError, match="同源"):
+        sb.gibson_assembly(FRAGS, min_overlap=20)
+    armed = sb.gibson_arms(FRAGS, overlap=25)
+    assembled = sb.gibson_assembly(armed, min_overlap=20)
+    assert len(assembled.sequence) > 0
+    for original, prepared in zip(FRAGS, armed):
+        assert prepared.startswith(original)
+
+
+def test_gibson_arms_refuses_fragments_shorter_than_the_overlap():
+    with pytest.raises(ValueError, match="短于"):
+        sb.gibson_arms(["ATGCATGCATGC", "ATGCATGCATGC"], overlap=25)
+
+
+def test_gibson_arms_refuses_too_short_an_overlap():
+    with pytest.raises(ValueError, match="20"):
+        sb.gibson_arms(FRAGS, overlap=8)
