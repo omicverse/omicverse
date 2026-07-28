@@ -155,3 +155,41 @@ def test_spata2_missing_variable_raises_keyerror():
 
     with pytest.raises(KeyError):
         space.spata2_extract_variables(adata, "MissingGene")
+
+
+def test_identify_outliers_does_not_flag_an_intact_lattice():
+    """A regular Visium lattice has no isolated spots — the old rule said 880.
+
+    Every interior spot on a lattice has the same k-th neighbour distance, so the
+    median absolute deviation is zero in exact arithmetic and ~1e-14 in floating
+    point. The previous ``if mad == 0`` guard missed that, the threshold collapsed
+    onto the median, and a quarter of an intact section came back flagged.
+    """
+    step = 7.3
+    grid = np.array([[i * step, j * step] for i in range(30) for j in range(30)],
+                    dtype=float)
+    adata = AnnData(np.zeros((len(grid), 1), dtype=np.float32))
+    adata.obsm["spatial"] = grid
+
+    assert space.spata2_identify_outliers(adata, write_key=None).sum() == 0
+    assert space.spata2_identify_outliers(adata, method="mad", write_key=None).sum() == 0
+
+
+def test_identify_outliers_still_finds_genuinely_isolated_spots():
+    step = 7.3
+    grid = np.array([[i * step, j * step] for i in range(30) for j in range(30)],
+                    dtype=float)
+    planted = grid.max(axis=0) + np.array([[80.0, 80.0], [95.0, 70.0], [110.0, 90.0]])
+    coords = np.vstack([grid, planted])
+    adata = AnnData(np.zeros((len(coords), 1), dtype=np.float32))
+    adata.obsm["spatial"] = coords
+
+    flags = space.spata2_identify_outliers(adata, write_key=None).to_numpy()
+    assert flags[-3:].all()          # the planted spots
+    assert not flags[:-3].any()      # and nothing else
+
+
+def test_identify_outliers_rejects_an_unknown_method():
+    adata = make_spatial_adata()
+    with pytest.raises(ValueError, match="method must be"):
+        space.spata2_identify_outliers(adata, method="knn")

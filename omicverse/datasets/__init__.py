@@ -163,5 +163,9 @@ from ._metabolism import (
     metabolism_hnsc,
     metabolism_compass,
 )
+from ._spatial import (
+    # SPATA2's own example Visium slide, for the ov.space utility tutorial
+    spata2_example,
+)
 from ._signatures import load_signatures_from_file, predefined_signatures
 from ._crossspecies import saturn_frog_zebrafish
