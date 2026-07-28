@@ -78,6 +78,13 @@ def test_or_logic_needs_only_one_input():
 
 @pytest.fixture()
 def core():
+    """The bundled textbook GEM.
+
+    Gated rather than assumed: the `build` CI job installs omicverse without the
+    [synbio] extra, so cobra is absent there. Every test in this file that needs a
+    metabolic model goes through this fixture for exactly that reason.
+    """
+    pytest.importorskip("cobra", reason="needs omicverse[synbio] (cobra)")
     return sb.load_gem("textbook")
 
 
@@ -213,6 +220,7 @@ def test_mrna_design_scores_cai_against_the_requested_host():
     The same sequence scores 0.99 against the human table and 0.63 against
     E. coli, which inverted the baseline-versus-LinearDesign comparison.
     """
+    pytest.importorskip("dnachisel", reason="codon_optimize needs dnachisel")
     from omicverse.synbio._expression import cai
 
     design = sb.mrna_design(PROTEIN, method="baseline", host="human")
@@ -224,6 +232,7 @@ def test_mrna_design_scores_cai_against_the_requested_host():
 
 def test_mrna_design_cai_is_never_a_silent_zero():
     """``except Exception: cai_val = 0.0`` reads as 'terrible codon usage'."""
+    pytest.importorskip("dnachisel", reason="codon_optimize needs dnachisel")
     design = sb.mrna_design(PROTEIN, method="baseline", host="human")
     assert design.cai > 0.5
 
@@ -239,6 +248,7 @@ def test_energy_leak_detects_a_planted_futile_cycle(core):
     maintenance demand, so the sealed LP was infeasible, ``slim_optimize()``
     returned nan, and ``0.0 if val != val`` laundered that into a clean result.
     """
+    pytest.importorskip("cobra", reason="needs omicverse[synbio] (cobra)")
     import cobra
 
     from omicverse.synbio._reconstruct import _energy_leak
@@ -282,6 +292,7 @@ def test_validate_gem_finds_the_textbook_infeasible_loop(core):
 
 def test_harmonisation_rank_correlation_is_tautological_and_labelled_so():
     """It is 1.0 by construction, so it cannot be the check."""
+    pytest.importorskip("python_codon_tables", reason="codon usage tables")
     from omicverse.synbio._refseq import GAPDH_CDS
 
     result = sb.codon_harmonize(GAPDH_CDS, source_host="h_sapiens",
@@ -294,6 +305,7 @@ def test_harmonisation_rank_correlation_is_tautological_and_labelled_so():
 
 def test_harmonisation_flags_rare_codons_it_introduces():
     """Rank-mapping happily places CGA/AGG — the codons Rosetta strains rescue."""
+    pytest.importorskip("python_codon_tables", reason="codon usage tables")
     from omicverse.synbio._refseq import GAPDH_CDS
 
     result = sb.codon_harmonize(GAPDH_CDS, source_host="h_sapiens",
@@ -342,6 +354,7 @@ def test_ec_confidence_is_not_labelled_high_reliability():
 def test_rbs_strength_responds_to_shine_dalgarno_spacing():
     """The scorer had no spacing term, so rbs_library searched a variable it
     could not see: 6, 8, 10 and 12 nt spacers returned bit-identical rates."""
+    pytest.importorskip("RNA", reason="rbs_strength needs ViennaRNA")
     rates = {}
     for spacer in (2, 4, 8, 12, 14):
         utr = "TTTAAGA" + "AAGGAGG" + "A" * spacer
@@ -526,6 +539,7 @@ def test_ml_guided_design_returns_distinct_designs():
     combinatorial loop had already produced, so n_designs=6 returned 5 unique
     designs — and the duplicate double-weighted its mutation in any sequence
     logo drawn from the set."""
+    pytest.importorskip("esm", reason="needs omicverse[synbio] (fair-esm)")
     GB1 = "MTYKLILNGKTLKGETTTEAVDAATAEKVFKQYANDNGVDGEWTYDDATKTFTVTE"
     designs = sb.ml_guided_design(GB1, n_designs=6, n_mutations=3)
     keys = [frozenset(d.mutations) for d in designs]
@@ -612,6 +626,8 @@ def test_gibson_arms_refuses_too_short_an_overlap():
 
 @pytest.fixture(scope="module")
 def plate_run():
+    """The real 96-well run. Needs pyreadr — the dataset ships as R .rda."""
+    pytest.importorskip("pyreadr", reason="the growth dataset is an R .rda")
     od = sb.fetch_growth_dataset()
     return od, float(od.iloc[0, 1:].mean())
 
@@ -682,6 +698,7 @@ def test_the_fba_ratio_depends_on_the_growth_model(plate_run):
     Gompertz gives measured/FBA = 1.29 and fires the warning; the AIC-preferred
     model gives 0.91 and does not.
     """
+    pytest.importorskip("cobra", reason="needs omicverse[synbio] (cobra)")
     od, blank = plate_run
     model = sb.load_gem("textbook")
     ratios = {}
@@ -701,6 +718,7 @@ def test_the_real_dose_response_dataset_reproduces_the_published_ed50():
     A dose-response fitter demonstrated on a curve drawn from the equation it is
     fitting has not been checked against anything.
     """
+    pytest.importorskip("pyreadr", reason="the drc dataset is an R .rda")
     data = sb.fetch_dose_response_dataset()
     assert len(data) == 24
     assert data["concentration"].nunique() == 7
@@ -772,6 +790,7 @@ def test_plasmid_burden_says_which_input_is_driving_it(core):
 
 def test_rbs_library_spans_orders_of_magnitude():
     """Graded to actually be graded — the spacing term is what makes it possible."""
+    pytest.importorskip("dnachisel", reason="codon_optimize needs dnachisel")
     cds = sb.codon_optimize(sb.reference_protein('gfp'), host='e_coli').sequence
     library = sb.rbs_library(cds, n=6, target_range=(1.0, 1000.0))
     rates = library.to_frame()["predicted"]
@@ -848,6 +867,7 @@ def test_pathway_search_does_not_answer_import_it(core):
     """The one-step route to succinate was SUCCt2_2 — import succinate — with
     dctA named as the gene to express, and three of five routes were
     transporters."""
+    pytest.importorskip("cobra", reason="needs omicverse[synbio] (cobra)")
     routes = sb.pathway_search(core, "succ_c")
     assert routes, "excluding transport must not empty the result"
     for route in routes:
@@ -858,6 +878,7 @@ def test_pathway_search_does_not_answer_import_it(core):
 
 
 def test_pathway_search_can_still_include_transport_on_request(core):
+    pytest.importorskip("cobra", reason="needs omicverse[synbio] (cobra)")
     routes = sb.pathway_search(core, "succ_c", exclude_transport=False)
     assert routes
 
@@ -889,6 +910,7 @@ def test_sirna_ranking_uses_thermodynamic_asymmetry():
 def test_sirna_accessibility_mode_actually_computes_accessibility():
     """The docstring promised an accessibility tiebreak; a bare `except Exception
     -> nan` hid a NameError and the mode silently did nothing."""
+    pytest.importorskip("RNA", reason="rna_accessibility needs ViennaRNA")
     transcript = ("ATGGTTTACATGTTCCAATATGATTCCAGCAGCGATGATTATGGCAGCAGCGATTATGGCAGCAGC"
                   "GATTATGGCAGCAGCGATTATGGCAGCAGCGATTATGGCAGCAGCGATTATGGCAGCAGCGATT")
     designs = sb.sirna_design(transcript, n=2, rank_by_asymmetry=False)
