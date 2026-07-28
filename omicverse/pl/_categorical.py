@@ -323,7 +323,7 @@ def barplot(data: Any = None,
 
 
 @register_function(
-    aliases=["散点分布图", "stripplot", "抖动散点", "jitter_plot", "点图"],
+    aliases=["stripplot", "散点分布图", "抖动散点", "jitter_plot", "逐点分布图"],
     category="pl",
     description=(
         "Strip plot: every observation as a jittered point per category, "
@@ -446,11 +446,13 @@ def stripplot(data: Any = None,
 
 
 @register_function(
-    aliases=["小提琴图", "violinplot", "violin_plot", "分布小提琴"],
+    aliases=["violinplot", "表格小提琴图", "dataframe小提琴图", "long_form_violin",
+             "非adata小提琴图"],
     category="pl",
     description=(
-        "Violin plot from a table (no AnnData): kernel density per category, "
-        "optional split by a two-level factor, inner box/points, and brackets"
+        "Violin plot from a long-form DataFrame or bare arrays. For an "
+        "AnnData with genes, layers and .raw use ov.pl.violin instead — this "
+        "is the container-free version, with split/clip/inner and tests"
     ),
     examples=[
         "ax = ov.pl.violinplot(df, 'cell_type', 'score')",
@@ -674,7 +676,8 @@ def violinplot(data: Any = None,
 
 
 @register_function(
-    aliases=["堆叠柱状图", "stackplot", "stacked_bar", "组成图", "比例图"],
+    aliases=["stackplot", "堆叠柱状图", "stacked_bar", "表格组成图",
+             "非adata堆叠图"],
     category="pl",
     description=(
         "Stacked bars of composition per category — counts or proportions — "

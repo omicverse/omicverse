@@ -641,3 +641,99 @@ class TestRegistryLookupIsUnambiguous:
         registry = self._registry()
         hits = {str(e.get("full_name")) for e in registry.find("as_plotdata")}
         assert any(h.endswith("as_plotdata") for h in hits)
+
+
+class TestNewFunctionsDoNotStealAliases:
+    """A new function must not take a name that already means something else.
+
+    The registry keys entries by alias, last writer wins. ``violinplot``
+    listed "小提琴图" and "violin_plot", which ``ov.pl.violin`` already
+    claimed, so the most natural Chinese query for a violin plot resolved to
+    the new table-first function instead of the mature AnnData one. Three
+    more did the same: ``stackplot`` took "比例图" from ``cellproportion``,
+    and ``scatterplot`` and ``stripplot`` both took "点图" from ``dotplot``.
+
+    A new function earns its own aliases by naming what is *different* about
+    it — "表格小提琴图", not "小提琴图".
+    """
+
+    #: names this work added, by the module that owns them
+    ADDED = {
+        "survival", "cumulative_incidence", "kaplan_meier", "logrank_test",
+        "aalen_johansen", "grays_test", "roc", "confusion", "roc_auc_ci",
+        "forest", "meta_analysis", "compare_groups", "add_stat_annotation",
+        "format_pvalue", "barplot", "stripplot", "violinplot", "stackplot",
+        "lollipopplot", "pieplot", "donutplot", "slopeplot", "histplot",
+        "kdeplot", "ridgeplot", "qqplot", "scatterplot", "lineplot", "regplot",
+        "as_plotdata", "accepts_frame", "get_values", "get_matrix", "figure",
+        "multipanel", "add_panel_label", "savefig", "set_editable_text",
+        "take_legend_out",
+    }
+
+    @staticmethod
+    def _entries():
+        import omicverse.pl  # noqa: F401
+
+        from omicverse._registry import get_registry
+
+        seen, out = set(), []
+        for entry in get_registry()._registry.values():
+            full = str(entry.get("full_name") or "")
+            if not full.startswith("omicverse.") or "[" in full or full in seen:
+                continue
+            seen.add(full)
+            out.append((full.rsplit(".", 1)[-1], entry))
+        return out
+
+    def test_no_new_function_contests_an_existing_alias(self):
+        import collections
+
+        claims = collections.defaultdict(set)
+        for short, entry in self._entries():
+            for alias in entry.get("aliases") or []:
+                claims[str(alias).lower()].add(short)
+        stolen = []
+        for alias, owners in claims.items():
+            if len(owners) < 2:
+                continue
+            mine = owners & self.ADDED
+            theirs = owners - self.ADDED
+            if mine and theirs:
+                stolen.append(f"{alias!r}: {sorted(mine)} contests {sorted(theirs)}")
+        assert not stolen, sorted(stolen)
+
+    def test_the_generic_violin_query_still_reaches_ov_pl_violin(self):
+        import omicverse.pl  # noqa: F401
+
+        from omicverse._registry import get_registry
+
+        registry = get_registry()
+        for query in ("小提琴图", "violin_plot", "violin"):
+            entry = registry._registry.get(query)
+            assert entry is not None, query
+            assert str(entry.get("full_name")).endswith("._violin.violin"), (
+                f"{query!r} resolves to {entry.get('full_name')}, not ov.pl.violin"
+            )
+
+    def test_the_generic_queries_reach_their_original_owners(self):
+        import omicverse.pl  # noqa: F401
+
+        from omicverse._registry import get_registry
+
+        registry = get_registry()
+        for query, owner in (("比例图", "cellproportion"), ("点图", "dotplot")):
+            entry = registry._registry.get(query)
+            assert entry is not None, query
+            assert str(entry.get("full_name")).endswith(f".{owner}"), (
+                f"{query!r} resolves to {entry.get('full_name')}, not {owner}"
+            )
+
+    def test_the_new_function_is_still_reachable_by_its_own_name(self):
+        import omicverse.pl  # noqa: F401
+
+        from omicverse._registry import get_registry
+
+        registry = get_registry()
+        for query in ("violinplot", "表格小提琴图", "stackplot", "scatterplot"):
+            entry = registry._registry.get(query)
+            assert entry is not None, f"{query!r} became unreachable"

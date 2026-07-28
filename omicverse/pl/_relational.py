@@ -60,7 +60,7 @@ def _shift(data, *fields):
 
 
 @register_function(
-    aliases=["散点图", "scatterplot", "scatter", "点图", "相关散点图"],
+    aliases=["scatterplot", "散点图", "scatter", "相关散点图", "xy散点图"],
     category="pl",
     description=(
         "Scatter plot of y against x from a table, with categorical or "
