@@ -162,18 +162,25 @@ def test_filter_without_chain_qc():
 # the reader flag the classification depends on
 # --------------------------------------------------------------------------
 def _contigs(cell_chains):
-    """Build a 10x-style contig table: {cell: [(locus, umis), ...]}."""
+    """Build a 10x-style contig table.
+
+    ``{cell: [(locus, umis), ...]}``; a ``umis`` entry may instead be
+    ``(umis, None)`` to mark a contig that carries no CDR3.
+    """
     rows = []
     for cell, chains in cell_chains.items():
         for i, (locus, umis) in enumerate(chains):
+            has_cdr3 = True
+            if isinstance(umis, tuple):
+                umis, has_cdr3 = umis[0], umis[1] is not None
             rows.append({
                 "barcode": cell,
                 "contig_id": f"{cell}_{i}",
                 "chain": locus,  # 10x column name; the reader renames it to `locus`
                 "v_gene": f"{locus}V1",
                 "j_gene": f"{locus}J1",
-                "cdr3": f"CA{i}F",
-                "cdr3_nt": "TGT" * 4,
+                "cdr3": f"CA{i}F" if has_cdr3 else None,
+                "cdr3_nt": "TGT" * 4 if has_cdr3 else None,
                 "productive": "True",
                 "umis": umis,
             })
@@ -213,3 +220,63 @@ def test_reader_keeps_the_highest_umi_chains(tmp_path):
         adata.obs["VJ_2_duplicate_count"].iloc[0],
     ]
     assert sorted(float(x) for x in kept) == [30.0, 50.0]
+
+
+def test_overflow_is_counted_per_receptor_system(tmp_path):
+    """An ambient BCR contig must not make a dual-alpha T cell 'multichain'.
+
+    2 TRA + 1 TRB is a dual-alpha TCR; a stray IGK contig alongside it is
+    contamination from another receptor system, not a third TCR chain.
+    """
+    csv = tmp_path / "filtered_contig_annotations.csv"
+    _contigs({
+        "AAA-1": [("TRA", 30), ("TRA", 20), ("IGK", 8), ("TRB", 25)],
+        "BBB-1": [("TRA", 30), ("TRA", 20), ("TRA", 8), ("TRB", 25)],
+    }).to_csv(csv, index=False)
+
+    adata = ov.airr.read_10x_vdj(str(csv))
+    ov.airr.chain_qc(adata)
+    pairing = adata.obs["chain_pairing"].astype(str).to_dict()
+    assert pairing["AAA-1"] == "extra VJ"     # dual alpha + ambient IGK
+    assert pairing["BBB-1"] == "multichain"   # three genuine alpha chains
+
+
+def test_junctionless_contigs_are_not_chains(tmp_path):
+    """A contig with no CDR3 cannot define a clone, so it is not a chain.
+
+    It must neither trip the overflow flag nor take a slot away from a
+    contig that does carry a junction, however high its UMI count.
+    """
+    csv = tmp_path / "filtered_contig_annotations.csv"
+    _contigs({
+        # three TRA contigs, but one has no CDR3 -> two real chains
+        "AAA-1": [("TRA", 30), ("TRA", 20), ("TRA", (99, None)), ("TRB", 25)],
+        # the junction-less contig has the highest UMI count of the arm
+        "BBB-1": [("TRA", (99, None)), ("TRA", 20), ("TRB", 25)],
+    }).to_csv(csv, index=False)
+
+    adata = ov.airr.read_10x_vdj(str(csv))
+    assert adata.obs["multi_chain"].astype(str).to_dict()["AAA-1"] == "False"
+
+    ov.airr.chain_qc(adata)
+    pairing = adata.obs["chain_pairing"].astype(str).to_dict()
+    assert pairing["AAA-1"] == "extra VJ"
+    # the real chain outranks the junction-less one despite 20 UMIs vs 99
+    assert adata.obs.loc["BBB-1", "VJ_1_junction_aa"] is not None
+    assert float(adata.obs.loc["BBB-1", "VJ_1_duplicate_count"]) == 20.0
+    assert pairing["BBB-1"] == "single pair"
+
+
+def test_locus_without_junction_does_not_make_a_cell_ambiguous(tmp_path):
+    """A junction-less IGH contig must not mark a clean TRA+TRB cell ambiguous."""
+    csv = tmp_path / "filtered_contig_annotations.csv"
+    _contigs({
+        "AAA-1": [("TRA", 30), ("TRB", 25), ("IGH", (9, None))],
+        "BBB-1": [("TRA", 30), ("TRB", 25), ("IGH", 9)],
+    }).to_csv(csv, index=False)
+
+    adata = ov.airr.read_10x_vdj(str(csv))
+    ov.airr.chain_qc(adata)
+    pairing = adata.obs["chain_pairing"].astype(str).to_dict()
+    assert pairing["AAA-1"] == "single pair"  # IGH carries no CDR3 -> not a chain
+    assert pairing["BBB-1"] == "ambiguous"    # a real IGH chain in a T cell

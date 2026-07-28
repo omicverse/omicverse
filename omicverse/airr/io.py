@@ -59,6 +59,15 @@ _VDJ_LOCI = {"TRB", "TRD", "IGH"}
 _TCR_LOCI = {"TRA", "TRB", "TRG", "TRD"}
 _BCR_LOCI = {"IGH", "IGK", "IGL"}
 
+# The three receptor systems a cell can express. Chain overflow is counted
+# within a system, not across all of them: a cell with 2 TRA + 1 IGK carries
+# a dual-alpha TCR plus one ambient BCR contig, not a three-chain receptor.
+_RECEPTOR_SYSTEMS = (
+    {"TRA", "TRB"},          # alpha/beta TCR
+    {"TRG", "TRD"},          # gamma/delta TCR
+    {"IGH", "IGK", "IGL"},   # BCR
+)
+
 
 def airr_obs_columns() -> list[str]:
     """Return the full ordered list of per-cell AIRR ``obs`` columns."""
@@ -132,6 +141,35 @@ def _is_productive(val) -> bool:
     return bool(val) if val is not None and val == val else False
 
 
+def _has_chain_overflow(vj: pd.DataFrame, vdj: pd.DataFrame) -> bool:
+    """True if any single receptor system contributed more than two chains to an arm.
+
+    Only two slots per arm survive :func:`_contigs_to_cells`, so a cell that
+    brought more chains than that has had some dropped — the configuration
+    that suggests a doublet. Two refinements keep the flag honest:
+
+    * counting is per receptor system, so ambient contamination from another
+      system (an IGK contig in a T cell) does not masquerade as a multichain
+      TCR;
+    * contigs without a ``junction_aa`` are not chains and do not count, which
+      is the same rule :func:`~omicverse.airr._qc.chain_qc` applies when it
+      counts the filled slots.
+    """
+    def _real(frame: pd.DataFrame) -> pd.DataFrame:
+        if "junction_aa" not in frame.columns:
+            return frame
+        ja = frame["junction_aa"]
+        return frame[ja.notna() & ~ja.astype(str).isin(["", "None", "nan"])]
+
+    vj, vdj = _real(vj), _real(vdj)
+    for system in _RECEPTOR_SYSTEMS:
+        n_vj = int(vj["locus"].isin(system).sum())
+        n_vdj = int(vdj["locus"].isin(system).sum())
+        if n_vj > 2 or n_vdj > 2:
+            return True
+    return False
+
+
 def _contigs_to_cells(contigs: pd.DataFrame) -> pd.DataFrame:
     """Collapse a per-contig table into the per-cell AIRR ``obs`` frame.
 
@@ -157,16 +195,23 @@ def _contigs_to_cells(contigs: pd.DataFrame) -> pd.DataFrame:
     contigs["duplicate_count"] = (
         pd.to_numeric(contigs["duplicate_count"], errors="coerce").fillna(0)
     )
+    # A contig without a CDR3 cannot define a clone, so it must never outrank
+    # one that can — otherwise a junction-less contig takes the VJ_2 slot and
+    # the real second chain is dropped.
+    if "junction_aa" in contigs.columns:
+        ja = contigs["junction_aa"]
+        contigs["_has_junction"] = (
+            ja.notna() & ~ja.astype(str).isin(["", "None", "nan"])
+        ).astype(int)
+    else:
+        contigs["_has_junction"] = 0
+    _rank = ["_has_junction", "duplicate_count"]
 
     rows: dict[str, dict] = {}
     for cell_id, sub in contigs.groupby("cell_id"):
         rec: dict = {c: None for c in airr_obs_columns()}
-        vj = sub[sub["locus"].isin(_VJ_LOCI)].sort_values(
-            "duplicate_count", ascending=False
-        )
-        vdj = sub[sub["locus"].isin(_VDJ_LOCI)].sort_values(
-            "duplicate_count", ascending=False
-        )
+        vj = sub[sub["locus"].isin(_VJ_LOCI)].sort_values(_rank, ascending=False)
+        vdj = sub[sub["locus"].isin(_VDJ_LOCI)].sort_values(_rank, ascending=False)
         for arm, frame in (("VJ", vj), ("VDJ", vdj)):
             for i, (_, contig) in enumerate(frame.iterrows()):
                 if i >= 2:
@@ -182,7 +227,7 @@ def _contigs_to_cells(contigs: pd.DataFrame) -> pd.DataFrame:
                 rec[f"{slot}_duplicate_count"] = contig.get("duplicate_count")
                 rec[f"{slot}_productive"] = _is_productive(contig.get("productive"))
 
-        rec["multi_chain"] = "True" if (len(vj) > 2 or len(vdj) > 2) else "False"
+        rec["multi_chain"] = "True" if _has_chain_overflow(vj, vdj) else "False"
 
         loci = set(sub["locus"]) - {"NONE"}
         has_tcr = bool(loci & _TCR_LOCI)

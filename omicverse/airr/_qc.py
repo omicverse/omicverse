@@ -95,10 +95,15 @@ def _classify_cell(row: pd.Series) -> tuple[str, str]:
     n_vj = int(_has(row.get("VJ_1_junction_aa"))) + int(_has(row.get("VJ_2_junction_aa")))
     n_vdj = int(_has(row.get("VDJ_1_junction_aa"))) + int(_has(row.get("VDJ_2_junction_aa")))
 
+    # Only slots that carry a junction contribute a locus. The readers fill a
+    # slot from the best contig available, and plenty of those contigs have a
+    # locus but no CDR3 — counting them would make `receptor_subtype` see
+    # chains that `n_vj` / `n_vdj` do not, and a stray junction-less IGH would
+    # then mark a clean TRA+TRB cell 'ambiguous'.
     loci = set()
     for slot in ("VJ_1", "VJ_2", "VDJ_1", "VDJ_2"):
         loc = row.get(f"{slot}_locus")
-        if _has(loc):
+        if _has(loc) and _has(row.get(f"{slot}_junction_aa")):
             loci.add(str(loc).upper())
     subtype = _receptor_subtype(loci)
 
