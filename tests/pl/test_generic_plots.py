@@ -776,7 +776,7 @@ class TestKdeCut:
         from omicverse.pl._stats_common import kde_curve
 
         grid, density = kde_curve(self._sample(), cut=4)
-        assert np.trapz(density, grid) == pytest.approx(1.0, abs=1e-3)
+        assert trapezoid(density, grid) == pytest.approx(1.0, abs=1e-3)
 
     def test_degenerate_sample_does_not_raise(self):
         from omicverse.pl._stats_common import kde_curve
