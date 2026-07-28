@@ -822,7 +822,7 @@ class TestViolinLook:
         assert max(widths) - min(widths) > 1e-6
 
     def test_stripplot_overlay_draws_every_point(self, cells):
-        plain = violinplot(cells, "cell_type", "score")
+        plain = violinplot(cells, "cell_type", "score", stripplot=False)
         n_plain = sum(c.get_offsets().shape[0] for c in plain.collections
                       if c.get_offsets() is not None)
         plt.close("all")
@@ -845,3 +845,117 @@ class TestViolinLook:
         lowest = min(float(c.get_paths()[0].vertices[:, 1].min())
                      for c in self._bodies(ax))
         assert lowest >= -1e-9
+
+
+class TestViolinMerge:
+    """`ov.pl.violin` absorbed `violinplot`; neither picture may change.
+
+    The requirement was that the existing violin keep working exactly as it
+    did, so the new options route to the kernel-density renderer and the
+    default path is left alone. These tests pin that boundary, because a
+    delegation that fires too eagerly would silently restyle every violin in
+    the package.
+    """
+
+    @staticmethod
+    def _adata(cells):
+        anndata = pytest.importorskip("anndata")
+        out = anndata.AnnData(np.zeros((len(cells), 1), dtype=np.float32),
+                              obs=cells.copy())
+        out.var_names = ["gene"]
+        return out
+
+    def test_default_path_does_not_delegate(self, cells, monkeypatch):
+        """No advanced option -> the matplotlib engine, untouched."""
+        from omicverse.pl import _categorical
+
+        called = []
+        monkeypatch.setattr(_categorical, "_violin_kde",
+                            lambda *a, **k: called.append(1))
+        from omicverse.pl import violin
+
+        violin(self._adata(cells), keys=["score"], groupby="cell_type",
+               show=False)
+        assert not called, "the default violin was rerouted to the KDE engine"
+
+    @pytest.mark.parametrize("option", [
+        {"hue": "condition"}, {"split": True}, {"cut": 0}, {"clip": (0, None)},
+        {"inner": "box"}, {"orient": "h"}, {"scale": "area"}, {"test": "auto"},
+    ])
+    def test_each_new_option_delegates(self, cells, monkeypatch, option):
+        from omicverse.pl import _categorical
+
+        called = []
+        monkeypatch.setattr(_categorical, "_violin_kde",
+                            lambda *a, **k: called.append(k) or "sentinel")
+        from omicverse.pl import violin
+
+        if "hue" in option or "split" in option:
+            option.setdefault("hue", "condition")
+        out = violin(self._adata(cells), keys="score", groupby="cell_type",
+                     **option)
+        assert called, f"{option} did not reach the KDE engine"
+        assert out == "sentinel"
+
+    def test_violin_now_takes_a_dataframe(self, cells):
+        from omicverse.pl import violin
+
+        ax = violin(cells, keys="score", groupby="cell_type", show=False)
+        assert ax is not None
+        assert cells["cell_type"].dtype == object  # caller's frame untouched
+        plt.close("all")
+
+    def test_absorbed_options_actually_draw(self, cells):
+        from omicverse.pl import violin
+
+        for option in ({"hue": "condition", "split": True},
+                       {"test": "auto"}, {"cut": 0}, {"inner": "stick"},
+                       {"orient": "h"}):
+            ax = violin(cells, keys="score", groupby="cell_type", **option)
+            assert ax.collections, option
+            plt.close("all")
+
+    def test_return_stats_gives_the_test_back(self, cells):
+        from omicverse.pl import violin
+
+        ax, stats = violin(cells, keys="score", groupby="cell_type",
+                           test="auto", return_stats=True)
+        assert stats["test"] is not None
+        plt.close("all")
+
+    def test_multi_key_with_an_advanced_option_is_refused(self, cells):
+        from omicverse.pl import violin
+
+        with pytest.raises(ValueError, match="one key at a time"):
+            violin(cells, keys=["score", "counts"], groupby="cell_type",
+                   split=True, hue="condition")
+
+    def test_violinplot_warns_and_forwards(self, cells):
+        from omicverse.pl import violinplot as legacy
+
+        with pytest.warns(DeprecationWarning, match="ov.pl.violin"):
+            ax = legacy(cells, "cell_type", "score")
+        assert ax is not None
+        plt.close("all")
+
+    def test_violinplot_keeps_its_own_defaults(self, cells):
+        """The shim must not inherit violin's defaults for these four.
+
+        Each one changes the figure: `violin` draws no inner box, draws the
+        raw points, pins fontsize=13 and uses the matplotlib engine — all the
+        opposite of what violinplot did.
+        """
+        from matplotlib.collections import PolyCollection
+
+        from omicverse.pl import violinplot as legacy
+
+        with pytest.warns(DeprecationWarning):
+            ax = legacy(cells, "cell_type", "score")
+        bodies = [c for c in ax.collections if isinstance(c, PolyCollection)]
+        points = sum(c.get_offsets().shape[0] for c in ax.collections
+                     if not isinstance(c, PolyCollection)
+                     and c.get_offsets() is not None)
+        assert bodies, "no violin drawn"
+        assert points < len(cells), "the strip overlay was inherited from violin"
+        assert ax.get_lines(), "the inner quartile box is missing"
+        plt.close("all")

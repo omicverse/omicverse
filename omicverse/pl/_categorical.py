@@ -445,27 +445,7 @@ def stripplot(data: Any = None,
 
 
 
-@register_function(
-    aliases=["violinplot", "表格小提琴图", "dataframe小提琴图", "long_form_violin",
-             "非adata小提琴图"],
-    category="pl",
-    description=(
-        "Violin plot from a long-form DataFrame or bare arrays. For an "
-        "AnnData with genes, layers and .raw use ov.pl.violin instead — this "
-        "is the container-free version, with split/clip/inner and tests"
-    ),
-    examples=[
-        "ax = ov.pl.violinplot(df, 'cell_type', 'score')",
-        "# Two conditions mirrored in one violin",
-        "ax = ov.pl.violinplot(df, 'cell_type', 'score', hue='condition',",
-        "                      split=True)",
-        "# With a Kruskal-Wallis omnibus and corrected pairwise brackets",
-        "ax, res = ov.pl.violinplot(df, 'arm', 'value', test='auto',",
-        "                           return_stats=True)",
-    ],
-    related=["pl.violin", "pl.stripplot", "pl.barplot", "pl.compare_groups"],
-)
-def violinplot(data: Any = None,
+def _violin_kde(data: Any = None,
                x: Any = None,
                y: Any = None,
                *,
@@ -1247,3 +1227,62 @@ def slopeplot(data: Any = None,
                 transform=ax.transAxes, ha="center", va="bottom",
                 fontsize=font_size(fontsize))
     return (ax, stats) if return_stats else ax
+
+
+@register_function(
+    aliases=["violinplot", "表格小提琴图", "dataframe小提琴图", "long_form_violin",
+             "非adata小提琴图"],
+    category="pl",
+    description=(
+        "Violin plot from a long-form DataFrame or bare arrays. For an "
+        "AnnData with genes, layers and .raw use ov.pl.violin instead — this "
+        "is the container-free version, with split/clip/inner and tests"
+    ),
+    examples=[
+        "ax = ov.pl.violinplot(df, 'cell_type', 'score')",
+        "# Two conditions mirrored in one violin",
+        "ax = ov.pl.violinplot(df, 'cell_type', 'score', hue='condition',",
+        "                      split=True)",
+        "# With a Kruskal-Wallis omnibus and corrected pairwise brackets",
+        "ax, res = ov.pl.violinplot(df, 'arm', 'value', test='auto',",
+        "                           return_stats=True)",
+    ],
+    related=["pl.violin", "pl.stripplot", "pl.barplot", "pl.compare_groups"],
+)
+def violinplot(data: Any = None, x: Any = None, y: Any = None, **kwargs: Any):
+    r"""Deprecated: use :func:`omicverse.pl.violin`.
+
+    ``violin`` now covers everything this did — it accepts a DataFrame as well
+    as an AnnData, and gained ``hue`` / ``split`` / ``cut`` / ``clip`` /
+    ``inner`` / ``orient`` / ``test``. Two names for one plot is what made
+    ``ov.pl.violin`` and this function look like they came from different
+    libraries.
+
+    The translation is just the argument names: ``x`` is ``groupby`` and ``y``
+    is ``keys``. Rendering is unchanged — this always routes through the
+    kernel-density engine, so an existing call produces the same figure it did
+    before, with a warning.
+    """
+    from warnings import warn
+
+    warn(
+        "`ov.pl.violinplot` is deprecated; use `ov.pl.violin`, which now takes "
+        "a DataFrame and supports hue/split/cut/clip/inner/orient/test. "
+        "`violinplot(df, x, y)` becomes `violin(df, keys=y, groupby=x)`.",
+        DeprecationWarning,
+        stacklevel=2,
+    )
+    from ._violin import violin
+
+    # Keep this function's own defaults rather than inheriting violin's.
+    # The two signatures disagree on four of them, and every one changes the
+    # picture:
+    #   scale      forces the kernel-density engine (violin defaults to the
+    #              matplotlib one)
+    #   inner      violinplot drew the quartile box; violin defaults to none
+    #   stripplot  violin draws the raw points; violinplot did not
+    #   fontsize   violin pins 13; violinplot follows ov.plot_set
+    for name, value in (("scale", "width"), ("inner", "box"),
+                        ("stripplot", False), ("fontsize", None)):
+        kwargs.setdefault(name, value)
+    return violin(data, keys=y, groupby=x, **kwargs)
