@@ -9,6 +9,11 @@ on:
       - "scripts/ci/mcp-*.sh"
       - "scripts/ci/mcp-report-versions.py"
       - "requirements/mcp-*.txt"
+      # The MCP runtime is installed as omicverse[tests,mcp], so its dependency
+      # set lives here. Leaving pyproject.toml out meant a change that broke the
+      # MCP install could not trigger these tests -- which is how a missing
+      # leidenalg went unnoticed for six weekly runs.
+      - "pyproject.toml"
   pull_request:
     branches: [master, dev]
     paths:
@@ -17,6 +22,11 @@ on:
       - "scripts/ci/mcp-*.sh"
       - "scripts/ci/mcp-report-versions.py"
       - "requirements/mcp-*.txt"
+      # The MCP runtime is installed as omicverse[tests,mcp], so its dependency
+      # set lives here. Leaving pyproject.toml out meant a change that broke the
+      # MCP install could not trigger these tests -- which is how a missing
+      # leidenalg went unnoticed for six weekly runs.
+      - "pyproject.toml"
   workflow_dispatch:
     inputs:
       profile:
