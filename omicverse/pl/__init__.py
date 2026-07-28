@@ -12,7 +12,10 @@ Visualization categories:
     Multi-omics plots: Factor plots, integration visualizations
     Network plots: Protein-protein interactions, pathway networks
     General plots: Heatmaps, scatter plots, bar plots
-    
+    Clinical plots: Kaplan-Meier survival, competing-risk incidence, forest
+    Model evaluation: ROC curves with DeLong CIs, confusion matrices
+    Figure assembly: journal-sized canvases, labelled panels, editable-text export
+
 Key modules:
     _single: Single-cell specific plotting functions
     _bulk: Bulk RNA-seq plotting functions
@@ -25,6 +28,10 @@ Key modules:
     _flowsig: Flow cytometry-style visualizations
     _embedding: Dimensionality reduction visualizations
     _density: Density and distribution plots
+    _survival: Kaplan-Meier and Aalen-Johansen curves, log-rank / Gray's test
+    _classification: ROC curves and confusion matrices
+    _forest: forest plots and fixed/random-effects meta-analysis
+    _layout: figure(), multipanel(), savefig() with Illustrator-editable text
     _funkyheatmap: dynbenchmark-style benchmark / multi-metric heatmaps
         (funky rectangles + circles + bars + pies + text + image glyphs,
         wraps the pyfunkyheatmap PyPI package)
@@ -254,6 +261,26 @@ from ._funkyheatmap import (
     position_arguments as funky_position_arguments,
     scale_minmax as funky_scale_minmax,
 )
+from ._layout import (
+    EDITABLE_TEXT_RCPARAMS,
+    JOURNAL_WIDTH_MM,
+    add_panel_label,
+    figure,
+    multipanel,
+    savefig,
+    set_editable_text,
+    take_legend_out,
+)
+from ._survival import (
+    aalen_johansen,
+    cumulative_incidence,
+    grays_test,
+    kaplan_meier,
+    logrank_test,
+    survival,
+)
+from ._classification import confusion, roc, roc_auc_ci
+from ._forest import forest, meta_analysis
 
 
 def curved_graph(*args, **kwargs):
@@ -473,4 +500,27 @@ __all__ = [
     "perturb_development_layout",
     "perturb_celloracle_layout",
     "perturb_markov_endpoints",
+    # @ _layout — figure geometry, panels, publication export
+    "JOURNAL_WIDTH_MM",
+    "EDITABLE_TEXT_RCPARAMS",
+    "figure",
+    "multipanel",
+    "add_panel_label",
+    "savefig",
+    "set_editable_text",
+    "take_legend_out",
+    # @ _survival — time-to-event
+    "survival",
+    "cumulative_incidence",
+    "kaplan_meier",
+    "logrank_test",
+    "aalen_johansen",
+    "grays_test",
+    # @ _classification — classifier evaluation
+    "roc",
+    "confusion",
+    "roc_auc_ci",
+    # @ _forest — effect sizes and meta-analysis
+    "forest",
+    "meta_analysis",
 ]
