@@ -562,10 +562,23 @@ def style_axes(ax, *, outward: float = 10, spines: bool = True,
         for side in ("left", "bottom"):
             ax.spines[side].set_visible(False)
         return ax
+    # Moving a spine makes matplotlib rebuild that axis's tick labels, which
+    # discards anything set through `set_xticklabels` — rotation and
+    # alignment most visibly. Carry them across the move.
+    keep = {
+        "x": [(t.get_rotation(), t.get_horizontalalignment())
+              for t in ax.get_xticklabels()],
+        "y": [(t.get_rotation(), t.get_horizontalalignment())
+              for t in ax.get_yticklabels()],
+    }
     for side in ("left", "bottom"):
         ax.spines[side].set_visible(True)
         if outward:
             ax.spines[side].set_position(("outward", float(outward)))
+    for axis, labels in (("x", ax.get_xticklabels()), ("y", ax.get_yticklabels())):
+        for text, (rotation, align) in zip(labels, keep[axis]):
+            text.set_rotation(rotation)
+            text.set_horizontalalignment(align)
     return ax
 
 

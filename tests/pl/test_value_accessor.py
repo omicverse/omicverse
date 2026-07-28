@@ -737,3 +737,56 @@ class TestNewFunctionsDoNotStealAliases:
         for query in ("violinplot", "表格小提琴图", "stackplot", "scatterplot"):
             entry = registry._registry.get(query)
             assert entry is not None, f"{query!r} became unreachable"
+
+
+class TestRotationSurvivesStyling:
+    """`rotation=` must reach the figure.
+
+    Moving a spine makes matplotlib rebuild that axis's tick labels and throw
+    away whatever `set_xticklabels` had set. Since `style_axes` moves both
+    spines by 10 points, every categorical plot silently rendered horizontal
+    labels however large `rotation=` was — visible as overlapping cell-type
+    names in the tutorial figures.
+    """
+
+    @staticmethod
+    def _frame():
+        rng = np.random.default_rng(0)
+        return pd.DataFrame({"ct": rng.choice(["aaaa", "bbbb", "cccc"], 150),
+                             "v": rng.normal(size=150)})
+
+    def test_moving_a_spine_still_drops_rotation_in_bare_matplotlib(self):
+        """The upstream behaviour this guards against, pinned."""
+        fig, ax = plt.subplots()
+        ax.set_xticks([0, 1, 2])
+        ax.set_xticklabels(list("abc"), rotation=45)
+        ax.spines["bottom"].set_position(("outward", 10))
+        assert {t.get_rotation() for t in ax.get_xticklabels()} == {0.0}
+        plt.close(fig)
+
+    def test_style_axes_carries_rotation_across_the_move(self):
+        import omicverse.pl as pl
+
+        fig, ax = plt.subplots()
+        ax.set_xticks([0, 1, 2])
+        ax.set_xticklabels(list("abc"), rotation=45, ha="right")
+        pl.style_axes(ax)
+        assert {t.get_rotation() for t in ax.get_xticklabels()} == {45.0}
+        assert {t.get_horizontalalignment() for t in ax.get_xticklabels()} == {"right"}
+        plt.close(fig)
+
+    @pytest.mark.parametrize("name,call", [
+        ("barplot", lambda pl, d: pl.barplot(d, "ct", "v", rotation=45)),
+        ("stripplot", lambda pl, d: pl.stripplot(d, "ct", "v", rotation=45)),
+        ("stackplot", lambda pl, d: pl.stackplot(d, "ct", hue="ct", rotation=45)),
+        ("violin", lambda pl, d: pl.violin(d, keys="v", groupby="ct",
+                                           rotation=45, show=False)),
+    ])
+    def test_rotation_reaches_the_figure(self, name, call):
+        import omicverse.pl as pl
+
+        ax = call(pl, self._frame())
+        rotations = {t.get_rotation() for t in ax.get_xticklabels()
+                     if t.get_text()}
+        assert rotations == {45.0}, f"{name} rendered {rotations}"
+        plt.close("all")
