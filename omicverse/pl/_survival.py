@@ -621,7 +621,7 @@ def _step_ci(ax, x, lo, hi, color, alpha):
 
 
 @register_function(
-    aliases=["生存曲线", "survival", "kaplan_meier", "KM曲线", "km_plot", "生存分析图"],
+    aliases=["生存曲线", "survival", "KM曲线", "km_plot", "生存分析图", "生存曲线图"],
     category="pl",
     description=(
         "Kaplan-Meier survival curves with confidence band, censoring marks, "
@@ -821,7 +821,7 @@ def survival(data: Any = None,
 
 @register_function(
     aliases=["累积发病率", "cumulative_incidence", "竞争风险", "competing_risks",
-             "CIF", "aalen_johansen"],
+             "累积发生率曲线"],
     category="pl",
     description=(
         "Aalen-Johansen cumulative incidence curves under competing risks, "

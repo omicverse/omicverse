@@ -315,19 +315,31 @@ class TestRegistryCoverage:
     def _public_names(self, callables_only: bool = True):
         """Public names of the new modules, keyed to the module they live in.
 
-        ``callables_only`` skips data constants such as ``JOURNAL_WIDTH_MM``
-        and ``EDITABLE_TEXT_RCPARAMS``: the registry indexes *capabilities an
-        agent can invoke*, and a dict of column widths is not one. They still
-        have to be exported, which the export test checks.
+        ``callables_only`` skips three things, for three different reasons:
+
+        * data constants such as ``JOURNAL_WIDTH_MM`` — the registry indexes
+          *capabilities an agent can invoke*, and a dict of column widths is
+          not one;
+        * classes such as ``PlotData`` and ``ObsView`` — registering a class
+          also registers its members, and ``PlotData.embedding`` then takes
+          the lookup key that belongs to ``ov.pl.embedding``. They are reached
+          through their factory, ``as_plotdata``, which is registered;
+        * anything in ``_plot_backend``, which stubs ``register_function`` out
+          on purpose because it holds the styling primitives.
+
+        All three must still be exported, which the export test checks.
         """
         import importlib
+        import inspect
 
         names = {}
         for module_name in self.MODULES:
             module = importlib.import_module(f"omicverse.pl.{module_name}")
             for name in getattr(module, "__all__", []):
-                if callables_only and not callable(getattr(module, name, None)):
-                    continue
+                target = getattr(module, name, None)
+                if callables_only:
+                    if not callable(target) or inspect.isclass(target):
+                        continue
                 names[name] = module_name
         return names
 
@@ -548,3 +560,84 @@ class TestDeprecatedAliases:
         with pytest.warns(DeprecationWarning, match=name):
             getattr(pl, name)(adata, keys="v", groupby="g")
         plt.close("all")
+
+
+class TestRegistryLookupIsUnambiguous:
+    """A name must resolve to the function that owns it.
+
+    The registry keys entries by alias and by short name, so an alias that
+    happens to equal another function's real name silently takes the key over
+    — asking for ``kaplan_meier`` returned ``survival``, because ``survival``
+    listed ``kaplan_meier`` among its aliases. Decorating a *class* had the
+    same effect through its members: ``PlotData.embedding`` claimed the key
+    ``embedding`` that belongs to ``ov.pl.embedding``.
+
+    These assertions cover the entries this work added. Capability branches
+    (``name[method=...]``) are excluded: sharing a method alias across the
+    functions that accept it is what that mechanism is for.
+    """
+
+    OWNED = (
+        "survival", "cumulative_incidence", "kaplan_meier", "logrank_test",
+        "aalen_johansen", "grays_test", "roc", "confusion", "roc_auc_ci",
+        "forest", "meta_analysis", "compare_groups", "add_stat_annotation",
+        "format_pvalue", "barplot", "stripplot", "violinplot", "stackplot",
+        "lollipopplot", "pieplot", "donutplot", "slopeplot", "histplot",
+        "kdeplot", "ridgeplot", "qqplot", "scatterplot", "lineplot", "regplot",
+        "as_plotdata", "accepts_frame", "get_values", "get_matrix",
+        "figure", "multipanel", "add_panel_label", "savefig",
+        "set_editable_text", "take_legend_out",
+    )
+
+    @staticmethod
+    def _registry():
+        import omicverse.pl  # noqa: F401
+
+        from omicverse._registry import get_registry
+
+        return get_registry()
+
+    def test_each_name_resolves_to_its_own_function(self):
+        registry = self._registry()
+        wrong = {}
+        for name in self.OWNED:
+            entry = registry._registry.get(name)
+            assert entry is not None, f"{name} is not in the registry at all"
+            full = str(entry.get("full_name"))
+            if not full.endswith(f".{name}"):
+                wrong[name] = full
+        assert not wrong, (
+            "these names resolve to a different function — an alias is "
+            f"shadowing them: {wrong}"
+        )
+
+    def test_no_alias_shadows_another_functions_name(self):
+        registry = self._registry()
+        owned = set(self.OWNED)
+        offenders = []
+        for entry in registry._registry.values():
+            full = str(entry.get("full_name") or "")
+            if "[" in full or not full.startswith("omicverse.pl."):
+                continue
+            short = full.rsplit(".", 1)[-1]
+            for alias in entry.get("aliases") or []:
+                alias = str(alias).lower()
+                if alias in owned and alias != short.lower():
+                    offenders.append(f"{short} claims the alias {alias!r}")
+        assert not offenders, sorted(set(offenders))
+
+    def test_decorating_a_class_does_not_leak_its_members(self):
+        registry = self._registry()
+        leaked = sorted({str(e.get("full_name")) for e in registry._registry.values()
+                         if ".PlotData." in str(e.get("full_name"))
+                         or ".ObsView." in str(e.get("full_name"))})
+        assert not leaked, (
+            "class members reached the lookup table; register the factory "
+            f"function instead of the class: {leaked}"
+        )
+
+    def test_the_factory_is_still_discoverable(self):
+        """Dropping the class decorators must not hide `as_plotdata`."""
+        registry = self._registry()
+        hits = {str(e.get("full_name")) for e in registry.find("as_plotdata")}
+        assert any(h.endswith("as_plotdata") for h in hits)

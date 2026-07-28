@@ -522,27 +522,14 @@ def blue_palette()->list:
     examples=['texts = ov.utils.plot_text_set(texts, text_knock=0.6, text_maxsize=12)'],
     related=['bulk.geneset_plot_multi', 'utils.plot_cellproportion']
 )
-@register_function(
-    aliases=["坐标轴样式", "style_axes", "spine_style", "外移边框", "ov_frame"],
-    category="pl",
-    description=(
-        "Apply the OmicVerse axes convention — top/right spines hidden, "
-        "left/bottom offset outward by 10 points, grid off"
-    ),
-    examples=[
-        "fig, ax = plt.subplots()",
-        "ax.plot(x, y)",
-        "ov.pl.style_axes(ax)",
-        "# keep the spines where they are, just hide the top and right",
-        "ov.pl.style_axes(ax, outward=0)",
-        "# an image or a pie has no meaningful frame",
-        "ov.pl.style_axes(ax, spines=False)",
-    ],
-    related=["pl.plot_set", "pl.figure", "pl.multipanel"],
-)
 def style_axes(ax, *, outward: float = 10, spines: bool = True,
                grid: bool = False, top: bool = False, right: bool = False):
     r"""Apply the OmicVerse frame convention to an axes.
+
+    Not in the function registry: this module hosts the styling primitives
+    (``plot_set``, ``palette``, ``ticks_range``, ...) and deliberately stubs
+    ``register_function`` out, because they are how a plot is configured
+    rather than something an agent is asked to produce.
 
     The house look — top and right spines hidden, the remaining two pushed
     ``outward`` points away from the data, no grid — was written inline in

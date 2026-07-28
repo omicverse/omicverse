@@ -227,20 +227,6 @@ def get_matrix(data: Any, keys: Sequence[str], *, layer: Optional[str] = None,
     return np.column_stack(columns).astype(float, copy=False)
 
 
-@register_function(
-    aliases=["绘图数据", "PlotData", "统一数据视图", "plot_data_view"],
-    category="pl",
-    description=(
-        "Uniform read access to metadata and feature values, whatever the underlying container — returned by ov.pl.as_plotdata"
-    ),
-    examples=[
-        'view = ov.pl.as_plotdata(adata)',
-        'view.obs, view.var_names, view.n_obs',
-        'view.values("CD3D", layer="counts")',
-        'view.has("leiden")',
-    ],
-    related=["pl.as_plotdata", "pl.get_values"],
-)
 class PlotData:
     """Uniform read access to metadata and feature values.
 
@@ -397,20 +383,6 @@ def as_plotdata(data: Any, *, obs: Optional[pd.DataFrame] = None,
     )
 
 
-@register_function(
-    aliases=["元数据视图", "ObsView", "obs视图", "metadata_view"],
-    category="pl",
-    description=(
-        "An AnnData-shaped, metadata-only view over a DataFrame — exposes .obs / .uns / .obs_names and raises an actionable error on .X"
-    ),
-    examples=[
-        'view = ov.pl.ObsView(df)',
-        'view.obs, view.uns, view.shape',
-        '# reaching for expression fails immediately, naming the problem',
-        "view.X   # AttributeError: ... has no 'X'. Pass an AnnData ...",
-    ],
-    related=["pl.accepts_frame", "pl.as_plotdata"],
-)
 class ObsView:
     """An ``AnnData``-shaped, metadata-only view over a ``DataFrame``.
 
