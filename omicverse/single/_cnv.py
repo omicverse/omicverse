@@ -28,6 +28,35 @@ from anndata import AnnData
 from .._registry import register_function
 
 
+_COPYKAT_INSTALL = "  pip install -U git+https://github.com/omicverse/py-CopyKAT.git"
+
+
+def _check_copykat_data() -> None:
+    """Verify the CopyKAT genome tables are actually reachable.
+
+    pycopykat resolves ``hg20_gene_anno.parquet`` and friends relative to its
+    own package directory; releases up to ``0.1.0.dev1`` looked one level
+    higher instead, which is the repo root for a source checkout but
+    ``site-packages/`` for a wheel install — so the tables were simply absent
+    and the first genome lookup blew up inside ``pandas.read_parquet``
+    (omicverse#903). Probing both locations here turns that into an actionable
+    message before any expensive work starts.
+    """
+    from pathlib import Path
+
+    import pycopykat
+
+    pkg = Path(pycopykat.__file__).resolve().parent
+    if (pkg / "data").is_dir() or (pkg.parent / "data").is_dir():
+        return
+    raise ImportError(
+        "pycopykat is installed but its genome reference tables "
+        f"(hg20/mm10 *_gene_anno.parquet) are missing — looked in {pkg / 'data'}. "
+        "Installs predating pycopykat 0.1.0.dev2 did not ship them. Reinstall with:\n"
+        f"{_COPYKAT_INSTALL}"
+    )
+
+
 def _check_dep(backend: str) -> None:
     """Lazy-import gate. Raises a clean ImportError pointing at the GitHub repo."""
     if backend == "copykat":
@@ -36,8 +65,9 @@ def _check_dep(backend: str) -> None:
         except ImportError as e:
             raise ImportError(
                 "pycopykat is required for method='copykat'. Install via:\n"
-                "  pip install git+https://github.com/omicverse/py-CopyKAT.git"
+                f"{_COPYKAT_INSTALL}"
             ) from e
+        _check_copykat_data()
     elif backend == "infercnv":
         try:
             import pyinfercnv  # noqa: F401
