@@ -7,6 +7,7 @@ import numpy as np
 import anndata
 from .._settings import add_reference
 from .._registry import register_function
+from ..external._pymclustr import fit_pymclustr
 
 mira_install=False
 def global_imports(modulename,shortname = None, asfunction = False):
@@ -153,7 +154,9 @@ def cluster(adata:anndata.AnnData,method:str='leiden',
         Number of clusters/components for ``'kmeans'``, ``'GMM'``, and
         ``'mclust'``.
     **kwargs
-        Extra keyword arguments forwarded to the selected backend.
+        Extra keyword arguments forwarded to the selected backend. For
+        ``method='pymclustR'``, ``key_added`` selects the output column;
+        the legacy spelling ``add_key`` is also accepted.
 
     Returns
     -------
@@ -211,31 +214,31 @@ def cluster(adata:anndata.AnnData,method:str='leiden',
         schist.inference.nested_model(adata, **kwargs)
         add_reference(adata,'schist','clustering with schist')
     elif method=='pymclustR':
-        # Pure-Python re-implementation of CRAN mclust — same 14
-        # covariance parameterisations, same EM, same BIC. Replaces
-        # the legacy ``method='mclust_R'`` (rpy2 bridge) so omicverse
-        # no longer needs an R install.
-        try:
-            from mclust_py import Mclust as _PyMclust
-        except ImportError as e:
-            raise ImportError(
-                "pymclustR is required for method='pymclustR'. "
-                "Install with: pip install pymclustR"
-            ) from e
         if n_components is None:
             raise ValueError("n_components must be provided for method='pymclustR'")
-        np.random.seed(random_state)
-        modelNames = kwargs.pop('modelNames', 'EEE')
-        if isinstance(modelNames, str):
-            modelNames = [modelNames]
-        fit = _PyMclust(
+        key_added = kwargs.pop('key_added', None)
+        add_key = kwargs.pop('add_key', None)
+        if key_added is not None and add_key is not None and key_added != add_key:
+            raise ValueError(
+                "key_added and add_key must match when both are provided"
+            )
+        output_key = (
+            key_added
+            if key_added is not None
+            else add_key if add_key is not None else method
+        )
+        if not isinstance(output_key, str) or not output_key:
+            raise ValueError("key_added must be a non-empty string")
+        model_names = kwargs.pop('modelNames', 'EEE')
+        labels, fit = fit_pymclustr(
             adata.obsm[use_rep],
-            G=[int(n_components)],
-            model_names=list(modelNames),
+            n_components=n_components,
+            model_names=model_names,
+            random_state=random_state,
             **kwargs,
         )
-        adata.obs[method] = fit.classification.astype(int)
-        adata.obs[method] = adata.obs[method].astype('category')
+        adata.obs[output_key] = labels
+        adata.obs[output_key] = adata.obs[output_key].astype('category')
         adata.uns.setdefault('pymclustR', {})[use_rep] = {
             'modelName': fit.model_name,
             'G': fit.G,
@@ -243,7 +246,7 @@ def cluster(adata:anndata.AnnData,method:str='leiden',
             'bic': fit.bic,
         }
         print(f"""finished: found {n_components} clusters and added
-    'pymclustR', the cluster labels (adata.obs, categorical)
+    '{output_key}', the cluster labels (adata.obs, categorical)
     [model={fit.model_name}, loglik={fit.loglik:.4f}, BIC={fit.bic:.4f}]""")
         add_reference(adata, 'pymclustR',
                       'clustering with pymclustR (Python re-implementation of CRAN mclust)')

@@ -15,6 +15,7 @@ from scipy.interpolate import griddata
 from statsmodels.stats.multitest import fdrcorrection
 import multiprocessing as mp
 from tqdm import trange, tqdm
+from .._pymclustr import fit_pymclustr
 
 
 
@@ -383,19 +384,14 @@ def cluster_post_process(adata, platform, k_neighbors = None, min_distance = Non
 
 
 def mclust(data, num_cluster, modelNames = 'EEE', random_seed = 818):
-    """
-    Mclust algorithm from R, similar to https://mclust-org.github.io/mclust/
-    """ 
-    np.random.seed(random_seed)
-    import rpy2.robjects as robjects
-    robjects.r.library("mclust")
-    import rpy2.robjects.numpy2ri
-    rpy2.robjects.numpy2ri.activate()  
-    r_random_seed = robjects.r['set.seed']
-    r_random_seed(random_seed)
-    rmclust = robjects.r['Mclust']
-    res = rmclust(data, num_cluster, modelNames)
-    return np.array(res[-2])
+    """Cluster data with pymclustR while preserving R's 1-based labels."""
+    labels, _ = fit_pymclustr(
+        data,
+        n_components=num_cluster,
+        model_names=modelNames,
+        random_state=random_seed,
+    )
+    return labels
 
 
 def calc_I(y, w):

@@ -142,6 +142,7 @@ full = [
   'gdown>=4.6',
   'wandb',
   'pygam>=0.8.0',
+  'pymclustR>=0.2.1',
 ]
 
 easy=[
@@ -222,6 +223,7 @@ jarvis = [
 tests = [
   "pytest>=7.0",
   "pytest-asyncio>=0.23",
+  "pymclustR>=0.2.1",
   "python-telegram-bot>=21.3",
   "discord.py>=2.5",
   "requests>=2.0",

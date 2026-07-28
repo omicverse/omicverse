@@ -9,6 +9,7 @@ import scanpy as sc
 import torch
 from torch_geometric.data import Data
 import anndata as ad
+from .._pymclustr import fit_pymclustr
 
 
 def Count2Binary(adata):
@@ -468,7 +469,7 @@ def Stats_Spatial_Graph(adata):
 
 def mclust_R(adata, num_cluster, add_key = 'mclust', modelNames='EEE', used_obsm='BINARY', random_seed=2020):
     """
-    Cluster an AnnData object using the mclust algorithm from R.
+    Cluster an AnnData object using the pure-Python pymclustR backend.
     
     Parameters:
     ----------
@@ -497,20 +498,13 @@ def mclust_R(adata, num_cluster, add_key = 'mclust', modelNames='EEE', used_obsm
         The input AnnData object with added clustering results in `adata.obs[add_key]`.
     """
     
-    np.random.seed(random_seed)
-    import rpy2.robjects as robjects
-    robjects.r.library("mclust")
-
-    import rpy2.robjects.numpy2ri
-    rpy2.robjects.numpy2ri.activate()
-    r_random_seed = robjects.r['set.seed']
-    r_random_seed(random_seed)
-    rmclust = robjects.r['Mclust']
-
-    res = rmclust(rpy2.robjects.numpy2ri.numpy2rpy(adata.obsm[used_obsm]), num_cluster, modelNames)
-    mclust_res = np.array(res[-2])
-
-    adata.obs[add_key] = mclust_res
+    labels, _ = fit_pymclustr(
+        adata.obsm[used_obsm],
+        n_components=num_cluster,
+        model_names=modelNames,
+        random_state=random_seed,
+    )
+    adata.obs[add_key] = labels
     adata.obs[add_key] = adata.obs[add_key].astype('int')
     adata.obs[add_key] = adata.obs[add_key].astype('category')
     return adata

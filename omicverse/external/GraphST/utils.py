@@ -4,28 +4,18 @@ from sklearn import metrics
 import scanpy as sc
 
 from sklearn.decomposition import PCA
+from .._pymclustr import fit_pymclustr
 
 
 def mclust_R(adata, num_cluster, modelNames='EEE', used_obsm='emb_pca', random_seed=2020):
-    """\
-    Clustering using the mclust algorithm.
-    The parameters are the same as those in the R package mclust.
-    """
-    
-    np.random.seed(random_seed)
-    import rpy2.robjects as robjects
-    robjects.r.library("mclust")
-
-    import rpy2.robjects.numpy2ri
-    rpy2.robjects.numpy2ri.activate()
-    r_random_seed = robjects.r['set.seed']
-    r_random_seed(random_seed)
-    rmclust = robjects.r['Mclust']
-    
-    res = rmclust(rpy2.robjects.numpy2ri.numpy2rpy(adata.obsm[used_obsm]), num_cluster, modelNames)
-    mclust_res = np.array(res[-2])
-
-    adata.obs['mclust'] = mclust_res
+    """Cluster an AnnData embedding with the pure-Python pymclustR backend."""
+    labels, _ = fit_pymclustr(
+        adata.obsm[used_obsm],
+        n_components=num_cluster,
+        model_names=modelNames,
+        random_state=random_seed,
+    )
+    adata.obs['mclust'] = labels
     adata.obs['mclust'] = adata.obs['mclust'].astype('int')
     adata.obs['mclust'] = adata.obs['mclust'].astype('category')
     return adata

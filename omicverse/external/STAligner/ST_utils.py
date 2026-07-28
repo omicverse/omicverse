@@ -4,6 +4,7 @@ import numpy as np
 import sklearn.neighbors
 import networkx as nx
 from .mnn_utils import create_dictionary_mnn
+from .._pymclustr import fit_pymclustr
 
 def match_cluster_labels(true_labels,est_labels):
     true_labels_arr = np.array(list(true_labels))
@@ -123,25 +124,14 @@ def Stats_Spatial_Net(adata):
 
 
 def mclust_R(adata, num_cluster, modelNames='EEE', used_obsm='STAGATE', random_seed=666):
-    """\
-    Clustering using the mclust algorithm.
-    The parameters are the same as those in the R package mclust.
-    """
-
-    np.random.seed(random_seed)
-    import rpy2.robjects as robjects
-    robjects.r.library("mclust")
-
-    import rpy2.robjects.numpy2ri
-    rpy2.robjects.numpy2ri.activate()
-    r_random_seed = robjects.r['set.seed']
-    r_random_seed(random_seed)
-    rmclust = robjects.r['Mclust']
-
-    res = rmclust(adata.obsm[used_obsm], num_cluster, modelNames)
-    mclust_res = np.array(res[-2])
-
-    adata.obs['mclust'] = mclust_res
+    """Cluster an AnnData embedding with the pure-Python pymclustR backend."""
+    labels, _ = fit_pymclustr(
+        adata.obsm[used_obsm],
+        n_components=num_cluster,
+        model_names=modelNames,
+        random_state=random_seed,
+    )
+    adata.obs['mclust'] = labels
     adata.obs['mclust'] = adata.obs['mclust'].astype('int')
     adata.obs['mclust'] = adata.obs['mclust'].astype('category')
     return adata
