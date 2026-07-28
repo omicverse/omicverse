@@ -158,10 +158,53 @@ def test_echo_volumes_are_nanolitres_snapped_to_resolution(worklist_and_source):
 
 
 def test_echo_splits_transfers_above_the_ceiling(worklist_and_source):
+    """Count rows per item rather than against the worklist length: the pick list
+    now excludes the enzyme master mix and the water (they are outside every
+    calibrated Echo fluid class and belong on a tip-based handler), so the
+    worklist length is no longer the right baseline."""
+    wl, src = worklist_and_source
+    rows = [r for r in sb.echo_picklist(wl, source_plate=src,
+                                        max_volume_nl=500.0).splitlines()[1:]
+            if r.strip()]
+    per_item: dict = {}
+    for row in rows:
+        fields = row.split(",")
+        per_item[fields[6]] = per_item.get(fields[6], 0) + 1
+    assert per_item, "no transfers emitted"
+    assert any(n > 1 for n in per_item.values()), (
+        f"a transfer above 500 nL must be split: {per_item}")
+    for item, n_rows in per_item.items():
+        volumes = [float(r.split(",")[5]) for r in rows if r.split(",")[6] == item]
+        assert all(v <= 500.0 + 1e-9 for v in volumes), (item, volumes)
+
+
+def test_echo_excludes_the_enzyme_master_mix(worklist_and_source):
+    """A glycerol-containing enzyme mix is outside every Echo fluid class."""
+    wl, src = worklist_and_source
+    with pytest.warns(UserWarning, match="枪头式移液器"):
+        rows = sb.echo_picklist(wl, source_plate=src).splitlines()[1:]
+    items = {r.split(",")[6] for r in rows if r.strip()}
+    assert "water" not in items
+    assert not any("master_mix" in i for i in items), items
+
+
+def test_echo_source_plate_name_matches_where_the_well_came_from(worklist_and_source):
+    """The CSV named a plate ('reagents') the well number did not come from."""
+    wl, src = worklist_and_source
+    rows = sb.echo_picklist(wl, source_plate=src).splitlines()[1:]
+    for row in rows:
+        if row.strip():
+            assert row.split(",")[0] == src.name, row
+
+
+def test_echo_never_emits_scientific_notation(worklist_and_source):
+    """`f"{v:g}"` printed a 1.25 mL transfer as '1.25e+06'."""
     wl, src = worklist_and_source
     rows = sb.echo_picklist(wl, source_plate=src,
-                            max_volume_nl=500.0).splitlines()[1:]
-    assert len(rows) > len(wl.transfers), "large transfers should be split"
+                            max_volume_nl=2e6).splitlines()[1:]
+    for row in rows:
+        if row.strip():
+            assert "e+" not in row.split(",")[5].lower(), row
 
 
 def test_echo_refuses_transfers_it_cannot_place():
@@ -540,8 +583,28 @@ def test_box_behnken_has_no_corner_points():
     assert not corners.any()
 
 
-def test_central_composite_has_axial_points_beyond_the_cube():
-    coded = np.asarray(sb.doe_design(FACTORS, design="central_composite").coded)
+def test_central_composite_has_axial_points_beyond_the_factorial_core():
+    """Axial points must sit outside the factorial core — that is what makes
+    curvature estimable — but inside the stated factor range, which is what
+    makes them buildable. The design is rescaled so the axial points land *on*
+    the bounds; asserting max|coded| > 1 encoded the old behaviour, where a third
+    of the runs asked for settings beyond the range the caller declared
+    (including negative plasmid copy numbers)."""
+    design = sb.doe_design(FACTORS, design="central_composite")
+    coded = np.asarray(design.coded)
+    core = np.abs(coded[np.count_nonzero(coded, axis=1) == coded.shape[1]]).max()
+    assert np.abs(coded).max() > core + 1e-9, "no axial points beyond the core"
+    assert np.abs(coded).max() <= 1.0 + 1e-9, "axial points outside the bounds"
+
+    natural = design.to_frame()
+    for name, (lo, hi) in FACTORS.items():
+        assert natural[name].min() >= lo - 1e-9, f"{name} below its low bound"
+        assert natural[name].max() <= hi + 1e-9, f"{name} above its high bound"
+
+
+def test_central_composite_unbounded_is_available_and_does_leave_the_box():
+    coded = np.asarray(sb.doe_design(FACTORS, design="central_composite",
+                                     bounded=False).coded)
     assert np.abs(coded).max() > 1.0
 
 

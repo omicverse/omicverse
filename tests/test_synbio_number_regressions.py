@@ -357,3 +357,163 @@ def test_rbs_strength_responds_to_shine_dalgarno_spacing():
         f"the optimum should sit near 8 nt: {rates}")
     assert rates[8] / min(rates[2], rates[14]) > 3.0, (
         f"a mis-spaced RBS should cost several fold: {rates}")
+
+
+# ---------------------------------------------------------------------------
+# artefacts that have to survive contact with an instrument
+# ---------------------------------------------------------------------------
+
+def _library_plates():
+    plate = sb.plate_layout([f"run{i}" for i in (1, 2, 3)], plate="96",
+                            controls=["blank", "wt"], name="assemblies")
+    source = sb.plate_layout(["backbone", "insertA", "insertB"], name="fragments",
+                             volumes_ul={"backbone": 30.0, "insertA": 30.0,
+                                         "insertB": 30.0})
+    worklist = sb.assembly_worklist(
+        {"backbone": (2686, 48.0), "insertA": (912, 31.0), "insertB": (604, 12.5)},
+        construct="run1")
+    return worklist, source, plate
+
+
+def test_transfers_never_land_in_a_control_well():
+    """dest_well defaulted to "A1" for every transfer and dest_plate was ignored.
+
+    On a plate laid out with controls first, A1 holds ``blank`` — so every
+    generated protocol dispensed the assembly into the negative control.
+    """
+    worklist, source, plate = _library_plates()
+    assert plate.contents["A1"] == "blank"
+    target = plate.well_of("run1")
+    assert target != "A1"
+
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore")
+        csv = sb.echo_picklist(worklist, source_plate=source, dest_plate=plate)
+    for row in csv.splitlines()[1:]:
+        if row.strip():
+            assert row.split(",")[4] == target, row
+
+    script = sb.opentrons_protocol(worklist, source_plate=source, dest_plate=plate,
+                                   pipette="p20_single_gen2")
+    assert f'dest["{target}"]' in script
+    assert 'dest["A1"]' not in script
+
+
+def test_assembly_refuses_rather_than_dropping_the_enzyme():
+    """When DNA + master mix exceeded the final volume, both the master mix and
+    the water were silently omitted — yielding a runnable protocol for a ligation
+    with no enzyme, no ligase and no buffer."""
+    with pytest.raises(ValueError, match="超过了终"):
+        sb.assembly_worklist({"backbone": (5000, 1.0), "insert": (1000, 2.0)},
+                             final_volume_ul=20.0)
+
+
+def test_assembly_always_includes_master_mix_and_water():
+    worklist = sb.assembly_worklist({"backbone": (2686, 48.0), "insert": (912, 31.0)})
+    items = {t.item for t in worklist.transfers}
+    assert any("master_mix" in i for i in items), items
+    assert "water" in items
+
+
+def test_echo_checks_source_volume_against_dead_volume():
+    """Plate.volumes_ul was populated by plate_layout and read by nothing."""
+    worklist = sb.assembly_worklist(
+        {"backbone": (2686, 48.0), "insertA": (912, 31.0)}, construct="run1")
+    thin = sb.plate_layout(["backbone", "insertA"], name="fragments",
+                           volumes_ul={"backbone": 2.6, "insertA": 30.0})
+    with pytest.raises(ValueError, match="源板体积不够"):
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore")
+            sb.echo_picklist(worklist, source_plate=thin, dead_volume_ul=2.5)
+
+
+def test_opentrons_adds_reagents_before_dna_and_mixes():
+    """A sub-microlitre DNA transfer into a dry well stays on the wall."""
+    worklist, source, plate = _library_plates()
+    script = sb.opentrons_protocol(worklist, source_plate=source, dest_plate=plate,
+                                   pipette="p20_single_gen2")
+    order = [line for line in script.splitlines() if "pipette.transfer" in line]
+    water = next(i for i, line in enumerate(order) if "water" in line)
+    dna = next(i for i, line in enumerate(order) if "backbone" in line)
+    assert water < dna, "reagents must go in before DNA"
+    assert "pipette.mix(" in script, "a ligation has to be mixed"
+
+
+def test_opentrons_warnings_reach_the_run_log():
+    """They were Python `#` comments, so they appeared in neither the run log nor
+    the Opentrons app."""
+    worklist, source, plate = _library_plates()
+    script = sb.opentrons_protocol(worklist, source_plate=source, dest_plate=plate,
+                                   pipette="p20_single_gen2")
+    assert "protocol.comment(" in script
+    assert "    # WARNING" not in script
+
+
+@pytest.mark.parametrize("pipette,expected_min,expected_rack", [
+    ("p20_single_gen2", 1.0, "opentrons_96_tiprack_20ul"),
+    ("p300_single_gen2", 20.0, "opentrons_96_tiprack_300ul"),
+    ("flex_1channel_1000", 5.0, "opentrons_flex_96_tiprack_1000ul"),
+    ("flex_8channel_50", 1.0, "opentrons_flex_96_tiprack_50ul"),
+])
+def test_pipette_specs_are_looked_up_not_substring_matched(pipette, expected_min,
+                                                          expected_rack):
+    """Substring matching put OT-2 tipracks on a Flex deck and reported a 20 µL
+    minimum for a Flex 1000, whose real minimum is 5 µL."""
+    from omicverse.synbio._build import _PIPETTE_SPECS
+    assert _PIPETTE_SPECS[pipette][0] == expected_min
+    assert _PIPETTE_SPECS[pipette][2] == expected_rack
+
+
+def test_pcr_runtime_is_not_four_times_too_long():
+    """`sum(s for _, _, s in steps if _ != "initial")` rebound _ to the
+    temperature, so every step was counted inside every cycle: 95.5 minutes for a
+    26.4-minute programme."""
+    program = sb.pcr_protocol(tm_forward=59.8, tm_reverse=59.3, amplicon_bp=714)
+    once = sum(s for name, _t, s in program.steps if name in program.ONCE_ONLY)
+    per_cycle = sum(s for name, _t, s in program.steps
+                    if name not in program.ONCE_ONLY)
+    assert program.total_minutes == pytest.approx((once + program.cycles * per_cycle) / 60.0)
+    assert 20.0 < program.total_minutes < 35.0, program.total_minutes
+
+
+def test_pcr_reports_the_clamp_instead_of_a_false_equation():
+    """It printed "min(Tm) 80.0 °C +3 °C = 72.0 °C"."""
+    program = sb.pcr_protocol(tm_forward=80.0, tm_reverse=80.0, amplicon_bp=500)
+    assert program.annealing_C == pytest.approx(72.0)
+    joined = " ".join(program.notes)
+    assert "clamped" in joined
+    assert "83.0" in joined, "the un-clamped arithmetic must still be shown"
+
+
+def test_pcr_has_a_lid_a_hold_and_a_loadable_export():
+    """Every other Build emitter produces something an instrument reads; this one
+    returned only a DataFrame."""
+    program = sb.pcr_protocol(tm_forward=59.8, tm_reverse=59.3, amplicon_bp=714)
+    assert program.lid_C > 90.0
+    assert any(name == "hold" for name, _t, _s in program.steps)
+    text = program.to_text()
+    assert "lid" in text and "HOLD" in text
+    assert "anneal" in text
+
+
+def test_plate_layout_spreads_replicates():
+    """Adjacent replicates share evaporation and optics — pseudo-replication."""
+    plate = sb.plate_layout(["d1", "d2", "d3"], replicates=3, controls=["blank"])
+    wells = list(plate.contents)
+    position = {item: i for i, item in enumerate(plate.contents.values())}
+    assert abs(position["d1_r2"] - position["d1"]) > 1, plate.contents
+
+
+def test_plate_layout_can_randomise_and_avoid_edges():
+    """Neither was possible before: plate position was collinear with run order."""
+    ordered = sb.plate_layout(["d1", "d2", "d3", "d4"], controls=["blank"])
+    shuffled = sb.plate_layout(["d1", "d2", "d3", "d4"], controls=["blank"],
+                               randomise=True, seed=3)
+    assert list(ordered.contents) != list(shuffled.contents)
+    assert set(ordered.contents.values()) == set(shuffled.contents.values())
+
+    interior = sb.plate_layout([f"x{i}" for i in range(20)], avoid_edges=True)
+    from omicverse.synbio._build import parse_well
+    for well in interior.contents:
+        row, col = parse_well(well)
+        assert 0 < row < 7 and 0 < col < 11, f"{well} is on the perimeter"

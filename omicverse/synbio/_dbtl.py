@@ -140,12 +140,21 @@ def _definitive_screening(n_factors: int):
 
 
 def _central_composite(n_factors: int, alpha: Optional[float] = None,
-                       n_centre: int = 3):
+                       n_centre: int = 3, bounded: bool = True):
     """Central composite: a factorial core, axial (star) points, and centres.
 
     The star points are what let a *quadratic* surface be fitted, which is the
     point of a response-surface round — a factorial alone can only ever fit a
     plane plus interactions, and an optimum inside the design space is curvature.
+
+    With ``bounded=True`` the whole matrix is rescaled so the axial points land
+    exactly on the stated factor range instead of 1.68x outside it. The rotatable
+    alpha is ``(2^k)^0.25`` — 1.682 for three factors — and ``to_frame()`` maps
+    coded ±1 onto ``(low, high)``, so an unscaled design asked for settings well
+    beyond the range the caller declared: over the range ``(1, 20)`` for plasmid
+    copy number it produced **-5.5 and 26.5 copies**, and 6 of 17 runs fell
+    outside the stated bounds. Rescaling preserves the relative geometry, and
+    therefore rotatability, while keeping every run buildable.
     """
     import numpy as np
     core = np.array(list(itertools.product((-1.0, 1.0), repeat=n_factors)))
@@ -157,7 +166,12 @@ def _central_composite(n_factors: int, alpha: Optional[float] = None,
             row[i] = sign
             star.append(row)
     centre = np.zeros((n_centre, n_factors))
-    return np.vstack([core, np.asarray(star), centre])
+    coded = np.vstack([core, np.asarray(star), centre])
+    if bounded:
+        peak = float(np.max(np.abs(coded)))
+        if peak > 1.0:
+            coded = coded / peak
+    return coded
 
 
 def _box_behnken(n_factors: int, n_centre: int = 3):
@@ -253,6 +267,7 @@ def doe_design(
     n_runs: Optional[int] = None,
     n_centre: int = 3,
     alpha: Optional[float] = None,
+    bounded: bool = True,
     seed: int = 0,
 ) -> Design:
     """Build an experimental design over ``factors``.
@@ -331,8 +346,14 @@ def doe_design(
             f"definitive screening:{len(coded)} 次(2k+1),主效应彼此正交、"
             f"与二因子交互正交,且二次项可估。")
     elif design == "central_composite":
-        coded = _central_composite(k, alpha=alpha, n_centre=n_centre)
+        coded = _central_composite(k, alpha=alpha, n_centre=n_centre,
+                                   bounded=bounded)
         notes.append("中心复合设计:含星号点,可拟合二次响应面。")
+        if bounded:
+            notes.append(
+                "已整体缩放,使轴向点正好落在给定的因子范围上(否则旋转型 alpha "
+                f"= {float(2 ** k) ** 0.25:.3f} 会让约 1/3 的实验点越界,"
+                "拷贝数、浓度这类量还会出现负值)。传 bounded=False 用经典未缩放版本。")
     elif design == "box_behnken":
         coded = _box_behnken(k, n_centre=n_centre)
         notes.append("Box-Behnken:无角点,不会出现所有因子同时取极值的实验。")

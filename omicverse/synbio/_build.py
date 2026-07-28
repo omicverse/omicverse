@@ -144,6 +144,9 @@ def plate_layout(
     start_well: str = "A1",
     controls: Optional[Sequence[str]] = None,
     replicates: int = 1,
+    randomise: bool = False,
+    avoid_edges: bool = False,
+    seed: int = 0,
     volumes_ul: Optional[Mapping[str, float]] = None,
     concentrations: Optional[Mapping[str, float]] = None,
 ) -> Plate:
@@ -187,9 +190,15 @@ def plate_layout(
         raise ValueError(
             f"起始孔 {start_well!r} 超出 {plate} 孔板范围({rows}x{cols})。")
 
+    # Replicates are laid out in *rounds*, not consecutively. Placing r1, r2, r3
+    # of the same item in adjacent wells is pseudo-replication: adjacent wells
+    # share evaporation, thermal and optical micro-environment, so the replicates
+    # agree for reasons that have nothing to do with the construct, and the
+    # precision they buy is illusory exactly where replication was supposed to
+    # protect against plate effects.
     expanded: List[str] = list(controls or [])
-    for item in items:
-        for r in range(replicates):
+    for r in range(replicates):
+        for item in items:
             expanded.append(str(item) if r == 0 else f"{item}_r{r + 1}")
 
     order: List[str] = []
@@ -204,10 +213,32 @@ def plate_layout(
                 if (c, r) >= (start_col, start_row):
                     order.append(well_name(r, c))
 
+    if avoid_edges and rows > 2 and cols > 2:
+        # The perimeter of a microplate evaporates fastest and reads differently.
+        # Reserving it costs wells and buys comparability; fill it with water.
+        interior = [w for w in order
+                    if 0 < parse_well(w)[0] < rows - 1
+                    and 0 < parse_well(w)[1] < cols - 1]
+        if len(expanded) <= len(interior):
+            order = interior
+
     if len(expanded) > len(order):
         raise ValueError(
             f"{len(expanded)} 个条目(含对照与重复)放不进 {plate} 孔板的 "
-            f"{len(order)} 个可用孔。换更大的板,减少 replicates,或分多块板。")
+            f"{len(order)} 个可用孔"
+            + ("(已排除边缘孔;传 avoid_edges=False 可用满板)" if avoid_edges else "")
+            + "。换更大的板,减少 replicates,或分多块板。")
+
+    if randomise:
+        # Run order and plate position are nuisance factors. Filling in design
+        # order makes column index collinear with the factor settings, so a
+        # position effect is indistinguishable from a real effect. There was no
+        # way to randomise at all before this.
+        import numpy as np
+        rng = np.random.default_rng(seed)
+        wells = list(order[:len(expanded)])
+        rng.shuffle(wells)
+        order = wells + list(order[len(expanded):])
 
     contents = {well: item for well, item in zip(order, expanded)}
     vols = {}
@@ -237,6 +268,10 @@ class Transfer:
     dest_well: str
     volume_ul: float
     item: str = ""
+    #: Which construct this transfer belongs to. Downstream emitters resolve the
+    #: destination well from ``dest_plate.well_of(construct)``, which is what
+    #: lets one worklist cover a whole library instead of a single reaction.
+    construct: str = ""
 
     @property
     def volume_nl(self) -> float:
@@ -318,6 +353,7 @@ def assembly_worklist(
     source_plate: str = "fragments",
     dest_plate: str = "reactions",
     dest_well: str = "A1",
+    construct: str = "",
 ) -> Worklist:
     """Volumes for one assembly reaction.
 
@@ -382,23 +418,31 @@ def assembly_worklist(
                 f"把储液稀释 {min_volume_ul / vol:.0f}x 后再取 {min_volume_ul} µL")
         transfers.append(Transfer(
             source_plate=source_plate, source_well="", dest_plate=dest_plate,
-            dest_well=dest_well, volume_ul=round(vol, 3), item=name))
+            dest_well=dest_well, volume_ul=round(vol, 3), item=name,
+            construct=construct))
 
     dna_volume = sum(t.volume_ul for t in transfers)
     mm_volume = final_volume_ul * master_mix_fraction
     water = final_volume_ul - dna_volume - mm_volume
     if water < 0:
-        notes.append(
-            f"DNA({dna_volume:.2f} µL) + master mix({mm_volume:.2f} µL) 已超过 "
-            f"{final_volume_ul} µL — 提高终体积、稀释储液,或降低 backbone_fmol。")
-    else:
-        transfers.append(Transfer(source_plate="reagents", source_well="",
-                                  dest_plate=dest_plate, dest_well=dest_well,
-                                  volume_ul=round(mm_volume, 3),
-                                  item=f"{method}_master_mix"))
-        transfers.append(Transfer(source_plate="reagents", source_well="",
-                                  dest_plate=dest_plate, dest_well=dest_well,
-                                  volume_ul=round(water, 3), item="water"))
+        # Previously this only appended a note and skipped the else-branch, so
+        # the master mix and the water were never emitted at all: the function
+        # returned a runnable protocol for a ligation with no enzyme, no ligase
+        # and no buffer. Refusing is the only safe answer.
+        raise ValueError(
+            f"DNA 体积 {dna_volume:.2f} µL + master mix {mm_volume:.2f} µL 超过了终"
+            f"体积 {final_volume_ul} µL,配不出这个反应。把 final_volume_ul 提高到 "
+            f"至少 {dna_volume + mm_volume:.1f} µL,或把储液稀释 "
+            f"{dna_volume / max(final_volume_ul - mm_volume, 1e-9):.1f}x,"
+            f"或降低 backbone_fmol。")
+    transfers.append(Transfer(source_plate="reagents", source_well="",
+                              dest_plate=dest_plate, dest_well=dest_well,
+                              volume_ul=round(mm_volume, 3), construct=construct,
+                              item=f"{method}_master_mix"))
+    transfers.append(Transfer(source_plate="reagents", source_well="",
+                              dest_plate=dest_plate, dest_well=dest_well,
+                              volume_ul=round(water, 3), item="water",
+                              construct=construct))
 
     return Worklist(transfers=transfers, reaction=method,
                     final_volume_ul=final_volume_ul, notes=notes)
@@ -436,6 +480,8 @@ def echo_picklist(
     source_plate_type: str = "384PP_AQ_BP",
     resolution_nl: float = 2.5,
     max_volume_nl: float = 2000.0,
+    dead_volume_ul: float = 2.5,
+    reagents_on_tips: bool = True,
     out: Optional[str] = None,
 ) -> str:
     """Render transfers as an Echo pick list, returned as CSV text.
@@ -466,39 +512,101 @@ def echo_picklist(
     if resolution_nl <= 0:
         raise ValueError("resolution_nl 必须为正。")
 
+    # Only DNA goes on an Echo. A Golden Gate master mix is a glycerol-containing
+    # enzyme mix and falls outside every calibrated Echo fluid class, which is why
+    # in practice the DNA is acoustically dispensed and the reagents are added by a
+    # tip-based handler. Emitting them here also asked for wells of a "reagents"
+    # plate that was never laid out.
+    reagent_items: List[str] = []
+    if reagents_on_tips:
+        dna, held_back = [], []
+        for t in transfers:
+            item = (t.item or "").lower()
+            if item == "water" or "master_mix" in item or "mastermix" in item:
+                held_back.append(t)
+            else:
+                dna.append(t)
+        if held_back:
+            reagent_items = [t.item for t in held_back]
+            transfers = dna
+
     lines = [",".join(ECHO_COLUMNS)]
     skipped: List[str] = []
+    drawn: Dict[Tuple[str, str], float] = {}
     for t in transfers:
         src_well = t.source_well
+        src_name = t.source_plate
         if not src_well and source_plate is not None:
             src_well = source_plate.well_of(t.item) or ""
+            if src_well:
+                # The well came from *this* plate, so it must be labelled with
+                # this plate's name. Emitting `t.source_plate` here named a plate
+                # ("reagents") that the well number did not come from, so the CSV
+                # pointed the Echo at wells of a plate that was never laid out.
+                src_name = source_plate.name
         if not src_well:
             skipped.append(t.item or "?")
             continue
-        dst_well = t.dest_well
-        if not dst_well and dest_plate is not None:
-            dst_well = dest_plate.well_of(t.item) or ""
-        if not dst_well:
-            dst_well = "A1"
+        # Destination: prefer the plate map keyed by construct. `dest_well`
+        # defaulted to "A1" for every transfer, so a plate whose A1 held the
+        # `blank` control received every assembly.
+        dst_well = ""
+        if dest_plate is not None:
+            dst_well = (dest_plate.well_of(t.construct) if t.construct else "") or ""
+            if not dst_well and t.item:
+                dst_well = dest_plate.well_of(t.item) or ""
+        dst_well = dst_well or t.dest_well or "A1"
 
-        total_nl = t.volume_nl
-        remaining = total_nl
+        remaining = t.volume_nl
         while remaining > 1e-9:
             chunk = min(remaining, max_volume_nl)
             snapped = round(chunk / resolution_nl) * resolution_nl
             if snapped <= 0:
                 break
             lines.append(",".join([
-                t.source_plate, source_plate_type, src_well,
-                t.dest_plate, dst_well, f"{snapped:g}", t.item,
+                src_name, source_plate_type, src_well,
+                t.dest_plate, dst_well, f"{snapped:.1f}", t.item,
             ]))
-            remaining -= chunk
+            # subtract what was actually emitted, not the un-snapped request,
+            # or split transfers drift by a droplet per chunk
+            remaining -= snapped
+            drawn[(src_name, src_well)] = drawn.get((src_name, src_well), 0.0) + snapped
+
+    # Source-volume feasibility. Plate.volumes_ul was populated by plate_layout
+    # and read by nothing, so a pick list could ask for 10 µL out of a well that
+    # holds 2 — or out of a well that holds nothing at all.
+    if source_plate is not None and source_plate.volumes_ul:
+        short = []
+        for (plate_name, well), nl in sorted(drawn.items()):
+            if plate_name != source_plate.name:
+                continue
+            available = float(source_plate.volumes_ul.get(well, 0.0))
+            usable = max(available - dead_volume_ul, 0.0)
+            if nl / 1000.0 > usable + 1e-9:
+                short.append(f"{well} 需要 {nl / 1000.0:.2f} µL,可用 "
+                             f"{usable:.2f} µL(装载 {available:.2f} − 死体积 "
+                             f"{dead_volume_ul:.2f})")
+        if short:
+            raise ValueError(
+                "源板体积不够,这份 pick list 跑不完:" + "; ".join(short)
+                + "。提高 plate_layout(volumes_ul=...) 里的装载体积,或降低 "
+                  "backbone_fmol/final_volume_ul。")
 
     if skipped:
         raise ValueError(
             f"这些转移没有源孔位,也无法从 source_plate 解析出来:{skipped}。"
             f"传 source_plate=(plate_layout 的结果),或在 Transfer 上直接给 "
             f"source_well。")
+
+    if reagent_items:
+        # Warn rather than writing a comment row: the CSV has to contain exactly
+        # what the Echo software parses, and nothing else.
+        import warnings
+        warnings.warn(
+            f"以下试剂未包含在这份 Echo pick list 里,请用枪头式移液器加:"
+            f"{sorted(set(reagent_items))} —— 含酶/甘油的 master mix 不在 Echo 的"
+            f"已校准流体类别内。传 reagents_on_tips=False 可强制包含。",
+            stacklevel=2)
 
     text = "\n".join(lines) + "\n"
     if out:
@@ -512,6 +620,23 @@ def echo_picklist(
 # ---------------------------------------------------------------------------
 # Opentrons protocol
 # ---------------------------------------------------------------------------
+
+#: ``pipette load name -> (min µL, max µL, tiprack load name)``.
+#: Keyed explicitly because substring matching on the pipette name put OT-2
+#: tipracks on a Flex deck and reported a 20 µL minimum for a Flex 1000 (whose
+#: real minimum is 5 µL), producing five false warnings and a protocol that
+#: cannot pass Flex analysis.
+_PIPETTE_SPECS: Dict[str, Tuple[float, float, str]] = {
+    "p20_single_gen2": (1.0, 20.0, "opentrons_96_tiprack_20ul"),
+    "p300_single_gen2": (20.0, 300.0, "opentrons_96_tiprack_300ul"),
+    "p1000_single_gen2": (100.0, 1000.0, "opentrons_96_tiprack_1000ul"),
+    "p20_multi_gen2": (1.0, 20.0, "opentrons_96_tiprack_20ul"),
+    "p300_multi_gen2": (20.0, 300.0, "opentrons_96_tiprack_300ul"),
+    "flex_1channel_50": (1.0, 50.0, "opentrons_flex_96_tiprack_50ul"),
+    "flex_1channel_1000": (5.0, 1000.0, "opentrons_flex_96_tiprack_1000ul"),
+    "flex_8channel_50": (1.0, 50.0, "opentrons_flex_96_tiprack_50ul"),
+    "flex_8channel_1000": (5.0, 1000.0, "opentrons_flex_96_tiprack_1000ul"),
+}
 
 @register_function(
     aliases=["opentrons_protocol", "Opentrons协议", "液体处理协议", "OT2",
@@ -541,6 +666,8 @@ def opentrons_protocol(
     source_slot: int = 1,
     dest_slot: int = 2,
     tiprack_slot: int = 3,
+    reagent_labware: str = "nest_12_reservoir_15ml",
+    reagent_slot: int = 4,
     pipette: Optional[str] = None,
     mount: str = "right",
     new_tip: str = "always",
@@ -589,32 +716,77 @@ def opentrons_protocol(
             tiprack = ("opentrons_96_tiprack_300ul" if robot == "OT-2"
                        else "opentrons_flex_96_tiprack_1000ul")
     else:
-        tiprack = ("opentrons_96_tiprack_300ul" if "300" in pipette or "1000" in pipette
-                   else "opentrons_96_tiprack_20ul")
+        tiprack = _PIPETTE_SPECS.get(pipette, _PIPETTE_SPECS["p300_single_gen2"])[2]
 
-    min_vol = 1.0 if "p20" in pipette or "50" in pipette else 20.0
+    min_vol = _PIPETTE_SPECS.get(pipette, _PIPETTE_SPECS["p300_single_gen2"])[0]
     warnings: List[str] = []
 
+    # Reagents before DNA. A sub-microlitre DNA transfer dispensed into a dry
+    # well stays on the wall; water and master mix go in first so there is a bulk
+    # to dispense into. The emitted order used to be exactly the reverse.
+    def _rank(t):
+        item = (t.item or "").lower()
+        if item == "water":
+            return 0
+        if "master_mix" in item or "mastermix" in item:
+            return 1
+        return 2
+    ordered = sorted(transfers, key=_rank)
+
+    # Reagents live in a reservoir, not on the DNA source plate. Without this
+    # they had no source well at all and the protocol could not be generated
+    # (or, before the destination fix, was generated without them entirely).
+    reagent_wells: Dict[str, str] = {}
+    for t in ordered:
+        item = (t.item or "").lower()
+        if (item == "water" or "master_mix" in item or "mastermix" in item) \
+                and t.item not in reagent_wells:
+            reagent_wells[t.item] = well_name(0, len(reagent_wells))
+    uses_reagents = bool(reagent_wells)
+
     body: List[str] = []
-    for t in transfers:
+    for t in ordered:
         if t.volume_ul <= 0:
             continue
-        src_well = t.source_well or (source_plate.well_of(t.item)
-                                     if source_plate else None)
-        dst_well = t.dest_well or (dest_plate.well_of(t.item)
-                                   if dest_plate else None) or "A1"
+        from_reservoir = t.item in reagent_wells
+        if from_reservoir:
+            src_well = reagent_wells[t.item]
+            src_label = "reagents"
+        else:
+            src_well = t.source_well or (source_plate.well_of(t.item)
+                                         if source_plate else None)
+            src_label = "source"
+        # Resolve the destination from the plate map, keyed by construct. A
+        # hardcoded "A1" fallback meant every assembly landed in whatever A1
+        # held — on a plate laid out with controls first, that is the `blank`.
+        dst_well = ""
+        if dest_plate is not None:
+            dst_well = (dest_plate.well_of(t.construct) if t.construct else "") or ""
+            if not dst_well and t.item:
+                dst_well = dest_plate.well_of(t.item) or ""
+        dst_well = dst_well or t.dest_well or "A1"
         if not src_well:
             raise ValueError(
                 f"转移 {t.item!r} 没有源孔位。传 source_plate=,或在 Transfer 上"
                 f"给 source_well。")
         if t.volume_ul < min_vol:
+            # protocol.comment() reaches the run log and the Opentrons app; a
+            # Python comment reaches neither, so the operator never saw it.
             warnings.append(
-                f"    # WARNING {t.item}: {t.volume_ul} µL is below the "
-                f"{pipette} minimum ({min_vol} µL) — dilute the stock")
+                f'    protocol.comment("WARNING {t.item}: {t.volume_ul} µL is '
+                f'below the {pipette} minimum ({min_vol} µL) — dilute the stock")')
         body.append(
-            f'    pipette.transfer({t.volume_ul}, source["{src_well}"], '
+            f'    pipette.transfer({t.volume_ul}, {src_label}["{src_well}"], '
             f'dest["{dst_well}"], new_tip="{new_tip}")'
             + (f'   # {t.item}' if t.item else ""))
+
+    # mix the completed reaction — a ligation has to be homogeneous
+    mix_wells = sorted({(dest_plate.well_of(t.construct) if (dest_plate and t.construct)
+                         else t.dest_well) or "A1" for t in ordered})
+    for well in mix_wells:
+        body.append(f'    pipette.pick_up_tip()')
+        body.append(f'    pipette.mix(3, {max(min_vol, 5.0)}, dest["{well}"])')
+        body.append(f'    pipette.drop_tip()')
 
     slot = (lambda s: f'"{chr(ord("A") + (s - 1) // 3)}{((s - 1) % 3) + 1}"'
             if robot == "Flex" else str(s))
@@ -640,8 +812,13 @@ def opentrons_protocol(
         f'    source = protocol.load_labware("{source_labware}", {slot(source_slot)})',
         f'    dest = protocol.load_labware("{dest_labware}", {slot(dest_slot)})',
         f'    tips = protocol.load_labware("{tiprack}", {slot(tiprack_slot)})',
+        *([f'    reagents = protocol.load_labware("{reagent_labware}", '
+           f'{slot(reagent_slot)})'] if uses_reagents else []),
         f'    pipette = protocol.load_instrument("{pipette}", "{mount}", '
         f'tip_racks=[tips])',
+        # A Flex has no fixed trash from apiLevel 2.16, so a protocol without an
+        # explicit trash bin fails analysis before it ever reaches the deck.
+        *(['    trash = protocol.load_trash_bin("A3")'] if robot == "Flex" else []),
         "",
         *warnings,
         *body,
@@ -670,9 +847,32 @@ class ThermocyclerProgram:
     extension_s: float = 30.0
     polymerase: str = "q5"
     notes: List[str] = field(default_factory=list)
+    #: Heated-lid setpoint. A block programme without one condenses on the cap.
+    lid_C: float = 105.0
+    #: Post-run hold temperature.
+    hold_C: float = 4.0
 
     #: Steps that run once per programme rather than once per cycle.
-    ONCE_ONLY = ("initial", "final_extension")
+    ONCE_ONLY = ("initial", "final_extension", "hold")
+
+    def to_text(self) -> str:
+        """The programme as a block-format listing a thermocycler can be set from.
+
+        Every other Build-layer emitter produces something an instrument reads;
+        this one returned a DataFrame and nothing else, so "a thermocycler program
+        from the primers" stopped at a table a human had to retype.
+        """
+        lines = [f"# {self.polymerase} — lid {self.lid_C:.0f} C, "
+                 f"{self.cycles} cycles, {self.total_minutes:.1f} min total"]
+        for name, temp, seconds in self.steps:
+            if name == "hold":
+                lines.append(f"HOLD           {temp:5.1f} C  infinite")
+                continue
+            tag = "1x " if name in self.ONCE_ONLY else f"{self.cycles}x"
+            lines.append(f"{tag} {name:<14s} {temp:5.1f} C  {seconds:6.1f} s")
+        for note in self.notes:
+            lines.append(f"# {note}")
+        return "\n".join(lines) + "\n"
 
     @property
     def total_minutes(self) -> float:
@@ -723,6 +923,9 @@ def pcr_protocol(
     polymerase: str = "q5",
     cycles: int = 30,
     final_extension_s: float = 120.0,
+    annealing_s: float = 20.0,
+    lid_C: float = 105.0,
+    hold_C: float = 4.0,
 ) -> ThermocyclerProgram:
     """A thermocycler program for one amplicon.
 
@@ -759,14 +962,21 @@ def pcr_protocol(
 
     p = _POL[polymerase]
     lower_tm = min(float(tm_forward), float(tm_reverse))
-    ta = lower_tm + p["ta_offset"]
-    ta = max(45.0, min(72.0, ta))
+    ta_raw = lower_tm + p["ta_offset"]
+    ta = max(45.0, min(72.0, ta_raw))
+    clamped = abs(ta - ta_raw) > 1e-9
 
     extension = max(10.0, p["s_per_kb"] * amplicon_bp / 1000.0)
 
     notes = [
-        f"annealing = min(Tm) {lower_tm:.1f} °C {p['ta_offset']:+g} °C = "
-        f"{ta:.1f} °C ({polymerase} convention)",
+        # Report the arithmetic *and* the clamp. Printing the pre-clamp equation
+        # with the post-clamp answer produced statements like
+        # "min(Tm) 80.0 °C +3 °C = 72.0 °C".
+        (f"annealing = min(Tm) {lower_tm:.1f} °C {p['ta_offset']:+g} °C = "
+         f"{ta_raw:.1f} °C, clamped to {ta:.1f} °C ({polymerase} convention)"
+         if clamped else
+         f"annealing = min(Tm) {lower_tm:.1f} °C {p['ta_offset']:+g} °C = "
+         f"{ta:.1f} °C ({polymerase} convention)"),
         f"extension = {p['s_per_kb']:g} s/kb x {amplicon_bp / 1000:.2f} kb = "
         f"{extension:.0f} s",
     ]
@@ -775,16 +985,22 @@ def pcr_protocol(
             f"两条引物 Tm 差 {abs(tm_forward - tm_reverse):.1f} °C(> 5 °C)— "
             f"退火只能照顾较低的那条,另一条会结合过强;建议重设引物。")
 
+    if clamped and ta_raw > 72.0:
+        notes.append(
+            f"退火温度被 72 °C 上限截断。Tm 这么高时通常改用两步 PCR"
+            f"(变性 + 72 °C 退火/延伸合并),而不是硬压退火温度。")
+
     steps = [
         ("initial", p["denature_C"], p["initial_s"]),
         ("denature", p["denature_C"], p["denature_s"]),
-        ("anneal", ta, 20.0),
+        ("anneal", ta, annealing_s),
         ("extend", p["extend_C"], extension),
         ("final_extension", p["extend_C"], final_extension_s),
+        ("hold", hold_C, 0.0),
     ]
     return ThermocyclerProgram(
         steps=steps, cycles=cycles, annealing_C=ta, extension_s=extension,
-        polymerase=polymerase, notes=notes)
+        polymerase=polymerase, notes=notes, lid_C=lid_C, hold_C=hold_C)
 
 
 # ---------------------------------------------------------------------------
