@@ -9,6 +9,8 @@ from anndata import AnnData
 from scipy import sparse
 from scipy.spatial import ConvexHull, QhullError, cKDTree
 
+from .._registry import register_function
+
 
 def _ensure_adata(adata: AnnData) -> AnnData:
     if not isinstance(adata, AnnData):
@@ -45,6 +47,18 @@ def _coords_array(
     return coords
 
 
+@register_function(
+    aliases=["SPATA2坐标提取", "spatial coordinates", "获取空间坐标", "coords_df"],
+    category="space",
+    description="Return SPATA2-style spatial coordinates as a barcode-indexed table, optionally joined with obs metadata",
+    requires={'obsm': ['spatial']},
+    produces={},
+    auto_fix='none',
+    examples=[
+        "coords = ov.space.spata2_get_coords(adata)",
+        "coords = ov.space.spata2_get_coords(adata, include_obs=['cluster'])",
+    ],
+)
 def spata2_get_coords(
     adata: AnnData,
     *,
@@ -130,6 +144,17 @@ def _to_1d(values: Any) -> np.ndarray:
     return values
 
 
+@register_function(
+    aliases=["SPATA2变量提取", "extract variables", "提取基因表达", "取变量"],
+    category="space",
+    description="Extract obs columns and/or gene expression into one observation-indexed frame",
+    requires={},
+    produces={},
+    auto_fix='none',
+    examples=[
+        "vals = ov.space.spata2_extract_variables(adata, ['METRN', 'total_counts'])",
+    ],
+)
 def spata2_extract_variables(
     adata: AnnData,
     variables: str | Iterable[str],
@@ -169,6 +194,17 @@ def spata2_extract_variables(
     return pd.DataFrame(out, index=adata.obs_names.copy())
 
 
+@register_function(
+    aliases=["SPATA2坐标合并", "join variables", "坐标与变量拼接"],
+    category="space",
+    description="Join spatial coordinates with selected obs or gene variables in a single table",
+    requires={'obsm': ['spatial']},
+    produces={},
+    auto_fix='none',
+    examples=[
+        "df = ov.space.spata2_join_variables(adata, ['METRN'])",
+    ],
+)
 def spata2_join_variables(
     adata: AnnData,
     variables: str | Iterable[str],
@@ -186,6 +222,17 @@ def spata2_join_variables(
     return coords.join(values)
 
 
+@register_function(
+    aliases=["SPATA2组织轮廓", "tissue outline", "组织边界", "convex hull"],
+    category="space",
+    description="Outline the observed tissue coordinates with a convex hull and store it in adata.uns",
+    requires={'obsm': ['spatial']},
+    produces={'uns': ['spata2_tissue_outline', 'spata2_tissue_outline_source_obs']},
+    auto_fix='none',
+    examples=[
+        "outline = ov.space.spata2_tissue_outline(adata)",
+    ],
+)
 def spata2_tissue_outline(
     adata: AnnData,
     *,
@@ -194,7 +241,30 @@ def spata2_tissue_outline(
     y: str = "y",
     write_key: str | None = "spata2_tissue_outline",
 ) -> pd.DataFrame:
-    """Identify a convex hull outlining the observed tissue coordinates."""
+    """Identify a convex hull outlining the observed tissue coordinates.
+
+    SPATA2's ``identifyTissueOutline(method = "obs")`` is not a convex hull: it
+    runs ``concaveman(concavity = 2)`` over the spots, and separately assigns a
+    ``tissue_section`` to every spot with DBSCAN (``eps = CCD * 1.25``,
+    ``minPts = 3`` on Visium) so a slide carrying several fragments yields one
+    outline per fragment.
+
+    On real Visium data the two agree closely, because the spots fill the capture
+    area and the point cloud is already near-convex. Measured against R
+    ``concaveman`` 1.2.0 on the same coordinates:
+
+    ==========================  ============  ==============  ========
+    data                        convex        concaveman(2)   ratio
+    ==========================  ============  ==============  ========
+    SPATA2 ``example_data``       173,041.8       168,821.6     1.025
+    DLPFC 151673              316,686,266     316,430,828      1.001
+    ==========================  ============  ==============  ========
+
+    DBSCAN found a single section and no noise spots in both, so the per-section
+    decomposition made no difference either. Expect a wider gap on a slide whose
+    tissue is genuinely concave, or that carries more than one fragment: a convex
+    hull bridges the opening and merges the fragments into one polygon.
+    """
 
     coords = _coords_array(adata, spatial_key=spatial_key, x=x, y=y)
     unique_coords, unique_idx = np.unique(coords, axis=0, return_index=True)
@@ -232,6 +302,18 @@ def _robust_threshold(values: np.ndarray, scale: float) -> float:
     return median + scale * 1.4826 * mad
 
 
+@register_function(
+    aliases=["SPATA2离群检测", "spatial outliers", "空间离群点", "孤立点检测"],
+    category="space",
+    description="Flag spatially isolated observations from k-nearest-neighbour distances with a median/MAD threshold",
+    requires={'obsm': ['spatial']},
+    produces={'obs': ['spata2_spatial_outlier']},
+    auto_fix='none',
+    examples=[
+        "flags = ov.space.spata2_identify_outliers(adata)",
+        "flags = ov.space.spata2_identify_outliers(adata, radius=150, min_neighbors=3)",
+    ],
+)
 def spata2_identify_outliers(
     adata: AnnData,
     *,
@@ -275,6 +357,17 @@ def spata2_identify_outliers(
     return series
 
 
+@register_function(
+    aliases=["SPATA2离群移除", "remove outliers", "剔除离群点"],
+    category="space",
+    description="Drop the observations flagged as spatially isolated, in place or as a copy",
+    requires={'obsm': ['spatial']},
+    produces={'obs': ['spata2_spatial_outlier']},
+    auto_fix='none',
+    examples=[
+        "clean = ov.space.spata2_remove_outliers(adata, copy=True)",
+    ],
+)
 def spata2_remove_outliers(
     adata: AnnData,
     *,
@@ -310,6 +403,17 @@ def spata2_remove_outliers(
     return None
 
 
+@register_function(
+    aliases=["SPATA2像素转换", "pixels to unit", "像素转物理单位"],
+    category="space",
+    description="Convert pixel distances to physical units given a pixels-per-unit scale factor",
+    requires={},
+    produces={},
+    auto_fix='none',
+    examples=[
+        "microns = ov.space.spata2_pixels_to_unit(120.0, pixels_per_unit=2.5)",
+    ],
+)
 def spata2_pixels_to_unit(pixels: Any, pixels_per_unit: float) -> Any:
     """Convert pixel distances to physical units with an explicit scale."""
 
@@ -318,6 +422,17 @@ def spata2_pixels_to_unit(pixels: Any, pixels_per_unit: float) -> Any:
     return np.asarray(pixels) / pixels_per_unit
 
 
+@register_function(
+    aliases=["SPATA2单位转像素", "unit to pixels", "物理单位转像素"],
+    category="space",
+    description="Convert physical distances to pixels given a pixels-per-unit scale factor",
+    requires={},
+    produces={},
+    auto_fix='none',
+    examples=[
+        "px = ov.space.spata2_unit_to_pixels(48.0, pixels_per_unit=2.5)",
+    ],
+)
 def spata2_unit_to_pixels(units: Any, pixels_per_unit: float) -> Any:
     """Convert physical-unit distances to pixels with an explicit scale."""
 
