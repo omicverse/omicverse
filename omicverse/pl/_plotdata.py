@@ -22,16 +22,176 @@ against ``adata.obs`` keeps working unchanged. Deliberately *not* a fake
 from __future__ import annotations
 
 import functools
-from typing import Any, Callable, Iterable, Optional, Sequence
+from typing import Any, Callable, Iterable, List, Optional, Sequence
 
 import numpy as np
 import pandas as pd
 
-__all__ = ["PlotData", "ObsView", "as_plotdata", "accepts_frame"]
+__all__ = ["PlotData", "ObsView", "as_plotdata", "accepts_frame", "get_values",
+           "get_matrix"]
 
 
 def _is_anndata_like(obj: Any) -> bool:
     return all(hasattr(obj, attr) for attr in ("obs", "var_names", "obs_names"))
+
+
+def _densify(values: Any) -> np.ndarray:
+    """1-D dense array, whatever came out of the matrix."""
+    if hasattr(values, "toarray"):
+        values = values.toarray()
+    return np.asarray(values).ravel()
+
+
+def _pick_matrix(data: Any, key: str, layer: Optional[str],
+                 use_raw: Optional[bool]):
+    """Choose the matrix to read ``key`` from, and the index within it.
+
+    Returns ``(matrix, index, source)`` where ``source`` names what was used,
+    for error messages and provenance.
+    """
+    raw = getattr(data, "raw", None)
+    in_var = key in data.var_names
+    in_raw = raw is not None and key in raw.var_names
+
+    if layer is not None:
+        if use_raw:
+            raise ValueError(
+                "Give either `layer=` or `use_raw=True`, not both — "
+                "`.raw` has no layers."
+            )
+        layers = getattr(data, "layers", {})
+        if layer not in layers:
+            available = ", ".join(map(str, layers)) or "none"
+            raise KeyError(f"No layer {layer!r}. Available: {available}.")
+        if not in_var:
+            raise KeyError(
+                f"{key!r} is not in `.var_names`, so it cannot be read from "
+                f"layer {layer!r}."
+            )
+        return layers[layer], data.var_names.get_loc(key), f"layers[{layer!r}]"
+
+    if use_raw is True:
+        if not in_raw:
+            raise KeyError(
+                f"`use_raw=True` but {key!r} is not in `.raw.var_names`"
+                + ("." if raw is not None else " — this object has no `.raw`.")
+            )
+        return raw.X, raw.var_names.get_loc(key), ".raw.X"
+
+    if in_var:
+        return data.X, data.var_names.get_loc(key), ".X"
+
+    if use_raw is None and in_raw:
+        # the usual reason a name is missing from .var_names is HVG subsetting
+        return raw.X, raw.var_names.get_loc(key), ".raw.X"
+
+    return None, None, None
+
+
+def get_values(data: Any, key: str, *, layer: Optional[str] = None,
+               use_raw: Optional[bool] = None,
+               dense: bool = True) -> np.ndarray:
+    r"""Read one named vector — a metadata column or a feature.
+
+    This is the single place ``ov.pl`` resolves "a name the user typed" into
+    numbers. Before it existed, nine modules each had their own version of the
+    same three lines, and they disagreed: some densified sparse matrices and
+    crashed on dense ones, some did the opposite, some preferred ``.raw`` over
+    ``.obs``, and only two honoured ``layer=``.
+
+    Arguments
+    ---------
+    data
+        ``AnnData`` (or anything AnnData-shaped), ``DataFrame``, ``dict``, or
+        a :class:`PlotData`.
+    key
+        Name to resolve.
+    layer
+        Read the feature from ``.layers[layer]`` instead of ``.X``. Cannot be
+        combined with ``use_raw=True``.
+    use_raw
+        ``True`` forces ``.raw``; ``False`` forbids it; ``None`` (default)
+        reads ``.X`` and falls back to ``.raw`` **only** when the name is
+        absent from ``.var_names`` — the situation left behind by
+        highly-variable-gene subsetting.
+
+        Note this differs from ``scanpy``'s plotting default, which prefers
+        ``.raw`` whenever it exists. The rule here never silently swaps the
+        matrix under a name that ``.X`` can already answer; pass
+        ``use_raw=True`` for the scanpy behaviour.
+    dense
+        Return a 1-D dense array. ``False`` returns whatever the matrix
+        column was.
+
+    Returns
+    -------
+    ``numpy.ndarray`` of length ``n_obs``.
+
+    Raises
+    ------
+    KeyError
+        With the near-misses listed, when the name resolves to nothing.
+    """
+    if isinstance(data, PlotData):
+        return data.values(key, layer=layer)
+
+    frame = data if isinstance(data, pd.DataFrame) else getattr(data, "obs", None)
+    if isinstance(data, dict):
+        frame = pd.DataFrame({k: np.asarray(v).ravel() for k, v in data.items()})
+
+    # metadata wins: a name that is both a column and a gene means the column
+    if isinstance(frame, pd.DataFrame) and key in frame.columns:
+        if layer is not None:
+            raise ValueError(
+                f"{key!r} is a metadata column; `layer=` only applies to "
+                f"features."
+            )
+        return frame[key].to_numpy()
+
+    if _is_anndata_like(data):
+        matrix, index, _ = _pick_matrix(data, key, layer, use_raw)
+        if matrix is not None:
+            column = matrix[:, index]
+            return _densify(column) if dense else column
+
+    _raise_unknown_key(data, frame, key, use_raw)
+
+
+def _raise_unknown_key(data, frame, key, use_raw):
+    from difflib import get_close_matches
+
+    pool: List[str] = []
+    if isinstance(frame, pd.DataFrame):
+        pool += [str(c) for c in frame.columns]
+    if _is_anndata_like(data):
+        pool += [str(v) for v in data.var_names[:5000]]
+    hint = get_close_matches(str(key), pool, n=3, cutoff=0.6)
+    suffix = f" Did you mean: {', '.join(hint)}?" if hint else ""
+    raw = getattr(data, "raw", None)
+    if use_raw is False and raw is not None and key in raw.var_names:
+        suffix += " It is present in `.raw` — pass `use_raw=True`."
+    raise KeyError(
+        f"{key!r} is neither a metadata column nor a feature of this "
+        f"object.{suffix}"
+    )
+
+
+def get_matrix(data: Any, keys: Sequence[str], *, layer: Optional[str] = None,
+               use_raw: Optional[bool] = None) -> np.ndarray:
+    r"""Read several names at once into an ``(n_obs, len(keys))`` array.
+
+    Same resolution rules as :func:`get_values`, but it reads each matrix once
+    rather than once per key — which matters for a dot plot over 50 genes.
+    """
+    keys = list(keys)
+    if not keys:
+        raise ValueError("`keys` is empty.")
+    columns = [get_values(data, key, layer=layer, use_raw=use_raw)
+               for key in keys]
+    lengths = {len(c) for c in columns}
+    if len(lengths) > 1:
+        raise ValueError(f"Resolved vectors have different lengths: {lengths}.")
+    return np.column_stack(columns).astype(float, copy=False)
 
 
 class PlotData:
@@ -51,7 +211,7 @@ class PlotData:
     """
 
     def __init__(self, obs: pd.DataFrame, *, var_names: Optional[pd.Index] = None,
-                 feature_getter: Optional[Callable[[str, Optional[str]], np.ndarray]] = None,
+                 feature_getter: Optional[Callable[..., np.ndarray]] = None,
                  obsm: Optional[Any] = None, source: Any = None):
         self.obs = obs
         self.var_names = pd.Index([] if var_names is None else var_names)
@@ -67,11 +227,13 @@ class PlotData:
         """Whether ``key`` resolves to either a metadata column or a feature."""
         return key in self.obs.columns or key in self.var_names
 
-    def values(self, key: str, layer: Optional[str] = None) -> np.ndarray:
+    def values(self, key: str, layer: Optional[str] = None, *,
+               use_raw: Optional[bool] = None) -> np.ndarray:
         """Values of ``key`` — a metadata column, or a feature.
 
-        Metadata wins when a name is both, which matches ``scanpy``'s
-        behaviour and is almost always what the caller meant.
+        Metadata wins when a name is both, which is almost always what the
+        caller meant. See :func:`get_values` for the ``layer`` / ``use_raw``
+        rules; this method is the same resolver bound to one object.
         """
         if key in self.obs.columns:
             if layer is not None:
@@ -80,8 +242,9 @@ class PlotData:
                     f"features."
                 )
             return self.obs[key].to_numpy()
-        if key in self.var_names and self._feature_getter is not None:
-            return self._feature_getter(key, layer)
+        if self._feature_getter is not None and (
+                key in self.var_names or _is_anndata_like(self.source)):
+            return self._feature_getter(key, layer, use_raw)
         from difflib import get_close_matches
 
         pool = list(map(str, self.obs.columns)) + list(map(str, self.var_names[:2000]))
@@ -127,19 +290,12 @@ def as_plotdata(data: Any, *, obs: Optional[pd.DataFrame] = None,
         return data
 
     if _is_anndata_like(data):
-        def feature_getter(key: str, layer_name: Optional[str]) -> np.ndarray:
-            index = data.var_names.get_loc(key)
-            if layer_name is not None:
-                matrix = data.layers[layer_name]
-            elif getattr(data, "raw", None) is not None and key in data.raw.var_names:
-                matrix = data.raw.X
-                index = data.raw.var_names.get_loc(key)
-            else:
-                matrix = data.X
-            column = matrix[:, index]
-            if hasattr(column, "toarray"):
-                column = column.toarray()
-            return np.asarray(column).ravel()
+        def feature_getter(key: str, layer_name: Optional[str],
+                           use_raw: Optional[bool] = None) -> np.ndarray:
+            matrix, index, _ = _pick_matrix(data, key, layer_name, use_raw)
+            if matrix is None:
+                _raise_unknown_key(data, data.obs, key, use_raw)
+            return _densify(matrix[:, index])
 
         return PlotData(data.obs, var_names=data.var_names,
                         feature_getter=feature_getter,
@@ -163,7 +319,8 @@ def as_plotdata(data: Any, *, obs: Optional[pd.DataFrame] = None,
             )
         columns = pd.Index([f"feature_{i}" for i in range(array.shape[1])])
 
-        def array_getter(key: str, layer_name: Optional[str]) -> np.ndarray:
+        def array_getter(key: str, layer_name: Optional[str],
+                         use_raw: Optional[bool] = None) -> np.ndarray:
             if layer_name is not None:
                 raise ValueError("A bare array has no layers.")
             return array[:, columns.get_loc(key)]

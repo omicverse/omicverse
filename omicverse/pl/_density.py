@@ -2,6 +2,7 @@ import numpy as np
 from scipy.stats import gaussian_kde
 import matplotlib.pyplot as plt
 from .._registry import register_function
+from ._plotdata import get_values
 
 
 
@@ -28,6 +29,8 @@ def calculate_gene_density(
     dims=(0, 1),
     adjust=1,
     min_expr=0.1,          # NEW: minimal raw expression to keep as weight > 0
+    layer=None,
+    use_raw=None,
 ):
     r"""
     Calculate weighted kernel density estimates for gene expression on 2D embeddings.
@@ -42,7 +45,11 @@ def calculate_gene_density(
         dims: Embedding dimensions to use as (x_dim, y_dim) ((0, 1))
         adjust: Bandwidth scaling factor for KDE (1)
         min_expr: Minimum expression threshold for including cells (0.1)
-        
+        layer: Read expression from `adata.layers[layer]` instead of `.X` (None)
+        use_raw: Force (`True`) or forbid (`False`) reading from `adata.raw`.
+            `None` reads `.X` and falls back to `.raw` only for names that are
+            absent from `.var_names` — see `ov.pl.get_values` (None)
+
     Returns:
         None: Updates adata.obs with density_{feature} columns
     """
@@ -55,12 +62,7 @@ def calculate_gene_density(
 
     for feat in features:
         # ----- fetch raw weights -------------------------------------------
-        if feat in adata.obs:
-            w_raw = adata.obs[feat].to_numpy()
-        elif feat in adata.var_names:
-            w_raw = adata[:, feat].X.toarray().ravel()
-        else:
-            raise ValueError(f"Feature '{feat}' not found in obs or var.")
+        w_raw = get_values(adata, feat, layer=layer, use_raw=use_raw)
 
         # ----- validity mask: finite coords & finite expr -------------------
         mask_finite = np.isfinite(w_raw) & np.all(np.isfinite(emb_all), axis=1)
@@ -79,7 +81,16 @@ def calculate_gene_density(
 
         # ----- min–max scale to 0-1 ----------------------------------------
         w_min, w_max = w_train_raw.min(), w_train_raw.max()
-        w_train      = (w_train_raw - w_min) / (w_max - w_min)
+        if w_max == w_min:
+            # every selected cell carries the same value, so the min-max scale
+            # is 0/0. The limiting case is an unweighted KDE of those cells —
+            # which is the honest answer, not a matrix full of NaN handed to
+            # scipy to fail on several frames later.
+            print(f"[{feat}] constant across the selected cells; "
+                  f"using an unweighted KDE.")
+            w_train = np.ones_like(w_train_raw, dtype=float)
+        else:
+            w_train = (w_train_raw - w_min) / (w_max - w_min)
 
         # ----- KDE fit ------------------------------------------------------
         kde = gaussian_kde(emb_train.T, weights=w_train, bw_method=adjust)

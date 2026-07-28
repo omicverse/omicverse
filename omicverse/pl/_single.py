@@ -1,5 +1,6 @@
 from ._scatterplot_backend import _embedding
 from .._registry import register_function
+from ._plotdata import get_values
 from ._plotdata import accepts_frame
 import collections.abc as cabc
 from copy import copy
@@ -1607,20 +1608,7 @@ def half_violin_boxplot(adata, keys, groupby, ax=None, figsize=(4,4), show=True,
     from scipy.sparse import issparse  
     
     # 获取 y 数据
-    y = None
-    if not adata.raw is None and keys in adata.raw.var_names:
-        y = adata.raw[:, keys].X
-    elif keys in adata.obs.columns:
-        y = adata.obs[keys].values
-    elif keys in adata.var_names:
-        y = adata[:, keys].X
-    else:
-        raise ValueError(f'{keys} not found in adata.raw.var_names, adata.var_names, or adata.obs.columns')
-    
-    if issparse(y):
-        y = y.toarray().reshape(-1)
-    else:
-        y = y.reshape(-1)
+    y = np.asarray(get_values(adata, keys), dtype=float).reshape(-1)
     
     # 获取 x 数据
     x = adata.obs[groupby].values.reshape(-1)

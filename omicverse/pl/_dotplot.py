@@ -15,6 +15,7 @@ import operator
 from typing import Any
 from ._palette import palette_28, palette_56
 from .._registry import register_function
+from ._plotdata import get_matrix
 
 _VarNames = Union[str, Sequence[str]]
 
@@ -233,12 +234,12 @@ def dotplot(
             use_raw = True
             print(f"Auto-detected: {len(genes_in_raw)} genes only in raw data, using raw data automatically")
 
-    if use_raw and adata.raw is not None:
-        matrix = adata.raw.X
-        var_names_idx = [adata.raw.var_names.get_loc(name) for name in var_names]
-    else:
-        matrix = adata.X if layer is None else adata.layers[layer]
-        var_names_idx = [adata.var_names.get_loc(name) for name in var_names]
+    # one dense (n_obs, n_genes) block, with the layer / raw rules applied once
+    expression = get_matrix(
+        adata, var_names,
+        layer=None if (use_raw and adata.raw is not None) else layer,
+        use_raw=True if (use_raw and adata.raw is not None) else None,
+    )
     
     # Determine category order
     if categories_order is not None:
@@ -283,8 +284,8 @@ def dotplot(
     
     for i, group in enumerate(agg.index):
         mask = (adata.obs[groupby] == group).values  # Convert to numpy array
-        group_matrix = matrix[mask][:, var_names_idx]
-        
+        group_matrix = expression[mask]
+
         # Calculate mean expression
         if mean_only_expressed:
             expressed = group_matrix > expression_cutoff

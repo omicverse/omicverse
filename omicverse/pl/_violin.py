@@ -6,6 +6,7 @@ from typing import Sequence, Union, Optional, Literal, List
 from matplotlib.axes import Axes
 from collections import OrderedDict
 from .._registry import register_function
+from ._plotdata import get_values
 
 try:
     from anndata import AnnData
@@ -493,29 +494,14 @@ def _extract_data_from_adata(adata, keys, groupby, layer, use_raw):
         if key in adata.obs.columns:
             # Key is in observations
             data_dict[key] = adata.obs[key]
-        elif key in adata.var_names:
-            # Key is a gene in current var_names
-            if use_raw and _has_raw and key in adata.raw.var_names:
-                gene_idx = list(adata.raw.var_names).index(key)
-                data_dict[key] = adata.raw.X[:, gene_idx]
-            elif layer is not None and layer in adata.layers:
-                gene_idx = list(adata.var_names).index(key)
-                data_dict[key] = adata.layers[layer][:, gene_idx]
-            else:
-                gene_idx = list(adata.var_names).index(key)
-                data_dict[key] = adata.X[:, gene_idx]
-
-            # Handle sparse matrices and ensure 1-D
-            if hasattr(data_dict[key], 'toarray'):
-                data_dict[key] = data_dict[key].toarray()
-            data_dict[key] = np.asarray(data_dict[key]).ravel()
-        elif use_raw and _has_raw and key in adata.raw.var_names:
-            # Key is NOT in current var_names but IS in raw (e.g. after HVG subsetting)
-            gene_idx = list(adata.raw.var_names).index(key)
-            data_dict[key] = adata.raw.X[:, gene_idx]
-            if hasattr(data_dict[key], 'toarray'):
-                data_dict[key] = data_dict[key].toarray()
-            data_dict[key] = np.asarray(data_dict[key]).ravel()
+        elif key in adata.var_names or (_has_raw and key in adata.raw.var_names):
+            # A gene: ov.pl.get_values applies the layer / raw rules, densifies
+            # a sparse column, and rescues names left only in .raw by HVG
+            # subsetting
+            data_dict[key] = get_values(
+                adata, key, layer=layer if not use_raw else None,
+                use_raw=True if use_raw and _has_raw else None,
+            )
         else:
             available = "adata.obs, adata.var_names"
             if _has_raw:

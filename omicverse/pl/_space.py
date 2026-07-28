@@ -7,6 +7,7 @@ import numpy as np
 from matplotlib.colors import ListedColormap
 from matplotlib.gridspec import GridSpec
 from .._registry import register_function
+from ._plotdata import get_values
 
 def to_rgb_grayscale(img, p_low: float = 1.0, p_high: float = 99.0):
     """Convert a 2-D grayscale image to a percentile-clipped RGB stack.
@@ -571,7 +572,7 @@ def plot_spatial(adata, color, img_key="hires", show_img=True, **kwargs):
         if ct in adata.obs.columns:
             plot_data[ct] = adata.obs[ct]
         elif ct in adata.var_names:
-            plot_data[ct] = adata[:,ct].X.flatten()
+            plot_data[ct] = get_values(adata, ct)
     plot_data=plot_data.fillna(0)
 
     fig = plot_spatial_general(adata,value_df=plot_data, **kwargs)  # cell abundance values
@@ -881,7 +882,7 @@ def add_pie_charts_to_spatial(
         if ct in adata.obs.columns:
             plot_data[ct] = adata.obs[ct]
         elif ct in adata.var_names:
-            plot_data[ct] = adata[:,ct].X.flatten()
+            plot_data[ct] = get_values(adata, ct)
     plot_data=plot_data.fillna(0)
     props_df = (
         plot_data
@@ -1061,7 +1062,7 @@ def add_pie2spatial(
         if ct in adata.obs.columns:
             plot_data[ct] = adata.obs[ct]
         elif ct in adata.var_names:
-            plot_data[ct] = adata[:,ct].X.flatten()
+            plot_data[ct] = get_values(adata, ct)
     plot_data=plot_data.fillna(0)
     props = (
         plot_data
