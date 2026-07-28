@@ -605,11 +605,25 @@ def analyse_parts(
         spread = max(block_effects.values()) - min(block_effects.values())
         notes.append(
             f"区组 {block!r} 的水平间跨度 {spread:.3g};已从各因子效应中扣除。")
+    # "Nothing mattered this round" has to be judged on the F-test, corrected for
+    # the number of factors tested — not on eta-squared. With 64 runs and 22
+    # parameters a *pure noise* response gives the top factor eta2 ~ 0.24, so an
+    # "eta2 < 0.05" rule almost never fires and is one more check incapable of
+    # failing. Three factors also means a naive p < 0.05 fires on noise about 14%
+    # of the time, hence the Bonferroni threshold.
     ranked = sorted(variance.items(), key=lambda kv: -kv[1])
-    if ranked and ranked[0][1] < 0.05:
+    if pvals:
+        alpha = 0.05 / max(len(pvals), 1)
+        best_p = min(pvals.values())
         notes.append(
-            f"解释方差最大的因子 {ranked[0][0]!r} 也只有 {ranked[0][1]:.1%} —— "
-            f"这一轮没有任何因子起作用,别在噪声上排序。")
+            f"显著性阈值 p < {alpha:.4f}(0.05 经 {len(pvals)} 个因子的 Bonferroni "
+            f"校正);最小 p = {best_p:.3g}。")
+        if best_p >= alpha:
+            notes.append(
+                f"没有任何因子通过校正后的显著性阈值 —— 这一轮没测出效应,"
+                f"别在噪声上排序。解释方差最大的是 {ranked[0][0]!r}(η² = "
+                f"{ranked[0][1]:.1%}),但 64 次实验、{p} 个参数时纯噪声也能给出"
+                f"这个量级的 η²,所以 η² 本身不足以判断。")
 
     return PartEffects(level_effects=level_effects, variance_explained=variance,
                        p_values=pvals, block_effects=block_effects,
@@ -936,8 +950,156 @@ def plot_design_balance(design: "PartDesign | object",
     return fig, axes
 
 
+@register_function(
+    aliases=["lookup_combination", "查组合", "回查实测值", "combination_lookup"],
+    category="synthetic_biology",
+    description="在一份已测数据里查出某个具体组合的行 —— 闭环的收尾动作:模型推荐了一个组合,那它实测是多少?返回匹配的行(通常一行),找不到时返回空表而不是报错,因为'这个组合没被建出来'本身就是一个结果。Look up the measured rows for one combination of levels.",
+    examples=[
+        "row = ov.synbio.lookup_combination(measured, effects.best_levels())",
+        "row = ov.synbio.lookup_combination(measured, proposal.combinations[0])",
+    ],
+    related=["synbio.analyse_parts", "synbio.propose_combinations",
+             "synbio.compare_part_effects"],
+    requires={}, produces={},
+)
+def lookup_combination(frame: "object", combination: Mapping[str, Any]
+                       ) -> "pd.DataFrame":
+    """Rows of ``frame`` matching every level in ``combination``.
+
+    An empty result means that combination was never built — which is a finding,
+    not an error, and is why this does not raise.
+    """
+    import pandas as pd
+
+    table = pd.DataFrame(frame)
+    missing = [name for name in combination if name not in table.columns]
+    if missing:
+        raise KeyError(
+            f"这些因子不在表里:{missing}。可选列:{list(table.columns)}")
+    mask = pd.Series(True, index=table.index)
+    for name, level in combination.items():
+        mask &= table[name].astype(str) == str(level)
+    return table.loc[mask]
+
+
+@register_function(
+    aliases=["compare_part_effects", "对比效应", "效应一致性", "验证设计",
+             "effects_agreement"],
+    category="synthetic_biology",
+    description="把一份设计估计出的每水平效应与另一份(通常是全组合实测的真值)对比:逐因子给出效应的 Pearson 相关、解释方差之差、最佳水平是否一致。这是'这个设计到底有没有奏效'的直接检验 —— 只有在真值已知时才做得到,而那正是应该验证方法本身的场合。Compare per-level effects from two analyses, factor by factor.",
+    examples=[
+        "ov.synbio.compare_part_effects(from_64_runs, from_all_512)",
+    ],
+    related=["synbio.analyse_parts", "synbio.plot_part_effects"],
+    requires={}, produces={},
+)
+def compare_part_effects(estimate: PartEffects, reference: PartEffects
+                         ) -> "pd.DataFrame":
+    """Per-factor agreement between an estimate and a reference analysis."""
+    import numpy as np
+    import pandas as pd
+
+    rows = []
+    shared = [f for f in estimate.level_effects if f in reference.level_effects]
+    if not shared:
+        raise ValueError(
+            f"两次分析没有共同因子。estimate: {list(estimate.level_effects)};"
+            f" reference: {list(reference.level_effects)}")
+    for factor in shared:
+        a, b = estimate.level_effects[factor], reference.level_effects[factor]
+        levels = [lvl for lvl in a if lvl in b]
+        va = np.array([a[lvl] for lvl in levels], dtype=float)
+        vb = np.array([b[lvl] for lvl in levels], dtype=float)
+        correlation = (float(np.corrcoef(va, vb)[0, 1])
+                       if len(levels) > 2 and va.std() > 0 and vb.std() > 0
+                       else float("nan"))
+        best_a = max(a, key=a.get)
+        best_b = max(b, key=b.get)
+        rows.append({
+            "factor": factor,
+            "n_levels_compared": len(levels),
+            "effect_r": correlation,
+            "eta2_estimate": estimate.variance_explained.get(factor, float("nan")),
+            "eta2_reference": reference.variance_explained.get(factor, float("nan")),
+            "best_level_estimate": best_a,
+            "best_level_reference": best_b,
+            "best_level_agrees": best_a == best_b,
+        })
+    frame = pd.DataFrame(rows)
+    return frame.sort_values("eta2_reference", ascending=False).reset_index(drop=True)
+
+
+@register_function(
+    aliases=["plot_round_progress", "画轮次进展", "闭环进展", "DBTL进展",
+             "round_progress"],
+    category="synthetic_biology",
+    description="画每一轮实测响应的分布与累计最优,可选画出全局最优参考线 —— 用来回答'这个闭环到底有没有奏效'。左图每轮一列散点加中位数,右图累计最优随轮次上升。传 best_possible= 时会标出距离真实最优还有多远;只有在真值已知(如回溯性地用一份已测全组合的数据集)时才给得出这条线,而那正是能验证方法本身的场合。Plot the measured response per round and the running best.",
+    examples=[
+        "ov.synbio.plot_round_progress({'round 1': y1, 'round 2': y2})",
+        "ov.synbio.plot_round_progress(rounds, best_possible=truth.max())",
+    ],
+    related=["synbio.propose_combinations", "synbio.analyse_parts",
+             "synbio.dbtl_campaign"],
+    requires={}, produces={},
+)
+def plot_round_progress(rounds: Mapping[str, Sequence[float]],
+                        best_possible: Optional[float] = None,
+                        response_name: str = "response", axes=None):
+    """Per-round measured response, and the running best against the ceiling."""
+    import matplotlib.pyplot as plt
+    import numpy as np
+
+    if not rounds:
+        raise ValueError("rounds 不能为空。")
+    if axes is None:
+        fig, axes = plt.subplots(1, 2, figsize=(11, 4.2))
+    else:
+        fig = np.ravel(axes)[0].figure
+    ax1, ax2 = np.ravel(axes)[:2]
+
+    labels = list(rounds)
+    rng = np.random.default_rng(0)
+    for i, label in enumerate(labels):
+        values = np.asarray(list(rounds[label]), dtype=float)
+        values = values[np.isfinite(values)]
+        if not values.size:
+            continue
+        jitter = rng.uniform(-0.13, 0.13, size=values.size)
+        ax1.scatter(np.full(values.size, i) + jitter, values, s=26, alpha=0.75,
+                    edgecolor="none")
+        ax1.hlines(np.median(values), i - 0.25, i + 0.25, color="black", lw=1.6)
+    if best_possible is not None:
+        ax1.axhline(best_possible, ls="--", color="#c0392b", lw=1.2,
+                    label="best in the whole library")
+        ax1.legend(fontsize=8)
+    ax1.set_xticks(range(len(labels)))
+    ax1.set_xticklabels(labels, fontsize=8)
+    ax1.set_ylabel(response_name)
+    ax1.set_title("measured per round (bar = median)")
+
+    running, best = [], -np.inf
+    for label in labels:
+        values = [v for v in rounds[label] if v == v]
+        best = max([best] + list(values))
+        running.append(best)
+    ax2.plot(range(len(labels)), running, "o-", color="#2980b9")
+    if best_possible is not None:
+        ax2.axhline(best_possible, ls="--", color="#c0392b", lw=1.2)
+        for i, value in enumerate(running):
+            ax2.annotate(f"{100 * 2 ** (value - best_possible):.0f}% of best",
+                         (i, value), textcoords="offset points", xytext=(4, -12),
+                         fontsize=7)
+    ax2.set_xticks(range(len(labels)))
+    ax2.set_xticklabels(labels, fontsize=8)
+    ax2.set_ylabel(f"best {response_name} so far")
+    ax2.set_title("running best")
+    fig.tight_layout()
+    return fig, axes
+
+
 __all__ = [
     "orthogonal_array", "combinatorial_design", "PartDesign",
+    "plot_round_progress", "lookup_combination", "compare_part_effects",
     "analyse_parts", "PartEffects",
     "propose_combinations", "CombinationProposal",
     "plot_part_effects", "plot_design_balance",

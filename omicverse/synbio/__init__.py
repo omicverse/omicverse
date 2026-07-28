@@ -287,6 +287,23 @@ _LAZY_ATTRS: dict[str, tuple[str, str]] = {
     "GROWTH_MODELS":         ("._assay", "GROWTH_MODELS"),
     # ---- Learn layer: DoE, Bayesian optimisation, the cycle ----------------
     "doe_design":            ("._dbtl", "doe_design"),
+    # --- real measured datasets -------------------------------------------
+    "fetch_promoter_library": ("._datasets", "fetch_promoter_library"),
+    "PROMOTER_ELEMENTS":     ("._datasets", "PROMOTER_ELEMENTS"),
+    # --- designs over discrete part choices --------------------------------
+    "orthogonal_array":      ("._discrete", "orthogonal_array"),
+    "combinatorial_design":  ("._discrete", "combinatorial_design"),
+    "PartDesign":            ("._discrete", "PartDesign"),
+    "analyse_parts":         ("._discrete", "analyse_parts"),
+    "PartEffects":           ("._discrete", "PartEffects"),
+    "propose_combinations":  ("._discrete", "propose_combinations"),
+    "CombinationProposal":   ("._discrete", "CombinationProposal"),
+    "plot_part_effects":     ("._discrete", "plot_part_effects"),
+    "plot_design_balance":   ("._discrete", "plot_design_balance"),
+    "plot_round_progress":   ("._discrete", "plot_round_progress"),
+    "lookup_combination":    ("._discrete", "lookup_combination"),
+    "compare_part_effects":  ("._discrete", "compare_part_effects"),
+    "DISCRETE_DESIGNS":      ("._discrete", "DISCRETE_DESIGNS"),
     "Design":                ("._dbtl", "Design"),
     "analyse_doe":           ("._dbtl", "analyse_doe"),
     "DoEAnalysis":           ("._dbtl", "DoEAnalysis"),
