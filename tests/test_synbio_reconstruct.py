@@ -28,7 +28,7 @@ def carved(template):
     """A draft missing the last 40 template genes — enough to stop growth."""
     genes = sorted(g.id for g in template.genes)
     gene_map = {f"q_{g}": g for g in genes[:-40]}
-    return sb.reconstruct_gem("unused.faa", template=template, gene_map=gene_map)
+    return sb.reconstruct_gem(None, template=template, gene_map=gene_map)
 
 
 # ---------------------------------------------------------------------------
@@ -119,7 +119,7 @@ def test_reconstruct_leaves_the_template_untouched(template, carved):
 def test_keep_orphan_reactions_carves_nothing(template):
     genes = sorted(g.id for g in template.genes)
     gene_map = {f"q_{g}": g for g in genes[:-40]}
-    rep = sb.reconstruct_gem("unused.faa", template=template, gene_map=gene_map,
+    rep = sb.reconstruct_gem(None, template=template, gene_map=gene_map,
                              keep_orphan_reactions=True)
     assert rep.n_reactions == rep.template_reactions
     assert rep.dropped_reactions, "the report still lists what would have gone"
@@ -130,25 +130,25 @@ def test_reconstruct_rejects_unknown_method(template):
     real backend now, so an unknown method has to be something genuinely absent
     — otherwise this test silently stops testing rejection."""
     with pytest.raises(ValueError, match="method must be one of"):
-        sb.reconstruct_gem("unused.faa", template=template, method="raven")
+        sb.reconstruct_gem(None, template=template, method="raven")
 
 
 def test_all_named_reconstruction_backends_are_accepted(template):
     """Every backend the docs name must at least reach its own dispatch."""
     import shutil
 
-    assert sb.reconstruct_gem("unused.faa", template=template,
+    assert sb.reconstruct_gem(None, template=template,
                               gene_map={}).method == "homology"
     for method, tool in (("carveme", "carve"), ("gapseq", "gapseq")):
         if shutil.which(tool):
             continue
         with pytest.raises(ImportError, match=tool):
-            sb.reconstruct_gem("unused.faa", template=template, method=method)
+            sb.reconstruct_gem(None, template=template, method=method)
 
 
 def test_homology_without_a_template_proteome_is_an_error(template):
     with pytest.raises(ValueError, match="template_proteome"):
-        sb.reconstruct_gem("unused.faa", template=template, method="homology")
+        sb.reconstruct_gem(None, template=template, method="homology")
 
 
 # ---------------------------------------------------------------------------

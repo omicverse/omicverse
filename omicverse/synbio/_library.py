@@ -14,6 +14,8 @@ Design the *libraries* you screen, and let a sequence model guide them:
 """
 from __future__ import annotations
 
+import itertools
+
 from dataclasses import dataclass, field
 from itertools import product
 from typing import TYPE_CHECKING, Dict, List, Optional, Sequence, Set
@@ -229,14 +231,30 @@ def ml_guided_design(seq: str, n_mutations: int = 3, n_designs: int = 10,
         total = sum(c[3] for c in combo)
         designs.append(DesignedVariant(mutations=muts, sequence="".join(s),
                                        predicted_score=float(total)))
-    # also emit the best single-position designs to fill out n_designs
-    for m, pos, alt, sc in chosen:
+    # Fill out n_designs with *distinct* combinations. Emitting single-position
+    # designs from index 0 re-emitted the k=1 design the loop above had already
+    # produced, so n_designs=6 returned 5 unique designs — every one of them a
+    # nested subset of the top design, and the duplicate double-weighted its
+    # mutation in any downstream sequence logo.
+    seen = {frozenset(d.mutations) for d in designs}
+    for size in range(1, n_mutations + 1):
         if len(designs) >= n_designs:
             break
-        s = list(seq)
-        s[pos - 1] = alt
-        designs.append(DesignedVariant(mutations=[m], sequence="".join(s),
-                                       predicted_score=sc))
+        for combo in itertools.combinations(chosen, size):
+            if len(designs) >= n_designs:
+                break
+            key = frozenset(c[0] for c in combo)
+            if key in seen:
+                continue
+            if len({c[1] for c in combo}) != len(combo):   # one alt per position
+                continue
+            seen.add(key)
+            s = list(seq)
+            for _m, pos, alt, _score in combo:
+                s[pos - 1] = alt
+            designs.append(DesignedVariant(
+                mutations=[c[0] for c in combo], sequence="".join(s),
+                predicted_score=float(sum(c[3] for c in combo))))
     designs.sort(key=lambda d: d.predicted_score, reverse=True)
     return designs[:n_designs]
 

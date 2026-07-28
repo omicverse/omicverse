@@ -366,7 +366,7 @@ def _fasta_lengths(path: str) -> Dict[str, int]:
 
 
 def _reconstruct_homology(
-    proteome: str,
+    proteome: Optional[str],
     template,
     template_proteome: Optional[str],
     *,
@@ -381,6 +381,17 @@ def _reconstruct_homology(
     tmpl = _load_template(template)
     tmpl_name = getattr(tmpl, "id", None) or str(template)
     n_template_rxns = len(tmpl.reactions)
+
+    # Validate the proteome path even when gene_map short-circuits the alignment.
+    # Reading it is skipped, but *accepting a path that does not exist* from a
+    # function whose whole purpose is to read it is how 'strainX.faa' — a file
+    # that was never created — became the documented example.
+    if proteome and not str(proteome).startswith(("<", "-")):
+        if not os.path.exists(proteome):
+            raise FileNotFoundError(
+                f"找不到蛋白组文件 {proteome!r}。即使传了 gene_map(此时不做比对),"
+                f"这个参数仍必须指向真实文件 —— 否则一次重建到底基于什么序列就无从"
+                f"追溯。只有映射关系、没有蛋白组时,请显式传 proteome=None。")
 
     if gene_map is None:
         if not template_proteome:

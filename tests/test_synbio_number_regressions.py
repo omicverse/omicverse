@@ -517,3 +517,31 @@ def test_plate_layout_can_randomise_and_avoid_edges():
     for well in interior.contents:
         row, col = parse_well(well)
         assert 0 < row < 7 and 0 < col < 11, f"{well} is on the perimeter"
+
+
+def test_ml_guided_design_returns_distinct_designs():
+    """The fill loop restarted from index 0 and re-emitted the k=1 design the
+    combinatorial loop had already produced, so n_designs=6 returned 5 unique
+    designs — and the duplicate double-weighted its mutation in any sequence
+    logo drawn from the set."""
+    GB1 = "MTYKLILNGKTLKGETTTEAVDAATAEKVFKQYANDNGVDGEWTYDDATKTFTVTE"
+    designs = sb.ml_guided_design(GB1, n_designs=6, n_mutations=3)
+    keys = [frozenset(d.mutations) for d in designs]
+    assert len(keys) == len(set(keys)), [sorted(k) for k in keys]
+    for design in designs:
+        positions = [int("".join(c for c in m[1:-1] if c.isdigit()))
+                     for m in design.mutations]
+        assert len(positions) == len(set(positions)), design.mutations
+
+
+def test_reconstruct_gem_rejects_a_proteome_that_does_not_exist(core):
+    """`reconstruct_gem('strainX.faa', gene_map=...)` accepted a file that was
+    never created, because the proteome is not read when gene_map short-circuits
+    the alignment. A function whose purpose is to read a file must not accept a
+    path it cannot open."""
+    gene_map = {f"strainX_{g.id}": g.id for g in list(core.genes)[:-40]}
+    with pytest.raises(FileNotFoundError, match="找不到蛋白组文件"):
+        sb.reconstruct_gem("strainX.faa", template=core, gene_map=gene_map)
+
+    report = sb.reconstruct_gem(None, template=core, gene_map=gene_map)
+    assert report.n_reactions < len(core.reactions), "nothing was carved"
