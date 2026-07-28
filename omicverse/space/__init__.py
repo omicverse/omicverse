@@ -61,7 +61,7 @@ from ._spatrio import CellMap,CellLoc
 from ._stt import STT
 from ._svg import svg,spatial_neighbors,spatial_autocorr,moranI
 from ._niche import molecular as _niche_molecular
-from . import nb, niche
+from . import geom, nb, niche
 from ._neighborhood import (
     interaction_matrix,
     nhood_enrichment,
@@ -197,4 +197,5 @@ __all__ = [
     # Namespaces
     'nb',
     'niche',
+    'geom',
 ]
