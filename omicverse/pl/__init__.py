@@ -295,6 +295,7 @@ from ._survival import (
 )
 from ._classification import confusion, roc, roc_auc_ci
 from ._forest import forest, meta_analysis
+from ._adjust_text import adjust_text
 from ._stats_tests import add_stat_annotation, compare_groups, format_pvalue
 from ._categorical import (
     barplot,
@@ -562,6 +563,7 @@ __all__ = [
     # @ _stats_tests — group comparison and significance brackets
     "compare_groups",
     "add_stat_annotation",
+    "adjust_text",
     "format_pvalue",
     # @ _categorical — generic categorical plots (table in, no AnnData)
     "barplot",
