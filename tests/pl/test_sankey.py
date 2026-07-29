@@ -178,3 +178,56 @@ def test_unknown_column_names_the_available_columns(flows):
 def test_needs_at_least_two_columns(flows):
     with pytest.raises(TypeError):
         sankey(flows, ["day"])
+
+
+# --------------------------------------------------------------------------
+# ribbon shape
+#
+# The ribbon profile is the whole visual identity of a Sankey. Two independent
+# things have to hold, and each was wrong at some point: the profile itself
+# must be the pySankey/cnsplots double-box convolution (a cubic smoothstep
+# ramps far too wide), and only *y* may follow it — warping x by the same curve
+# cancels the parametrisation and yields straight parallelograms.
+# --------------------------------------------------------------------------
+
+
+def test_profile_matches_the_pysankey_convolution():
+    from omicverse.pl._categorical import _smoothstep
+
+    profile = _smoothstep(62)
+    assert profile[0] == pytest.approx(0.0)
+    assert profile[-1] == pytest.approx(1.0)
+    assert np.all(np.diff(profile) >= -1e-12), "profile must be monotone"
+
+    t = np.linspace(0.0, 1.0, len(profile))
+    lo = t[np.argmax(profile > 0.05)]
+    hi = t[np.argmax(profile > 0.95)]
+    # the 5%->95% transition occupies the middle ~46% of the span; a cubic
+    # smoothstep would take ~72% and read as a straight diagonal
+    assert (hi - lo) == pytest.approx(0.459, abs=0.02)
+
+
+def test_ribbon_edges_are_curved_not_straight(flows):
+    """A ribbon edge must bow away from the straight line joining its ends."""
+    fig, ax = plt.subplots()
+    sankey(flows, ["day", "sex"], ax=ax)
+
+    from matplotlib.patches import Polygon
+
+    bowed = 0
+    for patch in ax.patches:
+        if not isinstance(patch, Polygon):
+            continue
+        gid = patch.get_gid() or ""
+        if not gid.startswith("flow:"):
+            continue
+        verts = patch.get_xy()
+        top = verts[:len(verts) // 2]          # the upper edge, left to right
+        xs, ys = top[:, 0], top[:, 1]
+        if np.allclose(ys, ys[0]):             # a level ribbon has nothing to bow
+            continue
+        straight = np.interp(xs, [xs[0], xs[-1]], [ys[0], ys[-1]])
+        deviation = np.max(np.abs(ys - straight))
+        if deviation > 0.02 * abs(ys[-1] - ys[0]):
+            bowed += 1
+    assert bowed > 0, "every ribbon edge was a straight line"
