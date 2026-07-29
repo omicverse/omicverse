@@ -130,6 +130,118 @@ def _figsize_inches(width, height, units: str, dpi: float,
     return w_in, h_in
 
 
+def _as_pair(value, name: str) -> Tuple[float, float]:
+    if isinstance(value, (int, float)):
+        return float(value), float(value)
+    pair = tuple(float(v) for v in value)
+    if len(pair) != 2:
+        raise ValueError(f"`{name}` takes one number or two, got {value!r}.")
+    return pair
+
+
+def _as_margins(value) -> Tuple[float, float, float, float]:
+    if isinstance(value, (int, float)):
+        return (float(value),) * 4
+    quad = tuple(float(v) for v in value)
+    if len(quad) != 4:
+        raise ValueError(
+            f"`margins` takes one number or four (left, right, bottom, top), "
+            f"got {value!r}."
+        )
+    return quad
+
+
+def _panel_geometry(grid, panel_size, panel_widths, panel_heights,
+                    margins, spacing, units, dpi, gridspec_kw):
+    """Derive the canvas and gridspec margins from absolute panel sizes.
+
+    Returns ``None`` when no panel size was asked for, which leaves the caller
+    on the ordinary figure-sized path.
+
+    A gridspec positions its panels in figure fractions, so fixing a panel in
+    millimetres means solving for the fractions that reproduce it on a canvas
+    that is itself derived from the panels. That is only well posed on a
+    regular grid: on a mosaic a panel may span two columns, and "the panel
+    width" is then not one number.
+    """
+    if panel_size is None and panel_widths is None and panel_heights is None:
+        return None
+    if grid is None:
+        raise ValueError(
+            "Panel sizes need a regular grid — pass `(nrows, ncols)` or a "
+            "panel count. A mosaic panel can span several columns, so it has "
+            "no single width to fix."
+        )
+    for ratio_key in ("width_ratios", "height_ratios"):
+        if ratio_key in gridspec_kw:
+            raise ValueError(
+                f"`{ratio_key}` is relative and panel sizes are absolute — "
+                f"give one or the other. Per-column sizes go in `panel_widths` "
+                f"/ `panel_heights`."
+            )
+
+    nrows, ncols = grid
+    if panel_size is not None:
+        if panel_widths is not None or panel_heights is not None:
+            raise ValueError(
+                "`panel_size` sets every panel; use `panel_widths` / "
+                "`panel_heights` instead to vary them per column or row."
+            )
+        pw, ph = _as_pair(panel_size, "panel_size")
+        widths = [pw] * ncols
+        heights = [ph] * nrows
+    else:
+        if panel_widths is None or panel_heights is None:
+            raise ValueError(
+                "Give both `panel_widths` and `panel_heights` (or use "
+                "`panel_size`) — a panel needs both dimensions fixed for the "
+                "canvas to be derivable."
+            )
+        widths = [float(v) for v in panel_widths]
+        heights = [float(v) for v in panel_heights]
+        if len(widths) != ncols or len(heights) != nrows:
+            raise ValueError(
+                f"`panel_widths` needs {ncols} values (one per column) and "
+                f"`panel_heights` needs {nrows} (one per row); got "
+                f"{len(widths)} and {len(heights)}."
+            )
+    if min(widths) <= 0 or min(heights) <= 0:
+        raise ValueError("Panel sizes must be positive.")
+
+    left_m, right_m, bottom_m, top_m = _as_margins(margins)
+    h_gap, v_gap = _as_pair(spacing, "spacing")
+
+    panels_w = sum(widths) + h_gap * (ncols - 1)
+    panels_h = sum(heights) + v_gap * (nrows - 1)
+    fig_w = panels_w + left_m + right_m
+    fig_h = panels_h + bottom_m + top_m
+    if fig_w <= 0 or fig_h <= 0:
+        raise ValueError(
+            f"Margins leave no room for the panels: figure would be "
+            f"{fig_w}x{fig_h} {units}."
+        )
+
+    factor = _to_inch_factor(units, dpi)
+    # gridspec's left/right/bottom/top are figure fractions; wspace/hspace are
+    # gap-over-mean-panel. Converting here is what keeps the drawn panel equal
+    # to the number the caller asked for.
+    mean_w = sum(widths) / ncols
+    mean_h = sum(heights) / nrows
+    return {
+        "figsize_in": (fig_w * factor, fig_h * factor),
+        "gridspec_kw": {
+            "left": left_m / fig_w,
+            "right": 1.0 - right_m / fig_w,
+            "bottom": bottom_m / fig_h,
+            "top": 1.0 - top_m / fig_h,
+            "wspace": (h_gap / mean_w) if ncols > 1 else 0.0,
+            "hspace": (v_gap / mean_h) if nrows > 1 else 0.0,
+            "width_ratios": widths,
+            "height_ratios": heights,
+        },
+    }
+
+
 @register_function(
     aliases=["画布", "figure", "figure_size", "出版尺寸", "期刊尺寸", "journal figure"],
     category="pl",
@@ -229,12 +341,20 @@ def _panel_labels(n: int, label: Union[bool, str, Sequence[str]]) -> Optional[Li
     category="pl",
     description=(
         "Lay out a labelled multi-panel figure (grid or mosaic) at a physical "
-        "size, with automatic a/b/c panel tags"
+        "size, with automatic a/b/c panel tags. Size the canvas with `width`, "
+        "or size the panels themselves with `panel_size` when a journal "
+        "specifies the panel rather than the figure"
     ),
     examples=[
         "# 2x2 grid, 183 mm wide (Nature double column)",
         "fig, ax = ov.pl.multipanel((2, 2), width='nature-double', height=120)",
         "ov.pl.volcano(deg, ax=ax['a'])",
+        "# Panels fixed at 45x100 mm each; the canvas is derived from them",
+        "fig, ax = ov.pl.multipanel((2, 3), panel_size=(45, 100))",
+        "# Per-column widths, a figure number, and a colour cycle bound to a panel",
+        "fig, ax = ov.pl.multipanel((1, 3), panel_widths=[45, 60, 30],",
+        "                           panel_heights=[80], title='Figure 1',",
+        "                           panel_styles={'a': {'color_cycle': ['#4C72B0', '#DD8452']}})",
         "# Mosaic: a wide panel on top of two narrow ones",
         "fig, ax = ov.pl.multipanel('AA\\nBC', width=183, height=110)",
         "ax['A'].plot(x, y)",
@@ -257,6 +377,14 @@ def multipanel(layout: Union[int, Tuple[int, int], str, Sequence[Sequence[Any]]]
                sharey: bool = False,
                editable_text: bool = True,
                constrained: bool = True,
+               panel_size: Optional[Tuple[float, float]] = None,
+               panel_widths: Optional[Sequence[float]] = None,
+               panel_heights: Optional[Sequence[float]] = None,
+               margins: Union[float, Tuple[float, float, float, float]] = 14.0,
+               spacing: Union[float, Tuple[float, float]] = 8.0,
+               title: Optional[str] = None,
+               title_kw: Optional[Mapping[str, Any]] = None,
+               panel_styles: Optional[Mapping[Any, Mapping[str, Any]]] = None,
                **gridspec_kw: Any):
     r"""Build a multi-panel figure and label the panels.
 
@@ -279,9 +407,49 @@ def multipanel(layout: Union[int, Tuple[int, int], str, Sequence[Sequence[Any]]]
         Extra keyword arguments forwarded to :func:`add_panel_label`.
     sharex, sharey
         Share axes across panels.
+    panel_size, panel_widths, panel_heights
+        Size the **panels** instead of the figure, in ``units``. A journal that
+        specifies a panel ("each panel 45 mm wide") cannot be satisfied by
+        ``width`` plus ``width_ratios``, because those fix the canvas and let
+        the panels fall where they may — the drawn panel then depends on how
+        much room the tick labels happened to need.
+
+        ``panel_size=(w, h)`` gives every panel that size; ``panel_widths`` /
+        ``panel_heights`` give per-column and per-row sizes. The figure is
+        sized to fit: ``sum(panels) + spacing + margins``.
+
+        This turns constrained layout **off** — the two are contradictory, one
+        reflows to fit content and the other refuses to. That makes ``margins``
+        load-bearing: anything outside the axes (tick labels, y-labels, panel
+        tags) has to fit in them, and will be clipped rather than accommodated.
+        Grid layouts only; a mosaic's spans have no single panel width.
+    margins
+        Space outside the panels, in ``units`` — one number, or
+        ``(left, right, bottom, top)``. Only consulted when panels are sized.
+    spacing
+        Gap between panels, in ``units`` — one number, or ``(horizontal,
+        vertical)``. Only consulted when panels are sized.
+    title
+        Figure title, e.g. ``'Figure 1'``, drawn with ``fig.suptitle``.
+    title_kw
+        Extra keyword arguments for the title, e.g. ``{'x': 0.02, 'ha': 'left'}``
+        to left-align it.
+    panel_styles
+        Per-panel settings, keyed the same way ``axes`` is. ``color_cycle``
+        calls :meth:`~matplotlib.axes.Axes.set_prop_cycle`; every other key is
+        passed to :meth:`~matplotlib.axes.Axes.set`, so ``title``, ``xlabel``,
+        ``xlim`` and friends all work::
+
+            panel_styles={'a': {'color_cycle': ['#4C72B0', '#DD8452'],
+                                'title': 'Baseline'}}
+
+        Binding the cycle to the panel means the plotting calls that follow do
+        not each have to carry the colour.
     **gridspec_kw
         Passed to the gridspec — e.g. ``width_ratios``, ``height_ratios``,
-        ``wspace``, ``hspace``.
+        ``wspace``, ``hspace``. ``width_ratios`` / ``height_ratios`` are
+        relative and are therefore rejected alongside ``panel_widths`` /
+        ``panel_heights``, which are absolute.
 
     Returns
     -------
@@ -310,9 +478,25 @@ def multipanel(layout: Union[int, Tuple[int, int], str, Sequence[Sequence[Any]]]
 
     if editable_text:
         set_editable_text(True)
-    w_in, h_in = _figsize_inches(width, height, units, dpi, aspect)
-    fig = plt.figure(figsize=(w_in, h_in), dpi=dpi,
-                     layout="constrained" if constrained else None)
+
+    sized_panels = _panel_geometry(
+        grid, panel_size, panel_widths, panel_heights,
+        margins, spacing, units, dpi, gridspec_kw,
+    )
+    if sized_panels is None:
+        w_in, h_in = _figsize_inches(width, height, units, dpi, aspect)
+        fig = plt.figure(figsize=(w_in, h_in), dpi=dpi,
+                         layout="constrained" if constrained else None)
+    else:
+        # Panels are absolute, so the canvas is derived and constrained layout
+        # must stay off — it exists precisely to move panels around.
+        if width is not None or height is not None:
+            raise ValueError(
+                "Give either the figure size (`width`/`height`) or the panel "
+                "size (`panel_size`/`panel_widths`/`panel_heights`), not both "
+                "— with panels sized, the figure size is derived from them."
+            )
+        fig = plt.figure(figsize=sized_panels["figsize_in"], dpi=dpi, layout=None)
 
     if grid is not None:
         nrows, ncols = grid
@@ -320,6 +504,8 @@ def multipanel(layout: Union[int, Tuple[int, int], str, Sequence[Sequence[Any]]]
         keys = labels if labels is not None else [
             (r, c) for r in range(nrows) for c in range(ncols)
         ]
+        if sized_panels is not None:
+            gridspec_kw = dict(gridspec_kw, **sized_panels["gridspec_kw"])
         gs = fig.add_gridspec(nrows, ncols, **gridspec_kw)
         axes: Dict[Any, Any] = {}
         first = None
@@ -358,6 +544,32 @@ def multipanel(layout: Union[int, Tuple[int, int], str, Sequence[Sequence[Any]]]
         for ax, text in zip(ordered, labels):
             if text not in axes:
                 axes[text] = ax
+
+    if title is not None:
+        fig.suptitle(title, **(dict(title_kw) if title_kw else {}))
+
+    if panel_styles:
+        unknown = [k for k in panel_styles if k not in axes]
+        if unknown:
+            raise KeyError(
+                f"panel_styles names panels that do not exist: {sorted(map(str, unknown))}. "
+                f"Available: {sorted(map(str, axes))}."
+            )
+        # Iterate over the axes, not the mapping: a panel reachable under two
+        # keys ('A' and 'a') would otherwise have its style applied twice, and
+        # a prop cycle applied twice is silently reset to its start.
+        applied: set = set()
+        for key, style in panel_styles.items():
+            ax = axes[key]
+            if id(ax) in applied:
+                continue
+            applied.add(id(ax))
+            settings = dict(style)
+            cycle = settings.pop("color_cycle", None)
+            if cycle is not None:
+                ax.set_prop_cycle(color=list(cycle))
+            if settings:
+                ax.set(**settings)
 
     return fig, axes
 
