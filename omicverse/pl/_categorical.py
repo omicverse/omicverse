@@ -1110,6 +1110,7 @@ def slopeplot(data: Any = None,
               y: Any = None,
               *,
               subject: Any = None,
+              group: Any = None,
               order: Optional[Sequence[Any]] = None,
               color_by: str = "direction",
               palette=None,
@@ -1137,6 +1138,12 @@ def slopeplot(data: Any = None,
     subject
         Column identifying the repeated unit (patient, donor, well). Required —
         without it there is nothing to connect.
+    group
+        Optional outer grouping. When given, ``x`` must hold exactly two
+        conditions: each ``group`` level becomes its own paired cluster along
+        the axis (the two conditions side by side, one line per ``subject``,
+        coloured by direction), rather than a single cluster spanning all ``x``
+        levels. This is the layout for "healthy vs disease within each site".
     color_by
         ``'direction'`` (default: up / down / flat), ``'subject'``, or the name
         of a column to colour by.
@@ -1158,6 +1165,67 @@ def slopeplot(data: Any = None,
     """
     if subject is None:
         raise TypeError("`subject` is required — it says which points connect.")
+
+    if group is not None:
+        # cnsplots-style grouped paired slope: ``x`` holds the two conditions to
+        # connect, ``subject`` pairs them, and ``group`` lays out one paired
+        # cluster per level along the axis (e.g. one cluster per site, each
+        # showing healthy vs disease). The single-cluster path below cannot
+        # express this nesting — a subject there spans every ``x`` level, not a
+        # two-point pair repeated across an outer grouping.
+        frame, names = resolve_columns(
+            data, require=("x", "y", "subject", "group"),
+            x=x, y=y, subject=subject, group=group)
+        x_levels = group_levels(frame["x"], order)
+        if len(x_levels) != 2:
+            raise ValueError(
+                "grouped slopeplot (`group=`) connects exactly two `x` "
+                f"conditions; got {len(x_levels)}: {x_levels}.")
+        spans = frame.groupby("subject", observed=False)["group"].nunique()
+        if (spans > 1).any():
+            bad = spans.index[spans > 1][0]
+            raise ValueError(
+                f"`subject` {bad!r} spans more than one `group`; each paired "
+                "subject must sit in a single group.")
+        g_levels = group_levels(frame["group"])
+        c_left, c_right = ((palette[0], palette[1]) if palette
+                           else (down_color, up_color))
+        ax = _new_axes(ax, figsize, (max(2.8, 1.4 * len(g_levels)), 4.0))
+        for index, level in enumerate(g_levels):
+            sub = frame[frame["group"] == level]
+            wide = (sub.pivot_table(index="subject", columns="x", values="y",
+                                    aggfunc="mean", observed=False)
+                    .reindex(columns=x_levels).dropna())
+            left = wide[x_levels[0]].to_numpy(dtype=float)
+            right = wide[x_levels[1]].to_numpy(dtype=float)
+            x1, x2 = index - 0.2, index + 0.2
+            for low, high in zip(left, right):
+                ax.plot([x1, x2], [low, high],
+                        color=(c_left if low > high else c_right),
+                        linewidth=linewidth, alpha=alpha, zorder=2)
+            ax.scatter([x1] * len(left), left, color=c_left, s=markersize,
+                       linewidths=0.4, zorder=3)
+            ax.scatter([x2] * len(right), right, color=c_right, s=markersize,
+                       linewidths=0.4, zorder=3)
+        from matplotlib.lines import Line2D
+        handles = [Line2D([0], [0], marker=marker, linestyle="", color=c_left,
+                          markersize=np.sqrt(markersize), label=str(x_levels[0])),
+                   Line2D([0], [0], marker=marker, linestyle="", color=c_right,
+                          markersize=np.sqrt(markersize), label=str(x_levels[1]))]
+        ax.legend(handles=handles, fontsize=font_size(fontsize), frameon=False)
+        ax.set_xticks(range(len(g_levels)))
+        ax.set_xticklabels([str(level) for level in g_levels],
+                           fontsize=font_size(fontsize))
+        ax.set_xlim(-0.6, len(g_levels) - 0.4)
+        ax.set_xlabel(xlabel if xlabel is not None else names.get("group", ""),
+                      fontsize=font_size(fontsize, "label"))
+        ax.set_ylabel(ylabel if ylabel is not None else names.get("y", ""),
+                      fontsize=font_size(fontsize, "label"))
+        if title:
+            ax.set_title(title, fontsize=font_size(fontsize, "title"))
+        ax.tick_params(labelsize=font_size(fontsize))
+        style_axes(ax)
+        return ax
 
     # `color_by` may name a subject-level metadata column (constant within each
     # subject, e.g. a healthy/disease label). resolve_columns only keeps the
