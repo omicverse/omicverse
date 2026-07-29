@@ -170,14 +170,97 @@ def _annotation_plotter(mp, name, series, annotation_palette):
     return mp.Colors(series.astype(str).values, palette=palette, label=name)
 
 
+def _place_in_rect(build, figure, rect, scale, trial):
+    r"""Draw a marsilea block into ``rect`` of ``figure`` at true size.
+
+    marsilea owns its own layout: :meth:`freeze` derives a figure size from the
+    block's content, calls ``figure.set_size_inches`` with it, and then adds
+    every axes at ``inches / that figure size``. Handing it a host figure
+    therefore resizes the host and scatters the heatmap's axes across the whole
+    canvas — the block cannot be asked to occupy a corner.
+
+    Rescaling the axes rectangles afterwards is not a fix either: an axes
+    rectangle scales but the text inside it does not, so a block squeezed to
+    half width keeps full-size tick labels and legends, which then overflow.
+    Only a *translation* is safe.
+
+    So the size is arranged before the draw instead of corrected after it. The
+    overhead around the heatmap cell — dendrograms, annotation strips, labels,
+    legends, margins — is set in inches and does not depend on how large the
+    cell is, so one throwaway render measures it:
+
+    ``overhead = natural_figure_size - trial_cell_size``
+
+    The cell that makes the block exactly fill ``rect`` is then
+    ``rect_size - overhead``, and a block built at that size needs only moving
+    into place. Text keeps its size because nothing is scaled.
+
+    Arguments
+    ---------
+    build
+        ``build(cell_w, cell_h)`` returning a fresh, unrendered marsilea object.
+    figure
+        Host figure. Its size is restored after marsilea has resized it.
+    rect
+        ``(x0, y0, width, height)`` in host-figure fractions.
+    trial
+        Cell size for the measuring pass. Any positive size works; a value near
+        the answer just avoids relying on the overhead being perfectly constant.
+
+    Returns
+    -------
+    The rendered marsilea object, with its axes inside ``rect``.
+    """
+    import matplotlib.pyplot as plt
+
+    host_w, host_h = figure.get_size_inches()
+
+    # Measuring pass on a throwaway figure: what does the overhead cost?
+    probe_fig = plt.figure(figsize=(4, 4))
+    _render_into(build(*trial), probe_fig, scale)
+    natural = probe_fig.get_size_inches().copy()
+    plt.close(probe_fig)
+    overhead = (natural[0] - trial[0] * scale, natural[1] - trial[1] * scale)
+
+    x0, y0, width, height = rect
+    target = (width * host_w, height * host_h)
+    cell = (max((target[0] - overhead[0]) / scale, 0.2),
+            max((target[1] - overhead[1]) / scale, 0.2))
+
+    before = set(figure.axes)
+    heatmap = build(*cell)
+    _render_into(heatmap, figure, scale)
+    added = [ax for ax in figure.axes if ax not in before]
+
+    # marsilea resized the host to its own figure size; the axes it added are
+    # fractions of *that*. Restore the host and re-express them as fractions of
+    # the host, offset to the rect's corner — a translation, not a rescale.
+    block_w, block_h = figure.get_size_inches()
+    figure.set_size_inches(host_w, host_h)
+    for ax in added:
+        pos = ax.get_position()
+        ax.set_position([
+            x0 + pos.x0 * block_w / host_w,
+            y0 + pos.y0 * block_h / host_h,
+            pos.width * block_w / host_w,
+            pos.height * block_h / host_h,
+        ])
+    return heatmap
+
+
 def _render_into(heatmap, figure, scale):
     """Render a marsilea object, tolerating a SubFigure target.
 
     marsilea 0.5.8's composite layout calls ``figure.set_size_inches`` during
     freeze, which a ``matplotlib`` SubFigure does not implement (its size is
     owned by the parent gridspec). We temporarily attach a no-op so the layout
-    engine can run; the axis rectangles it computes are already fractions of
-    the target region, so the heatmap fills the SubFigure correctly.
+    engine can run.
+
+    Note that surviving the call is all the no-op buys: the rectangles marsilea
+    then computes are fractions of the figure size *it* derived, not of the
+    SubFigure, so the block still lands across the parent figure rather than
+    inside the subfigure. Use ``rect=`` (see :func:`_place_in_rect`) to confine
+    a heatmap to part of a figure.
     """
     from matplotlib.figure import SubFigure
 
@@ -243,6 +326,9 @@ def heatmap(
     label="value",
     annotation_palette=None,
     scale=1,
+    width=None,
+    height=None,
+    rect=None,
 ):
     r"""Draw an embeddable clustered heatmap with marsilea.
 
@@ -282,6 +368,18 @@ def heatmap(
             annotation name (each value a colour list, a {category: colour} map,
             or a colormap name for numeric annotations).
         scale: Passed through to marsilea ``render`` to scale the layout.
+        width, height: Size of the heatmap cell itself, in inches — the
+            dendrograms, annotation strips, labels and legends are added
+            around it. Left to marsilea when None.
+        rect: Place the whole block inside this ``(x0, y0, width, height)``
+            region of ``figure``, in figure fractions, and restore the
+            figure's size afterwards. Requires ``figure``. Without it,
+            marsilea resizes the figure to suit itself and spreads the
+            heatmap's axes over the whole canvas, so a multi-panel figure can
+            only host the heatmap by giving it a region. The cell is sized so
+            the block fills the region at true scale and is then translated
+            into place — nothing is rescaled, so tick labels, legends and the
+            colour bar keep the size they were drawn at.
 
     Returns:
         The marsilea ``Heatmap`` object, already rendered. Reach ``.figure`` for
@@ -307,63 +405,92 @@ def heatmap(
 
     frame = _apply_zscore(frame, z_score)
 
-    heatmap_obj = ma.Heatmap(
-        frame.values,
-        cmap=cmap,
-        vmin=vmin,
-        vmax=vmax,
-        center=center,
-        label=label,
-    )
+    def _build(main_w=None, main_h=None):
+        """Assemble the marsilea object. ``main_*`` size the heatmap cell only.
 
-    # Annotation strips (with legends). Rows go left, columns go top.
-    for name, series in row_ann:
-        heatmap_obj.add_left(
-            _annotation_plotter(mp, name, series, annotation_palette),
-            size=0.2,
-            pad=0.05,
-            legend=True,
-        )
-    for name, series in col_ann:
-        heatmap_obj.add_top(
-            _annotation_plotter(mp, name, series, annotation_palette),
-            size=0.2,
-            pad=0.05,
-            legend=True,
+        A marsilea object is consumed by ``render``, so placing the block at an
+        exact size needs a throwaway build to measure with and a fresh one to
+        draw — hence a factory rather than a single object.
+        """
+        obj = ma.Heatmap(
+            frame.values,
+            cmap=cmap,
+            vmin=vmin,
+            vmax=vmax,
+            center=center,
+            label=label,
+            width=main_w,
+            height=main_h,
         )
 
-    # Tick labels.
-    if show_rownames:
-        heatmap_obj.add_right(mp.Labels(row_labels), pad=0.05)
-    if show_colnames:
-        heatmap_obj.add_bottom(mp.Labels(col_labels, rotation=90), pad=0.05)
+        # Annotation strips (with legends). Rows go left, columns go top.
+        for name, series in row_ann:
+            obj.add_left(
+                _annotation_plotter(mp, name, series, annotation_palette),
+                size=0.2,
+                pad=0.05,
+                legend=True,
+            )
+        for name, series in col_ann:
+            obj.add_top(
+                _annotation_plotter(mp, name, series, annotation_palette),
+                size=0.2,
+                pad=0.05,
+                legend=True,
+            )
 
-    # Axis titles.
-    title_kwargs = {}
-    if xlabel is not None:
-        title_kwargs["bottom"] = xlabel
-    if ylabel is not None:
-        title_kwargs["left"] = ylabel
-    if title_kwargs:
-        heatmap_obj.add_title(**title_kwargs)
+        # Tick labels.
+        if show_rownames:
+            obj.add_right(mp.Labels(row_labels), pad=0.05)
+        if show_colnames:
+            obj.add_bottom(mp.Labels(col_labels, rotation=90), pad=0.05)
 
-    # Clustering. add_dendrogram both reorders and (optionally) draws; a
-    # dendrogram cannot be shown without clustering, so *_dendrogram is honoured
-    # only when *_cluster is True.
-    if row_cluster:
-        heatmap_obj.add_dendrogram("left", show=bool(row_dendrogram), pad=0.02)
-    if col_cluster:
-        heatmap_obj.add_dendrogram("top", show=bool(col_dendrogram), pad=0.02)
+        # Axis titles.
+        title_kwargs = {}
+        if xlabel is not None:
+            title_kwargs["bottom"] = xlabel
+        if ylabel is not None:
+            title_kwargs["left"] = ylabel
+        if title_kwargs:
+            obj.add_title(**title_kwargs)
 
-    if row_ann or col_ann:
-        heatmap_obj.add_legends()
+        # Clustering. add_dendrogram both reorders and (optionally) draws; a
+        # dendrogram cannot be shown without clustering, so *_dendrogram is
+        # honoured only when *_cluster is True.
+        if row_cluster:
+            obj.add_dendrogram("left", show=bool(row_dendrogram), pad=0.02)
+        if col_cluster:
+            obj.add_dendrogram("top", show=bool(col_dendrogram), pad=0.02)
+
+        if row_ann or col_ann:
+            obj.add_legends()
+        return obj
+
+    import matplotlib.pyplot as plt
+
+    if rect is not None:
+        if figure is None:
+            raise TypeError("`rect` places the heatmap inside a figure you "
+                            "supply — pass `figure=` as well.")
+        heatmap_obj = _place_in_rect(
+            _build, figure, rect, scale,
+            trial=(width if width is not None else max(n_cols * 0.06, 2.0),
+                   height if height is not None else max(n_rows * 0.16, 1.5)))
+        deform = heatmap_obj.get_deform()
+        heatmap_obj.row_order = _reorder_labels(
+            row_labels,
+            getattr(deform, "row_reorder_index", None) if row_cluster else None)
+        heatmap_obj.col_order = _reorder_labels(
+            col_labels,
+            getattr(deform, "col_reorder_index", None) if col_cluster else None)
+        return heatmap_obj
+
+    heatmap_obj = _build(width, height)
 
     if figure is None:
-        import matplotlib.pyplot as plt
-
-        width = min(max(n_cols * 0.35 + 3, 4), 20)
-        height = min(max(n_rows * 0.3 + 2, 3), 20)
-        figure = plt.figure(figsize=(width, height))
+        fig_w = min(max(n_cols * 0.35 + 3, 4), 20)
+        fig_h = min(max(n_rows * 0.3 + 2, 3), 20)
+        figure = plt.figure(figsize=(fig_w, fig_h))
 
     _render_into(heatmap_obj, figure, scale)
 
