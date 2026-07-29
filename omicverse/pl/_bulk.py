@@ -28,7 +28,8 @@ def volcano(result,pval_name='qvalue',fc_name='log2FC',pval_max=None,FC_max=None
                      up_fontcolor:str='#e25d5d',down_fontcolor:str='#7388c1',normal_fontcolor:str='#d7d7d7',
                      legend_bbox:tuple=(0.8, -0.2),legend_ncol:int=2,legend_fontsize:int=12,
                      plot_genes:list=None,plot_genes_num:int=10,plot_genes_fontsize:int=10,
-                     ticks_fontsize:int=12,pval_threshold:float=0.05,fc_max:float=1.5,fc_min:float=-1.5,
+                     ticks_fontsize:int=None,pval_threshold:float=0.05,fc_max:float=1.5,fc_min:float=-1.5,
+                     label_fontsize:float=None,
                      ax = None,):
     r"""
     Create a volcano plot for differential expression analysis.
@@ -76,14 +77,18 @@ def volcano(result,pval_name='qvalue',fc_name='log2FC',pval_max=None,FC_max=None
         Number of top genes automatically annotated when ``plot_genes`` is None.
     plot_genes_fontsize : int
         Font size for annotated gene labels.
-    ticks_fontsize : int
-        Tick label font size.
+    ticks_fontsize : int or None
+        Tick label font size. When ``None`` follows ``rcParams['xtick.labelsize']``.
     pval_threshold : float
         Significance threshold used to define highlighted genes.
     fc_max : float
         Positive fold-change cutoff.
     fc_min : float
         Negative fold-change cutoff.
+    label_fontsize : float or None
+        Font size of the x/y axis labels. When ``None`` follows
+        ``rcParams['axes.labelsize']`` so the labels match surrounding panels
+        instead of the fixed title font size.
     ax : matplotlib.axes.Axes or None
         Existing axes object to draw on.
         
@@ -276,8 +281,17 @@ def volcano(result,pval_name='qvalue',fc_name='log2FC',pval_max=None,FC_max=None
             linestyle="--",
             color='black')
     #设置横标签与纵标签
-    ax.set_ylabel(rf'$-log_{{10}}({pval_name})$',titlefont)
-    ax.set_xlabel(r'$log_{2}FC$',titlefont)
+    # The axis labels used to inherit titlefont's fixed size (14), which dwarfs
+    # the 5-6pt labels of neighbouring panels in a multi-panel figure. Decouple
+    # only the size: keep the mathtext/weight styling from titlefont, but let
+    # the size follow rcParams['axes.labelsize'] (or an explicit label_fontsize)
+    # so the labels scale with the surrounding font.
+    if label_fontsize is None:
+        label_fontsize = plt.rcParams['axes.labelsize']
+    label_font = dict(titlefont)
+    label_font['size'] = label_fontsize
+    ax.set_ylabel(rf'$-log_{{10}}({pval_name})$',label_font)
+    ax.set_xlabel(r'$log_{2}FC$',label_font)
     #设置标题
     ax.set_title(title,titlefont)
 
@@ -299,6 +313,10 @@ def volcano(result,pval_name='qvalue',fc_name='log2FC',pval_max=None,FC_max=None
     ax.spines['bottom'].set_visible(True)
     ax.spines['left'].set_visible(True)
 
+    # Tick labels were also pinned at 12, larger than the rest of a small panel.
+    # Default to rcParams['xtick.labelsize'] so they track the surrounding font.
+    if ticks_fontsize is None:
+        ticks_fontsize = plt.rcParams['xtick.labelsize']
     ax.set_xticks([round(i,2) for i in ax.get_xticks()[1:-1]],#获取x坐标轴内容
         [round(i,2) for i in ax.get_xticks()[1:-1]],#更新x坐标轴内容
         fontsize=ticks_fontsize,
@@ -358,45 +376,113 @@ def volcano(result,pval_name='qvalue',fc_name='log2FC',pval_max=None,FC_max=None
     related=["bulk.pyDEG.deg_analysis"]
 )
 def venn(sets={}, out='./', palette='bgrc',
-             ax=False, ext='png', dpi=300, fontsize=3.5,
-             bbox_to_anchor=(.5, .99),nc=2,cs=4):
+             ax=False, ext='png', dpi=300, fontsize=None,
+             bbox_to_anchor=(.5, .99),nc=2,cs=4, figsize=(4,4)):
     r"""
     Create a Venn diagram to visualize set overlaps.
-    
+
+    For 2 or 3 sets this draws area-proportional circles via ``matplotlib-venn``
+    (``venn2``/``venn3``) so the numbers sit inside clean, correctly scaled
+    regions instead of the non-proportional ellipses of the ``venn`` package.
+    This follows the approach of cnsplots (Farid Rashidi, BSD-3-Clause); the
+    implementation here is independent. ``matplotlib-venn`` only supports 2 or 3
+    sets, so 4+ sets fall back to the ``venny4py`` backend.
+
     Parameters
     ----------
     sets : dict
-        Dictionary mapping set names to Python sets.
+        Dictionary mapping set names to Python sets. 2 or 3 sets use
+        ``matplotlib-venn``; 4 or more fall back to ``venny4py``.
     out : str
-        Output directory for saved figure.
+        Output directory for saved figure (``venny4py`` fallback only).
     palette : str or list
-        Color palette passed to backend venn renderer.
+        Colors for the set circles. A string such as ``'bgrc'`` is treated as a
+        sequence of single-letter matplotlib colors; a list is used as-is.
     ax : matplotlib.axes.Axes or bool
-        Existing axes; if ``False`` a new figure/axes is created.
+        Existing axes to draw into; if ``False`` a new figure/axes is created.
     ext : str
-        Output file extension.
+        Output file extension (``venny4py`` fallback only).
     dpi : int
-        Resolution of saved image.
-    fontsize : float
-        Font size for labels.
+        Resolution of saved image (``venny4py`` fallback only).
+    fontsize : float or None
+        Font size for the subset counts and set names. When ``None`` it follows
+        ``plt.rcParams['font.size']`` so the labels match the rest of a figure
+        rather than a hard-coded size.
     bbox_to_anchor : tuple
-        Legend anchor position.
+        Legend anchor position (``venny4py`` fallback only).
     nc : int
-        Number of legend columns.
+        Number of legend columns (``venny4py`` fallback only).
     cs : float
-        Legend font size.
-        
+        Legend font size (``venny4py`` fallback only).
+    figsize : tuple
+        Figure size used when ``ax`` is ``False`` and a new figure is created.
+
     Returns
     -------
     matplotlib.axes.Axes or bool
-        Axes handle returned by caller/backend context.
+        The axes the diagram was drawn into (or the passed-in ``ax``).
     """
-    
-    from ._venn_backend import venny4py
-    venny4py(sets=sets,out=out,ce=palette,asax=ax,ext=ext,
-             dpi=dpi,size=fontsize,bbox_to_anchor=bbox_to_anchor,
-             nc=nc,cs=cs,
-             )
+
+    n = len(sets)
+    if n < 2:
+        raise ValueError(
+            f"ov.pl.venn needs at least 2 sets to draw a Venn diagram, got {n}. "
+            "Pass a dict like {'A': setA, 'B': setB}."
+        )
+
+    # matplotlib-venn only implements venn2/venn3; anything larger keeps the old
+    # venny4py behaviour so existing 4-set calls do not break.
+    if n > 3:
+        from ._venn_backend import venny4py
+        venny4py(sets=sets, out=out, ce=palette, asax=ax, ext=ext,
+                 dpi=dpi, size=fontsize if fontsize is not None else 3.5,
+                 bbox_to_anchor=bbox_to_anchor, nc=nc, cs=cs,
+                 )
+        return ax
+
+    # Optional backend: guard with an actionable message like the other
+    # optional-backend ov.pl functions rather than letting a bare ImportError
+    # surface from deep in the call.
+    try:
+        import matplotlib_venn
+    except ImportError as exc:  # pragma: no cover - exercised only without the dep
+        raise ImportError(
+            "ov.pl.venn needs the `matplotlib-venn` package to draw "
+            "proportional 2/3-set diagrams.\n"
+            "Install with: pip install matplotlib-venn"
+        ) from exc
+
+    if fontsize is None:
+        fontsize = plt.rcParams['font.size']
+
+    # Draw into the caller's axes when given; only mint a new figure otherwise,
+    # so drawing into an existing panel never leaks a stray figure via gca.
+    if ax is False or ax is None:
+        _, ax = plt.subplots(figsize=figsize)
+
+    labels = list(sets.keys())
+    values = [set(sets[k]) for k in labels]
+    colors = tuple(palette[:n])
+
+    if n == 2:
+        diagram = matplotlib_venn.venn2(
+            tuple(values), tuple(labels), set_colors=colors, alpha=0.8, ax=ax)
+        subset_ids = ('10', '01', '11')
+        set_ids = ('A', 'B')
+    else:
+        diagram = matplotlib_venn.venn3(
+            tuple(values), tuple(labels), set_colors=colors, alpha=0.8, ax=ax)
+        subset_ids = ('100', '010', '001', '110', '101', '011', '111')
+        set_ids = ('A', 'B', 'C')
+
+    # Size both the subset counts and the set names off the same font so they
+    # match surrounding panels. Empty regions have no label object, hence the
+    # None guard (get_label_by_id returns None there in matplotlib-venn 1.1.2).
+    for area in subset_ids + set_ids:
+        label = diagram.get_label_by_id(area)
+        if label is not None:
+            label.set_fontsize(fontsize)
+
     return ax
 
 @register_function(
