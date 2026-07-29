@@ -221,6 +221,10 @@ def test_mrna_design_scores_cai_against_the_requested_host():
     E. coli, which inverted the baseline-versus-LinearDesign comparison.
     """
     pytest.importorskip("dnachisel", reason="codon_optimize needs dnachisel")
+    # mrna_design folds the CDS on its way to a design (_mrna.py -> rna_fold),
+    # so ViennaRNA is needed too. Guarding only dnachisel turned a missing
+    # optional backend into a failure instead of a skip.
+    pytest.importorskip("RNA", reason="mrna_design folds via ViennaRNA")
     from omicverse.synbio._expression import cai
 
     design = sb.mrna_design(PROTEIN, method="baseline", host="human")
@@ -233,6 +237,10 @@ def test_mrna_design_scores_cai_against_the_requested_host():
 def test_mrna_design_cai_is_never_a_silent_zero():
     """``except Exception: cai_val = 0.0`` reads as 'terrible codon usage'."""
     pytest.importorskip("dnachisel", reason="codon_optimize needs dnachisel")
+    # mrna_design folds the CDS on its way to a design (_mrna.py -> rna_fold),
+    # so ViennaRNA is needed too. Guarding only dnachisel turned a missing
+    # optional backend into a failure instead of a skip.
+    pytest.importorskip("RNA", reason="mrna_design folds via ViennaRNA")
     design = sb.mrna_design(PROTEIN, method="baseline", host="human")
     assert design.cai > 0.5
 

@@ -13,9 +13,12 @@ three spatial dimensions; :func:`interpolate` fills the gap between two sections
 The alignment is a fused Gromov-Wasserstein problem, which is what PASTE solves:
 match spots between two slices using both their expression similarity and the
 geometry of each slice, then read a rigid transform off the resulting coupling.
-It is implemented here over POT rather than by depending on PASTE, so the default
-path needs nothing beyond what omicverse already installs; ``method='paste'``
-hands over to the real package when it is present.
+It is implemented here over POT rather than by depending on PASTE, so the
+default path needs one small package instead of the whole PASTE stack —
+``pip install POT``. POT is not declared in any omicverse extra, so a plain
+install does not have it; the import error names the package. ``method='icp'``
+and ``method='rigid'`` are the genuinely dependency-free routes (scipy only),
+and ``method='paste'`` hands over to the real package when it is present.
 """
 from __future__ import annotations
 
