@@ -102,6 +102,20 @@ def _unstagger(labels) -> None:
             text.set_transform(base)
 
 
+def _remember_size(text) -> float:
+    """The label's size before any pass shrank it."""
+    if not hasattr(text, "_ov_declutter_base_size"):
+        text._ov_declutter_base_size = text.get_size()
+    return text._ov_declutter_base_size
+
+
+def _restore_sizes(labels) -> None:
+    for text in labels:
+        base = getattr(text, "_ov_declutter_base_size", None)
+        if base is not None:
+            text.set_size(base)
+
+
 def _thin(labels, step: int) -> None:
     for index, text in enumerate(labels):
         text.set_visible(index % step == 0)
@@ -131,6 +145,8 @@ def declutter_ticks(ax,
                     max_rotation: float = 90.0,
                     rotate: bool = True,
                     stagger: bool = True,
+                    shrink: bool = True,
+                    min_fontsize: float = 5.0,
                     thin: bool = True,
                     max_thin: int = 4,
                     on_draw: bool = True):
@@ -142,11 +158,15 @@ def declutter_ticks(ax,
     1. **rotate** — up to ``max_rotation`` degrees (x-axis only; rotating y
        labels does not buy vertical room).
     2. **stagger** — alternate labels are pushed into a second row, one label
-       height further from the axis. This is the closest analogue to what
-       :func:`~omicverse.pl.adjust_text` does for free-floating text: a tick
-       label cannot move *along* its axis without pointing at the wrong value,
-       so the space has to come from the perpendicular direction.
-    3. **thin** — show every 2nd, then 3rd, ... label up to ``max_thin``.
+       height further from the axis (x-axis only). This is the closest analogue
+       to what :func:`~omicverse.pl.adjust_text` does for free-floating text: a
+       tick label cannot move *along* its axis without pointing at the wrong
+       value, so the space has to come from the perpendicular direction.
+    3. **shrink** — reduce the label size, down to ``min_fontsize``. On a
+       category axis a point or two of font size costs less than losing half
+       the category names, and it is the only remedy besides thinning that the
+       y-axis can use at all.
+    4. **thin** — show every 2nd, then 3rd, ... label up to ``max_thin``.
 
     Arguments
     ---------
@@ -156,10 +176,12 @@ def declutter_ticks(ax,
         ``'x'``, ``'y'`` or ``'both'``.
     max_rotation
         Ceiling for step 1, in degrees. ``0`` disables rotation.
-    rotate, stagger, thin
+    rotate, stagger, shrink, thin
         Enable or disable individual steps.
+    min_fontsize
+        Floor for step 3, in points.
     max_thin
-        Largest stride step 3 may use.
+        Largest stride step 4 may use.
     on_draw
         Register a draw-time callback instead of deciding immediately. This is
         the default because the answer depends on the axes' final physical
@@ -200,17 +222,20 @@ def declutter_ticks(ax,
 
             figure.canvas.mpl_connect("draw_event", _on_draw)
         registry[ax] = dict(axis=axis, max_rotation=max_rotation,
-                            rotate=rotate, stagger=stagger, thin=thin,
+                            rotate=rotate, stagger=stagger, shrink=shrink,
+                            min_fontsize=min_fontsize, thin=thin,
                             max_thin=max_thin)
         return ax
 
     return _declutter_now(ax, axis=axis, max_rotation=max_rotation,
-                          rotate=rotate, stagger=stagger, thin=thin,
+                          rotate=rotate, stagger=stagger, shrink=shrink,
+                          min_fontsize=min_fontsize, thin=thin,
                           max_thin=max_thin)
 
 
 def _declutter_now(ax, *, axis: str, max_rotation: float, rotate: bool,
-                   stagger: bool, thin: bool, max_thin: int):
+                   stagger: bool, shrink: bool, min_fontsize: float,
+                   thin: bool, max_thin: int):
     """Measure and fix, using the geometry as it stands right now."""
     figure = ax.figure
     if figure is None or figure.canvas is None:
@@ -228,6 +253,7 @@ def _declutter_now(ax, *, axis: str, max_rotation: float, rotate: bool,
         # Start from a clean slate so an earlier verdict, reached at a different
         # axes size, does not stick: un-hide, un-stagger, un-rotate.
         _unstagger(labels)
+        _restore_sizes(labels)
         for text in labels:
             text.set_visible(True)
         if which == "x":
@@ -247,14 +273,32 @@ def _declutter_now(ax, *, axis: str, max_rotation: float, rotate: bool,
             if not _collides(labels, renderer, which):
                 continue
 
-        if stagger:
+        if stagger and which == "x":
+            # Only on x: pushing y labels sideways moves them away from the
+            # axis they annotate without buying any vertical room.
             boxes = _boxes(labels, renderer)
-            extent = max((b.height if which == "x" else b.width)
-                         for b in boxes) if boxes else 10.0
+            extent = max(b.height for b in boxes) if boxes else 10.0
             _stagger(labels, which, extent + 2.0)
             if not _collides(labels, renderer, which):
                 continue
             _unstagger(labels)
+
+        if shrink:
+            # Before dropping labels, try making them smaller. On a category
+            # axis losing half the category names is a worse outcome than a
+            # point or two of font size, and this is the only remedy available
+            # to the y axis besides thinning.
+            base = [_remember_size(t) for t in labels]
+            for factor in (0.9, 0.8, 0.7, 0.6):
+                for text, size in zip(labels, base):
+                    text.set_size(max(size * factor, min_fontsize))
+                if not _collides(labels, renderer, which):
+                    break
+            if not _collides(labels, renderer, which):
+                continue
+            # Still colliding at the floor: keep the smaller size rather than
+            # giving it back. Thinning now has less to remove, so fewer labels
+            # are lost than if the pass had gone to full size and thinned.
 
         if thin:
             for step in range(2, max(max_thin, 2) + 1):

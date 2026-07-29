@@ -156,3 +156,41 @@ def test_style_axes_registers_the_pass_by_default():
         assert not _overlap_free(ax2, "x"), "the global switch was ignored"
     finally:
         set_tick_declutter(previous)
+
+
+def _crowded_y_axes(height=0.9, n=5):
+    """Crowded, but not hopelessly: collides at full size, fits at 70%."""
+    fig, ax = plt.subplots(figsize=(3.0, height))
+    ax.set_ylim(-0.5, n - 0.5)
+    ax.set_yticks(range(n))
+    ax.set_yticklabels([f"Group{i}" for i in range(n)])
+    return fig, ax
+
+
+def test_shrinking_is_preferred_over_dropping_labels():
+    """A category axis should lose font size before it loses category names."""
+    fig, ax = _crowded_y_axes()
+    fig.canvas.draw()
+    assert _collides(_visible_labels(ax, "y"), fig.canvas.get_renderer(), "y"), \
+        "fixture is not actually crowded"
+    before_n = len(ax.get_yticklabels())
+    before_size = ax.get_yticklabels()[0].get_size()
+
+    declutter_ticks(ax, axis="y", on_draw=False)
+
+    assert ax.get_yticklabels()[0].get_size() < before_size, "nothing shrank"
+    assert len(ax.get_yticklabels()) == before_n, "a label was dropped"
+    assert _overlap_free(ax, "y")
+
+
+def test_shrinking_is_undone_when_the_axes_grows_again():
+    fig, ax = _crowded_y_axes()
+    original = ax.get_yticklabels()[0].get_size()
+    declutter_ticks(ax, axis="y")
+    fig.canvas.draw()
+    assert ax.get_yticklabels()[0].get_size() < original, "nothing shrank"
+
+    fig.set_size_inches(3.0, 8.0)
+    fig.canvas.draw()
+    assert ax.get_yticklabels()[0].get_size() == pytest.approx(original), \
+        "the font size was never given back"
