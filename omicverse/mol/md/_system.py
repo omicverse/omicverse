@@ -153,11 +153,19 @@ def _resolve_structure(structure, workdir: str) -> Tuple[str, Any, Dict[str, Any
     if hasattr(structure, "poses") and hasattr(structure, "affinities"):
         receptor = getattr(structure, "receptor", None)
         if receptor is None:
+            # DockingResult.receptor arrived with the MD layer in 2.3.0, so a
+            # result pickled by an earlier omicverse has no such attribute and
+            # lands here. Re-docking is not required — the receptor is the only
+            # missing piece, and it can simply be passed alongside the poses.
             raise ValueError(
                 "this DockingResult carries no receptor, so the complex cannot "
-                "be rebuilt. Pass the receptor explicitly, e.g. "
-                "ov.mol.simulate(structure, ligand=result) with `structure` "
-                "the MolStructure you docked into.")
+                "be rebuilt. Pass the receptor as the structure and the result "
+                "as the ligand:\n"
+                "    ov.mol.simulate(structure, ligand=result)\n"
+                "with `structure` the MolStructure you docked into. Results "
+                "from ov.mol.dock() on omicverse >= 2.3.0 carry the receptor "
+                "themselves; one saved by an older version does not, so either "
+                "hand it over this way or re-run ov.mol.dock().")
         ligand = structure.best
         if ligand is None:
             raise ValueError("DockingResult has no poses to simulate")

@@ -77,10 +77,12 @@ class TissueZones:
         "alternative to cell2location's Bayesian CoLocatedGroupsSklearnNMF "
         "with the same interpretation."
     ),
+    produces={'obsm': ['{obsm_added}'], 'uns': ['tissue_zones']},
     examples=[
         "tz = ov.space.nmf_tissue_zones(adata, "
         "obsm_key='q05_cell_abundance_w_sf', n_factors=10)",
         "# spot activations in adata.obsm['X_tissue_zones']",
+        "# run metadata in adata.uns['tissue_zones']['X_tissue_zones']",
         "# factor loadings in tz.factor_loadings",
     ],
     related=[
@@ -134,7 +136,12 @@ def nmf_tissue_zones(
         ``X_tissue_zones``. Also written back to
         ``adata.obsm[obsm_added]`` so downstream plotting (Scanpy
         ``sc.pl.spatial``, ``ov.pl.embedding``) can colour spots by
-        zone directly.
+        zone directly. The run's metadata (``n_factors``,
+        ``source_obsm``, ``cell_type_names``, ``factor_names``,
+        ``reconstruction_err``) goes to
+        ``adata.uns['tissue_zones'][obsm_added]``, so a saved AnnData
+        still says where its zone matrix came from — the array on its
+        own does not.
     factor_prefix
         Prefix for factor names; the i-th factor is
         ``f'{factor_prefix}_{i+1}'``.

@@ -9,6 +9,14 @@ Every function accepts an :class:`~omicverse.mol.md.MDTrajectory`, an
    These helpers therefore **image molecules automatically** before analysing
    (equivalent to :meth:`MDTrajectory.wrap`). Pass ``wrap=False`` if you have
    already imaged the trajectory yourself.
+
+   This applies to the inputs the helpers load themselves — an
+   :class:`~omicverse.mol.md.MDTrajectory`, or a path plus ``top=``. An
+   already-loaded ``mdtraj.Trajectory`` is used exactly as handed over and is
+   **never** imaged, whatever ``wrap`` says: the caller has clearly taken the
+   trajectory in hand, and re-imaging it would silently undo their own
+   treatment. Call :func:`load_trajectory` (or ``traj.image_molecules()``)
+   before passing one in.
 """
 
 from __future__ import annotations
@@ -51,8 +59,12 @@ def _as_traj(traj, top=None, stride: int = 1, wrap: bool = True):
         already = bool(traj.provenance.get("wrapped"))
         return _image(t) if (wrap and not already) else t
     if isinstance(traj, md.Trajectory):
+        # `wrap` is deliberately not honoured here: an in-memory Trajectory has
+        # no provenance saying whether it was already imaged, and re-imaging an
+        # imaged trajectory can shift molecules again. The caller holding the
+        # object is the one who knows — documented in the module docstring.
         t = traj[::stride] if stride > 1 else traj
-        return t                 # assume the caller manages imaging
+        return t
     if isinstance(traj, str):
         if top is None:
             raise ValueError(

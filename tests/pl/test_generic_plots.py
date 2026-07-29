@@ -323,6 +323,60 @@ class TestCategorical:
         assert stats_out["pvalue"] == pytest.approx(expected.pvalue)
         assert stats_out["n_complete"] == 20
 
+    def test_slope_auto_means_the_paired_rank_test(self):
+        """``test='auto'`` is accepted here, and it is the *paired* default.
+
+        Regression: `slopeplot` handed `test` to `_run_test` unresolved, so
+        `'auto'` — which works on every other table-first plot — raised
+        ``ValueError: Unknown pairwise test 'auto'``. It now resolves through
+        the same helper `compare_groups` uses, with ``paired=True``, so it
+        lands on Wilcoxon signed-rank rather than the unpaired Mann-Whitney U.
+        """
+        from scipy import stats
+
+        from omicverse.pl._stats_tests import _resolve_test
+
+        # the two arms of 'auto' — unpaired vs paired — are different tests
+        assert _resolve_test("auto") == "mannwhitney"
+        assert _resolve_test("auto", paired=True) == "wilcoxon"
+
+        rng = np.random.default_rng(11)
+        pre = rng.normal(4.0, 1.0, 24)
+        post = pre + rng.normal(0.5, 0.8, 24)
+        frame = pd.DataFrame({
+            "patient": np.repeat([f"P{i}" for i in range(24)], 2),
+            "time": np.tile(["pre", "post"], 24),
+            "value": np.ravel(np.column_stack([pre, post])),
+        })
+        ax, stats_out = slopeplot(frame, "time", "value", subject="patient",
+                                  order=["pre", "post"], test="auto",
+                                  return_stats=True)
+        expected = stats.wilcoxon(pre, post)
+        assert stats_out["pvalue"] == pytest.approx(expected.pvalue)
+        assert stats_out["statistic"] == pytest.approx(float(expected.statistic))
+        # the resolved test has to be visible — in the returned dict and on
+        # the figure — so nobody has to guess what 'auto' picked
+        assert stats_out["test"] == "Wilcoxon signed-rank"
+        annotations = [t.get_text() for t in ax.texts]
+        assert any("Wilcoxon signed-rank" in text for text in annotations)
+
+    def test_slope_auto_and_wilcoxon_agree(self):
+        """'auto' is an alias, not a second code path: same numbers."""
+        frame = pd.DataFrame({
+            "patient": np.repeat([f"P{i}" for i in range(8)], 2),
+            "time": np.tile(["pre", "post"], 8),
+            "value": [1.0, 2.5, 2.0, 2.2, 3.0, 4.1, 1.5, 1.9,
+                      2.2, 3.3, 0.8, 1.9, 4.0, 4.4, 2.7, 3.9],
+        })
+        _, from_auto = slopeplot(frame, "time", "value", subject="patient",
+                                 order=["pre", "post"], test="auto",
+                                 return_stats=True)
+        _, from_name = slopeplot(frame, "time", "value", subject="patient",
+                                 order=["pre", "post"], test="wilcoxon",
+                                 return_stats=True)
+        assert from_auto["pvalue"] == pytest.approx(from_name["pvalue"])
+        assert from_auto["test"] == from_name["test"]
+
     def test_slope_reports_excluded_subjects(self, capsys):
         frame = pd.DataFrame({
             "patient": ["a", "a", "b", "c", "c"],

@@ -239,7 +239,8 @@ def barplot(data: Any = None,
     test
         Run a comparison and draw brackets — any test accepted by
         :func:`~omicverse.pl.compare_groups`, e.g. ``'mannwhitney'``,
-        ``'welch'``, or ``'auto'``. Ignored when ``hue`` is set.
+        ``'welch'``, or ``'auto'`` (which is Mann-Whitney U, fixed, not
+        picked from the data). Ignored when ``hue`` is set.
     return_stats
         Return ``(ax, results)`` with the summary table and, if a test ran,
         its results.
@@ -1098,6 +1099,9 @@ def donutplot(data: Any = None,
         "# Colour by direction and run a Wilcoxon signed-rank test",
         "ax = ov.pl.slopeplot(df, 'timepoint', 'value', subject='patient',",
         "                     color_by='direction', test='wilcoxon')",
+        "# 'auto' is the paired default — Wilcoxon signed-rank; res['test'] names it",
+        "ax, res = ov.pl.slopeplot(df, 'timepoint', 'value', subject='patient',",
+        "                          test='auto', return_stats=True)",
     ],
     related=["pl.violinplot", "pl.barplot", "pl.compare_groups"],
 )
@@ -1140,8 +1144,13 @@ def slopeplot(data: Any = None,
         Overlay the group ``'mean'`` or ``'median'`` as a heavy line.
     test
         ``'wilcoxon'`` or ``'ttest_rel'`` for a paired comparison of the first
-        and last condition. Subjects missing either end are excluded, and the
-        number excluded is reported.
+        and last condition. ``'auto'`` is accepted for consistency with the
+        other plots and means ``'wilcoxon'`` here — the paired counterpart of
+        the Mann-Whitney U that :func:`~omicverse.pl.compare_groups` resolves
+        ``'auto'`` to; like there, it is a fixed default and nothing about the
+        data is inspected. The test that actually ran is printed above the axes
+        and returned as ``stats['test']``. Subjects missing either end are
+        excluded, and the number excluded is reported.
 
     Returns
     -------
@@ -1216,11 +1225,19 @@ def slopeplot(data: Any = None,
         if dropped:
             print(f"slopeplot: {dropped} subject(s) lack {first} or {last} and "
                   f"are excluded from the paired test.")
-        from ._stats_tests import _run_test, format_pvalue
+        from ._stats_tests import _resolve_test, _run_test, format_pvalue
 
+        # `test` reaches _run_test raw, and _run_test knows concrete names
+        # only — so 'auto' has to be translated here, exactly as
+        # compare_groups does it for the unpaired plots. This plot is paired
+        # by construction (`subject` is required), hence paired=True: 'auto'
+        # is Wilcoxon signed-rank, not Mann-Whitney U. `label` below is
+        # derived from the resolved name, so the figure and the returned
+        # dict always say which test ran.
         statistic, pvalue, label = _run_test(
             complete[first].to_numpy(dtype=float),
-            complete[last].to_numpy(dtype=float), test)
+            complete[last].to_numpy(dtype=float),
+            _resolve_test(test, paired=True))
         stats.update(statistic=statistic, pvalue=pvalue, test=label)
         ax.text(0.5, 1.01, f"{label}: {format_pvalue(pvalue, 'value')} "
                            f"(n={len(complete)})",

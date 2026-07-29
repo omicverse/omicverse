@@ -128,9 +128,13 @@ def fetch_promoter_library(
         unambiguous across its barcodes — so this is a real orderable sequence
         per design point, not a reconstruction.
     log2
-        Add a ``log2_expression`` column. Expression spans 143-fold across the
-        library and its effects are multiplicative, so effect estimates and
-        Gaussian-process surrogates both belong on a log scale.
+        Add a ``log2_expression`` column. Expression spans well over two orders
+        of magnitude across the library and its effects are multiplicative, so
+        effect estimates and Gaussian-process surrogates both belong on a log
+        scale. The exact span is a property of whatever GEO currently serves for
+        GSE108535, not of this code, so read it off the frame
+        (``lib['expression'].max() / lib['expression'].min()``) rather than off
+        a constant written into this docstring.
 
     Returns
     -------

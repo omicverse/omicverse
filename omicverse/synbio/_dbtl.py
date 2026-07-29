@@ -50,7 +50,15 @@ ACQUISITIONS = ("ei", "ucb", "poi", "greedy")
 # ---------------------------------------------------------------------------
 
 def _hadamard(n: int):
-    """Sylvester construction, for Plackett-Burman designs at n = 4, 8, 12…"""
+    """Sylvester construction, for Plackett-Burman designs at n = 4, 8, 16, 32…
+
+    Sylvester doubles a matrix at each step, so it reaches **powers of two only**
+    — never the 12, 20 or 24 that Paley's construction supplies. The trailing
+    ``[:n, :n]`` slice would silently return a non-orthogonal matrix for any
+    other ``n`` (a truncated 16x16 is not a Hadamard matrix of order 12), which
+    is why :func:`_plackett_burman` steps ``n`` by doubling and never asks for
+    one.
+    """
     import numpy as np
     h = np.array([[1]])
     while h.shape[0] < n:
@@ -59,11 +67,19 @@ def _hadamard(n: int):
 
 
 def _plackett_burman(n_factors: int):
-    """A Plackett-Burman design: n runs for up to n-1 factors, n a multiple of 4.
+    """A Plackett-Burman design: n runs for up to n-1 factors, n a power of two.
 
     Main effects only — two-factor interactions are fully confounded with them.
     That is the trade: the cheapest possible screen, on the assumption that
     interactions are small compared with main effects.
+
+    Plackett-Burman is defined for every n that is a multiple of 4, but the
+    Hadamard matrices here come from the Sylvester construction, which only
+    reaches 4, 8, 16, 32… So the run counts this function can produce are those,
+    and the 12- and 20-run designs of the original paper are not among them: 11
+    factors get 16 runs rather than 12, and 19 factors get 32 rather than 20.
+    The design returned is a valid orthogonal main-effects screen at every size
+    it does produce — it is simply not always the smallest one that exists.
     """
     import numpy as np
     n = 4

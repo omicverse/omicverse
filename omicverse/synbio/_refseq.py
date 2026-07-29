@@ -15,7 +15,14 @@ landmark does not.
     >>> import omicverse as ov
     >>> seq = ov.synbio.reference_protein('phoA')
     >>> ov.synbio.predict_signal_peptide(seq).cleavage_site
-    21
+    23
+
+The experimentally verified phoA cleavage site is after residue 21. The
+heuristic scores 21 and 23 identically (0.95 each) and reports the later one, so
+21 comes back in ``.alternatives`` rather than as ``.cleavage_site``. The doctest
+pins what the code returns, not what the landmark means — the landmark itself is
+documented on the ``phoA`` entry below, and a tie broken the other way would be
+a scoring change, not a documentation fix.
 """
 from __future__ import annotations
 

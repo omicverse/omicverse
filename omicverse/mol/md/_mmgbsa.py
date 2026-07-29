@@ -300,14 +300,29 @@ def mmgbsa(
         ``md_refine_ns > 0``, relaxed with a short MD first).
     receptor, ligand
         Override the receptor / ligand when they cannot be inferred.
+        ``receptor`` is only consulted on the ``DockingResult`` path (an
+        ``MDTrajectory`` already contains the complex, so it is ignored
+        there); ``ligand`` is only used to recover the ligand SMILES when the
+        trajectory's provenance does not carry one.
     method
-        ``'gbsa'`` (GBn2 implicit solvent). ``'pbsa'`` is not implemented —
-        it needs an external Poisson-Boltzmann solver.
+        ``'gbsa'`` (GBn2 implicit solvent) — the only implemented method.
+        ``'pbsa'`` / ``'mmpbsa'`` **raise** :class:`NotImplementedError`: they
+        need an external Poisson-Boltzmann solver (APBS, AMBER's MMPBSA.py)
+        that omicverse does not bundle, and there is no silent fallback to
+        GBSA. Note that ``'mmpbsa'`` is also a registry *alias* of this
+        function, so ``ov.find_function('mmpbsa')`` points here — at GBSA.
     frames
         Number of evenly spaced frames to score, or ``'all'``.
     md_refine_ns
-        For a ``DockingResult``: length of the relaxation MD before scoring.
-        ``0`` scores the minimised pose only.
+        For a ``DockingResult``: length of the relaxation MD run between
+        minimisation and scoring. ``0`` does **not** mean "no dynamics" —
+        MM-GBSA averages over a *trajectory*, and there is no path here that
+        scores an ``MDSystem``'s coordinates directly, so the floor is the
+        shortest run that produces frames at all: minimise, then 2 ps of NVT,
+        out of which ``frames`` snapshots are scored. Ignored entirely when
+        ``source`` is already an
+        :class:`~omicverse.mol.md.MDTrajectory` (that trajectory is scored
+        as given).
 
     Returns
     -------
@@ -344,9 +359,18 @@ def mmgbsa(
         os.makedirs(outdir, exist_ok=True)
         rec = receptor if receptor is not None else getattr(source, "receptor", None)
         if rec is None:
+            # DockingResult.receptor arrived with the MD layer in 2.3.0, so a
+            # result pickled by an earlier omicverse has no such attribute and
+            # lands here. Re-docking is not required — the receptor is the only
+            # missing piece, and passing it costs nothing.
             raise ValueError(
-                "this DockingResult carries no receptor; pass receptor=<the "
-                "MolStructure you docked into>")
+                "this DockingResult carries no receptor, so the complex "
+                "cannot be rebuilt for scoring. Pass it explicitly:\n"
+                "    ov.mol.mmgbsa(result, receptor=<the MolStructure you "
+                "docked into>)\n"
+                "Results from ov.mol.dock() on omicverse >= 2.3.0 carry the "
+                "receptor themselves; one saved by an older version does not, "
+                "so either supply receptor= or re-run ov.mol.dock().")
         if verbose:
             print("   preparing the docked complex (implicit solvent)")
         mdsys = prepare_system(rec, ligand=source, water="implicit",
@@ -356,7 +380,21 @@ def mmgbsa(
                          verbose=verbose)
         run_ns = max(float(md_refine_ns), 0.0)
         if run_ns <= 0:
-            run_ns, report = 0.002, 0.002        # a single scored frame
+            # md_refine_ns=0 is "don't refine", but scoring needs a trajectory
+            # on disk (see the md.load below), so the floor is the shortest
+            # production that writes any frames: 2 ps of NVT off the minimised
+            # pose. NB `report` is report_ps — picoseconds — so 0.002 here is
+            # one 2 fs step, i.e. a frame every step (~1000 frames from those
+            # 2 ps), and `frames` then picks how many are actually scored. A
+            # single end-of-run frame would need report=2.0; that is left
+            # alone deliberately, and not only for compatibility. Scoring one
+            # frame returns std=0 and sem=0 — a spread of exactly zero, which
+            # reads as precision this method does not have. MM-GBSA is only
+            # good for relative ranking, so the ensemble that gives `sem` a
+            # meaning is worth more than making the frame count match the
+            # word "single". Changing it would also move every dG this path
+            # has produced.
+            run_ns, report = 0.002, 0.002
         else:
             report = max(run_ns * 1000.0 / max(int(frames if isinstance(frames, int) else 50), 1), 0.1)
         traj_obj = production(
@@ -479,11 +517,15 @@ def mmgbsa(
              "absolute_binding_free_energy"],
     category="mol",
     description=(
-        "Rigorous alchemical free-energy calculation (FEP / TI). Not "
-        "implemented — it needs openmmtools and hundreds of GPU-hours per "
-        "ligand. Use mmgbsa for fast relative ranking."
+        "Not implemented — calling this always raises NotImplementedError. "
+        "It is registered so that a search for FEP / TI / absolute binding "
+        "free energy says so outright and points somewhere useful, rather "
+        "than returning nothing. Rigorous alchemical free energies need "
+        "openmmtools for the alchemical factory plus many lambda windows — "
+        "hundreds of GPU-hours per ligand. Use mmgbsa for fast relative "
+        "ranking, or perses / OpenFE for a real FEP workflow."
     ),
-    examples=["# not implemented; see ov.mol.mmgbsa"],
+    examples=["# not implemented; raises NotImplementedError. Use ov.mol.mmgbsa"],
     related=["mol.mmgbsa", "mol.simulate"],
 )
 def alchemical_free_energy(*args, **kwargs):

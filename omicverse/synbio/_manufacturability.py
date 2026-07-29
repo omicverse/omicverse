@@ -13,7 +13,10 @@ because nothing carries it out of the cytoplasm.
   with the hot spots located rather than just scored.
 * :func:`predict_signal_peptide` — is there a Sec/SPI signal peptide, where does
   it cleave, and what does its tripartite structure look like.
-* :func:`predict_localization` — cytoplasm / membrane / periplasm / secreted.
+* :func:`predict_localization` — cytoplasm / membrane / periplasm. The heuristic
+  calls three compartments, not four: ``secreted`` is scored and exposed on
+  ``.scores``, but a Sec signal peptide alone routes to the periplasm, so
+  ``periplasm`` dominates it by design (see the function docstring).
 * :func:`predict_expression_level` — a composite: the above plus length and
   composition liabilities, reported as components so a bad score is diagnosable.
 * :func:`plot_manufacturability` — where along the sequence the risk sits.
@@ -25,9 +28,12 @@ rule set. They are documented arithmetic, not fitted models, and they are
 labelled as such: every result carries ``method`` so a number is never mistaken
 for a Protein-Sol or SignalP prediction. ``method='proteinsol'``,
 ``'aggrescan'``, ``'tango'``, ``'signalp'`` and ``'deeploc'`` dispatch to the
-real predictors and raise an actionable error when they are not installed. This
-mirrors how the rest of ``ov.synbio`` began for CFD, Azimuth and the Salis RBS
-calculator before those backends were vendored.
+real predictors and raise an actionable error when they are not installed —
+none of them is vendored here, so today every one of them raises. In particular
+``method='deeploc'`` is not a working route to a ``secreted`` call: it is an
+``ImportError``, not an alternative backend. This mirrors how the rest of
+``ov.synbio`` began for CFD, Azimuth and the Salis RBS calculator before those
+backends were vendored.
 """
 from __future__ import annotations
 
@@ -550,7 +556,7 @@ class LocalizationPrediction:
     aliases=["predict_localization", "亚细胞定位", "localization", "DeepLoc",
              "定位预测", "跨膜螺旋", "分泌预测"],
     category="synthetic_biology",
-    description="亚细胞定位:胞质/膜/周质/分泌。规则法结合信号肽判断与跨膜螺旋计数(疏水滑窗 ≥18 残基)。method='heuristic'(默认,无依赖)或 'deeploc'(真实 DeepLoc 2.0)。Predict subcellular localisation (cytoplasm / membrane / periplasm / secreted).",
+    description="亚细胞定位:规则法结合信号肽判断与跨膜螺旋计数(疏水滑窗 ≥18 残基),只判三个区室 —— 胞质/膜/周质。'secreted' 仍会打分并放在 .scores 里供查看,但按设计恒被 'periplasm' 压过:Sec 信号肽只能把链送到周质,真正的胞外分泌需要专门的分泌系统,序列启发式看不出来。method='heuristic'(默认,无依赖);'deeploc' 未内置,调用即抛 ImportError,不是拿到 'secreted' 的替代路径。Predict subcellular localisation; the heuristic returns cytoplasm / membrane / periplasm (secreted is scored for inspection only).",
     examples=[
         "loc = ov.synbio.predict_localization(seq)",
         "loc.compartment, loc.n_tm_helices",
@@ -569,6 +575,24 @@ def predict_localization(sequence: str, method: str = "heuristic",
     the two dominates decides the call: a protein with both a signal peptide and
     several TM helices is a membrane protein that was inserted via Sec, not a
     secreted one.
+
+    **Three compartments, not four.** ``compartment`` is only ever
+    ``'cytoplasm'``, ``'membrane'`` or ``'periplasm'``. ``'secreted'`` is scored
+    and returned in ``.scores``, but ``'periplasm'`` outscores it in both
+    branches — with a signal peptide (0.55 against 0.50) and without one (0.05
+    against 0.02) — so it is never the argmax. That is the intended biology
+    rather than a gap in the table: in *E. coli* a Sec/SPI signal peptide
+    delivers the chain to the periplasm and stops there, and genuine
+    extracellular secretion needs a dedicated system (T1SS-T6SS, or the Tat
+    pathway) whose components are not in the sequence being scored. A
+    sequence-only heuristic that claimed to see them would be guessing.
+
+    Users who want the margin rather than the verdict should read ``.scores``:
+    ``scores['periplasm'] - scores['secreted']`` is the fixed gap above, and
+    ``.signal_peptide`` carries the evidence the call was made from.
+
+    ``method='deeploc'`` raises :class:`ImportError` — DeepLoc 2.0 is not
+    vendored, so it is not a second route that returns ``'secreted'``.
     """
     if method not in _LOC_BACKENDS:
         raise ValueError(f"method must be one of {list(_LOC_BACKENDS)}, got {method!r}")

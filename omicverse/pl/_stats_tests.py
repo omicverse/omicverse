@@ -34,7 +34,30 @@ _CONTINUOUS_TESTS = {
 #: Tests on a contingency table of counts.
 _CATEGORICAL_TESTS = {"fisher", "chi2"}
 
+#: What ``test='auto'`` stands for, keyed by whether the design is paired.
+#: Both entries are rank-based, because the alternative would be to assume
+#: normality on data that is usually counts or ratios. This is a *fixed*
+#: substitution — nothing here looks at the values, so 'auto' is a default,
+#: not an adaptive choice. Picking a test after seeing the data (Shapiro, then
+#: t-test or Mann-Whitney) inflates the type-I error rate, which is why the
+#: table is a constant and not a rule.
+_AUTO_TEST = {False: "mannwhitney", True: "wilcoxon"}
+
 _STAR_CUTOFFS = ((1e-4, "****"), (1e-3, "***"), (1e-2, "**"), (0.05, "*"))
+
+
+def _resolve_test(test: str, *, paired: bool = False) -> str:
+    """Translate ``'auto'`` into the concrete test name it stands for.
+
+    Every entry point that accepts ``test=`` goes through here, so ``'auto'``
+    means the same thing wherever it is typed. ``paired=True`` is for designs
+    where the two samples are the same subjects measured twice
+    (:func:`~omicverse.pl.slopeplot`): there the distribution-free choice is
+    the Wilcoxon signed-rank test rather than Mann-Whitney U.
+    """
+    if test == "auto":
+        return _AUTO_TEST[bool(paired)]
+    return test
 
 
 @register_function(
@@ -149,8 +172,8 @@ def _correct(pvalues: Sequence[float], method: Optional[str]) -> np.ndarray:
              "pairwise_test", "显著性检验"],
     category="pl",
     description=(
-        "Run pairwise (and omnibus) group comparisons with automatic test "
-        "selection and multiple-testing correction, returning a tidy table"
+        "Run pairwise (and omnibus) group comparisons with a rank-based "
+        "default test and multiple-testing correction, returning a tidy table"
     ),
     examples=[
         "# Two groups -> Mann-Whitney by default",
@@ -190,10 +213,14 @@ def compare_groups(data: Any = None,
         Which comparisons to run, e.g. ``[('a', 'b'), ('a', 'c')]``. Defaults
         to every pair, which is why the correction matters.
     test
-        ``'auto'`` (default) uses Mann-Whitney U — it makes no normality
-        assumption and expression-like data is rarely normal. Others:
-        ``'welch'``, ``'ttest'``, ``'brunnermunzel'``, and for paired designs
-        ``'wilcoxon'`` / ``'ttest_rel'``.
+        ``'auto'`` (default) is always Mann-Whitney U here. It is a fixed
+        default, not a data-dependent choice: nothing inspects normality,
+        variance or sample size, because choosing the test after looking at
+        the data inflates the type-I error rate. Mann-Whitney is the default
+        because it assumes no normality and expression-like data is rarely
+        normal. Others: ``'welch'``, ``'ttest'``, ``'brunnermunzel'``, and for
+        paired designs ``'wilcoxon'`` / ``'ttest_rel'``. Whichever runs is
+        named in the ``test`` column of the result.
     correction
         ``'holm'`` (default), ``'bonferroni'``, ``'bh'``, ``'by'``, or ``None``.
         Applied across the pairwise tests only.
@@ -207,6 +234,12 @@ def compare_groups(data: Any = None,
     -------
     ``DataFrame`` with one row per comparison: ``group1``, ``group2``, ``n1``,
     ``n2``, ``statistic``, ``pvalue``, ``pvalue_corrected``, ``test``.
+
+    ``correction`` is applied across the pairwise rows only. The omnibus row —
+    ``group1 == group2 == '*'`` — is a single test over all groups and is not
+    part of that family, so its ``pvalue_corrected`` is a **copy of its raw
+    ``pvalue``**, not a corrected value. The column exists there only so the
+    frame stays rectangular; do not read it as adjusted.
     """
     from ._stats_common import resolve_columns
 
@@ -250,7 +283,7 @@ def compare_groups(data: Any = None,
                 f"{sorted(map(str, unknown))}. Available: {list(map(str, kept))}."
             )
 
-    pairwise = "mannwhitney" if test == "auto" else test
+    pairwise = _resolve_test(test)
     records = []
     for left, right in pairs:
         statistic, pvalue, label = _run_test(samples[left], samples[right],
@@ -266,6 +299,12 @@ def compare_groups(data: Any = None,
     if omnibus and len(kept) > 2:
         name = "anova" if pairwise in {"ttest", "welch", "ttest_rel"} else "kruskal"
         statistic, pvalue, label = _omnibus([samples[lv] for lv in kept], name)
+        # `pvalue_corrected` on this row is the raw P value, deliberately.
+        # The omnibus is one test, not a member of the pairwise family the
+        # correction was computed over, so there is nothing to adjust it
+        # against; the column is carried here only to keep the frame
+        # rectangular. Documented in the docstring so nobody reads the name
+        # and assumes otherwise.
         overall = pd.DataFrame([{
             "group1": "*", "group2": "*", "n1": len(values), "n2": len(kept),
             "statistic": statistic, "pvalue": pvalue,

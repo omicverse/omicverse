@@ -279,6 +279,11 @@ def equilibrate(system: MDSystem, *, nvt_ps: float = 100.0,
         the NPT stage.
     seed
         Seed for the initial Maxwell-Boltzmann velocities and the barostat.
+    progress
+        Accepted for signature symmetry with
+        :func:`~omicverse.mol.production`, but **not used**: equilibration
+        attaches no reporters, so there is no per-step progress to suppress.
+        Use ``verbose`` to control the stage banners.
 
     Returns
     -------
@@ -421,7 +426,10 @@ def production(system: MDSystem, *, ns: float = 10.0,
         Integration timestep. 2 fs with HBonds constraints is the safe
         default; 4 fs requires a system built with ``hmr=True``.
     ensemble
-        ``'NPT'`` (constant pressure, needs explicit solvent) or ``'NVT'``.
+        ``'NPT'`` (constant pressure) or ``'NVT'``. NPT needs a periodic box,
+        so on an implicit-solvent system it is downgraded to NVT rather than
+        refused — the run still happens, and the ensemble actually used is the
+        one recorded in the trajectory's provenance.
     report_ps
         Interval between saved frames and log lines, in ps.
     traj

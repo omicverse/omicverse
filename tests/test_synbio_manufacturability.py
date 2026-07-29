@@ -283,6 +283,43 @@ def test_localization_scores_cover_every_compartment():
     assert loc.score == max(loc.scores.values())
 
 
+#: What ``predict_localization`` can actually return. ``secreted`` is scored but
+#: not in here, and the docstring now says so — see the test below.
+REACHABLE_COMPARTMENTS = {"cytoplasm", "membrane", "periplasm"}
+
+
+@pytest.mark.parametrize("seq", [PHOA, GFP, LYSOZYME, LACY])
+def test_heuristic_only_ever_returns_three_compartments(seq):
+    """``secreted`` is scored for inspection, never returned — by design.
+
+    A Sec/SPI signal peptide delivers to the periplasm and stops there; real
+    extracellular secretion needs a dedicated system that a sequence-only
+    heuristic cannot see. So ``periplasm`` is scored strictly above ``secreted``
+    in both branches and wins the argmax every time. The docs used to promise
+    four compartments; this pins the three that exist so the promise cannot
+    quietly come back.
+    """
+    loc = sb.predict_localization(seq)
+    assert "secreted" in loc.scores, (
+        "the secreted score is part of the public output — users read the "
+        "periplasm-vs-secreted margin off .scores")
+    assert loc.compartment in REACHABLE_COMPARTMENTS, (
+        f"undocumented compartment {loc.compartment!r}: {loc.scores}")
+
+
+@pytest.mark.parametrize("seq,signal", [(PHOA, True), (GFP, False)])
+def test_periplasm_dominates_secreted_in_both_branches(seq, signal):
+    """The structural reason ``secreted`` is unreachable, pinned directly.
+
+    Asserted as an inequality rather than on the two constants, so a rescoring
+    that genuinely makes secretion callable fails here and has to be argued for
+    rather than slipping in.
+    """
+    loc = sb.predict_localization(seq)
+    assert loc.signal_peptide.has_signal is signal
+    assert loc.scores["periplasm"] > loc.scores["secreted"]
+
+
 def test_deeploc_backend_is_explained():
     with pytest.raises(ImportError, match="DeepLoc"):
         sb.predict_localization(GFP, method="deeploc")
