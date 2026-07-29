@@ -206,6 +206,8 @@ def upset(
     sets,
     keys=None,
     axis="obs",
+    figure=None,
+    rect=None,
     top_n=30,
     min_size=1,
     sort_by="size",
@@ -397,7 +399,23 @@ def upset(
     )
     label_fontsize = count_fontsize or max(8, rcParams["font.size"] * 0.68)
 
-    fig = plt.figure(figsize=figsize, facecolor=rcParams["figure.facecolor"])
+    # An UpSet plot is four plain matplotlib axes in a 2x2 gridspec, so it can
+    # be confined to part of a figure the caller already has: `figure` supplies
+    # the canvas and `rect` the region. Without them the behaviour is unchanged
+    # — a new figure sized by `figsize`.
+    if rect is not None and figure is None:
+        raise TypeError("`rect` places the UpSet plot inside a figure you "
+                        "supply — pass `figure=` as well.")
+    if figure is None:
+        fig = plt.figure(figsize=figsize,
+                         facecolor=rcParams["figure.facecolor"])
+    else:
+        fig = figure
+    region = {}
+    if rect is not None:
+        x0, y0, width, height = rect
+        region = dict(left=x0, right=x0 + width,
+                      bottom=y0, top=y0 + height)
     layout = fig.add_gridspec(
         2,
         2,
@@ -405,6 +423,7 @@ def upset(
         height_ratios=height_ratios,
         hspace=0.10,
         wspace=0.05,
+        **region,
     )
     ax_empty = fig.add_subplot(layout[0, 0])
     ax_intersections = fig.add_subplot(layout[0, 1])

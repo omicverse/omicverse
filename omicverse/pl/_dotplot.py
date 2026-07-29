@@ -65,6 +65,8 @@ def dotplot(
     show: Optional[bool] = None,
     save: Optional[Union[str, bool]] = None,
     ax: Optional[_AxesSubplot] = None,
+    figure=None,
+    rect=None,
     return_fig: Optional[bool] = False,
     vmin: Optional[float] = None,
     vmax: Optional[float] = None,
@@ -470,9 +472,49 @@ def dotplot(
     # Add legends
     m.add_legends(box_padding=2)
     
-    # Render the plot
-    m.render()
-    fig = m.figure
+    # Render the plot. marsilea owns its layout: it derives a figure size from
+    # its content and places its axes as fractions of *that*, so handing it a
+    # host figure resizes the host and spreads the dotplot over the whole
+    # canvas. `rect` confines it: the block is rendered at its natural size and
+    # then *translated* into the region — never rescaled, so the dot legend and
+    # colour bar keep the size they were drawn at.
+    if rect is not None and figure is None:
+        raise TypeError("`rect` places the dotplot inside a figure you supply "
+                        "— pass `figure=` as well.")
+    if figure is None:
+        m.render()
+        fig = m.figure
+    else:
+        host_w, host_h = figure.get_size_inches()
+        before = set(figure.axes)
+        m.render(figure=figure)
+        added = [a for a in figure.axes if a not in before]
+        block_w, block_h = figure.get_size_inches()
+        figure.set_size_inches(host_w, host_h)
+        if rect is not None:
+            x0, y0, width, height = rect
+            if block_w > width * host_w + 1e-6 or block_h > height * host_h + 1e-6:
+                warnings.warn(
+                    f"the dotplot needs {block_w:.1f} x {block_h:.1f} in and "
+                    f"`rect` offers {width * host_w:.1f} x "
+                    f"{height * host_h:.1f} in; it will overflow the region. "
+                    "Enlarge the region, or reduce the number of genes or "
+                    "groups — the block is not rescaled, because that would "
+                    "shrink the axes without shrinking their text.",
+                    UserWarning,
+                    stacklevel=2,
+                )
+        else:
+            x0, y0 = 0.0, 0.0
+        for axes in added:
+            pos = axes.get_position()
+            axes.set_position([
+                x0 + pos.x0 * block_w / host_w,
+                y0 + pos.y0 * block_h / host_h,
+                pos.width * block_w / host_w,
+                pos.height * block_h / host_h,
+            ])
+        fig = figure
 
     if save not in (None, False):
         save_path = Path(save) if isinstance(save, str) else Path("dotplot.png")
