@@ -65,44 +65,28 @@ class TestUpsetAsPanel:
             upset(_sets(), rect=(0, 0, 1, 1))
 
 
-class TestDotplotAsPanel:
-    def test_host_figure_size_survives(self):
+class TestDotplotLegendSide:
+    """`dotplot` hardcoded its legends to the right; the side is now a choice.
+
+    It is not embeddable: marsilea's layout for this block is composite, so it
+    fills whatever figure it is handed rather than reporting a size — see the
+    comment in `_dotplot.py`. Only the legend placement is under test here.
+    """
+
+    def test_legend_side_reaches_marsilea(self):
         adata = _adata()
-        fig = plt.figure(figsize=(14.0, 8.0))
-        host = fig.add_axes([0.05, 0.72, 0.30, 0.22])
-        before = host.get_position().bounds
+        for side in ("right", "bottom", "left", "top"):
+            m = dotplot(adata, list(adata.var_names[:4]), "grp",
+                        legend_side=side, show=False)
+            assert m is not None, f"legend_side={side!r} produced nothing"
 
-        dotplot(adata, list(adata.var_names[:5]), "grp", figure=fig,
-                rect=(0.40, 0.10, 0.55, 0.55), show=False)
-
-        assert tuple(fig.get_size_inches()) == (14.0, 8.0), \
-            "marsilea resized the host figure"
-        assert host.get_position().bounds == pytest.approx(before)
-
-    def test_block_is_placed_at_the_region_origin(self):
+    def test_legends_can_be_switched_off(self):
         adata = _adata()
-        fig = plt.figure(figsize=(14.0, 8.0))
-        before = set(fig.axes)
-        x0, y0 = 0.40, 0.10
+        assert dotplot(adata, list(adata.var_names[:4]), "grp",
+                       legend=False, show=False) is not None
 
-        dotplot(adata, list(adata.var_names[:5]), "grp", figure=fig,
-                rect=(x0, y0, 0.55, 0.55), show=False)
-
-        added = [a for a in fig.axes if a not in before]
-        assert added, "nothing was drawn"
-        assert min(a.get_position().x0 for a in added) >= x0 - 1e-6
-        assert min(a.get_position().y0 for a in added) >= y0 - 1e-6
-
-    def test_an_undersized_region_warns_rather_than_rescaling(self):
-        """Rescaling would shrink the axes without shrinking their text."""
-        adata = _adata(n_var=20)
-        fig = plt.figure(figsize=(14.0, 8.0))
-        with pytest.warns(UserWarning, match="overflow the region"):
-            dotplot(adata, list(adata.var_names), "grp", figure=fig,
-                    rect=(0.1, 0.1, 0.06, 0.06), show=False)
-
-    def test_rect_without_a_figure_is_refused(self):
+    def test_an_unknown_side_is_refused(self):
         adata = _adata()
-        with pytest.raises(TypeError, match="pass `figure="):
+        with pytest.raises(ValueError, match="must be 'right', 'left'"):
             dotplot(adata, list(adata.var_names[:3]), "grp",
-                    rect=(0, 0, 1, 1), show=False)
+                    legend_side="sideways", show=False)
