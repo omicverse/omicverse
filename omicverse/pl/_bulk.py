@@ -506,7 +506,7 @@ def venn(sets={}, out='./', palette='bgrc',
 def boxplot(data,hue,x_value=None,y_value=None,width=0.3,title='',
                  figsize=(6,3),palette=None,fontsize=10,
                  legend_bbox=(1, 0.55),legend_ncol=1,hue_order=None,
-                 *,x=None,y=None,ax=None):
+                 *,x=None,y=None,ax=None,show_points=True):
     r"""
     Create a boxplot with jittered points to visualize data distribution across categories.
 
@@ -547,6 +547,9 @@ def boxplot(data,hue,x_value=None,y_value=None,width=0.3,title='',
         every existing positional call is unaffected. Pass one of
         :func:`~omicverse.pl.multipanel`'s panels here to place the boxplot
         inside a larger figure.
+    show_points : bool
+        Overlay jittered raw points on each box. ``True`` (default) keeps the
+        existing look; ``False`` draws boxes only, for a clean multi-panel figure.
 
     Returns
     -------
@@ -815,13 +818,17 @@ def boxplot(data,hue,x_value=None,y_value=None,width=0.3,title='',
         plt.setp(b1['caps'], color=hue_color)
         plt.setp(b1['medians'], color=hue_color)
 
-        clevels = np.linspace(0., 1., len(plot_data_random1[hue_data]))
-        # ax.scatter, not plt.scatter: pyplot draws on whatever the current
-        # axes happens to be, which is not the caller's axes once this is
-        # placed in a panel of a figure built elsewhere.
-        for jitter, val, clevel in zip(plot_data_xs1[hue_data], plot_data_random1[hue_data], clevels):
-            if len(val) > 0:  # Only plot if there's data
-                ax.scatter(jitter, val,c=hue_color,alpha=0.4)
+        # Jittered raw points are helpful for small n but clutter a box with a
+        # hue split or a small multi-panel figure, so they are opt-out via
+        # show_points. Default stays True to preserve the existing look.
+        if show_points:
+            clevels = np.linspace(0., 1., len(plot_data_random1[hue_data]))
+            # ax.scatter, not plt.scatter: pyplot draws on whatever the current
+            # axes happens to be, which is not the caller's axes once this is
+            # placed in a panel of a figure built elsewhere.
+            for jitter, val, clevel in zip(plot_data_xs1[hue_data], plot_data_random1[hue_data], clevels):
+                if len(val) > 0:  # Only plot if there's data
+                    ax.scatter(jitter, val,c=hue_color,alpha=0.4)
 
     #坐标轴字体
     #fontsize=10
