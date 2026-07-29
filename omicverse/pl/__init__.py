@@ -300,6 +300,7 @@ from ._categorical import (
     donutplot,
     lollipopplot,
     pieplot,
+    sankey,
     slopeplot,
     stackplot,
     stripplot,
@@ -569,6 +570,7 @@ __all__ = [
     "pieplot",
     "donutplot",
     "slopeplot",
+    "sankey",
     # @ _distribution
     "histplot",
     "kdeplot",

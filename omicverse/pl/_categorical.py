@@ -30,7 +30,7 @@ from ._stats_common import (as_frame, default_palette, font_size,
 
 __all__ = [
     "barplot", "stripplot", "violinplot", "stackplot", "lollipopplot",
-    "pieplot", "donutplot", "slopeplot",
+    "pieplot", "donutplot", "slopeplot", "sankey",
 ]
 
 
@@ -1244,6 +1244,269 @@ def slopeplot(data: Any = None,
                 transform=ax.transAxes, ha="center", va="bottom",
                 fontsize=font_size(fontsize))
     return (ax, stats) if return_stats else ax
+
+
+# --------------------------------------------------------------------------
+# flow / alluvial
+# --------------------------------------------------------------------------
+
+
+def _smoothstep(n: int) -> np.ndarray:
+    """A cubic S-curve on ``[0, 1]`` sampled at ``n`` points.
+
+    ``3t^2 - 2t^3`` is flat at both ends, so ribbons leave a node horizontally
+    and arrive horizontally — the shape that reads as a smooth flow rather than
+    a slanted parallelogram. pySankey/cnsplots reach the same curve by
+    convolving a step twice with a box; a closed-form smoothstep is the same
+    idea without the resampling, and it lets us place the polygon vertices
+    exactly, which is what keeps mass conservation checkable from the artists.
+    """
+    t = np.linspace(0.0, 1.0, n)
+    return t * t * (3.0 - 2.0 * t)
+
+
+def _stage_layout(counts: pd.Series, levels: list, gap: float):
+    """Top and height of every node in one stage, stacked top-to-bottom.
+
+    Heights are counts normalised so the bars plus the ``gap``s between them
+    fill ``[0, 1]``. Stacking downward from ``y = 1`` puts the first level of
+    ``levels`` at the top, so the row order the caller chose is the order a
+    reader sees.
+    """
+    total = float(counts.sum())
+    n = len(levels)
+    span = 1.0 - gap * (n - 1) if n > 1 else 1.0
+    if span <= 0:
+        raise ValueError(
+            f"`gap={gap}` leaves no room for {n} nodes in a stage; use a "
+            f"smaller gap (gap * (n_nodes - 1) must stay below 1)."
+        )
+    tops, heights = {}, {}
+    cursor = 1.0
+    for level in levels:
+        height = float(counts.get(level, 0.0)) / total * span if total else 0.0
+        tops[level] = cursor
+        heights[level] = height
+        cursor -= height + gap
+    return tops, heights
+
+
+@register_function(
+    aliases=["桑基图", "河流图", "sankey", "alluvial", "冲积图"],
+    category="pl",
+    description=(
+        "Sankey / alluvial diagram of the flow between two or more categorical "
+        "columns of a table — the general, container-free counterpart of "
+        "ov.pl.perturb_sankey"
+    ),
+    examples=[
+        "# Two-stage flow: how each day splits by sex",
+        "ax = ov.pl.sankey(df, ['day', 'sex'])",
+        "# Three-stage alluvial, coloured from a fixed palette",
+        "ax = ov.pl.sankey(df, ['day', 'sex', 'smoker'], palette='tab10')",
+        "# Pin the level order of one column",
+        "ax = ov.pl.sankey(df, ['day', 'sex'], order={'day': ['Thur', 'Fri', 'Sat', 'Sun']})",
+    ],
+    related=["pl.perturb_sankey", "pl.stackplot", "pl.slopeplot"],
+)
+def sankey(data: Any = None,
+           columns: Optional[Sequence[Any]] = None,
+           *,
+           ax=None,
+           palette=None,
+           gap: float = 0.02,
+           node_width: float = 0.03,
+           flow_alpha: float = 0.6,
+           order: Optional[Any] = None,
+           label: bool = True,
+           label_fontsize: Optional[float] = None,
+           figsize: Tuple[float, float] = (4, 4)):
+    r"""Sankey / alluvial diagram of the flow between categorical columns.
+
+    A node is a category within one column (stage); its height is the number
+    of rows in that category. A ribbon joins a category in stage ``i`` to a
+    category in stage ``i + 1``, and its width is the number of rows that fall
+    in both — so the picture accounts for every row, and the widths leaving a
+    node always sum back to the node's height (this is the property that makes
+    a Sankey a Sankey, and it holds here by construction).
+
+    Ribbon geometry follows cnsplots (Farid Rashidi, BSD-3-Clause) — a
+    smoothstep between the two node edges — and is implemented independently.
+
+    Arguments
+    ---------
+    data
+        A ``DataFrame`` (or anything with an ``.obs`` frame, e.g. an
+        ``AnnData``). Rows missing any of ``columns`` are dropped and the count
+        is reported.
+    columns
+        Two or more column names, drawn left to right. Three or more columns
+        give a multi-stage alluvial, each consecutive pair joined by ribbons.
+    palette
+        Colours for the nodes of each stage, anything
+        :func:`~omicverse.pl.barplot` accepts (an ov palette by default, a
+        colormap name, or an explicit list). Ribbons take the colour of their
+        **left** node, so a source can be followed downstream.
+    gap
+        Vertical space between nodes in a stage, in axes units (the whole
+        diagram is one unit tall).
+    node_width
+        Horizontal width of the node bars, in stage-spacing units.
+    flow_alpha
+        Opacity of the ribbons; the bars are drawn opaque.
+    order
+        Level order per column. Either a mapping ``{column: [levels...]}`` for
+        specific columns, or a single sequence applied to every column. Columns
+        left unspecified fall back to categorical order, else a plain sort.
+    label
+        Draw the category name beside each node.
+
+    Returns
+    -------
+    The ``Axes`` the diagram was drawn into.
+    """
+    frame = as_frame(data)
+    if frame is None:
+        raise TypeError(
+            "`data` must be a DataFrame or an object with an `.obs` frame "
+            "(e.g. AnnData); got " + type(data).__name__ + "."
+        )
+    if columns is None or len(list(columns)) < 2:
+        raise TypeError(
+            "`columns` must name at least two categorical columns to draw a "
+            "flow between."
+        )
+    columns = list(columns)
+    missing = [c for c in columns if c not in frame.columns]
+    if missing:
+        available = ", ".join(map(str, frame.columns[:30]))
+        raise KeyError(
+            f"Column(s) {missing} are not in the table. Available columns: "
+            f"{available}" + (" ..." if frame.shape[1] > 30 else "")
+        )
+
+    stage = frame[columns].copy()
+    before = len(stage)
+    stage = stage.dropna()
+    dropped = before - len(stage)
+    if dropped:
+        print(f"sankey: dropped {dropped} rows with missing values.")
+    if stage.empty:
+        raise ValueError("Nothing to plot — every row is missing a value.")
+
+    # Per-column level order. A dict targets named columns; a bare sequence is
+    # applied to all of them (each column keeps only the levels it has).
+    def _levels_for(column):
+        explicit = None
+        if isinstance(order, Mapping):
+            explicit = order.get(column)
+        elif order is not None:
+            present = set(pd.unique(stage[column]))
+            explicit = [lv for lv in order if lv in present]
+            if not explicit:
+                explicit = None
+        return group_levels(stage[column], explicit)
+
+    levels = [_levels_for(c) for c in columns]
+
+    ax = _new_axes(ax, figsize, figsize)
+    n_stages = len(columns)
+
+    # Node layout and colours, one entry per stage.
+    tops, heights, colours = [], [], []
+    for i, column in enumerate(columns):
+        counts = stage[column].value_counts()
+        top, height = _stage_layout(counts, levels[i], gap)
+        tops.append(top)
+        heights.append(height)
+        palette_i = default_palette(len(levels[i]), palette)
+        colours.append({lv: palette_i[j] for j, lv in enumerate(levels[i])})
+
+    # Node bars. Rectangles (not fill_between) so their heights are readable
+    # straight off the artist in a test, and gid-tagged for the same reason.
+    from matplotlib.patches import Polygon, Rectangle
+
+    for i in range(n_stages):
+        for level in levels[i]:
+            h = heights[i][level]
+            if h <= 0:
+                continue
+            bar = Rectangle((i - node_width / 2, tops[i][level] - h),
+                            node_width, h, facecolor=colours[i][level],
+                            edgecolor="none", zorder=3)
+            bar.set_gid(f"node:{i}:{level}")
+            ax.add_patch(bar)
+
+    # Ribbons between each consecutive pair of stages. For a left node, the
+    # outgoing widths are laid out top-to-bottom in right-label order; for a
+    # right node, the incoming widths are laid out in left-label order — which
+    # falls out of iterating left (outer) then right (inner). The left-side
+    # width of every ribbon is count / total scaled by the LEFT stage's span,
+    # so the widths leaving a node sum exactly to that node's height.
+    npts = 60
+    s = _smoothstep(npts)
+    for i in range(n_stages - 1):
+        left_col, right_col = columns[i], columns[i + 1]
+        pair = (stage.groupby([left_col, right_col], observed=True)
+                .size())
+        total = float(len(stage))
+        span_l = 1.0 - gap * (len(levels[i]) - 1) if len(levels[i]) > 1 else 1.0
+        span_r = (1.0 - gap * (len(levels[i + 1]) - 1)
+                  if len(levels[i + 1]) > 1 else 1.0)
+        left_cursor = dict(tops[i])
+        right_cursor = dict(tops[i + 1])
+        x_left = i + node_width / 2
+        x_right = (i + 1) - node_width / 2
+        xs = x_left + (x_right - x_left) * s
+        for left in levels[i]:
+            for right in levels[i + 1]:
+                count = float(pair.get((left, right), 0.0))
+                if count <= 0:
+                    continue
+                w_left = count / total * span_l
+                w_right = count / total * span_r
+                l_top = left_cursor[left]
+                l_bot = l_top - w_left
+                r_top = right_cursor[right]
+                r_bot = r_top - w_right
+                left_cursor[left] = l_bot
+                right_cursor[right] = r_bot
+
+                y_top = l_top + (r_top - l_top) * s
+                y_bot = l_bot + (r_bot - l_bot) * s
+                verts = np.concatenate([
+                    np.column_stack([xs, y_top]),
+                    np.column_stack([xs[::-1], y_bot[::-1]]),
+                ])
+                ribbon = Polygon(verts, closed=True,
+                                 facecolor=colours[i][left], edgecolor="none",
+                                 alpha=flow_alpha, zorder=2)
+                ribbon.set_gid(f"flow:{i}:{left}:{right}")
+                ax.add_patch(ribbon)
+
+    if label:
+        size = font_size(label_fontsize)
+        pad = node_width + 0.02 * max(n_stages - 1, 1)
+        for i in range(n_stages):
+            for level in levels[i]:
+                h = heights[i][level]
+                if h <= 0:
+                    continue
+                centre = tops[i][level] - h / 2
+                if i == 0:
+                    ax.text(i - node_width / 2 - pad, centre, str(level),
+                            ha="right", va="center", fontsize=size)
+                elif i == n_stages - 1:
+                    ax.text(i + node_width / 2 + pad, centre, str(level),
+                            ha="left", va="center", fontsize=size)
+                else:
+                    ax.text(i, tops[i][level] + 0.005, str(level),
+                            ha="center", va="bottom", fontsize=size)
+
+    ax.set_xlim(-0.4, (n_stages - 1) + 0.4)
+    ax.set_ylim(-0.02, 1.05)
+    ax.axis("off")
+    return ax
 
 
 @register_function(
