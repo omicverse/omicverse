@@ -6,10 +6,11 @@ a 90 mm panel and a smear on a 40 mm one, and nothing in the plotting call
 knows which it will be — a layout engine may resize the axes afterwards.
 
 :func:`declutter_ticks` measures the drawn label boxes and, when they collide,
-works through a ladder of remedies. Unlike :func:`~omicverse.pl.adjust_text` it
-cannot simply push labels apart: a tick label is anchored to its tick, so
-moving it along the axis would make it point at the wrong value. What it can do
-is rotate them, deal them into two rows, or show fewer of them.
+works through a ladder of remedies: rotate, deal into two rows, or slide apart
+along the axis with a leader line back to each tick — the same bargain
+:func:`~omicverse.pl.adjust_text` strikes for point labels, where the leader is
+what licenses moving the text away from what it names. Font sizes are never
+changed.
 
 Because the answer depends on the final geometry, the check is registered as a
 draw-time callback by default: it re-evaluates on every draw and is idempotent,
@@ -102,18 +103,134 @@ def _unstagger(labels) -> None:
             text.set_transform(base)
 
 
-def _remember_size(text) -> float:
-    """The label's size before any pass shrank it."""
-    if not hasattr(text, "_ov_declutter_base_size"):
-        text._ov_declutter_base_size = text.get_size()
-    return text._ov_declutter_base_size
+def _separate_1d(wanted, extents, lo, hi, pad):
+    """Slide items along a line so they stop overlapping, order preserved.
+
+    Overlapping neighbours are merged into a block, the block is centred on the
+    mean of the positions its members wanted, and its members are laid out
+    touching inside it — repeated until no block overlaps its neighbour. The
+    result is the closest arrangement to what was asked for that also fits, and
+    it never reorders, which for tick labels would be a lie about the data.
+
+    Blocks are clamped to ``[lo, hi]``; if the total width exceeds that span
+    there is no overlap-free answer and the caller is told so.
+    """
+    need = [extents[i] + pad for i in range(len(wanted))]
+    if sum(need) > (hi - lo):
+        return None
+
+    def size(block):
+        return sum(need[i] for i in block)
+
+    def target(block):
+        return sum(wanted[i] for i in block) / len(block)
+
+    def start_of(block):
+        return min(max(target(block) - size(block) / 2.0, lo),
+                   hi - size(block))
+
+    blocks = [[i] for i in sorted(range(len(wanted)), key=lambda i: wanted[i])]
+    while True:
+        starts = [start_of(b) for b in blocks]
+        for k in range(len(blocks) - 1):
+            if starts[k] + size(blocks[k]) > starts[k + 1] + 1e-9:
+                blocks[k:k + 2] = [blocks[k] + blocks[k + 1]]
+                break
+        else:
+            break
+
+    centres = {}
+    for block, start in zip(blocks, starts):
+        cursor = start
+        for i in block:
+            centres[i] = cursor + need[i] / 2.0
+            cursor += need[i]
+    return [centres[i] for i in range(len(wanted))]
 
 
-def _restore_sizes(labels) -> None:
-    for text in labels:
-        base = getattr(text, "_ov_declutter_base_size", None)
-        if base is not None:
-            text.set_size(base)
+def _spread(ax, labels, renderer, which: str, leader_color, leader_linewidth):
+    """Slide the labels apart along the axis and draw a leader to each tick.
+
+    This is the tick-label form of what :func:`~omicverse.pl.adjust_text` does.
+    A displaced tick label would point at the wrong value on its own — the
+    leader line is what makes moving it honest, exactly as it is for repelled
+    point labels.
+
+    Returns True if the collision was cleared.
+    """
+    import matplotlib.transforms as mtransforms
+    from matplotlib.lines import Line2D
+
+    boxes = _boxes(labels, renderer)
+    if len(boxes) != len(labels):
+        return False
+    axes_box = ax.get_window_extent()
+    figure_box = ax.figure.bbox
+    # Tick labels may reach a little past the axes — the first and last always
+    # do — so the room available is the axes span plus a margin of a quarter of
+    # its length on each side, never outside the figure.
+    if which == "x":
+        wanted = [(b.x0 + b.x1) / 2 for b in boxes]
+        extents = [b.width for b in boxes]
+        slack = 0.25 * axes_box.width
+        lo = max(figure_box.x0, axes_box.x0 - slack)
+        hi = min(figure_box.x1, axes_box.x1 + slack)
+    else:
+        wanted = [(b.y0 + b.y1) / 2 for b in boxes]
+        extents = [b.height for b in boxes]
+        slack = 0.25 * axes_box.height
+        lo = max(figure_box.y0, axes_box.y0 - slack)
+        hi = min(figure_box.y1, axes_box.y1 + slack)
+
+    # Twice the collision pad: each slot carries one pad, so the gap between
+    # neighbours comes out at the slot padding — and `_collides` wants the gap
+    # to *exceed* `_PAD_POINTS`, which an exactly-equal gap does not.
+    placed = _separate_1d(wanted, extents, lo, hi, _PAD_POINTS * 2)
+    if placed is None:                    # cannot fit at this size at all
+        return False
+
+    _clear_leaders(ax)
+    leaders = []
+    for text, box, want, got in zip(labels, boxes, wanted, placed):
+        shift = got - want
+        base = getattr(text, "_ov_declutter_base_transform", text.get_transform())
+        text._ov_declutter_base_transform = base
+        # `shift` is in display pixels, and the label's transform lands in
+        # display space, so the offset composes directly — no unit conversion.
+        dx, dy = (shift, 0.0) if which == "x" else (0.0, shift)
+        text.set_transform(base + mtransforms.Affine2D().translate(dx, dy))
+
+        # Leader: from the tick on the axis edge to the label's new position.
+        if abs(shift) < 0.5:
+            continue
+        if which == "x":
+            x_from, y_from = want, axes_box.y0
+            x_to, y_to = got, box.y1
+        else:
+            x_from, y_from = axes_box.x0, want
+            x_to, y_to = box.x1, got
+        line = Line2D([x_from, x_to], [y_from, y_to],
+                      transform=mtransforms.IdentityTransform(),
+                      color=leader_color,
+                      linewidth=leader_linewidth, zorder=1, clip_on=False)
+        ax.figure.add_artist(line)
+        leaders.append(line)
+    ax._ov_declutter_leaders = leaders
+
+    if _collides(labels, renderer, which):
+        _clear_leaders(ax)
+        _unstagger(labels)
+        return False
+    return True
+
+
+def _clear_leaders(ax) -> None:
+    for line in getattr(ax, "_ov_declutter_leaders", []):
+        try:
+            line.remove()
+        except (ValueError, NotImplementedError):
+            pass
+    ax._ov_declutter_leaders = []
 
 
 def _thin(labels, step: int) -> None:
@@ -127,7 +244,7 @@ def _thin(labels, step: int) -> None:
     category="pl",
     description=(
         "Detect overlapping tick labels at draw time and separate them by "
-        "rotating, staggering into two rows, or showing fewer of them"
+        "rotating, sliding them apart with leader lines, or showing fewer"
     ),
     examples=[
         "ax = ov.pl.boxplot(df, 'day', 'total_bill')",
@@ -145,8 +262,9 @@ def declutter_ticks(ax,
                     max_rotation: float = 90.0,
                     rotate: bool = True,
                     stagger: bool = True,
-                    shrink: bool = True,
-                    min_fontsize: float = 5.0,
+                    spread: bool = True,
+                    leader_color: str = '0.55',
+                    leader_linewidth: float = 0.5,
                     thin: bool = True,
                     max_thin: int = 4,
                     on_draw: bool = True):
@@ -162,11 +280,14 @@ def declutter_ticks(ax,
        to what :func:`~omicverse.pl.adjust_text` does for free-floating text: a
        tick label cannot move *along* its axis without pointing at the wrong
        value, so the space has to come from the perpendicular direction.
-    3. **shrink** — reduce the label size, down to ``min_fontsize``. On a
-       category axis a point or two of font size costs less than losing half
-       the category names, and it is the only remedy besides thinning that the
-       y-axis can use at all.
-    4. **thin** — show every 2nd, then 3rd, ... label up to ``max_thin``.
+    3. **spread** — slide the labels apart *along* the axis, keeping their
+       order, and draw a thin leader from each one back to its tick. This is
+       the tick-label form of what :func:`~omicverse.pl.adjust_text` does: a
+       displaced label would point at the wrong value on its own, and the
+       leader is what makes moving it honest — exactly as it is for repelled
+       point labels. Font sizes are never touched.
+    4. **thin** — show every 2nd, then 3rd, ... label up to ``max_thin``. Only
+       reached when the labels cannot be made to fit side by side at all.
 
     Arguments
     ---------
@@ -176,10 +297,10 @@ def declutter_ticks(ax,
         ``'x'``, ``'y'`` or ``'both'``.
     max_rotation
         Ceiling for step 1, in degrees. ``0`` disables rotation.
-    rotate, stagger, shrink, thin
+    rotate, stagger, spread, thin
         Enable or disable individual steps.
-    min_fontsize
-        Floor for step 3, in points.
+    leader_color, leader_linewidth
+        Style of the leader lines drawn by step 3.
     max_thin
         Largest stride step 4 may use.
     on_draw
@@ -222,19 +343,21 @@ def declutter_ticks(ax,
 
             figure.canvas.mpl_connect("draw_event", _on_draw)
         registry[ax] = dict(axis=axis, max_rotation=max_rotation,
-                            rotate=rotate, stagger=stagger, shrink=shrink,
-                            min_fontsize=min_fontsize, thin=thin,
+                            rotate=rotate, stagger=stagger, spread=spread,
+                            leader_color=leader_color,
+                            leader_linewidth=leader_linewidth, thin=thin,
                             max_thin=max_thin)
         return ax
 
     return _declutter_now(ax, axis=axis, max_rotation=max_rotation,
-                          rotate=rotate, stagger=stagger, shrink=shrink,
-                          min_fontsize=min_fontsize, thin=thin,
+                          rotate=rotate, stagger=stagger, spread=spread,
+                          leader_color=leader_color,
+                          leader_linewidth=leader_linewidth, thin=thin,
                           max_thin=max_thin)
 
 
 def _declutter_now(ax, *, axis: str, max_rotation: float, rotate: bool,
-                   stagger: bool, shrink: bool, min_fontsize: float,
+                   stagger: bool, spread: bool, leader_color, leader_linewidth,
                    thin: bool, max_thin: int):
     """Measure and fix, using the geometry as it stands right now."""
     figure = ax.figure
@@ -253,7 +376,7 @@ def _declutter_now(ax, *, axis: str, max_rotation: float, rotate: bool,
         # Start from a clean slate so an earlier verdict, reached at a different
         # axes size, does not stick: un-hide, un-stagger, un-rotate.
         _unstagger(labels)
-        _restore_sizes(labels)
+        _clear_leaders(ax)
         for text in labels:
             text.set_visible(True)
         if which == "x":
@@ -283,22 +406,9 @@ def _declutter_now(ax, *, axis: str, max_rotation: float, rotate: bool,
                 continue
             _unstagger(labels)
 
-        if shrink:
-            # Before dropping labels, try making them smaller. On a category
-            # axis losing half the category names is a worse outcome than a
-            # point or two of font size, and this is the only remedy available
-            # to the y axis besides thinning.
-            base = [_remember_size(t) for t in labels]
-            for factor in (0.9, 0.8, 0.7, 0.6):
-                for text, size in zip(labels, base):
-                    text.set_size(max(size * factor, min_fontsize))
-                if not _collides(labels, renderer, which):
-                    break
-            if not _collides(labels, renderer, which):
-                continue
-            # Still colliding at the floor: keep the smaller size rather than
-            # giving it back. Thinning now has less to remove, so fewer labels
-            # are lost than if the pass had gone to full size and thinned.
+        if spread and _spread(ax, labels, renderer, which, leader_color,
+                              leader_linewidth):
+            continue
 
         if thin:
             for step in range(2, max(max_thin, 2) + 1):
