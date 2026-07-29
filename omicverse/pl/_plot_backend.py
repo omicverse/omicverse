@@ -523,7 +523,8 @@ def blue_palette()->list:
     related=['bulk.geneset_plot_multi', 'utils.plot_cellproportion']
 )
 def style_axes(ax, *, outward: float = 10, spines: bool = True,
-               grid: bool = False, top: bool = False, right: bool = False):
+               grid: bool = False, top: bool = False, right: bool = False,
+               declutter: bool = True):
     r"""Apply the OmicVerse frame convention to an axes.
 
     Not in the function registry: this module hosts the styling primitives
@@ -579,7 +580,29 @@ def style_axes(ax, *, outward: float = 10, spines: bool = True,
         for text, (rotation, align) in zip(labels, keep[axis]):
             text.set_rotation(rotation)
             text.set_horizontalalignment(align)
+    if declutter and _DECLUTTER_TICKS:
+        # Registered as a draw-time callback, not resolved here: whether the
+        # labels collide depends on the physical size the axes ends up at, and
+        # a caller assembling a multi-panel figure has not fixed that yet. A
+        # no-op when nothing overlaps.
+        from ._declutter import declutter_ticks
+
+        declutter_ticks(ax)
     return ax
+
+
+_DECLUTTER_TICKS = True
+
+
+def set_tick_declutter(enabled: bool) -> bool:
+    """Turn the automatic tick-label de-overlap in ``style_axes`` on or off.
+
+    Returns the previous setting, so it can be restored.
+    """
+    global _DECLUTTER_TICKS
+    previous = _DECLUTTER_TICKS
+    _DECLUTTER_TICKS = bool(enabled)
+    return previous
 
 
 def plot_text_set(text, text_knock=2, text_maxsize=20):
