@@ -644,7 +644,8 @@ def ticks_range(x,width):
 
 def plot_boxplot(data, hue, x_value, y_value, width=0.6, title='',
                  figsize=(6, 3), palette=None, fontsize=10,
-                 legend_bbox=(1, 0.55), legend_ncol=1, hue_order=None):
+                 legend_bbox=(1, 0.55), legend_ncol=1, hue_order=None,
+                 *, ax=None):
     r"""Deprecated alias of :func:`omicverse.pl.boxplot`.
 
     This was an earlier, shorter implementation of the same plot. It is now a
@@ -660,6 +661,10 @@ def plot_boxplot(data, hue, x_value, y_value, width=0.6, title='',
     The x categories are now sorted, which they were not before. That is the
     one visible change, and it is a fix: the old order came from however the
     rows happened to be grouped.
+
+    ``ax`` is forwarded rather than reimplemented: the shim exists so there is
+    exactly one boxplot implementation, and a second axes-handling branch here
+    would be the first place the two drift apart again.
     """
     from warnings import warn
 
@@ -679,7 +684,7 @@ def plot_boxplot(data, hue, x_value, y_value, width=0.6, title='',
                     width=width, title=title, figsize=figsize,
                     palette=palette, fontsize=fontsize,
                     legend_bbox=legend_bbox, legend_ncol=legend_ncol,
-                    hue_order=hue_order)
+                    hue_order=hue_order, ax=ax)
 
 
 def plot_network(G:nx.Graph,G_type_dict:dict,G_color_dict:dict,pos_type:str='spring',pos_dim:int=2,
@@ -689,7 +694,7 @@ def plot_network(G:nx.Graph,G_type_dict:dict,G_color_dict:dict,pos_type:str='spr
                 label_verticalalignment:str='center_baseline',label_fontsize:int=12,
                 label_fontfamily:str='Arial',label_fontweight:str='bold',label_bbox=None,
                 legend_bbox:tuple=(0.7, 0.05),legend_ncol:int=3,legend_fontsize:int=12,
-                legend_fontweight:str='bold'):
+                legend_fontweight:str='bold',*,ax=None):
     r"""Plot network graph with customizable node and edge properties.
     
     Parameters
@@ -717,14 +722,23 @@ def plot_network(G:nx.Graph,G_type_dict:dict,G_color_dict:dict,pos_type:str='spr
         legend_ncol: Legend columns (3)
         legend_fontsize: Legend font size (12)
         legend_fontweight: Legend font weight ('bold')
-        
+        ax: Draw into this axes instead of creating a figure. Keyword-only, so
+            existing positional calls are unaffected; ``figsize`` is ignored
+            when it is given, because the axes' figure belongs to the caller
+            (None)
+
     Returns
     -------
-        Tuple of (figure, axes) objects
+        Tuple of (figure, axes) objects. The pair is returned in both cases —
+        when ``ax`` was supplied the figure is the one that axes belongs to —
+        so the return shape does not depend on how the function was called.
     """
-    
 
-    fig, ax = plt.subplots(figsize=figsize)
+
+    if ax is None:
+        fig, ax = plt.subplots(figsize=figsize)
+    else:
+        fig = ax.get_figure()
     if pos_type=='spring':
         pos = nx.spring_layout(G, scale=pos_scale, k=pos_k)
     elif pos_type=='kamada_kawai':
@@ -734,7 +748,11 @@ def plot_network(G:nx.Graph,G_type_dict:dict,G_color_dict:dict,pos_type:str='spr
     G_color_dict=dict(zip(G.nodes,[G_color_dict[i] for i in G.nodes]))
     G_type_dict=dict(zip(G.nodes,[G_type_dict[i] for i in G.nodes]))
 
-    nx.draw_networkx_edges(G, pos,nodelist=list(G_color_dict.keys()), alpha=pos_alpha)
+    # networkx and adjustText both fall back to plt.gca() when no axes is
+    # named, which is the wrong figure entirely once this plot is one panel of
+    # a canvas assembled elsewhere. Name the axes everywhere.
+    nx.draw_networkx_edges(G, pos,nodelist=list(G_color_dict.keys()), alpha=pos_alpha,
+                           ax=ax)
     nx.draw_networkx_nodes(
         G,
         pos,
@@ -743,6 +761,7 @@ def plot_network(G:nx.Graph,G_type_dict:dict,G_color_dict:dict,pos_type:str='spr
         node_color=list(G_color_dict.values()),
         alpha=node_alpha,
         linewidths=node_linewidths,
+        ax=ax,
     )
     if plot_node!=None:
         hub_gene=plot_node
@@ -768,10 +787,11 @@ def plot_network(G:nx.Graph,G_type_dict:dict,G_color_dict:dict,pos_type:str='spr
                fontdict={'size':label_fontsize,'weight':label_fontweight,'color':'black'}
                ) for i in hub_gene if 'ENSG' not in i]
     if adjustText.__version__<='0.8':
-        adjust_text(texts,only_move={'text': 'xy'},arrowprops=dict(arrowstyle='->', color='red'),)
+        adjust_text(texts,only_move={'text': 'xy'},arrowprops=dict(arrowstyle='->', color='red'),
+                    ax=ax)
     else:
         adjust_text(texts,only_move={"text": "xy", "static": "xy", "explode": "xy", "pull": "xy"},
-                    arrowprops=dict(arrowstyle='->', color='red'))
+                    arrowprops=dict(arrowstyle='->', color='red'),ax=ax)
    #adjust_text(texts,only_move={'text': 'xy'},arrowprops=dict(arrowstyle='->', color='red'),)
 
     ax.axis("off")
@@ -785,11 +805,11 @@ def plot_network(G:nx.Graph,G_type_dict:dict,G_color_dict:dict,pos_type:str='spr
     
     patches = [ mpatches.Patch(color=type_color_dict[i], label="{:s}".format(i) ) for i in type_color_dict.keys() ] 
 
-    plt.legend(handles=patches,bbox_to_anchor=legend_bbox, ncol=legend_ncol,fontsize=legend_fontsize)
-    leg = plt.gca().get_legend() #或leg=ax.get_legend()
+    ax.legend(handles=patches,bbox_to_anchor=legend_bbox, ncol=legend_ncol,fontsize=legend_fontsize)
+    leg = ax.get_legend()
     ltext = leg.get_texts()
     plt.setp(ltext, fontsize=legend_fontsize,fontweight=legend_fontweight)
-    
+
     return fig,ax
 
 @register_function(

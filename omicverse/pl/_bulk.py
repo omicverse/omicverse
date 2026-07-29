@@ -417,12 +417,13 @@ def venn(sets={}, out='./', palette='bgrc',
     ],
     related=["pl.add_palue"]
 )
-def boxplot(data,hue,x_value,y_value,width=0.3,title='',
+def boxplot(data,hue,x_value=None,y_value=None,width=0.3,title='',
                  figsize=(6,3),palette=None,fontsize=10,
-                 legend_bbox=(1, 0.55),legend_ncol=1,hue_order=None):
+                 legend_bbox=(1, 0.55),legend_ncol=1,hue_order=None,
+                 *,x=None,y=None,ax=None):
     r"""
     Create a boxplot with jittered points to visualize data distribution across categories.
-    
+
     Parameters
     ----------
     data : pd.DataFrame
@@ -430,15 +431,19 @@ def boxplot(data,hue,x_value,y_value,width=0.3,title='',
     hue : str
         Column name used for color grouping.
     x_value : str
-        Column name used as x-axis category.
+        Column name used as x-axis category. ``x`` is accepted as an alias,
+        which is what the sibling table-first plots (``barplot``,
+        ``stripplot``, ``violinplot``) call it.
     y_value : str
-        Column name containing numeric values.
+        Column name containing numeric values. ``y`` is accepted as an alias.
     width : float
         Width of each box element.
     title : str
         Plot title.
     figsize : tuple
-        Figure size passed to matplotlib.
+        Figure size passed to matplotlib. Ignored when ``ax`` is given — the
+        axes already has a size, and resizing its figure would rescale every
+        other panel sharing it.
     palette : list or None
         Color list for hue groups; default palette is used when ``None``.
     fontsize : int
@@ -449,12 +454,44 @@ def boxplot(data,hue,x_value,y_value,width=0.3,title='',
         Number of legend columns.
     hue_order : list or None
         Explicit order of hue categories.
-        
+    x, y : str
+        Aliases for ``x_value`` / ``y_value``. Keyword-only.
+    ax : matplotlib.axes.Axes or None
+        Draw into this axes instead of creating a figure. Keyword-only, so
+        every existing positional call is unaffected. Pass one of
+        :func:`~omicverse.pl.multipanel`'s panels here to place the boxplot
+        inside a larger figure.
+
     Returns
     -------
     Tuple[matplotlib.figure.Figure, matplotlib.axes.Axes]
-        Figure and axes of generated boxplot.
+        Figure and axes of generated boxplot. The pair is returned in both
+        cases — when ``ax`` was supplied the figure is simply the one that
+        axes already belongs to — so the return shape never depends on how
+        the function was called.
     """
+    # `x`/`y` are the names the rest of the table-first family uses. Resolve
+    # them into the historical parameters rather than renaming, so that the
+    # thousands of existing `x_value=`/`y_value=` calls keep working.
+    if x is not None:
+        if x_value is not None and x_value != x:
+            raise ValueError(
+                f"`x` and `x_value` are aliases and disagree: {x!r} vs "
+                f"{x_value!r}. Pass only one."
+            )
+        x_value = x
+    if y is not None:
+        if y_value is not None and y_value != y:
+            raise ValueError(
+                f"`y` and `y_value` are aliases and disagree: {y!r} vs "
+                f"{y_value!r}. Pass only one."
+            )
+        y_value = y
+    if x_value is None or y_value is None:
+        raise TypeError(
+            "boxplot() needs the category and value columns: pass "
+            "`x_value=`/`y_value=` (or their aliases `x=`/`y=`)."
+        )
 
     # Color codes for terminal output
     class Colors:
@@ -670,7 +707,12 @@ def boxplot(data,hue,x_value,y_value,width=0.3,title='',
         plot_data_random1[hue_data]=data_a_random
         plot_data_xs1[hue_data]=data_a_xs
 
-    fig, ax = plt.subplots(figsize=figsize)
+    if ax is None:
+        fig, ax = plt.subplots(figsize=figsize)
+    else:
+        # A caller-supplied axes already lives in a figure that is theirs to
+        # size and lay out; we only draw.
+        fig = ax.get_figure()
     #色卡
     if palette==None:
         from ._palette import sc_color
@@ -688,9 +730,12 @@ def boxplot(data,hue,x_value,y_value,width=0.3,title='',
         plt.setp(b1['medians'], color=hue_color)
 
         clevels = np.linspace(0., 1., len(plot_data_random1[hue_data]))
-        for x, val, clevel in zip(plot_data_xs1[hue_data], plot_data_random1[hue_data], clevels):
+        # ax.scatter, not plt.scatter: pyplot draws on whatever the current
+        # axes happens to be, which is not the caller's axes once this is
+        # placed in a panel of a figure built elsewhere.
+        for jitter, val, clevel in zip(plot_data_xs1[hue_data], plot_data_random1[hue_data], clevels):
             if len(val) > 0:  # Only plot if there's data
-                plt.scatter(x, val,c=hue_color,alpha=0.4)
+                ax.scatter(jitter, val,c=hue_color,alpha=0.4)
 
     #坐标轴字体
     #fontsize=10
@@ -725,9 +770,10 @@ def boxplot(data,hue,x_value,y_value,width=0.3,title='',
     examples=['ov.pl.plot_grouped_fractions(res, obs=adata.obs, group_key="condition")'],
     related=['pl.boxplot', 'utils.plot_cellproportion']
 )
-def plot_grouped_fractions(res, obs, group_key, 
+def plot_grouped_fractions(res, obs, group_key,
                            color_dict=None,agg='mean', normalize=True,
                            figsize=(4, 4),
+                           *,ax=None,
                           ):
     """
     Plot grouped cell-fraction summaries as stacked bars.
@@ -747,7 +793,12 @@ def plot_grouped_fractions(res, obs, group_key,
     normalize : bool
         Whether each grouped row is normalized to sum to 1.
     figsize : tuple
-        Figure size passed to pandas/matplotlib plotting backend.
+        Figure size passed to pandas/matplotlib plotting backend. Ignored when
+        ``ax`` is given: pandas would call ``set_size_inches`` on the axes'
+        figure, which would resize the caller's whole multi-panel canvas.
+    ax : matplotlib.axes.Axes or None
+        Draw into this axes instead of creating a figure. Keyword-only, so
+        existing positional calls are unaffected.
 
     Returns
     -------
@@ -779,7 +830,10 @@ def plot_grouped_fractions(res, obs, group_key,
     colors = [color_dict[c] for c in g.columns]
 
     # 5) 画图
-    ax = g.plot(kind='bar', stacked=True, figsize=figsize, color=colors)
+    if ax is None:
+        ax = g.plot(kind='bar', stacked=True, figsize=figsize, color=colors)
+    else:
+        ax = g.plot(kind='bar', stacked=True, color=colors, ax=ax)
     ax.set_xlabel(group_key)
     ax.set_ylabel('Cell Fraction')
     ax.set_title(f'Cell fractions grouped by {group_key} ({agg})')
