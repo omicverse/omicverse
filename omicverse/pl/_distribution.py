@@ -605,15 +605,38 @@ def qqplot(data: Any = None,
         x_label = f"expected $-\\log_{{10}}(P)$"
 
     ax = _new_axes(ax, figsize, (3.8, 3.8))
+
+    # The reference line defines the location-scale map from theoretical units
+    # to sample units, and the confidence band has to travel through the same
+    # map. For `dist='norm'` the theoretical axis is the *standard* normal while
+    # the sample keeps its own units, so a band left in theoretical units lands
+    # around zero while the points sit around the sample mean — visibly detached
+    # (sepal_length: band -3.6..3.6 against points 4.3..7.9).
+    def _reference_line():
+        if line == "45":
+            return 1.0, 0.0
+        qx = np.quantile(plot_x, [0.25, 0.75])
+        qy = np.quantile(plot_y, [0.25, 0.75])
+        slope = (qy[1] - qy[0]) / (qx[1] - qx[0]) if qx[1] != qx[0] else 1.0
+        return slope, qy[0] - slope * qx[0]
+
     if ci is not None and other is None:
         ranks = np.arange(1, n + 1)
         lo_q = scipy_stats.beta.ppf((1 - ci) / 2, ranks, n - ranks + 1)
         hi_q = scipy_stats.beta.ppf(1 - (1 - ci) / 2, ranks, n - ranks + 1)
         if dist == "uniform":
+            # p-value scale on both axes: the band is already in sample units.
             band_lo, band_hi = lo_q, hi_q
+        elif dist == "norm":
+            slope, intercept = _reference_line()
+            band_lo = slope * distribution.ppf(lo_q) + intercept
+            band_hi = slope * distribution.ppf(hi_q) + intercept
         else:
-            band_lo = distribution.ppf(lo_q) if dist == "norm" else None
-            band_hi = distribution.ppf(hi_q) if dist == "norm" else None
+            # theoretical quantiles came from parameters fitted to the sample,
+            # so the fitted ppf puts the band in sample units directly.
+            params = distribution.fit(sample)
+            band_lo = distribution.ppf(lo_q, *params)
+            band_hi = distribution.ppf(hi_q, *params)
         if band_lo is not None:
             if log:
                 with np.errstate(divide="ignore"):

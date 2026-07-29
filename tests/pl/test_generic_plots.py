@@ -1120,3 +1120,78 @@ class TestViolinAnnDataPaths:
         assert ax.get_xlabel() == "celltype"
         assert ax.get_ylabel() == "GENE0"
         plt.close("all")
+
+
+class TestQqplotConfidenceBand:
+    """The band must live on the sample's scale, not the theoretical one.
+
+    With ``dist='norm'`` the x axis is the *standard* normal while y keeps the
+    sample's own units, so a band left in theoretical units sits around zero
+    while the points sit around the sample mean. On sepal-length-like data that
+    put the band at -3.6..3.6 against points at 4.3..7.9 — detached, and
+    useless as a band.
+    """
+
+    @staticmethod
+    def _band(ax):
+        for coll in ax.collections:
+            if type(coll).__name__.startswith("FillBetween"):
+                return coll.get_paths()[0].get_extents()
+        return None
+
+    def test_band_brackets_the_sample_not_the_origin(self):
+        rng = np.random.default_rng(0)
+        sample = rng.normal(loc=6.0, scale=0.8, size=300)
+
+        fig, ax = plt.subplots()
+        qqplot(sample, dist="norm", line="quartile", ax=ax)
+
+        band = self._band(ax)
+        assert band is not None, "no confidence band was drawn"
+        assert band.y0 < sample.min() and band.y1 > sample.max(), (
+            f"band {band.y0:.2f}..{band.y1:.2f} does not bracket the sample "
+            f"{sample.min():.2f}..{sample.max():.2f}")
+
+    def test_band_covers_most_points_for_a_normal_sample(self):
+        """A 95% pointwise band should contain nearly all of a normal sample."""
+        rng = np.random.default_rng(1)
+        sample = rng.normal(loc=-4.0, scale=3.0, size=500)
+
+        fig, ax = plt.subplots()
+        qqplot(sample, dist="norm", line="quartile", ax=ax, ci=0.95)
+
+        band = [c for c in ax.collections
+                if type(c).__name__.startswith("FillBetween")][0]
+        points = [c for c in ax.collections
+                  if type(c).__name__ == "PathCollection"][0].get_offsets()
+        verts = band.get_paths()[0].vertices
+        half = len(verts) // 2
+        lo_x, lo_y = verts[:half, 0], verts[:half, 1]
+        inside = 0
+        for x, y in points:
+            j = int(np.argmin(np.abs(lo_x - x)))
+            hi_y = verts[len(verts) - 1 - j, 1]
+            if min(lo_y[j], hi_y) <= y <= max(lo_y[j], hi_y):
+                inside += 1
+        assert inside / len(points) > 0.9, \
+            f"only {inside}/{len(points)} points fell inside the 95% band"
+
+    def test_a_fitted_distribution_gets_a_band_too(self):
+        """Non-normal dists fit their parameters, so the band is expressible."""
+        rng = np.random.default_rng(2)
+        sample = rng.gamma(shape=3.0, scale=2.0, size=300)
+
+        fig, ax = plt.subplots()
+        qqplot(sample, dist="gamma", line="quartile", ax=ax)
+
+        band = self._band(ax)
+        assert band is not None, "a fitted distribution drew no band"
+        assert band.y1 > sample.mean(), "band is not on the sample's scale"
+
+    def test_uniform_log_path_is_unchanged(self):
+        """The GWAS path already had the band in sample units — keep it."""
+        rng = np.random.default_rng(3)
+        fig, ax = plt.subplots()
+        qqplot(rng.uniform(size=2000), dist="uniform", log=True, ax=ax)
+        band = self._band(ax)
+        assert band is not None and band.y1 > 1.0
