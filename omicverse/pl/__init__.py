@@ -160,6 +160,7 @@ from ._heatmap_marsilea import (
     global_imports,
     group_heatmap,
 )
+from ._marsilea_heatmap import heatmap
 from ._multi import embedding_multi
 from ._bulk import boxplot, plot_grouped_fractions, venn, volcano
 from ._upset import upset
@@ -413,6 +414,7 @@ __all__ = [
     "feature_heatmap",
     "group_heatmap",
     "global_imports",
+    "heatmap",
     "marker_heatmap",
     "pycomplexheatmap_install",
     # @ _multi
