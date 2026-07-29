@@ -193,6 +193,7 @@ def roc(data: Any = None,
         n_boot: int = 500,
         random_state: int = 0,
         chance_line: bool = True,
+        aspect: Any = "equal",
         xlabel: str = "False positive rate",
         ylabel: str = "True positive rate",
         title: Optional[str] = None,
@@ -234,6 +235,13 @@ def roc(data: Any = None,
         ``None`` reports the point estimate only.
     n_boot
         Bootstrap resamples when ``ci='bootstrap'``.
+    aspect
+        Axes aspect. ``'equal'`` (default) is the convention for a standalone
+        ROC — a unit square where the chance line runs at 45°. Pass ``'auto'``
+        when the ROC is a panel of a larger figure: ``'equal'`` makes
+        matplotlib shrink the axes to a square inside whatever rectangle the
+        layout assigned, so the panel stops filling its cell and its x-axis
+        leaves the row's baseline. ``None`` leaves the aspect untouched.
     return_stats
         Return ``(ax, stats)`` with the AUC, CI and curve of every model.
 
@@ -352,7 +360,13 @@ def roc(data: Any = None,
 
     ax.set_xlim(-0.01, 1.01)
     ax.set_ylim(-0.01, 1.01)
-    ax.set_aspect("equal", adjustable="box")
+    # 'equal' is the convention for a standalone ROC, but it overrides the
+    # axes rectangle a layout engine assigned: matplotlib shrinks the axes to
+    # square inside it, so the panel no longer fills its cell and its x-axis no
+    # longer sits on the row's baseline. `aspect='auto'` keeps the given
+    # rectangle, which is what a panel in a multi-panel figure needs.
+    if aspect is not None:
+        ax.set_aspect(aspect, adjustable="box")
     ax.set_xlabel(xlabel, fontsize=font_size(fontsize, "label"))
     ax.set_ylabel(ylabel, fontsize=font_size(fontsize, "label"))
     if title:

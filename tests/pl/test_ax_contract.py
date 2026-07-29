@@ -299,3 +299,39 @@ def test_no_new_single_axes_plot_is_missing_ax():
         "`ax=None` and add a case to AX_PLOTS, or list them in "
         "COMPOSITE_OR_NOT_A_PLOT with the reason they need more than one axes."
     )
+
+
+# --------------------------------------------------------------------------
+# roc: a forced aspect overrides the rectangle a layout gave the axes
+# --------------------------------------------------------------------------
+
+
+def test_roc_equal_aspect_shrinks_the_assigned_rectangle():
+    """The default 'equal' is right for a standalone ROC and wrong for a panel.
+
+    matplotlib honours `aspect='equal'` by shrinking the axes to a square
+    *inside* its position, so a panel handed a non-square rectangle stops
+    filling it — and its x-axis leaves the row's baseline.
+    """
+    import numpy as np
+
+    from omicverse.pl._classification import roc
+
+    rng = np.random.default_rng(0)
+    y_true = rng.integers(0, 2, 200)
+    y_score = rng.random(200) * 0.5 + y_true * 0.3
+
+    fig = plt.figure(figsize=(8, 4))
+    wide = [0.1, 0.1, 0.8, 0.4]                    # deliberately not square
+
+    ax_equal = fig.add_axes(wide)
+    roc(y_true=y_true, y_score=y_score, ax=ax_equal, ci=None)
+    ax_auto = fig.add_axes(wide)
+    roc(y_true=y_true, y_score=y_score, ax=ax_auto, ci=None, aspect="auto")
+
+    fig.canvas.draw()
+    kept = ax_auto.get_window_extent()
+    shrunk = ax_equal.get_window_extent()
+    assert shrunk.width < kept.width * 0.95, "equal aspect did not shrink the axes"
+    assert kept.width == pytest.approx(wide[2] * 8 * fig.dpi, rel=0.02)
+    assert kept.height == pytest.approx(wide[3] * 4 * fig.dpi, rel=0.02)
