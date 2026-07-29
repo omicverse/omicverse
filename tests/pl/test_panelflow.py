@@ -581,3 +581,57 @@ class TestPanelOptions:
         fl.fig.canvas.draw()
         assert fl["A"] is ax
         assert "A" not in fl._tags
+
+
+# --------------------------------------------------------------------------
+# points, and the measurement policy
+# --------------------------------------------------------------------------
+
+
+def test_points_are_a_unit():
+    """Panel sizes quoted in points (72 pt = 1 in) — cnsplots' native unit."""
+    import omicverse as ov
+
+    fl_pt = ov.pl.panelflow(max_width=720, units="pt", margins=0)
+    a = fl_pt.panel("A", 144, 72)
+    fl_in = ov.pl.panelflow(max_width=10, units="in", margins=0)
+    b = fl_in.panel("A", 2, 1)
+
+    fl_pt.fig.canvas.draw()
+    fl_in.fig.canvas.draw()
+    wa, ha = (a.get_position().width * fl_pt.fig.get_size_inches()[0],
+              a.get_position().height * fl_pt.fig.get_size_inches()[1])
+    wb, hb = (b.get_position().width * fl_in.fig.get_size_inches()[0],
+              b.get_position().height * fl_in.fig.get_size_inches()[1])
+    assert wa == pytest.approx(wb, abs=1e-6)
+    assert ha == pytest.approx(hb, abs=1e-6)
+
+
+def test_reserve_axis_packs_tighter_than_tight():
+    """'axis' reserves for the axis decorations only, 'tight' for everything.
+
+    A legend thrown outside the axes is measured by 'tight' and ignored by
+    'axis', so the same panels give a narrower canvas under 'axis'.
+    """
+    import omicverse as ov
+
+    def next_panel_x0(policy):
+        fl = ov.pl.panelflow(max_width=200, units="mm", reserve=policy,
+                             margins=0)
+        ax = fl.panel("A", 40, 40)
+        ax.plot([0, 1], [0, 1], label="a long legend entry that sticks out")
+        ax.legend(loc="center left", bbox_to_anchor=(1.02, 0.5))
+        following = fl.panel("B", 40, 40)
+        fl.fig.canvas.draw()
+        return following.get_position().x0
+
+    # 'tight' reserves the room the legend occupies, pushing B to the right;
+    # 'axis' does not measure it, so B sits much closer to A.
+    assert next_panel_x0("axis") < next_panel_x0("tight") - 0.05
+
+
+def test_reserve_rejects_an_unknown_policy():
+    import omicverse as ov
+
+    with pytest.raises(ValueError, match="reserve must be"):
+        ov.pl.panelflow(max_width=100, reserve="whatever")

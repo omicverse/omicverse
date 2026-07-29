@@ -78,6 +78,11 @@ _UNIT_TO_INCH = {
     "inches": 1.0,
     "mm": 1.0 / 25.4,
     "cm": 1.0 / 2.54,
+    # points are matplotlib's native unit, and what cnsplots-style panel
+    # sizes are given in (a "45x100" panel is 45pt x 100pt, ~16x35 mm).
+    "pt": 1.0 / 72.0,
+    "point": 1.0 / 72.0,
+    "points": 1.0 / 72.0,
 }
 
 _PANEL_LABEL_ALPHABET = "abcdefghijklmnopqrstuvwxyz"

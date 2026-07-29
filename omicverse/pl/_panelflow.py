@@ -415,10 +415,21 @@ class PanelFlow:
                  title_kw: Optional[Mapping[str, Any]] = None,
                  title_loc: str = "left",
                  title_pad: float = 2.0,
+                 reserve: str = 'tight',
                  editable_text: bool = True):
         self._units = str(units)
         self._dpi = float(dpi)
         self._to_inch = _to_inch_factor(self._units, self._dpi)
+        if reserve not in ('tight', 'axis'):
+            raise ValueError(
+                f"reserve must be 'tight' or 'axis', got {reserve!r}. "
+                "'tight' reserves for everything the axes draws (safe with "
+                "far-flung legends/annotations); 'axis' reserves only for tick "
+                "labels, axis labels and the title (packs tighter, the way "
+                "cnsplots does, but a legend thrown outside the axes can then "
+                "land on the next panel)."
+            )
+        self._reserve = reserve
 
         resolved = _resolve_width(max_width, self._units)
         self._max_width_in = _positive("max_width", resolved) * self._to_inch
@@ -795,7 +806,19 @@ class PanelFlow:
         reserve and dragging the tag out with it.
         """
         box = ax.get_window_extent(renderer)
-        full = ax.get_tightbbox(renderer)
+        # 'tight' unions everything the axes draws; 'axis' unions only the
+        # axis decorations and the title, the way cnsplots measures -- which
+        # packs tighter but does not reserve for a legend flung outside the box.
+        if self._reserve == 'axis':
+            from matplotlib.transforms import Bbox
+            parts = [ax.xaxis.get_tightbbox(renderer),
+                     ax.yaxis.get_tightbbox(renderer)]
+            if ax.get_title():
+                parts.append(ax.title.get_window_extent(renderer))
+            parts = [b for b in parts if b is not None]
+            full = Bbox.union(parts) if parts else box
+        else:
+            full = ax.get_tightbbox(renderer)
         if full is None:
             return {"left": 0.0, "top": 0.0, "bottom": 0.0, "right": 0.0}
         return {
@@ -925,6 +948,7 @@ def panelflow(max_width: Union[float, str] = "nature-double",
               title_kw: Optional[Mapping[str, Any]] = None,
               title_loc: str = "left",
               title_pad: float = 2.0,
+              reserve: str = 'tight',
               editable_text: bool = True) -> PanelFlow:
     r"""Start a measure-then-place panel layout.
 
@@ -947,4 +971,5 @@ def panelflow(max_width: Union[float, str] = "nature-double",
                      margins=margins, pad_left=pad_left, pad_top=pad_top,
                      label=label, tag=tag, tag_kw=tag_kw, title=title,
                      title_kw=title_kw, title_loc=title_loc,
-                     title_pad=title_pad, editable_text=editable_text)
+                     title_pad=title_pad, reserve=reserve,
+                     editable_text=editable_text)
