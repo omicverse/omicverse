@@ -27,6 +27,9 @@ def volcano(result,pval_name='qvalue',fc_name='log2FC',pval_max=None,FC_max=None
                      up_color:str='#e25d5d',down_color:str='#7388c1',normal_color:str='#d7d7d7',
                      up_fontcolor:str='#e25d5d',down_fontcolor:str='#7388c1',normal_fontcolor:str='#d7d7d7',
                      legend_bbox:tuple=(0.8, -0.2),legend_ncol:int=2,legend_fontsize:int=12,
+                     show_thresholds:bool=True,threshold_color:str='0.55',
+                     threshold_linewidth:float=0.8,threshold_linestyle:str='--',
+                     show_normal_in_legend:bool=True,
                      plot_genes:list=None,plot_genes_num:int=10,plot_genes_fontsize:int=10,
                      ticks_fontsize:int=None,pval_threshold:float=0.05,fc_max:float=1.5,fc_min:float=-1.5,
                      label_fontsize:float=None,
@@ -71,6 +74,15 @@ def volcano(result,pval_name='qvalue',fc_name='log2FC',pval_max=None,FC_max=None
         Number of legend columns.
     legend_fontsize : int
         Legend font size.
+    show_thresholds : bool
+        Draw the fold-change and p-value guide lines. ``False`` omits them.
+    threshold_color, threshold_linewidth, threshold_linestyle
+        Style of those guides. The default is a thin grey dash; they used to be
+        fixed at 2 pt solid black, which reads as content rather than as an
+        annotation — especially in a small panel.
+    show_normal_in_legend : bool
+        Include the non-significant count in the legend. It is the majority of
+        the points, so leaving it out left the grey cloud unexplained.
     plot_genes : list or None
         Explicit gene list to annotate.
     plot_genes_num : int
@@ -264,22 +276,21 @@ def volcano(result,pval_name='qvalue',fc_name='log2FC',pval_max=None,FC_max=None
             alpha=.5,#透明度
             )
 
-    ax.plot([result['log2FC'].min(),result['log2FC'].max()],#辅助线的x值起点与终点
-            [-np.log10(pval_threshold),-np.log10(pval_threshold)],#辅助线的y值起点与终点
-            linewidth=2,#辅助线的宽度
-            linestyle="--",#辅助线类型：虚线
-            color='black'#辅助线的颜色
-    )
-    ax.plot([fc_max,fc_max],
-            [result['-log(qvalue)'].min(),result['-log(qvalue)'].max()],
-            linewidth=2, 
-            linestyle="--",
-            color='black')
-    ax.plot([fc_min,fc_min],
-            [result['-log(qvalue)'].min(),result['-log(qvalue)'].max()],
-            linewidth=2, 
-            linestyle="--",
-            color='black')
+    # Threshold guides. These were fixed at 2 pt solid black, which overpowers
+    # the points they are meant to annotate — in a multi-panel figure the three
+    # black bars read as the panel's content. They are now styled, and can be
+    # turned off entirely.
+    if show_thresholds:
+        guide = dict(linewidth=threshold_linewidth,
+                     linestyle=threshold_linestyle,
+                     color=threshold_color,
+                     zorder=0)
+        ax.plot([result['log2FC'].min(),result['log2FC'].max()],
+                [-np.log10(pval_threshold),-np.log10(pval_threshold)], **guide)
+        ax.plot([fc_max,fc_max],
+                [result['-log(qvalue)'].min(),result['-log(qvalue)'].max()], **guide)
+        ax.plot([fc_min,fc_min],
+                [result['-log(qvalue)'].min(),result['-log(qvalue)'].max()], **guide)
     #设置横标签与纵标签
     # The axis labels used to inherit titlefont's fixed size (14), which dwarfs
     # the 5-6pt labels of neighbouring panels in a multi-panel figure. Decouple
@@ -297,10 +308,16 @@ def volcano(result,pval_name='qvalue',fc_name='log2FC',pval_max=None,FC_max=None
 
     #绘制图注
     #legend标签列表，上面的color即是颜色列表
+    # Every point on the plot needs a key. The non-significant class is the
+    # majority of the points and was the only one missing from the legend, so a
+    # reader had no way to tell what the grey cloud was.
     labels = ['up:{0}'.format(len(result[result['sig']=='up'])),
-            'down:{0}'.format(len(result[result['sig']=='down']))]  
-    #用label和color列表生成mpatches.Patch对象，它将作为句柄来生成legend
+            'down:{0}'.format(len(result[result['sig']=='down']))]
     color = [up_color,down_color]
+    if show_normal_in_legend:
+        labels.append('ns:{0}'.format(len(result[result['sig']=='normal'])))
+        color.append(normal_color)
+    #用label和color列表生成mpatches.Patch对象，它将作为句柄来生成legend
     patches = [mpatches.Patch(color=color[i], label="{:s}".format(labels[i]) ) for i in range(len(color))] 
 
     ax.legend(handles=patches,

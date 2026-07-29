@@ -6,11 +6,14 @@ passed-in set names, emit subset-count texts, and size labels off the font
 (rcParams by default, or an explicit fontsize).
 """
 import matplotlib
+import numpy as np
+import pandas as pd
 matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 import pytest
 
 import omicverse as ov
+from omicverse.pl._bulk import volcano
 
 
 SETS3 = {"A": {1, 2, 3}, "B": {2, 3, 4}, "C": {3, 4, 5}}
@@ -78,3 +81,64 @@ def test_too_few_sets_errors():
     with pytest.raises(ValueError):
         ov.pl.venn(sets={"only": {1, 2}}, ax=ax)
     plt.close(fig)
+
+
+# --------------------------------------------------------------------------
+# volcano: threshold guides and a complete legend
+# --------------------------------------------------------------------------
+
+
+def _volcano_frame():
+    rng = np.random.default_rng(0)
+    n = 300
+    lfc = rng.normal(0, 1.5, n)
+    q = 10 ** (-rng.uniform(0.1, 8, n))
+    sig = np.where((q < 0.05) & (np.abs(lfc) > 1.5),
+                   np.where(lfc > 0, "up", "down"), "normal")
+    return pd.DataFrame({"log2FC": lfc, "qvalue": q, "sig": sig},
+                        index=[f"G{i}" for i in range(n)])
+
+
+def _guides(ax):
+    """The threshold lines: straight two-point segments, not the data."""
+    return [ln for ln in ax.get_lines() if len(ln.get_xdata()) == 2]
+
+
+def test_threshold_guides_are_thin_and_grey_by_default():
+    fig, ax = plt.subplots()
+    volcano(_volcano_frame(), ax=ax, plot_genes_num=0)
+    guides = _guides(ax)
+    assert len(guides) == 3, "expected the two FC guides and the p-value guide"
+    for line in guides:
+        assert line.get_linewidth() < 1.5, "guide is as heavy as the data"
+        # 2pt solid black was the old look; anything but pure black now
+        assert matplotlib.colors.to_rgb(line.get_color()) != (0.0, 0.0, 0.0)
+
+
+def test_threshold_guides_can_be_styled_and_switched_off():
+    fig, ax = plt.subplots()
+    volcano(_volcano_frame(), ax=ax, plot_genes_num=0,
+            threshold_color="#ff0000", threshold_linewidth=2.5)
+    assert all(ln.get_linewidth() == pytest.approx(2.5) for ln in _guides(ax))
+
+    fig2, ax2 = plt.subplots()
+    volcano(_volcano_frame(), ax=ax2, plot_genes_num=0, show_thresholds=False)
+    assert _guides(ax2) == []
+
+
+def test_legend_accounts_for_the_non_significant_points():
+    fig, ax = plt.subplots()
+    volcano(_volcano_frame(), ax=ax, plot_genes_num=0)
+    texts = [t.get_text() for t in ax.get_legend().get_texts()]
+    assert any(t.startswith("up:") for t in texts)
+    assert any(t.startswith("down:") for t in texts)
+    assert any(t.startswith("ns:") for t in texts), \
+        "the grey majority of the points had no legend key"
+
+
+def test_non_significant_key_can_be_omitted():
+    fig, ax = plt.subplots()
+    volcano(_volcano_frame(), ax=ax, plot_genes_num=0,
+            show_normal_in_legend=False)
+    texts = [t.get_text() for t in ax.get_legend().get_texts()]
+    assert not any(t.startswith("ns:") for t in texts)
