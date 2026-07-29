@@ -38,6 +38,8 @@ Key modules:
     _classification: ROC curves and confusion matrices
     _forest: forest plots and fixed/random-effects meta-analysis
     _layout: figure(), multipanel(), savefig() with Illustrator-editable text
+    _panelflow: panelflow() — panels declared at their finished axes size,
+        decorations measured at draw time and reserved outside the box
     _funkyheatmap: dynbenchmark-style benchmark / multi-metric heatmaps
         (funky rectangles + circles + bars + pies + text + image glyphs,
         wraps the pyfunkyheatmap PyPI package)
@@ -277,6 +279,10 @@ from ._layout import (
     savefig,
     set_editable_text,
     take_legend_out,
+)
+from ._panelflow import (
+    PanelFlow,
+    panelflow,
 )
 from ._survival import (
     aalen_johansen,
@@ -533,6 +539,9 @@ __all__ = [
     "savefig",
     "set_editable_text",
     "take_legend_out",
+    # @ _panelflow — panels sized by their axes box, decorations measured
+    "panelflow",
+    "PanelFlow",
     # @ _survival — time-to-event
     "survival",
     "cumulative_incidence",
