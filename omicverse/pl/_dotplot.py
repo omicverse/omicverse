@@ -6,7 +6,6 @@ import numpy as np
 import pandas as pd
 import marsilea as ma
 import marsilea.plotter as mp
-import inspect
 import warnings
 from matplotlib.colors import Normalize, Colormap
 from matplotlib.axes import Axes as _AxesSubplot
@@ -66,8 +65,6 @@ def dotplot(
     show: Optional[bool] = None,
     save: Optional[Union[str, bool]] = None,
     ax: Optional[_AxesSubplot] = None,
-    figure=None,
-    rect=None,
     legend: bool = True,
     legend_side: str = 'right',
     legend_pad: float = 0.0,
@@ -180,60 +177,6 @@ def dotplot(
             UserWarning,
             stacklevel=2,
         )
-
-    # `rect` places the block inside a figure the caller already has. marsilea
-    # sizes its own figure from the heatmap cell plus the overhead around it
-    # (legends, colour bar, the count bars), and that overhead does not depend
-    # on how large the cell is — so the cell that makes the block fill a given
-    # region is found the same way as in `ov.pl.heatmap`: render a throwaway
-    # copy to measure the overhead, build at the corrected size, and translate
-    # into place. Nothing is rescaled, so the text keeps the size it was drawn
-    # at.
-    if rect is not None:
-        if figure is None:
-            raise TypeError("`rect` places the dotplot inside a figure you "
-                            "supply — pass `figure=` as well.")
-        import matplotlib.pyplot as _plt
-
-        forwarded = {name: value for name, value in locals().items()
-                     if name in _DOTPLOT_PARAMS
-                     and name not in ("figsize", "figure", "rect", "show")}
-        host_w, host_h = (float(v) for v in figure.get_size_inches())
-        x0, y0, width, height = rect
-        target = (width * host_w, height * host_h)
-
-        def measure(cell_size):
-            probe = _plt.figure(figsize=(4.0, 4.0))
-            dotplot(figsize=cell_size, figure=probe, rect=None, show=False,
-                    **forwarded)
-            natural = tuple(float(v) for v in probe.get_size_inches())
-            _plt.close(probe)
-            return natural
-
-        # The overhead is nearly but not exactly independent of the cell size —
-        # a legend can wrap differently — so one correction step follows the
-        # first estimate. Two passes bring the block inside the region to well
-        # under a millimetre; without the second it overshot by ~1% of the
-        # region and spilled onto the neighbouring panel.
-        cell = (max(target[0] - 1.0, 0.25), max(target[1] - 1.0, 0.25))
-        for _ in range(2):
-            natural = measure(cell)
-            cell = (max(cell[0] + (target[0] - natural[0]), 0.25),
-                    max(cell[1] + (target[1] - natural[1]), 0.25))
-
-        existing = set(figure.axes)
-        dotplot(figsize=cell, figure=figure, rect=None, show=False,
-                **forwarded)
-        added = [axes for axes in figure.axes if axes not in existing]
-        block_w, block_h = (float(v) for v in figure.get_size_inches())
-        figure.set_size_inches(host_w, host_h)
-        for axes in added:
-            pos = axes.get_position()
-            axes.set_position([x0 + pos.x0 * block_w / host_w,
-                               y0 + pos.y0 * block_h / host_h,
-                               pos.width * block_w / host_w,
-                               pos.height * block_h / host_h])
-        return None
 
     # Convert var_names to list if string
     original_var_names_dict = None
@@ -552,12 +495,15 @@ def dotplot(
     #
     # Placing one of these blocks properly needs marsilea's own layout anchors
     # (`set_figsize` / `set_anchor`), which is a larger change than this.
-    if figure is None:
-        m.render()
-        fig = m.figure
-    else:
-        m.render(figure=figure)
-        fig = figure
+    # Not embeddable. marsilea's own figure size is not the block's size (the
+    # legends are artists drawn inside their host axes and reach past it), and a
+    # post-render translate therefore cannot be fitted to a region: three
+    # measurement strategies -- figure size, the union of axes positions, the
+    # union of tightboxes -- each under-measured the block and it overflowed
+    # onto the next panel. Confining one of these needs marsilea's own layout
+    # anchors, not a translation.
+    m.render()
+    fig = m.figure
 
     if save not in (None, False):
         save_path = Path(save) if isinstance(save, str) else Path("dotplot.png")
@@ -979,6 +925,3 @@ def markers_dotplot(
         return_fig=return_fig,
         **kwds,
     )
-
-
-_DOTPLOT_PARAMS = frozenset(inspect.signature(dotplot).parameters)

@@ -65,68 +65,20 @@ class TestUpsetAsPanel:
             upset(_sets(), rect=(0, 0, 1, 1))
 
 
-class TestDotplotAsPanel:
-    """`dotplot` can be confined to a region, and its legends can move.
+class TestDotplotLegends:
+    """`dotplot`'s legends were hardcoded to the right; the side is a choice now.
 
-    marsilea sizes its figure from the heatmap cell plus a fixed overhead, so
-    the cell is solved for the region (one throwaway render measures the
-    overhead) and the block is then translated — never rescaled.
+    It is not embeddable — see the comment in `_dotplot.py`: marsilea's figure
+    size is not the block's size, because the legends are artists drawn inside
+    their host axes and reach past it, so no post-render translate can be fitted
+    to a region.
     """
 
-    def test_host_figure_and_neighbours_survive(self):
+    def test_every_side_works(self):
         adata = _adata()
-        fig = plt.figure(figsize=(13.0, 9.0))
-        host = fig.add_axes([0.05, 0.80, 0.25, 0.15])
-        before = host.get_position().bounds
-
-        dotplot(adata, list(adata.var_names[:4]), "grp", figure=fig,
-                rect=(0.10, 0.10, 0.45, 0.55), show=False)
-
-        assert tuple(fig.get_size_inches()) == (13.0, 9.0)
-        assert host.get_position().bounds == pytest.approx(before)
-
-    def test_block_stays_inside_the_region(self):
-        adata = _adata()
-        fig = plt.figure(figsize=(13.0, 9.0))
-        existing = set(fig.axes)
-        x0, y0, w, h = 0.10, 0.10, 0.45, 0.55
-
-        dotplot(adata, list(adata.var_names[:4]), "grp", figure=fig,
-                rect=(x0, y0, w, h), show=False)
-
-        added = [a for a in fig.axes if a not in existing]
-        assert added, "nothing was drawn"
-        assert min(a.get_position().x0 for a in added) >= x0 - 1e-6
-        assert max(a.get_position().x1 for a in added) <= x0 + w + 1e-6
-        assert min(a.get_position().y0 for a in added) >= y0 - 1e-6
-        assert max(a.get_position().y1 for a in added) <= y0 + h + 1e-6
-
-    def test_a_wider_region_gives_a_wider_block(self):
-        """The cell is solved for the region, so the block tracks it."""
-        def block_width(region_w):
-            adata = _adata()
-            fig = plt.figure(figsize=(16.0, 9.0))
-            existing = set(fig.axes)
-            dotplot(adata, list(adata.var_names[:4]), "grp", figure=fig,
-                    rect=(0.05, 0.10, region_w, 0.6), show=False)
-            added = [a for a in fig.axes if a not in existing]
-            return (max(a.get_position().x1 for a in added)
-                    - min(a.get_position().x0 for a in added))
-
-        assert block_width(0.80) > block_width(0.40) * 1.4
-
-    def test_rect_without_a_figure_is_refused(self):
-        adata = _adata()
-        with pytest.raises(TypeError, match="pass `figure="):
-            dotplot(adata, list(adata.var_names[:3]), "grp",
-                    rect=(0, 0, 1, 1), show=False)
-
-    def test_legend_side_reaches_marsilea(self):
-        adata = _adata()
-        for side in ("right", "bottom", "left", "top"):
-            m = dotplot(adata, list(adata.var_names[:4]), "grp",
-                        legend_side=side, show=False)
-            assert m is not None, f"legend_side={side!r} produced nothing"
+        for side in ("right", "left", "top", "bottom"):
+            assert dotplot(adata, list(adata.var_names[:4]), "grp",
+                           legend_side=side, show=False) is not None
 
     def test_legends_can_be_switched_off(self):
         adata = _adata()
