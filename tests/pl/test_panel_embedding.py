@@ -65,14 +65,48 @@ class TestUpsetAsPanel:
             upset(_sets(), rect=(0, 0, 1, 1))
 
 
-class TestDotplotLegends:
-    """`dotplot`'s legends were hardcoded to the right; the side is a choice now.
+class TestDotplotAsPanel:
+    """`dotplot` maps onto a region, and its legends can move.
 
-    It is not embeddable — see the comment in `_dotplot.py`: marsilea's figure
-    size is not the block's size, because the legends are artists drawn inside
-    their host axes and reach past it, so no post-render translate can be fitted
-    to a region.
+    The block's extent cannot be read back from marsilea, so it is mapped onto
+    the region proportionally rather than fitted to it — the same thing cnsplots
+    does. Geometry scales, text does not, which is why a small `fontsize` is
+    part of using it in a panel.
     """
+
+    def test_block_lands_exactly_on_the_region(self):
+        adata = _adata()
+        fig = plt.figure(figsize=(13.0, 9.0))
+        existing = set(fig.axes)
+        x0, y0, w, h = 0.10, 0.10, 0.45, 0.55
+
+        dotplot(adata, list(adata.var_names[:4]), "grp", figure=fig,
+                rect=(x0, y0, w, h), show=False, fontsize=6)
+
+        added = [a for a in fig.axes if a not in existing]
+        assert added, "nothing was drawn"
+        assert min(a.get_position().x0 for a in added) == pytest.approx(x0, abs=1e-6)
+        assert max(a.get_position().x1 for a in added) == pytest.approx(x0 + w, abs=1e-6)
+        assert min(a.get_position().y0 for a in added) == pytest.approx(y0, abs=1e-6)
+        assert max(a.get_position().y1 for a in added) == pytest.approx(y0 + h, abs=1e-6)
+
+    def test_host_figure_and_neighbours_survive(self):
+        adata = _adata()
+        fig = plt.figure(figsize=(13.0, 9.0))
+        host = fig.add_axes([0.05, 0.80, 0.25, 0.15])
+        before = host.get_position().bounds
+
+        dotplot(adata, list(adata.var_names[:4]), "grp", figure=fig,
+                rect=(0.10, 0.10, 0.45, 0.55), show=False, fontsize=6)
+
+        assert tuple(fig.get_size_inches()) == (13.0, 9.0)
+        assert host.get_position().bounds == pytest.approx(before)
+
+    def test_rect_without_a_figure_is_refused(self):
+        adata = _adata()
+        with pytest.raises(TypeError, match="pass `figure="):
+            dotplot(adata, list(adata.var_names[:3]), "grp",
+                    rect=(0, 0, 1, 1), show=False)
 
     def test_every_side_works(self):
         adata = _adata()
