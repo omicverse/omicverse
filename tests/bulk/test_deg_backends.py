@@ -89,3 +89,11 @@ def test_unknown_method_raises(deg_counts):
     dds.drop_duplicates_index()
     with pytest.raises(ValueError):
         dds.deg_analysis(["s0", "s1", "s2"], ["s3", "s4", "s5"], method="not_a_method")
+
+
+@pytest.mark.parametrize("method", ["DEseq2", "edger", "limma", "edgepy", "ttest"])
+def test_too_few_observations_raise_clear_error(deg_counts, method):
+    dds = ov.bulk.pyDEG(deg_counts.copy())
+    dds.drop_duplicates_index()
+    with pytest.raises(ValueError, match="at least two observations"):
+        dds.deg_analysis(["s0"], ["s3"], method=method)

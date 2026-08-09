@@ -554,6 +554,14 @@ class pyDEG(object):
         r"""
         Differential expression analysis.
 
+        Note:
+            Each group must contain at least two observations. DESeq2 and the
+            other backends estimate within-group dispersion/variance from the
+            columns passed in ``group1`` / ``group2``; with one observation per
+            group the test is undefined. For single-cell data, aggregate counts
+            per biological sample and cell type (e.g. ``ov.single.pseudobulk``)
+            before calling this method.
+
         Arguments:
             group1: The first group to be compared.
             group2: The second group to be compared.
@@ -585,6 +593,16 @@ class pyDEG(object):
         Returns
             result: The result of differential expression analysis.
         """
+        if len(group1) < 2 or len(group2) < 2:
+            raise ValueError(
+                "Each group must contain at least two observations. "
+                "DESeq2 and the other pyDEG backends estimate within-group "
+                "dispersion/variance from the columns in group1/group2; with "
+                "one observation per group the test is undefined. For "
+                "single-cell data, aggregate counts per biological sample and "
+                "cell type (e.g. ov.single.pseudobulk) before calling "
+                "deg_analysis."
+            )
         from pydeseq2.dds import DeseqDataSet
         from pydeseq2.ds import DeseqStats
         from scipy.stats import ttest_ind
