@@ -228,6 +228,7 @@ tests = [
   "discord.py>=2.5",
   "requests>=2.0",
   "pillow>=9.0",
+  "matplotlib-venn>=1.1",
   "nbformat>=5.0",
   "httpx[socks]",
   # ov.micro test dependencies — scikit-bio powers Alpha/Beta/Ordinate,
