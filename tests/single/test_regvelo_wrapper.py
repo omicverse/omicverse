@@ -563,6 +563,109 @@ def test_velocity_effect_writes_obs_and_handles_zero_norms(monkeypatch):
     assert adata.obs["TF1_velocity_effect"].equals(result)
 
 
+def test_velocity_effect_aligns_cells_and_genes_by_name(monkeypatch):
+    from scipy.sparse import csr_matrix
+
+    _install_fake_regvelo(monkeypatch)
+    Velo = _load_leaf_module("omicverse.single._velo").Velo
+
+    adata = _make_velocity_adata()
+    adata.obs_names = ["cell_a", "cell_b", "cell_c", "cell_d"]
+    adata.layers["velo_regvelo"] = np.array(
+        [
+            [1.0, 2.0, 3.0],
+            [2.0, 1.0, 0.0],
+            [0.0, 3.0, 1.0],
+            [4.0, 0.0, 2.0],
+        ],
+        dtype=np.float32,
+    )
+    perturbed = adata[[2, 0, 3, 1], [2, 0, 1]].copy()
+    perturbed.layers["velocity"] = csr_matrix(
+        perturbed.layers["velo_regvelo"]
+    )
+
+    result = Velo(adata).velocity_effect(perturbed)
+
+    assert result.tolist() == pytest.approx([0.0] * adata.n_obs, abs=1e-7)
+
+
+def test_velocity_effect_rejects_mismatched_cell_labels(monkeypatch):
+    _install_fake_regvelo(monkeypatch)
+    Velo = _load_leaf_module("omicverse.single._velo").Velo
+
+    adata = _make_velocity_adata()
+    perturbed = _make_velocity_adata()
+    adata.layers["velo_regvelo"] = np.ones(adata.shape, dtype=np.float32)
+    perturbed.layers["velocity"] = np.ones(perturbed.shape, dtype=np.float32)
+    perturbed.obs_names = ["other", *perturbed.obs_names[1:]]
+
+    with pytest.raises(ValueError, match="obs_names.*same labels"):
+        Velo(adata).velocity_effect(perturbed)
+
+
+def test_graphvelo_default_and_subset_gene_markers(monkeypatch):
+    from scipy.sparse import csr_matrix
+
+    calls = {"init": [], "train": [], "project": []}
+
+    class FakeGraphVelo:
+        def __init__(self, adata, **kwargs):
+            self.adata = adata
+            calls["init"].append(kwargs)
+
+        def train(self, **kwargs):
+            calls["train"].append(kwargs)
+
+        def project_velocity(self, values):
+            calls["project"].append(values)
+            return np.asarray(values)
+
+    fake_graph_velocity = types.ModuleType(
+        "omicverse.external.graphvelo.graph_velocity"
+    )
+    fake_graph_velocity.GraphVelo = FakeGraphVelo
+    fake_graph_utils = types.ModuleType("omicverse.external.graphvelo.utils")
+    fake_graph_utils.adj_to_knn = lambda matrix: (
+        np.tile(np.arange(matrix.shape[0]), (matrix.shape[0], 1)),
+        None,
+    )
+    monkeypatch.setitem(
+        sys.modules,
+        "omicverse.external.graphvelo.graph_velocity",
+        fake_graph_velocity,
+    )
+    monkeypatch.setitem(
+        sys.modules,
+        "omicverse.external.graphvelo.utils",
+        fake_graph_utils,
+    )
+
+    Velo = _load_leaf_module("omicverse.single._velo").Velo
+    adata = _make_velocity_adata()
+    adata.layers["velocity_S"] = np.ones(adata.shape, dtype=np.float32)
+    adata.obsp["connectivities"] = csr_matrix(np.eye(adata.n_obs))
+    adata.uns["neighbors"] = {}
+    adata.obsm["X_umap"] = np.ones((adata.n_obs, 2), dtype=np.float32)
+    adata.obsm["X_pca"] = np.ones((adata.n_obs, 2), dtype=np.float32)
+
+    Velo(adata).graphvelo()
+    assert calls["init"][-1]["gene_subset"] == adata.var_names.tolist()
+    assert adata.var["velocity_gv_genes"].tolist() == [True, True, True]
+
+    Velo(adata).graphvelo(gene_subset=["TF1", "TF3"])
+    assert calls["init"][-1]["gene_subset"] == ["TF1", "TF3"]
+    assert adata.var["velocity_gv_genes"].tolist() == [True, False, True]
+
+
+def test_graphvelo_rejects_unknown_subset_gene(monkeypatch):
+    Velo = _load_leaf_module("omicverse.single._velo").Velo
+
+    adata = _make_velocity_adata()
+    with pytest.raises(KeyError, match="missing_gene"):
+        Velo(adata).graphvelo(gene_subset=["TF1", "missing_gene"])
+
+
 def test_adata_first_perturbation_wrappers(monkeypatch):
     _install_fake_regvelo(monkeypatch)
     mod = _load_leaf_module("omicverse.single._velo")

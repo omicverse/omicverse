@@ -480,7 +480,8 @@ class Velo:
         basis_keys : list of str
             Embedding keys in ``adata.obsm`` to project refined velocity onto.
         gene_subset : list of str or None
-            Gene subset used by GraphVelo; if ``None``, backend default is used.
+            Gene subset used by GraphVelo. If ``None``, all genes are used.
+            Unknown or empty subsets raise before model training.
         **kwargs
             Additional arguments passed to ``GraphVelo``.
 
@@ -493,16 +494,37 @@ class Velo:
         --------
         >>> velo.graphvelo(xkey='Ms', vkey='velocity_S', basis_keys=['X_umap'])
         """
+        if gene_subset is None:
+            selected_genes = self.adata.var_names.tolist()
+        else:
+            if isinstance(gene_subset, str):
+                gene_subset = [gene_subset]
+            selected_genes = list(dict.fromkeys(gene_subset))
+            if not selected_genes:
+                raise ValueError("`gene_subset` must contain at least one gene.")
+            missing_genes = [
+                gene for gene in selected_genes if gene not in self.adata.var_names
+            ]
+            if missing_genes:
+                raise KeyError(
+                    "Some genes in `gene_subset` are not present in `adata.var_names`: "
+                    f"{missing_genes}."
+                )
         from ..external.graphvelo.graph_velocity import GraphVelo
         from ..external.graphvelo.utils import adj_to_knn
         indices, _ = adj_to_knn(self.adata.obsp['connectivities'])
         self.adata.uns['neighbors']['indices'] = indices
-        gv=GraphVelo(self.adata, xkey=xkey, vkey=vkey,gene_subset=gene_subset,**kwargs)
+        gv=GraphVelo(
+            self.adata,
+            xkey=xkey,
+            vkey=vkey,
+            gene_subset=selected_genes,
+            **kwargs,
+        )
         gv.train(n_jobs=n_jobs)
         self.adata.layers['velocity_gv'] = gv.project_velocity(self.adata.layers[xkey])
 
-        self.adata.var['velocity_gv_genes']=False
-        self.adata.var['velocity_gv_genes']=self.adata.var.loc[gene_subset,'velocity_gv_genes']=True
+        self.adata.var['velocity_gv_genes'] = self.adata.var_names.isin(selected_genes)
         if issparse(self.adata.layers['velocity_gv']):
             self.adata.layers['velocity_gv'] = self.adata.layers['velocity_gv'].toarray()
         for basis_key in basis_keys:
@@ -1050,7 +1072,9 @@ class Velo:
         Compute per-cell velocity direction change after perturbation.
 
         The effect is ``1 - cosine_similarity`` between baseline and perturbed
-        velocity vectors and is written to ``adata.obs[effect_key]``.
+        velocity vectors and is written to ``adata.obs[effect_key]``. Cells and
+        genes are aligned by ``obs_names`` and ``var_names`` before comparison;
+        both objects must contain the same unique labels.
 
         Parameters
         ----------
@@ -1084,8 +1108,31 @@ class Velo:
         def _as_dense(value):
             return value.toarray() if _issparse(value) else _np.asarray(value)
 
+        for axis_name, baseline_names, perturbed_names in (
+            ('obs', self.adata.obs_names, perturbed_adata.obs_names),
+            ('var', self.adata.var_names, perturbed_adata.var_names),
+        ):
+            if not baseline_names.is_unique or not perturbed_names.is_unique:
+                raise ValueError(
+                    f"Baseline and perturbed `{axis_name}_names` must be unique "
+                    "to align velocity vectors safely."
+                )
+            missing = baseline_names.difference(perturbed_names)
+            extra = perturbed_names.difference(baseline_names)
+            if len(missing) or len(extra):
+                raise ValueError(
+                    f"Baseline and perturbed `{axis_name}_names` must contain the "
+                    "same labels; "
+                    f"missing from perturbed: {missing.tolist()}, "
+                    f"extra in perturbed: {extra.tolist()}."
+                )
+
+        obs_indexer = perturbed_adata.obs_names.get_indexer(self.adata.obs_names)
+        var_indexer = perturbed_adata.var_names.get_indexer(self.adata.var_names)
         baseline_velocity = _as_dense(self.adata.layers[baseline_velocity_key])
-        perturbed_velocity = _as_dense(perturbed_adata.layers[perturbed_velocity_key])
+        perturbed_velocity = perturbed_adata.layers[perturbed_velocity_key]
+        perturbed_velocity = perturbed_velocity[obs_indexer, :][:, var_indexer]
+        perturbed_velocity = _as_dense(perturbed_velocity)
         if baseline_velocity.shape != perturbed_velocity.shape:
             raise ValueError(
                 "Baseline and perturbed velocity layers must have the same shape; "
