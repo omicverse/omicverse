@@ -9,6 +9,122 @@ import matplotlib.pyplot as plt
 from typing import List, Dict, Tuple, Optional, Union
 from .._registry import register_function
 
+
+_CLINICAL_COLUMN_ALIASES = {
+    "case_submitter_id": (
+        "case_submitter_id",
+        "cases.submitter_id",
+        "case.submitter_id",
+        "submitter_id",
+    ),
+    "vital_status": (
+        "vital_status",
+        "demographic.vital_status",
+        "cases.demographic.vital_status",
+        "case.demographic.vital_status",
+    ),
+    "days_to_last_follow_up": (
+        "days_to_last_follow_up",
+        "diagnoses.days_to_last_follow_up",
+        "cases.diagnoses.days_to_last_follow_up",
+        "case.diagnoses.days_to_last_follow_up",
+        "follow_ups.days_to_follow_up",
+        "cases.follow_ups.days_to_follow_up",
+        "case.follow_ups.days_to_follow_up",
+    ),
+    "days_to_death": (
+        "days_to_death",
+        "demographic.days_to_death",
+        "cases.demographic.days_to_death",
+        "case.demographic.days_to_death",
+    ),
+    "age_at_index": (
+        "age_at_index",
+        "demographic.age_at_index",
+        "cases.demographic.age_at_index",
+        "case.demographic.age_at_index",
+    ),
+    "tumor_grade": (
+        "tumor_grade",
+        "diagnoses.tumor_grade",
+        "cases.diagnoses.tumor_grade",
+        "case.diagnoses.tumor_grade",
+    ),
+}
+
+_MISSING_CLINICAL_VALUES = {
+    "",
+    "--",
+    "nan",
+    "<na>",
+    "na",
+    "n/a",
+    "none",
+    "not reported",
+    "not available",
+    "unknown",
+}
+
+
+def _iter_reported_values(values):
+    """Yield non-missing scalar values, including pipe-delimited GDC exports."""
+    for value in values:
+        if isinstance(value, (list, tuple, np.ndarray, pd.Series)):
+            parts = value
+        else:
+            parts = str(value).split("|")
+        for part in parts:
+            text = str(part).strip()
+            if text.lower() not in _MISSING_CLINICAL_VALUES:
+                yield part
+
+
+def _first_reported(values, default=np.nan):
+    return next(_iter_reported_values(values), default)
+
+
+def _max_reported_days(values):
+    days = pd.to_numeric(list(_iter_reported_values(values)), errors="coerce")
+    days = np.asarray(days, dtype=float)
+    days = days[np.isfinite(days)]
+    return float(days.max()) if len(days) else np.nan
+
+
+def _canonical_vital_status(values):
+    statuses = [str(value).strip() for value in _iter_reported_values(values)]
+    normalized = [status.lower() for status in statuses]
+    if any(status in {"dead", "deceased"} for status in normalized):
+        return "Dead"
+    if "alive" in normalized:
+        return "Alive"
+    return statuses[0] if statuses else "Not Reported"
+
+
+def _resolve_clinical_column(columns, canonical_name, explicit_name=None, required=False):
+    available = list(columns)
+    if explicit_name is not None:
+        if explicit_name not in columns:
+            raise KeyError(
+                f"Clinical column {explicit_name!r}, mapped from {canonical_name!r}, "
+                f"was not found. Available columns: {available}."
+            )
+        return explicit_name
+
+    by_lower_name = {str(column).lower(): column for column in columns}
+    for alias in _CLINICAL_COLUMN_ALIASES[canonical_name]:
+        if alias.lower() in by_lower_name:
+            return by_lower_name[alias.lower()]
+
+    if required:
+        raise KeyError(
+            f"Required clinical field {canonical_name!r} was not found. Pass its "
+            "actual column name with "
+            f"clinical_columns={{'{canonical_name}': 'your_column'}}. "
+            f"Available columns: {available}."
+        )
+    return None
+
+
 @register_function(
     aliases=["TCGA分析", "pyTCGA", "tcga_analysis", "癌症基因组分析"],
     category="bulk",
@@ -113,42 +229,119 @@ class pyTCGA(object):
         self.adata=adata
         return adata
         
-    def survial_init(self):
+    def survial_init(
+        self,
+        clinical_columns: Optional[Dict[str, str]] = None,
+        obs_case_id: str = "Case ID",
+    ) -> None:
         r"""Initialize survival analysis data.
-        
+
         Processes clinical data to extract survival information including
-        vital status and survival days.
+        vital status and survival days. Both legacy unprefixed columns and
+        current GDC fields such as ``demographic.vital_status`` and
+        ``diagnoses.days_to_last_follow_up`` are detected automatically.
+
+        Arguments:
+            clinical_columns: Optional mapping from canonical field names to
+                columns in ``clinical_sheet``. Supported canonical names are
+                ``case_submitter_id``, ``vital_status``,
+                ``days_to_last_follow_up``, ``days_to_death``,
+                ``age_at_index``, and ``tumor_grade``.
+            obs_case_id: Column in ``adata.obs`` containing GDC case submitter
+                identifiers (default: ``'Case ID'``).
+
+        Updates ``self.adata`` in place, restricting it to samples with
+        matching clinical cases and annotating ``vital_status`` and ``days``.
         """
-        day_li=[]
-        pd_c=self.clinical_sheet
-        for i in pd_c.index:
-            if pd_c.loc[i,'vital_status'].iloc[0]=='Alive':
-                day_li.append(pd_c.loc[i,'days_to_last_follow_up'].iloc[0])
-            elif pd_c.loc[i,'vital_status'].iloc[0]=='Dead':
-                day_li.append(pd_c.loc[i,'days_to_death'].iloc[0])
+        clinical_columns = dict(clinical_columns or {})
+        unknown_fields = sorted(
+            set(clinical_columns).difference(_CLINICAL_COLUMN_ALIASES)
+        )
+        if unknown_fields:
+            raise ValueError(
+                "Unknown canonical clinical field(s): "
+                f"{unknown_fields}. Supported fields are: "
+                f"{sorted(_CLINICAL_COLUMN_ALIASES)}."
+            )
+        if obs_case_id not in self.adata.obs:
+            raise KeyError(
+                f"adata.obs has no case identifier column {obs_case_id!r}."
+            )
+
+        source = self.clinical_sheet
+        resolved = {
+            field: _resolve_clinical_column(
+                source.columns,
+                field,
+                clinical_columns.get(field),
+                required=field in {"case_submitter_id", "vital_status"},
+            )
+            for field in _CLINICAL_COLUMN_ALIASES
+        }
+        if (
+            resolved["days_to_last_follow_up"] is None
+            and resolved["days_to_death"] is None
+        ):
+            raise KeyError(
+                "No survival-time field was found. Provide "
+                "'days_to_last_follow_up' and/or 'days_to_death' through "
+                "clinical_columns."
+            )
+
+        clinical = pd.DataFrame(index=source.index)
+        for field, column in resolved.items():
+            clinical[field] = source[column] if column is not None else np.nan
+        clinical["case_submitter_id"] = [
+            str(_first_reported([value], default="")).strip()
+            for value in clinical["case_submitter_id"]
+        ]
+        clinical = clinical.loc[clinical["case_submitter_id"] != ""]
+
+        records = []
+        for case_id, case_rows in clinical.groupby(
+            "case_submitter_id", sort=False
+        ):
+            vital_status = _canonical_vital_status(case_rows["vital_status"])
+            follow_up = _max_reported_days(
+                case_rows["days_to_last_follow_up"]
+            )
+            death = _max_reported_days(case_rows["days_to_death"])
+            if vital_status == "Dead":
+                days = death if np.isfinite(death) else follow_up
+            elif vital_status == "Alive":
+                days = follow_up if np.isfinite(follow_up) else death
             else:
-                day_li.append(pd_c.loc[i,'days_to_last_follow_up'].iloc[0])
-        pd_c['days']=day_li
-        
-        s_pd=pd_c[["case_submitter_id",
-              "vital_status",
-              "days_to_last_follow_up",
-                "days_to_death",
-                "age_at_index",
-                "tumor_grade","days"]].copy()
-        s_pd=s_pd.drop_duplicates(subset='case_submitter_id')
-        s_pd.set_index(s_pd.columns[0],inplace=True)
-        self.s_pd=s_pd
-        
-        
-        self.adata.obs['vital_status']='Not Reported'
-        self.adata.obs['days']=np.nan
-        for i in self.adata.obs.index:
-            if self.adata.obs.loc[i,'Case ID'] not in s_pd.index:
-                self.adata=self.adata[self.adata.obs.index!=i]
-                continue
-            self.adata.obs.loc[i,'vital_status']=s_pd.loc[self.adata.obs.loc[i,'Case ID'],'vital_status']
-            self.adata.obs.loc[i,'days']=s_pd.loc[self.adata.obs.loc[i,'Case ID'],'days']
+                finite_days = [day for day in (follow_up, death) if np.isfinite(day)]
+                days = max(finite_days) if finite_days else np.nan
+            records.append(
+                {
+                    "case_submitter_id": case_id,
+                    "vital_status": vital_status,
+                    "days_to_last_follow_up": follow_up,
+                    "days_to_death": death,
+                    "age_at_index": _first_reported(case_rows["age_at_index"]),
+                    "tumor_grade": _first_reported(case_rows["tumor_grade"]),
+                    "days": days,
+                }
+            )
+
+        if not records:
+            raise ValueError(
+                "No valid case submitter identifiers were found in the clinical data."
+            )
+        s_pd = pd.DataFrame.from_records(records).set_index("case_submitter_id")
+        self.s_pd = s_pd
+
+        case_ids = self.adata.obs[obs_case_id].astype(str)
+        matched = case_ids.isin(s_pd.index)
+        self.adata = self.adata[matched].copy()
+        case_ids = self.adata.obs[obs_case_id].astype(str)
+        self.adata.obs["vital_status"] = (
+            case_ids.map(s_pd["vital_status"]).fillna("Not Reported")
+        )
+        self.adata.obs["days"] = pd.to_numeric(
+            case_ids.map(s_pd["days"]), errors="coerce"
+        )
         
         
         
@@ -337,6 +530,3 @@ class pyTCGA(object):
             res_l_lnc.append(self.survival_analysis(i)[1])
         self.adata.var['survial_test_statistic']=res_l_tt
         self.adata.var['survial_p']=res_l_lnc
-        
-    
-    
