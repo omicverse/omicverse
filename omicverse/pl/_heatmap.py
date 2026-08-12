@@ -28,12 +28,6 @@ def check_pycomplexheatmap():
         raise ImportError("Please install the tangram: `pip install PyComplexHeatmap`.")
 
 
-def _apply_plotset():
-    from ._plot_backend import plotset
-
-    plotset()
-
-
 @register_function(
     aliases=["复杂热图", "complexheatmap", "complex_heatmap", "PyComplexHeatmap"],
     category="pl",
@@ -137,7 +131,6 @@ def complexheatmap(
     if pycomplexheatmap_install:
         _global_imports("PyComplexHeatmap", "pch")
 
-    _apply_plotset()
     if layer is not None:
         use_raw = False
     if use_raw:

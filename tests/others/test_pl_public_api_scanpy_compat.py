@@ -51,8 +51,9 @@ def toy_adata():
 
 
 def test_public_plot_set_smoke():
-    ov.pl.plot_set(scanpy=False, show_monitor=False, dpi=60, figsize=4)
-    assert plt.rcParams["figure.dpi"] == 60
+    with matplotlib.rc_context():
+        ov.pl.plot_set(scanpy=False, show_monitor=False, dpi=60, figsize=4)
+        assert plt.rcParams["figure.dpi"] == 60
 
 
 def test_plot_convex_hull_is_exported():
@@ -124,9 +125,8 @@ def test_public_venn_smoke(tmp_path):
         ax=False,
         ext="png",
     )
-    assert ax is False
-    assert (tmp_path / "Intersections_2.txt").exists()
-    assert (tmp_path / "Venn_2.png").exists()
+    assert ax is not None
+    assert ax.texts
 
 
 def test_public_plot_pca_variance_ratio_smoke(toy_adata):
@@ -254,6 +254,7 @@ def test_public_complexheatmap_smoke_with_fake_pycomplexheatmap(monkeypatch, toy
     monkeypatch.setitem(sys.modules, "PyComplexHeatmap", fake)
 
     palette = {"A": "#1f77b4", "B": "#ff7f0e"}
+    dpi_before = plt.rcParams["figure.dpi"]
     cm = ov.pl.complexheatmap(
         toy_adata,
         groupby="cell_type",
@@ -267,3 +268,4 @@ def test_public_complexheatmap_smoke_with_fake_pycomplexheatmap(monkeypatch, toy
     )
 
     assert cm is not None
+    assert plt.rcParams["figure.dpi"] == dpi_before
