@@ -555,12 +555,12 @@ class pyDEG(object):
         Differential expression analysis.
 
         Note:
-            Each group must contain at least two observations. DESeq2 and the
-            other backends estimate within-group dispersion/variance from the
-            columns passed in ``group1`` / ``group2``; with one observation per
-            group the test is undefined. For single-cell data, aggregate counts
-            per biological sample and cell type (e.g. ``ov.single.pseudobulk``)
-            before calling this method.
+            Each group must select at least two distinct, non-overlapping count
+            matrix columns. This validates only the column selection: ``pyDEG``
+            has no sample metadata and therefore cannot determine whether those
+            columns are independent biological replicates. For single-cell
+            data, first aggregate raw counts per biological sample and cell type
+            with ``ov.single.pseudobulk``.
 
         Arguments:
             group1: The first group to be compared.
@@ -593,16 +593,41 @@ class pyDEG(object):
         Returns
             result: The result of differential expression analysis.
         """
+        if not self.data.columns.is_unique:
+            duplicated = self.data.columns[self.data.columns.duplicated()].unique().tolist()
+            raise ValueError(
+                "pyDEG count matrix columns must be unique; duplicate columns: "
+                f"{duplicated!r}."
+            )
+
+        for name, group in (("group1", group1), ("group2", group2)):
+            if len(group) != len(set(group)):
+                raise ValueError(f"{name} contains duplicate columns.")
+
         if len(group1) < 2 or len(group2) < 2:
             raise ValueError(
-                "Each group must contain at least two observations. "
-                "DESeq2 and the other pyDEG backends estimate within-group "
-                "dispersion/variance from the columns in group1/group2; with "
-                "one observation per group the test is undefined. For "
-                "single-cell data, aggregate counts per biological sample and "
-                "cell type (e.g. ov.single.pseudobulk) before calling "
-                "deg_analysis."
+                "Each group must contain at least two distinct input columns. "
+                "This check does not establish biological replication; for "
+                "single-cell data, first aggregate raw counts per biological "
+                "sample and cell type with ov.single.pseudobulk."
             )
+
+        group2_columns = set(group2)
+        overlap = [column for column in group1 if column in group2_columns]
+        if overlap:
+            raise ValueError(
+                "group1 and group2 overlap; each input column must belong to "
+                f"exactly one group. Overlap: {overlap!r}."
+            )
+
+        available = set(self.data.columns)
+        missing = [column for column in group1 + group2 if column not in available]
+        if missing:
+            missing = list(dict.fromkeys(missing))
+            raise KeyError(
+                f"Input columns {missing!r} were not found in the pyDEG count matrix."
+            )
+
         from pydeseq2.dds import DeseqDataSet
         from pydeseq2.ds import DeseqStats
         from scipy.stats import ttest_ind
