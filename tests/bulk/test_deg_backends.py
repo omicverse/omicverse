@@ -89,3 +89,42 @@ def test_unknown_method_raises(deg_counts):
     dds.drop_duplicates_index()
     with pytest.raises(ValueError):
         dds.deg_analysis(["s0", "s1", "s2"], ["s3", "s4", "s5"], method="not_a_method")
+
+
+@pytest.mark.parametrize("method", ["DEseq2", "edger", "limma", "edgepy", "ttest"])
+def test_too_few_observations_raise_clear_error(deg_counts, method):
+    dds = ov.bulk.pyDEG(deg_counts.copy())
+    dds.drop_duplicates_index()
+    with pytest.raises(ValueError, match="at least two distinct input columns"):
+        dds.deg_analysis(["s0"], ["s3"], method=method)
+
+
+@pytest.mark.parametrize(
+    ("group1", "group2", "match"),
+    [
+        (["s0", "s0"], ["s3", "s4"], "group1 contains duplicate columns"),
+        (["s0", "s1"], ["s3", "s3"], "group2 contains duplicate columns"),
+        (["s0", "s1"], ["s1", "s3"], "group1 and group2 overlap"),
+    ],
+)
+def test_invalid_group_columns_raise_clear_error(deg_counts, group1, group2, match):
+    dds = ov.bulk.pyDEG(deg_counts.copy())
+    dds.drop_duplicates_index()
+    with pytest.raises(ValueError, match=match):
+        dds.deg_analysis(group1, group2, method="ttest")
+
+
+def test_missing_group_columns_raise_clear_error(deg_counts):
+    dds = ov.bulk.pyDEG(deg_counts.copy())
+    dds.drop_duplicates_index()
+    with pytest.raises(KeyError, match="not found in the pyDEG count matrix"):
+        dds.deg_analysis(["s0", "missing"], ["s3", "s4"], method="ttest")
+
+
+def test_duplicate_count_matrix_columns_raise_clear_error(deg_counts):
+    duplicated = deg_counts.copy()
+    duplicated.columns = ["s0", "s0", "s2", "s3", "s4", "s5"]
+    dds = ov.bulk.pyDEG(duplicated)
+    dds.drop_duplicates_index()
+    with pytest.raises(ValueError, match="count matrix columns must be unique"):
+        dds.deg_analysis(["s0", "s2"], ["s3", "s4"], method="ttest")
