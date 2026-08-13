@@ -256,11 +256,11 @@ def _sans_serif_chain(primary, base, fallback):
     chain = []
     if primary is not None:
         chain.append(primary)
-    chain.extend(base)
-    chain.extend(fallback)
-    for extra in ("DejaVu Sans", "Bitstream Vera Sans", "sans-serif"):
+    chain.extend(_available_font_families(base))
+    chain.extend(_available_font_families(fallback))
+    for extra in ("DejaVu Sans", "Bitstream Vera Sans"):
         if extra not in chain:
-            chain.append(extra)
+            chain.extend(_available_font_families((extra,)))
     return list(dict.fromkeys(chain))
 
 
@@ -437,10 +437,14 @@ def plot_set(verbosity: int = 3, dpi: int = 80,
 
     if font_requested or fallback_font_path is not None:
         fallback_fonts = _resolve_fallback_fonts(fallback_font_path)
-        base_fonts = list(rcParams.get("font.sans-serif", []))
-        rcParams["font.family"] = "sans-serif"
-        rcParams["font.sans-serif"] = _sans_serif_chain(
+        base_fonts = list(rcParams.get("font.family", []))
+        if not base_fonts or base_fonts == ["sans-serif"]:
+            base_fonts = list(rcParams.get("font.sans-serif", []))
+        font_chain = _sans_serif_chain(
             resolved_font, base_fonts, fallback_fonts)
+        rcParams["font.family"] = [
+            family for family in font_chain if family != "sans-serif"]
+        rcParams["font.sans-serif"] = font_chain
 
     # Apply figsize AFTER scanpy to ensure it's not overridden
     if isinstance(figsize, (int, float)):
@@ -1783,13 +1787,12 @@ def set_rcParams_scanpy(fontsize=14, color_map=None):
     rcParams["lines.markeredgewidth"] = 1
 
     # font
-    rcParams["font.sans-serif"] = [
-        "Arial",
-        "Helvetica",
-        "DejaVu Sans",
-        "Bitstream Vera Sans",
-        "sans-serif",
-    ] + _available_font_families(_CJK_FALLBACK_FONTS)
+    base_families = _available_font_families(
+        ("Arial", "Helvetica", "DejaVu Sans", "Bitstream Vera Sans"))
+    cjk_fallback = _available_font_families(_CJK_FALLBACK_FONTS)
+    rcParams["font.family"] = base_families + cjk_fallback
+    rcParams["font.sans-serif"] = (
+        base_families + ["sans-serif"] + cjk_fallback)
     rcParams["font.size"] = fontsize
     rcParams["legend.fontsize"] = 0.92 * fontsize
     rcParams["axes.titlesize"] = fontsize

@@ -26,9 +26,12 @@ def test_plot_set_prefers_primary_then_user_fallback(monkeypatch):
         ov.pl.plot_set(
             scanpy=False, font_path="Primary",
             fallback_font_path="SimHei", show_monitor=False)
+        family = matplotlib.rcParams["font.family"]
         chain = matplotlib.rcParams["font.sans-serif"]
 
-    assert chain[0] == "Primary"
+    assert family[0] == "Primary"
+    assert "SimHei" in family
+    assert "sans-serif" not in family
     assert "SimHei" in chain
 
 
@@ -44,8 +47,11 @@ def test_plot_set_falls_back_when_primary_font_is_missing(monkeypatch):
         ov.pl.plot_set(
             scanpy=False, font_path="missing.ttf",
             fallback_font_path="SimHei", show_monitor=False)
+        family = matplotlib.rcParams["font.family"]
         chain = matplotlib.rcParams["font.sans-serif"]
 
+    assert "SimHei" in family
+    assert "missing.ttf" not in family
     assert "SimHei" in chain
     assert "missing.ttf" not in chain
 
@@ -57,6 +63,9 @@ def test_plot_set_scanpy_defaults_keep_cjk_fallback(monkeypatch):
 
     with matplotlib.rc_context():
         ov.pl.plot_set(scanpy=True, show_monitor=False)
+        family = matplotlib.rcParams["font.family"]
         chain = matplotlib.rcParams["font.sans-serif"]
 
+    assert "SimHei" in family
+    assert "sans-serif" not in family
     assert "SimHei" in chain
