@@ -42,6 +42,9 @@ Quick-start
 >>> ov.pp.ambient.remove_ambient(adata, method='soupx', raw=raw_adata)
 >>> # DecontX / scCDC — need a clustered filtered matrix
 >>> ov.pp.ambient.remove_ambient(adata, method='decontx', cluster_key='leiden')
+>>> # multi-sample DecontX — run per batch / lane / donor
+>>> ov.pp.ambient.remove_ambient(
+...     adata, method='decontx', cluster_key='leiden', batch_key='sample')
 >>> # diagnostics
 >>> ov.pp.ambient.count_integrity_check(adata.layers['ambient_raw'], adata.X)
 >>> ov.pp.ambient.contamination_report(adata)

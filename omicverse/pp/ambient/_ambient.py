@@ -150,11 +150,20 @@ def _run_soupx(adata, *, raw=None, layer=None, cluster_key=None,
 
 
 def _run_decontx(adata, *, raw=None, layer=None, cluster_key=None,
-                 max_iter=500, seed=12345, verbose=False, **kwargs):
+                 batch_key=None, max_iter=500, seed=12345, verbose=False,
+                 **kwargs):
     """DecontX — needs a filtered, clustered matrix."""
     decontx_mod = _require("pydecontx", "DecontX ambient removal")
     cluster_key = _resolve_clusters(adata, cluster_key, "decontx")
     z = adata.obs[cluster_key].astype(str).to_numpy()
+
+    batch = None
+    if batch_key is not None:
+        if batch_key not in adata.obs:
+            raise ValueError(
+                f"method='decontx' batch_key='{batch_key}' not found in "
+                "adata.obs.")
+        batch = adata.obs[batch_key].astype(str).to_numpy()
 
     background = None
     if raw is not None:
@@ -164,14 +173,15 @@ def _run_decontx(adata, *, raw=None, layer=None, cluster_key=None,
         background = sp.csc_matrix(rw.X).T
 
     res = decontx_mod.decontx(
-        adata, z=z, background=background, max_iter=max_iter, seed=seed,
-        layer=layer, verbose=verbose)
+        adata, z=z, batch=batch, background=background, max_iter=max_iter,
+        seed=seed, layer=layer, verbose=verbose)
     # res.decontx_counts is genes x cells
     corrected_cg = sp.csr_matrix(res.decontx_counts.T)
     rho = np.asarray(res.contamination, dtype=float)
     n_genes_corrected = int(adata.n_vars)
     meta = {
         "cluster_key": cluster_key,
+        "batch_key": batch_key,
         "max_iter": max_iter,
         "contamination_fraction": float(np.mean(rho)),
         "background_used": background is not None,
@@ -320,6 +330,7 @@ def remove_ambient(
     raw=None,
     layer: Optional[str] = None,
     cluster_key: Optional[str] = None,
+    batch_key: Optional[str] = None,
     copy: bool = False,
     keep_raw_layer: bool = True,
     raw_layer_name: str = "ambient_raw",
@@ -354,6 +365,9 @@ def remove_ambient(
     cluster_key
         ``obs`` column with cluster / cell-type labels — required for
         DecontX and scCDC, optional for SoupX (enables auto rho).
+    batch_key
+        ``obs`` column with per-cell batch / sample labels — optional.
+        When set, DecontX decontaminates each batch separately.
     copy
         Return a new AnnData instead of modifying ``adata`` in place.
     keep_raw_layer
@@ -394,7 +408,7 @@ def remove_ambient(
     runner = _DISPATCH[method]
     corrected_cg, rho, n_genes_corrected, meta = runner(
         out, raw=raw, layer=layer, cluster_key=cluster_key,
-        verbose=verbose, **kwargs)
+        batch_key=batch_key, verbose=verbose, **kwargs)
 
     _set_X(out, corrected_cg, layer)
 
@@ -453,6 +467,7 @@ def estimate_contamination(
     raw=None,
     layer: Optional[str] = None,
     cluster_key: Optional[str] = None,
+    batch_key: Optional[str] = None,
     obs_key: str = "ambient_contamination_est",
     verbose: bool = False,
     **kwargs,
@@ -476,6 +491,9 @@ def estimate_contamination(
         Count layer to read. ``None`` uses ``.X``.
     cluster_key
         ``obs`` column with cluster labels — required for DecontX / scCDC.
+    batch_key
+        ``obs`` column with per-cell batch / sample labels — optional.
+        When set, DecontX decontaminates each batch separately.
     obs_key
         ``obs`` column the estimate is written to. Default
         ``'ambient_contamination_est'``.
@@ -501,7 +519,7 @@ def estimate_contamination(
     runner = _DISPATCH[method]
     _, rho, _, meta = runner(
         work, raw=raw, layer=layer, cluster_key=cluster_key,
-        verbose=verbose, **kwargs)
+        batch_key=batch_key, verbose=verbose, **kwargs)
 
     rho = np.asarray(rho, dtype=float)
     series = pd.Series(rho, index=adata.obs_names, name=obs_key)
