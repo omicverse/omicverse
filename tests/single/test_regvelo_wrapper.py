@@ -662,28 +662,40 @@ def test_graphvelo_default_and_subset_gene_markers(monkeypatch):
 def test_graphvelo_marker_excludes_nan_velocity_genes(monkeypatch, sparse_velocity):
     from scipy.sparse import csr_matrix
 
-    from omicverse.external.graphvelo import graph_velocity, utils as graph_utils
-
-    Velo = _load_leaf_module("omicverse.single._velo").Velo
     captured = {}
 
-    def fake_train(self, **kwargs):
-        captured["n_model_features"] = self.X.shape[1]
+    class FakeGraphVelo:
+        def __init__(self, adata, gene_subset=None, xkey="Ms", **kwargs):
+            selected_mask = adata.var_names.isin(gene_subset)
+            self.X = np.asarray(adata.layers[xkey])[:, selected_mask]
 
-    monkeypatch.setattr(graph_velocity.GraphVelo, "train", fake_train)
-    monkeypatch.setattr(
-        graph_velocity.GraphVelo,
-        "project_velocity",
-        lambda self, values: np.asarray(values),
+        def train(self, **kwargs):
+            captured["n_model_features"] = self.X.shape[1]
+
+        def project_velocity(self, values):
+            return np.asarray(values)
+
+    fake_graph_velocity = types.ModuleType(
+        "omicverse.external.graphvelo.graph_velocity"
     )
-    monkeypatch.setattr(
-        graph_utils,
-        "adj_to_knn",
-        lambda matrix: (
-            np.tile(np.arange(matrix.shape[0]), (matrix.shape[0], 1)),
-            None,
-        ),
+    fake_graph_velocity.GraphVelo = FakeGraphVelo
+    fake_graph_utils = types.ModuleType("omicverse.external.graphvelo.utils")
+    fake_graph_utils.adj_to_knn = lambda matrix: (
+        np.tile(np.arange(matrix.shape[0]), (matrix.shape[0], 1)),
+        None,
     )
+    monkeypatch.setitem(
+        sys.modules,
+        "omicverse.external.graphvelo.graph_velocity",
+        fake_graph_velocity,
+    )
+    monkeypatch.setitem(
+        sys.modules,
+        "omicverse.external.graphvelo.utils",
+        fake_graph_utils,
+    )
+
+    Velo = _load_leaf_module("omicverse.single._velo").Velo
 
     adata = _make_velocity_adata()
     adata.layers["velocity_S"] = np.ones(adata.shape, dtype=np.float32)
