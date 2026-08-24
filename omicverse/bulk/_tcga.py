@@ -342,6 +342,7 @@ class pyTCGA(object):
         self.adata.obs["days"] = pd.to_numeric(
             case_ids.map(s_pd["days"]), errors="coerce"
         )
+        self._survival_obs_case_id = obs_case_id
         
         
         
@@ -457,8 +458,12 @@ class pyTCGA(object):
         from lifelines.statistics import logrank_test
         goal_gene=gene
         
-        s_pd=self.s_pd
-        s_pd=s_pd.loc[self.adata.obs['Case ID']]
+        obs_case_id = getattr(self, "_survival_obs_case_id", "Case ID")
+        if obs_case_id not in self.adata.obs:
+            raise KeyError(
+                f"adata.obs has no configured case identifier column {obs_case_id!r}."
+            )
+        s_pd = self.s_pd.loc[self.adata.obs[obs_case_id]].copy()
         if layer!='raw':
             if layer not in self.adata.layers.keys():
                 #issparse
@@ -479,14 +484,20 @@ class pyTCGA(object):
                 s_pd[goal_gene]=self.adata[self.adata.obs.index,self.adata.var['gene_name']==goal_gene].X.mean(axis=1).toarray()
             else:
                 s_pd[goal_gene]=self.adata[self.adata.obs.index,self.adata.var['gene_name']==goal_gene].X.mean(axis=1)
+        s_pd['days'] = pd.to_numeric(s_pd['days'], errors='coerce')
+        s_pd['fustat'] = s_pd['vital_status'].map({'Alive': 0, 'Dead': 1})
+        s_pd = s_pd.dropna(subset=['days', 'fustat'])
+        if s_pd.empty:
+            raise ValueError(
+                "No samples have both a valid survival time and a known "
+                "vital status ('Alive' or 'Dead')."
+            )
         if gene_threshold=='median':
             s_pd['{}_status'.format(goal_gene)]=['High' if i>s_pd[goal_gene].median() else 'Low' for i in s_pd[goal_gene] ]
         elif gene_threshold=='mean':
             s_pd['{}_status'.format(goal_gene)]=['High' if i>s_pd[goal_gene].mean() else 'Low' for i in s_pd[goal_gene] ]
         else:
             s_pd['{}_status'.format(goal_gene)]=['High' if i>gene_threshold else 'Low' for i in s_pd[goal_gene] ]
-        s_pd=s_pd.loc[s_pd['days']!="'--"]
-        s_pd['fustat'] = [0 if 'Alive'==i else 1 for i in s_pd['vital_status']]
         s_pd['gene_fustat'] = [0 if 'High'==i else 1 for i in s_pd['{}_status'.format(goal_gene)]]
 
         km = KaplanMeierFitter()
