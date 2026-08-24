@@ -481,7 +481,9 @@ class Velo:
             Embedding keys in ``adata.obsm`` to project refined velocity onto.
         gene_subset : list of str or None
             Gene subset used by GraphVelo. If ``None``, all genes are used.
-            Unknown or empty subsets raise before model training.
+            Unknown or empty subsets raise before model training. Genes with
+            NaN velocity values are excluded from training and the recorded
+            ``velocity_gv_genes`` mask.
         **kwargs
             Additional arguments passed to ``GraphVelo``.
 
@@ -510,6 +512,18 @@ class Velo:
                     "Some genes in `gene_subset` are not present in `adata.var_names`: "
                     f"{missing_genes}."
                 )
+        selected_mask = self.adata.var_names.isin(selected_genes)
+        velocity = self.adata.layers[vkey]
+        if issparse(velocity):
+            velocity_sum = np.asarray(velocity.sum(axis=0)).ravel()
+        else:
+            velocity_sum = np.asarray(velocity).sum(axis=0)
+        effective_mask = selected_mask & ~np.isnan(velocity_sum)
+        selected_genes = self.adata.var_names[effective_mask].tolist()
+        if not selected_genes:
+            raise ValueError(
+                "`gene_subset` contains no genes without NaN velocity values."
+            )
         from ..external.graphvelo.graph_velocity import GraphVelo
         from ..external.graphvelo.utils import adj_to_knn
         indices, _ = adj_to_knn(self.adata.obsp['connectivities'])

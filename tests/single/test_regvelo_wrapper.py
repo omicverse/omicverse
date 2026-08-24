@@ -658,6 +658,58 @@ def test_graphvelo_default_and_subset_gene_markers(monkeypatch):
     assert adata.var["velocity_gv_genes"].tolist() == [True, False, True]
 
 
+@pytest.mark.parametrize("sparse_velocity", [False, True])
+def test_graphvelo_marker_excludes_nan_velocity_genes(monkeypatch, sparse_velocity):
+    from scipy.sparse import csr_matrix
+
+    from omicverse.external.graphvelo import graph_velocity, utils as graph_utils
+
+    Velo = _load_leaf_module("omicverse.single._velo").Velo
+    captured = {}
+
+    def fake_train(self, **kwargs):
+        captured["n_model_features"] = self.X.shape[1]
+
+    monkeypatch.setattr(graph_velocity.GraphVelo, "train", fake_train)
+    monkeypatch.setattr(
+        graph_velocity.GraphVelo,
+        "project_velocity",
+        lambda self, values: np.asarray(values),
+    )
+    monkeypatch.setattr(
+        graph_utils,
+        "adj_to_knn",
+        lambda matrix: (
+            np.tile(np.arange(matrix.shape[0]), (matrix.shape[0], 1)),
+            None,
+        ),
+    )
+
+    adata = _make_velocity_adata()
+    adata.layers["velocity_S"] = np.ones(adata.shape, dtype=np.float32)
+    adata.layers["velocity_S"][:, 1] = np.nan
+    if sparse_velocity:
+        adata.layers["velocity_S"] = csr_matrix(adata.layers["velocity_S"])
+    adata.obsp["connectivities"] = csr_matrix(np.eye(adata.n_obs))
+    adata.uns["neighbors"] = {}
+    adata.obsm["X_umap"] = np.ones((adata.n_obs, 2), dtype=np.float32)
+    adata.obsm["X_pca"] = np.ones((adata.n_obs, 2), dtype=np.float32)
+
+    Velo(adata).graphvelo(
+        gene_subset=["TF1", "Gene2"],
+        approx=False,
+    )
+
+    assert captured["n_model_features"] == 1
+    assert adata.var["velocity_gv_genes"].tolist() == [True, False, False]
+
+    with pytest.raises(ValueError, match="no genes without NaN velocity"):
+        Velo(adata).graphvelo(
+            gene_subset=["Gene2"],
+            approx=False,
+        )
+
+
 def test_graphvelo_rejects_unknown_subset_gene(monkeypatch):
     Velo = _load_leaf_module("omicverse.single._velo").Velo
 
