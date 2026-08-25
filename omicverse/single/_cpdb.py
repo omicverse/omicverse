@@ -2,6 +2,8 @@ r"""
 The downanlysis of cellphonedb
 """
 
+from threading import RLock
+
 import matplotlib.pyplot as plt
 import pandas as pd
 import numpy as np
@@ -12,7 +14,36 @@ import matplotlib
 import anndata
 from .._registry import register_function
 
-kpy_install=False
+kpy_install = False
+_cpdb_scoring_lock = RLock()
+
+
+def _call_cpdb_statistical_analysis(
+    cpdb_statistical_analysis_method,
+    analysis_params,
+):
+    """Call CellPhoneDB with unique gene names in its scoring matrix."""
+    scoring_utils = getattr(cpdb_statistical_analysis_method, "scoring_utils", None)
+    scorer_name = "heteromer_geometric_expression_per_cell_type"
+    if scoring_utils is None or not hasattr(scoring_utils, scorer_name):
+        return cpdb_statistical_analysis_method.call(**analysis_params)
+
+    with _cpdb_scoring_lock:
+        original = getattr(scoring_utils, scorer_name)
+
+        def unique_gene_rows(*args, **kwargs):
+            matrix = original(*args, **kwargs)
+            if matrix.index.has_duplicates:
+                # A gene can map to multiple CellPhoneDB protein records.
+                matrix = matrix.groupby(level=0, sort=False).mean()
+            return matrix
+
+        setattr(scoring_utils, scorer_name, unique_gene_rows)
+        try:
+            return cpdb_statistical_analysis_method.call(**analysis_params)
+        finally:
+            setattr(scoring_utils, scorer_name, original)
+
 
 def global_imports(modulename,shortname = None, asfunction = False):
     if shortname is None: 
@@ -656,7 +687,10 @@ def cellphonedb_v5(adata,
         analysis_params.update(kwargs)
         
         # Run analysis
-        cpdb_results = cpdb_statistical_analysis_method.call(**analysis_params)
+        cpdb_results = _call_cpdb_statistical_analysis(
+            cpdb_statistical_analysis_method,
+            analysis_params,
+        )
         
         print("   - CellPhoneDB analysis completed successfully!")
         
@@ -1158,7 +1192,10 @@ def run_cellphonedb_v5(adata,
         analysis_params.update(kwargs)
         
         # Run analysis
-        cpdb_results = cpdb_statistical_analysis_method.call(**analysis_params)
+        cpdb_results = _call_cpdb_statistical_analysis(
+            cpdb_statistical_analysis_method,
+            analysis_params,
+        )
         
         print("   - CellPhoneDB analysis completed successfully!")
         
