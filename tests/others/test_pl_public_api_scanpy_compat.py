@@ -254,19 +254,18 @@ def test_public_complexheatmap_smoke_with_fake_pycomplexheatmap(monkeypatch, toy
     monkeypatch.setitem(sys.modules, "PyComplexHeatmap", fake)
 
     palette = {"A": "#1f77b4", "B": "#ff7f0e"}
-    # complexheatmap applies plotset() globally; keep that out of the rest
-    # of the session so later layout-sensitive pl tests are not shifted.
-    with matplotlib.rc_context():
-        cm = ov.pl.complexheatmap(
-            toy_adata,
-            groupby="cell_type",
-            var_names=["g1", "g2"],
-            marker_genes_dict={"A": ["g1"], "B": ["g2"]},
-            col_color_bars=palette,
-            col_color_labels=palette,
-            left_color_bars=palette,
-            left_color_labels=palette,
-            use_raw=False,
-        )
+    dpi_before = plt.rcParams["figure.dpi"]
+    cm = ov.pl.complexheatmap(
+        toy_adata,
+        groupby="cell_type",
+        var_names=["g1", "g2"],
+        marker_genes_dict={"A": ["g1"], "B": ["g2"]},
+        col_color_bars=palette,
+        col_color_labels=palette,
+        left_color_bars=palette,
+        left_color_labels=palette,
+        use_raw=False,
+    )
 
     assert cm is not None
+    assert plt.rcParams["figure.dpi"] == dpi_before

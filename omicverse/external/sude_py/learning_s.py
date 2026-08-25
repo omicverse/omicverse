@@ -540,7 +540,7 @@ def _learning_s_torch(X_samp, k1, get_knn, rnn, id_samp, no_dims, initialize, ag
         
         # GPU-accelerated matrix operations
         ProMatY = 4 * (P_torch - Q) * Q1 * QQ1
-        diag_sum = torch.diag(torch.sum(ProMatY, dim=0))
+        diag_sum = torch.sum(ProMatY, dim=0)
         grad = (torch.diag(diag_sum) - ProMatY) @ Y_torch
         
         # Update embedding
@@ -554,5 +554,3 @@ def _learning_s_torch(X_samp, k1, get_knn, rnn, id_samp, no_dims, initialize, ag
         print(f"   ✅ Torch learning_s completed: {X_samp.shape} -> {Y_result.shape}")
     
     return Y_result, k2
-        
-    
