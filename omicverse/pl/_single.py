@@ -364,7 +364,10 @@ def embedding(
         "                     transpose=True, figsize=(6,4))",
         "# Custom group order",
         "ov.pl.cellproportion(adata, celltype_clusters='cell_type', groupby='leiden',",
-        "                     groupby_li=['0', '1', '2'], legend=True)"
+        "                     groupby_li=['0', '1', '2'], legend=True)",
+        "# Connect cumulative proportions across ordered groups",
+        "ov.pl.cellproportion(adata, celltype_clusters='cell_type', groupby='condition',",
+        "                     groupby_li=['control', 'treated'], trend=True)"
     ],
     related=["pl.embedding", "tl.leiden"]
 )
@@ -373,6 +376,7 @@ def cellproportion(adata:AnnData,celltype_clusters:str,groupby:str,
                        groupby_li=None,figsize:tuple=(4,6),
                        ticks_fontsize:int=12,labels_fontsize:int=12,ax=None,
                        legend:bool=False,legend_awargs=None,transpose:bool=False,
+                       trend:bool=False,trend_kwargs=None,
                        save:str=None,**kwargs):
     r"""Plot cell proportion of each cell type in each visual cluster.
 
@@ -388,6 +392,12 @@ def cellproportion(adata:AnnData,celltype_clusters:str,groupby:str,
         legend: Whether to show legend. (False)
         legend_awargs: Legend arguments. ({'ncol':1})
         transpose: Whether to transpose the plot (horizontal bars). (False)
+        trend: Whether to connect cumulative cell-type proportions across
+            adjacent groups. The group order follows ``groupby_li`` when
+            supplied; these are visual guides, not fitted statistical trends.
+            (False)
+        trend_kwargs: Additional keyword arguments passed to the cumulative
+            boundary lines drawn when ``trend=True``. (None)
     
     Returns:
         None
@@ -456,6 +466,26 @@ def cellproportion(adata:AnnData,celltype_clusters:str,groupby:str,
             test1=test2
             bottoms+=test1['value'].values
         n+=1
+
+    if trend and len(all_celltype) > 1:
+        week_order = [i.replace('Retinoblastoma_','') for i in visual_li]
+        proportions = (
+            b.pivot(index='Week', columns='cell_type', values='value')
+            .reindex(index=week_order, columns=all_celltype, fill_value=0)
+            .fillna(0)
+        )
+        cumulative = proportions.cumsum(axis=1)
+        line_kw = {'linewidth': 1.5, 'alpha': 0.9, 'zorder': 3}
+        line_kw.update(trend_kwargs or {})
+        line_kw.setdefault('label', '_nolegend_')
+        for cell_type in all_celltype[:-1]:
+            boundary = cumulative[cell_type].to_numpy()
+            type_line_kw = dict(line_kw)
+            type_line_kw.setdefault('color', plot_data2_color_dict[cell_type])
+            if transpose:
+                ax.plot(boundary, week_order, **type_line_kw)
+            else:
+                ax.plot(week_order, boundary, **type_line_kw)
     if legend!=False:
         # Merge defaults with user-supplied legend kwargs to avoid duplicate bbox_to_anchor
         legend_kw = {'bbox_to_anchor': (1.05, -0.05), 'loc': 3, 'borderaxespad': 0, 'fontsize': 10}
