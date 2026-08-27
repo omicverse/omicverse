@@ -8,7 +8,7 @@ import torch
 from pyro.nn import PyroModule
 from scipy.sparse import csr_matrix
 from scvi import REGISTRY_KEYS
-from scvi.nn import one_hot
+from torch.nn.functional import one_hot
 
 # class NegativeBinomial(TorchDistributionMixin, ScVINegativeBinomial):
 #    pass
@@ -247,7 +247,7 @@ class LocationModelWTAMultiExperimentHierarchicalGeneLevel(PyroModule):
     def forward(self, x_data, neg_data, n_nuclei, idx, batch_index):
         self.n_neg_probes = neg_data.shape[1]
 
-        obs2sample = one_hot(batch_index, self.n_batch)
+        obs2sample = one_hot(batch_index.squeeze(-1), self.n_batch).float()
 
         obs_plate = self.create_plates(x_data, neg_data, n_nuclei, idx, batch_index)
 

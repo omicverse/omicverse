@@ -2,8 +2,8 @@ import collections
 from typing import Iterable
 
 import torch
-from scvi.nn._utils import one_hot
 from torch import nn as nn
+from torch.nn.functional import one_hot
 
 
 class FCLayers(nn.Module):
@@ -176,7 +176,7 @@ class FCLayers(nn.Module):
                 raise ValueError("cat not provided while n_cat != 0 in init. params.")
             if n_cat > 1:  # n_cat = 1 will be ignored - no additional information
                 if cat.size(1) != n_cat:
-                    one_hot_cat = one_hot(cat, n_cat)
+                    one_hot_cat = one_hot(cat.squeeze(-1), n_cat).float()
                 else:
                     one_hot_cat = cat  # cat has already been one_hot encoded
                 one_hot_cat_list += [one_hot_cat]

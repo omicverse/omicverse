@@ -7,7 +7,7 @@ import pyro.distributions as dist
 import torch
 from pyro.nn import PyroModule
 from scvi import REGISTRY_KEYS
-from scvi.nn import one_hot
+from torch.nn.functional import one_hot
 
 
 class RegressionBackgroundDetectionTechPyroModel(PyroModule):
@@ -176,15 +176,15 @@ class RegressionBackgroundDetectionTechPyroModel(PyroModule):
         }
 
     def forward(self, x_data, idx, batch_index, label_index, extra_categoricals):
-        obs2sample = one_hot(batch_index, self.n_batch)
-        obs2label = one_hot(label_index, self.n_factors)
+        obs2sample = one_hot(batch_index.squeeze(-1), self.n_batch).float()
+        obs2label = one_hot(label_index.squeeze(-1), self.n_factors).float()
         if self.n_extra_categoricals is not None:
             obs2extra_categoricals = torch.cat(
                 [
                     one_hot(
-                        extra_categoricals[:, i].view((extra_categoricals.shape[0], 1)),
+                        extra_categoricals[:, i].view((extra_categoricals.shape[0], 1)).squeeze(-1),
                         n_cat,
-                    )
+                    ).float()
                     for i, n_cat in enumerate(self.n_extra_categoricals)
                 ],
                 dim=1,
