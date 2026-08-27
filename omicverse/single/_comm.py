@@ -31,8 +31,11 @@ def _looks_like_liana_results(value) -> bool:
 def _looks_like_cpdb_results(value) -> bool:
     if not isinstance(value, Mapping):
         return False
-    return {"means", "pvalues"}.issubset(value.keys()) and all(
-        isinstance(value[key], pd.DataFrame) for key in ("means", "pvalues")
+    if not isinstance(value.get("means"), pd.DataFrame):
+        return False
+    return any(
+        isinstance(value.get(key), pd.DataFrame)
+        for key in ("pvalues", "relevant_interactions")
     )
 
 
