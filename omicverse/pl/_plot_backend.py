@@ -40,6 +40,18 @@ def register_function(*args, **kwargs):
 # Global variable to control vector-friendly rasterization
 _vector_friendly = True
 
+# Common CJK-capable fallback families used when the primary font (for
+# example Arial) lacks Chinese glyphs. Matplotlib falls back glyph-by-glyph
+# through the family list, so order here matters.
+_CJK_FALLBACK_FONTS = (
+    "SimHei",
+    "Microsoft YaHei",
+    "Noto Sans CJK SC",
+    "WenQuanYi Zen Hei",
+    "PingFang SC",
+    "Arial Unicode MS",
+)
+
 sc_color=[
  '#1F577B', '#A56BA7', '#E0A7C8', '#E069A6', '#941456', 
  '#FCBC10', '#EF7B77', '#279AD7','#F0EEF0',
@@ -172,6 +184,86 @@ EMOJI = {
 }
 
 
+def _looks_like_font_file(path):
+    """Return True when a string looks like a font file path."""
+    text = str(path)
+    return (
+        os.path.splitext(text)[1].lower() in
+        {".ttf", ".otf", ".ttc", ".dfont"}
+        or os.sep in text
+        or "/" in text
+        or "\\" in text
+    )
+
+
+def _font_family_available(family):
+    """Return True when Matplotlib can resolve the family name."""
+    try:
+        fm.findfont(
+            fm.FontProperties(family=family), fallback_to_default=False)
+    except ValueError:
+        return False
+    return True
+
+
+def _resolve_font_name(font_path):
+    """Resolve a font file path or family name to a usable family name."""
+    if font_path is None:
+        return None
+    path = os.fspath(font_path)
+    if os.path.isfile(path):
+        try:
+            fm.fontManager.addfont(path)
+            return fm.FontProperties(fname=path).get_name()
+        except Exception as exc:
+            print(f"[ov.pl.plot_set] Could not load font file {path}: {exc}")
+            return None
+    if _looks_like_font_file(path):
+        print(f"[ov.pl.plot_set] Font file not found: {path}")
+        return None
+    if _font_family_available(path):
+        return path
+    print(f"[ov.pl.plot_set] Font family not found: {path}")
+    return None
+
+
+def _available_font_families(families):
+    """Return installed font families in input order, without duplicates."""
+    seen = set()
+    available = []
+    for family in families:
+        if family in seen:
+            continue
+        seen.add(family)
+        if _font_family_available(family):
+            available.append(family)
+    return available
+
+
+def _resolve_fallback_fonts(fallback_font_path):
+    """Return user + built-in CJK fallback families that are available."""
+    fallback = []
+    if fallback_font_path is not None:
+        name = _resolve_font_name(fallback_font_path)
+        if name is not None:
+            fallback.append(name)
+    fallback.extend(_available_font_families(_CJK_FALLBACK_FONTS))
+    return list(dict.fromkeys(fallback))
+
+
+def _sans_serif_chain(primary, base, fallback):
+    """Build a de-duplicated sans-serif family list."""
+    chain = []
+    if primary is not None:
+        chain.append(primary)
+    chain.extend(_available_font_families(base))
+    chain.extend(_available_font_families(fallback))
+    for extra in ("DejaVu Sans", "Bitstream Vera Sans"):
+        if extra not in chain:
+            chain.extend(_available_font_families((extra,)))
+    return list(dict.fromkeys(chain))
+
+
 @register_function(
     aliases=["绘图设置", "plot_set", "ov_plot_set", "plotset", "设置绘图"],
     category="utils",
@@ -180,13 +272,16 @@ EMOJI = {
         "ov.utils.ov_plot_set()",
         "ov.utils.plot_set(dpi=100, figsize=6)",
         "ov.utils.plot_set(scanpy=False, fontsize=12)",
-        "ov.utils.plot_set(vector_friendly=True)"
+        "ov.utils.plot_set(vector_friendly=True)",
+        "ov.utils.plot_set(font_path='Arial', "
+        "fallback_font_path='SimHei')",
     ],
     related=["pl.embedding", "pl.volcano", "utils.palette"]
 )
 def plot_set(verbosity: int = 3, dpi: int = 80, 
              facecolor: str = 'white', 
              font_path: str = None,
+             fallback_font_path: str = None,
              ipython_format: str  = "retina",
              dpi_save: int = 300,
              transparent: bool = None,
@@ -209,6 +304,10 @@ def plot_set(verbosity: int = 3, dpi: int = 80,
         Figure and axes background color.
     font_path:str or None
         Optional custom font path or keyword (for example ``'arial'``).
+    fallback_font_path:str or None
+        Optional fallback font path or family name for glyphs missing from
+        ``font_path`` (for example Chinese characters in Arial). When not
+        supplied, common CJK families such as SimHei are used automatically.
     ipython_format:str
         Inline backend display format in IPython.
     dpi_save:int
@@ -282,10 +381,14 @@ def plot_set(verbosity: int = 3, dpi: int = 80,
     global _vector_friendly
     _vector_friendly = vector_friendly
 
-    # 3) Custom font setup (BEFORE scanpy to avoid FontManager reset issues)
+    # 3) Custom font setup. The family is resolved before scanpy so a font
+    # file can be registered; rcParams are re-applied after scanpy so scanpy
+    # defaults do not erase the requested fonts.
+    font_requested = font_path is not None
+    resolved_font = None
     if font_path is not None:
         # Check if user wants Arial font (auto-download)
-        if font_path.lower() in ['arial', 'arial.ttf'] and not font_path.endswith('.ttf'):
+        if font_path.lower() in ("arial", "arial.ttf"):
             try:
                 # Create a persistent cache location for the Arial font
                 import tempfile
@@ -320,28 +423,28 @@ def plot_set(verbosity: int = 3, dpi: int = 80,
                 font_path = None
         
         if font_path is not None:
-            try:
-                # 1) Create a brand-new manager
+            if os.path.isfile(font_path):
+                # Rebuild the manager once so the newly registered file is
+                # visible to every font-family lookup below.
                 fm.fontManager = fm.FontManager()
-                
-                # 2) Add your file
-                fm.fontManager.addfont(font_path)
-                
-                # 3) Now find out what name it uses
-                name = fm.FontProperties(fname=font_path).get_name()
-                print("Registered as:", name)
-                
-                # 4) Point rcParams at that name
-                mpl.rcParams['font.family'] = 'sans-serif'
-                mpl.rcParams['font.sans-serif'] = [name, 'DejaVu Sans']
-                
-            except Exception as e:
-                print(f"Failed to set custom font: {e}")
-                print("Continuing with default font settings...")
+            resolved_font = _resolve_font_name(font_path)
+            if resolved_font is None:
+                print("[ov.pl.plot_set] Falling back to CJK-capable fonts.")
 
     # Apply scanpy rcParams AFTER font setup to preserve font-related settings
     if scanpy:
         set_rcParams_scanpy(fontsize=fontsize, color_map=color_map)
+
+    if font_requested or fallback_font_path is not None:
+        fallback_fonts = _resolve_fallback_fonts(fallback_font_path)
+        base_fonts = list(rcParams.get("font.family", []))
+        if not base_fonts or base_fonts == ["sans-serif"]:
+            base_fonts = list(rcParams.get("font.sans-serif", []))
+        font_chain = _sans_serif_chain(
+            resolved_font, base_fonts, fallback_fonts)
+        rcParams["font.family"] = [
+            family for family in font_chain if family != "sans-serif"]
+        rcParams["font.sans-serif"] = font_chain
 
     # Apply figsize AFTER scanpy to ensure it's not overridden
     if isinstance(figsize, (int, float)):
@@ -1684,13 +1787,12 @@ def set_rcParams_scanpy(fontsize=14, color_map=None):
     rcParams["lines.markeredgewidth"] = 1
 
     # font
-    rcParams["font.sans-serif"] = [
-        "Arial",
-        "Helvetica",
-        "DejaVu Sans",
-        "Bitstream Vera Sans",
-        "sans-serif",
-    ]
+    base_families = _available_font_families(
+        ("Arial", "Helvetica", "DejaVu Sans", "Bitstream Vera Sans"))
+    cjk_fallback = _available_font_families(_CJK_FALLBACK_FONTS)
+    rcParams["font.family"] = base_families + cjk_fallback
+    rcParams["font.sans-serif"] = (
+        base_families + ["sans-serif"] + cjk_fallback)
     rcParams["font.size"] = fontsize
     rcParams["legend.fontsize"] = 0.92 * fontsize
     rcParams["axes.titlesize"] = fontsize
