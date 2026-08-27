@@ -5,7 +5,7 @@ import pyro.distributions as dist
 import torch
 from pyro.nn import PyroModule
 from scvi import REGISTRY_KEYS
-from scvi.nn import one_hot
+from torch.nn.functional import one_hot
 
 # class NegativeBinomial(TorchDistributionMixin, ScVINegativeBinomial):
 #    pass
@@ -215,7 +215,7 @@ class LocationModelMultiExperimentLocationBackgroundNormLevelGeneAlphaPyroModel(
         }
 
     def forward(self, x_data, idx, batch_index):
-        obs2sample = one_hot(batch_index, self.n_batch)
+        obs2sample = one_hot(batch_index.squeeze(-1), self.n_batch).float()
 
         obs_plate = self.create_plates(x_data, idx, batch_index)
 
