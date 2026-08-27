@@ -18,15 +18,65 @@ kpy_install = False
 _cpdb_scoring_lock = RLock()
 
 
-def _call_cpdb_statistical_analysis(
-    cpdb_statistical_analysis_method,
+def _normalize_cpdb_method(method):
+    aliases = {
+        "2": "statistical",
+        "method2": "statistical",
+        "statistical": "statistical",
+        "3": "degs",
+        "method3": "degs",
+        "degs": "degs",
+    }
+    normalized = aliases.get(str(method).lower())
+    if normalized is None:
+        raise ValueError(
+            "`method` must identify CellPhoneDB Method 2 ('statistical') "
+            "or Method 3 ('degs')."
+        )
+    return normalized
+
+
+def _validate_degs_file(method, degs_file_path):
+    if method == "degs":
+        if degs_file_path is None:
+            raise ValueError("`degs_file_path` is required when method='degs'.")
+        from pathlib import Path
+
+        if not Path(degs_file_path).is_file():
+            raise FileNotFoundError(f"DEGs file not found: {degs_file_path}")
+        return str(degs_file_path)
+    if degs_file_path is not None:
+        raise ValueError("`degs_file_path` is only used when method='degs'.")
+    return None
+
+
+def _cpdb_results_for_uns(cpdb_results):
+    """Return an H5AD-safe copy of CellPhoneDB result tables."""
+    stored = {}
+    for key, value in cpdb_results.items():
+        # CellPhoneDB returns the DataFrame class when optional CellSign
+        # inputs are absent. It is not a result table and is not serializable.
+        if value is pd.DataFrame:
+            continue
+        if not isinstance(value, pd.DataFrame):
+            stored[key] = value
+            continue
+        table = value.copy()
+        for column in table.select_dtypes(include=['object', 'string']).columns:
+            table[column] = table[column].astype('string').fillna('').astype(str)
+        stored[key] = table
+    return stored
+
+
+def _call_cpdb_analysis(
+    cpdb_analysis_method,
     analysis_params,
 ):
-    """Call CellPhoneDB with unique gene names in its scoring matrix."""
-    scoring_utils = getattr(cpdb_statistical_analysis_method, "scoring_utils", None)
+    """Call a CellPhoneDB method with unique genes in its scoring matrix."""
+    scoring_utils = getattr(cpdb_analysis_method, "scoring_utils", None)
     scorer_name = "heteromer_geometric_expression_per_cell_type"
     if scoring_utils is None or not hasattr(scoring_utils, scorer_name):
-        return cpdb_statistical_analysis_method.call(**analysis_params)
+        return cpdb_analysis_method.call(**analysis_params)
 
     with _cpdb_scoring_lock:
         original = getattr(scoring_utils, scorer_name)
@@ -40,7 +90,7 @@ def _call_cpdb_statistical_analysis(
 
         setattr(scoring_utils, scorer_name, unique_gene_rows)
         try:
-            return cpdb_statistical_analysis_method.call(**analysis_params)
+            return cpdb_analysis_method.call(**analysis_params)
         finally:
             setattr(scoring_utils, scorer_name, original)
 
@@ -539,7 +589,7 @@ def cellphonedb_v5(adata,
         Raw CellPhoneDB result dict and formatted communication AnnData. The
         same objects are also written to ``adata.uns[results_key]`` and
         ``adata.uns[comm_key]`` so downstream ``ov.pl.ccc_*`` plots can work
-        directly on the original ``adata``.
+    directly on the original ``adata``.
     """
     import os
     import tempfile
@@ -547,7 +597,7 @@ def cellphonedb_v5(adata,
     from pathlib import Path
     import pandas as pd
     import scanpy as sc
-    
+
     # Validate inputs
     if celltype_key not in adata.obs.columns:
         raise ValueError(f"celltype_key '{celltype_key}' not found in adata.obs")
@@ -687,7 +737,7 @@ def cellphonedb_v5(adata,
         analysis_params.update(kwargs)
         
         # Run analysis
-        cpdb_results = _call_cpdb_statistical_analysis(
+        cpdb_results = _call_cpdb_analysis(
             cpdb_statistical_analysis_method,
             analysis_params,
         )
@@ -698,7 +748,7 @@ def cellphonedb_v5(adata,
         print("   - Formatting results for visualization...")
         
         adata_cpdb = format_cpdb_results(cpdb_results, separator=separator)
-        adata.uns[results_key] = cpdb_results
+        adata.uns[results_key] = _cpdb_results_for_uns(cpdb_results)
         adata.uns[comm_key] = adata_cpdb
         
         print(f"   - Created visualization AnnData: {adata_cpdb.shape}")
@@ -728,7 +778,8 @@ def format_cpdb_results(cpdb_results, separator='|'):
     Parameters
     ----------
     cpdb_results:dict
-        Result dictionary returned by CellPhoneDB statistical analysis.
+        Result dictionary returned by CellPhoneDB statistical (Method 2) or
+        DEGs-based (Method 3) analysis.
     separator:str
         Separator used in sender|receiver pair column names.
 
@@ -740,9 +791,7 @@ def format_cpdb_results(cpdb_results, separator='|'):
     import pandas as pd
     import scanpy as sc
     
-    # Extract results
     means_df = cpdb_results['means']
-    pvalues_df = cpdb_results['pvalues']
     
     # Identify cell type pair columns (usually start after column 12 or 13)
     info_cols = []
@@ -759,6 +808,40 @@ def format_cpdb_results(cpdb_results, separator='|'):
     if len(pair_cols) == 0:
         raise ValueError(f"No cell type pair columns found with separator '{separator}'")
     
+    if 'pvalues' in cpdb_results:
+        method = 'statistical'
+        support_kind = 'pvalue'
+        pvalues_df = cpdb_results['pvalues']
+        relevance_df = None
+    elif 'relevant_interactions' in cpdb_results:
+        method = 'degs'
+        support_kind = 'relevance'
+        relevant = cpdb_results['relevant_interactions']
+        relevance_df = pd.DataFrame(False, index=means_df.index, columns=pair_cols)
+        if 'id_cp_interaction' not in means_df or 'id_cp_interaction' not in relevant:
+            raise ValueError(
+                "Method 3 results require 'id_cp_interaction' in both "
+                "'means' and 'relevant_interactions'."
+            )
+        relevant_by_id = relevant.drop_duplicates('id_cp_interaction').set_index(
+            'id_cp_interaction'
+        )
+        mean_ids = means_df['id_cp_interaction']
+        for col in pair_cols:
+            if col in relevant_by_id:
+                relevance_df[col] = (
+                    mean_ids.map(relevant_by_id[col])
+                    .fillna(False)
+                    .astype(bool)
+                    .to_numpy()
+                )
+        pvalues_df = (~relevance_df).astype(float)
+    else:
+        raise ValueError(
+            "CellPhoneDB results must contain either 'pvalues' (Method 2) "
+            "or 'relevant_interactions' (Method 3)."
+        )
+
     # Create AnnData object
     # X matrix: cell pairs (obs) x L-R interactions (vars)
     X_data = means_df[pair_cols].T  # Transpose so pairs are observations
@@ -768,6 +851,8 @@ def format_cpdb_results(cpdb_results, separator='|'):
     # Add layers
     adata_cpdb.layers['means'] = means_df[pair_cols].T
     adata_cpdb.layers['pvalues'] = pvalues_df[pair_cols].T
+    if relevance_df is not None:
+        adata_cpdb.layers['relevance'] = relevance_df[pair_cols].T
     
     # Add variable (L-R pair) information
     adata_cpdb.var = means_df[info_cols].copy()
@@ -782,6 +867,9 @@ def format_cpdb_results(cpdb_results, separator='|'):
         print(f"   - Found {adata_cpdb.var['classification'].nunique()} pathway classifications")
     adata_cpdb.uns["comm_source"] = "cellphonedb"
     adata_cpdb.uns["cpdb_separator"] = separator
+    adata_cpdb.uns["cellphonedb_method"] = method
+    adata_cpdb.uns["support_kind"] = support_kind
+    adata_cpdb.uns["pvalues_are_statistical"] = method == 'statistical'
     return adata_cpdb
 
 
@@ -970,16 +1058,19 @@ def validate_cpdb_database(cpdb_file_path):
 @register_function(
     aliases=['CellPhoneDB 分析', 'run_cellphonedb_v5', 'cell-cell communication v5'],
     category="single",
-    description="Run CellPhoneDB v5 statistical ligand-receptor analysis to identify significant cell-cell communication pairs.",
+    description="Run CellPhoneDB v5 statistical or DEGs-based ligand-receptor analysis.",
     prerequisites={'optional_functions': ['pp.qc', 'pp.preprocess']},
     requires={'obs': ['celltype labels'], 'var': ['gene symbols']},
     produces={
-        'layers': ['means', 'pvalues'],
+        'layers': ['means', 'pvalues', 'relevance'],
         'obs': ['sender', 'receiver'],
         'var': ['interaction metadata'],
     },
     auto_fix='escalate',
-    examples=['ov.single.run_cellphonedb_v5(adata, cpdb_file_path="./cellphonedb.zip", celltype_key="cell_labels", iterations=1000, pvalue=0.05)'],
+    examples=[
+        'ov.single.run_cellphonedb_v5(adata, cpdb_file_path="./cellphonedb.zip", celltype_key="cell_labels")',
+        'ov.single.run_cellphonedb_v5(adata, cpdb_file_path="./cellphonedb.zip", method=3, degs_file_path="./DEGs.tsv")',
+    ],
     related=['pl.CellChatViz', 'single.pathway_enrichment']
 )
 def run_cellphonedb_v5(adata, 
@@ -999,9 +1090,12 @@ def run_cellphonedb_v5(adata,
                            separator='|',
                            results_key: str = 'cpdb_results',
                            comm_key: str = 'cpdb_comm',
+                           method='statistical',
+                           degs_file_path=None,
+                           score_interactions=True,
                            **kwargs):
     """
-    Run CellPhoneDB statistical analysis with automatic database download
+    Run CellPhoneDB statistical or DEGs-based analysis.
     
     Parameters
     ----------
@@ -1036,8 +1130,16 @@ def run_cellphonedb_v5(adata,
         Saves all intermediate tables employed during the analysis
     separator:str
         String to employ to separate cells in the results dataframes
+    method:{2, 3, 'statistical', 'degs'}
+        CellPhoneDB method to run. Method 2 / ``'statistical'`` is the
+        historical permutation-based default. Method 3 / ``'degs'`` runs the
+        DEGs-based analysis.
+    degs_file_path:str or None
+        CellPhoneDB DEG input file. Required when ``method='degs'``.
+    score_interactions:bool
+        Whether CellPhoneDB should calculate interaction scores.
     **kwargs:dict
-        Additional parameters forwarded to ``cpdb_statistical_analysis_method.call``.
+        Additional parameters forwarded to the selected CellPhoneDB method.
 
     Returns
     -------
@@ -1050,14 +1152,14 @@ def run_cellphonedb_v5(adata,
     Examples
     --------
     # Basic usage - will download database automatically if needed
-    cpdb_results, adata_cpdb = run_cellphonedb_analysis(
+    cpdb_results, adata_cpdb = run_cellphonedb_v5(
         adata, 
         cpdb_file_path='./cellphonedb.zip',
         celltype_key='celltype_minor'
     )
     
     # Advanced usage
-    cpdb_results, adata_cpdb = run_cellphonedb_analysis(
+    cpdb_results, adata_cpdb = run_cellphonedb_v5(
         adata,
         cpdb_file_path='/path/to/cellphonedb.zip',
         celltype_key='celltype_minor',
@@ -1069,9 +1171,11 @@ def run_cellphonedb_v5(adata,
     import os
     import tempfile
     import shutil
-    from pathlib import Path
     import pandas as pd
     import scanpy as sc
+
+    method = _normalize_cpdb_method(method)
+    degs_file_path = _validate_degs_file(method, degs_file_path)
     
     # Step 1: Validate and download database if necessary
     print("🔬 Starting CellPhoneDB analysis...")
@@ -1154,14 +1258,19 @@ def run_cellphonedb_v5(adata,
         
         # Step 6: Run CellPhoneDB analysis
         try:
-            from cellphonedb.src.core.methods import cpdb_statistical_analysis_method
+            if method == "statistical":
+                from cellphonedb.src.core.methods import cpdb_statistical_analysis_method
+                cpdb_analysis_method = cpdb_statistical_analysis_method
+            else:
+                from cellphonedb.src.core.methods import cpdb_degs_analysis_method
+                cpdb_analysis_method = cpdb_degs_analysis_method
         except ImportError:
             raise ImportError(
                 "CellPhoneDB not installed. Please install with: "
                 "pip install cellphonedb"
             )
         
-        print("   - Running CellPhoneDB statistical analysis...")
+        print(f"   - Running CellPhoneDB {method} analysis...")
         
         # Prepare parameters
         analysis_params = {
@@ -1171,29 +1280,34 @@ def run_cellphonedb_v5(adata,
             'counts_data': 'hgnc_symbol',
             'active_tfs_file_path': None,
             'microenvs_file_path': None,
-            'score_interactions': True,
-            'iterations': iterations,
+            'score_interactions': score_interactions,
             'threshold': threshold,
             'threads': threads,
-            'debug_seed': 42,
             'result_precision': 3,
-            'pvalue': pvalue,
-            'subsampling': False,
-            'subsampling_log': False,
-            'subsampling_num_pc': 100,
-            'subsampling_num_cells': 1000,
             'separator': separator,
             'debug': debug,
             'output_path': output_dir,
             'output_suffix': None
         }
+        if method == "statistical":
+            analysis_params.update({
+                'iterations': iterations,
+                'debug_seed': 42,
+                'pvalue': pvalue,
+                'subsampling': False,
+                'subsampling_log': False,
+                'subsampling_num_pc': 100,
+                'subsampling_num_cells': 1000,
+            })
+        else:
+            analysis_params['degs_file_path'] = degs_file_path
         
         # Update with any additional kwargs
         analysis_params.update(kwargs)
         
         # Run analysis
-        cpdb_results = _call_cpdb_statistical_analysis(
-            cpdb_statistical_analysis_method,
+        cpdb_results = _call_cpdb_analysis(
+            cpdb_analysis_method,
             analysis_params,
         )
         
@@ -1203,7 +1317,7 @@ def run_cellphonedb_v5(adata,
         print("   - Formatting results for visualization...")
         
         adata_cpdb = format_cpdb_results(cpdb_results, separator=separator)
-        adata.uns[results_key] = cpdb_results
+        adata.uns[results_key] = _cpdb_results_for_uns(cpdb_results)
         adata.uns[comm_key] = adata_cpdb
         
         print(f"   - Created visualization AnnData: {adata_cpdb.shape}")

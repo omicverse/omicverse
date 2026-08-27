@@ -39,6 +39,19 @@ def cpdb_results() -> dict[str, pd.DataFrame]:
     return {"means": means, "pvalues": pvalues}
 
 
+@pytest.fixture()
+def cpdb_degs_results(cpdb_results: dict[str, pd.DataFrame]) -> dict[str, pd.DataFrame]:
+    means = cpdb_results["means"]
+    relevant = means.iloc[[1, 0]].copy()
+    relevant["B|T"] = [0, 1]
+    relevant["T|B"] = [1, 0]
+    return {
+        "means": means,
+        "relevant_interactions": relevant,
+        "significant_means": means.copy(),
+    }
+
+
 def test_format_liana_results_alias_matches_backward_compatible_name() -> None:
     liana_res = pd.DataFrame(
         {
@@ -75,3 +88,49 @@ def test_to_comm_adata_extracts_cpdb_results_from_uns(cpdb_results: dict[str, pd
     extracted = ov.single.extract_comm_adata(adata, result_uns_key="cpdb_results")
     assert comm_adata.shape == extracted.shape == (2, 2)
     assert float(comm_adata.layers["means"][0, 0]) == pytest.approx(0.8)
+
+
+def test_method3_relevance(
+    cpdb_degs_results: dict[str, pd.DataFrame],
+) -> None:
+    comm_adata = ov.single.format_cpdb_results(cpdb_degs_results)
+
+    assert comm_adata.uns["cellphonedb_method"] == "degs"
+    assert comm_adata.uns["support_kind"] == "relevance"
+    assert not comm_adata.uns["pvalues_are_statistical"]
+    assert comm_adata.layers["relevance"].tolist() == [
+        [True, False],
+        [False, True],
+    ]
+    assert comm_adata.layers["pvalues"].tolist() == [
+        [0.0, 1.0],
+        [1.0, 0.0],
+    ]
+
+
+def test_method3_adapter(
+    cpdb_degs_results: dict[str, pd.DataFrame],
+) -> None:
+    comm_adata = ov.single.to_comm_adata(data=cpdb_degs_results)
+    assert comm_adata.uns["support_kind"] == "relevance"
+
+
+def test_method3_filtering(
+    cpdb_degs_results: dict[str, pd.DataFrame],
+) -> None:
+    from omicverse.pl._ccc import _communication_long_table
+
+    comm_adata = ov.single.format_cpdb_results(cpdb_degs_results)
+    strict = _communication_long_table(comm_adata, pvalue_threshold=0.0)
+    permissive = _communication_long_table(comm_adata, pvalue_threshold=2.0)
+
+    assert len(strict) == len(permissive) == 2
+    assert set(strict["pair_lr"]) == {"CXCL13_CXCR5", "TNF_TNFRSF1A"}
+
+
+def test_method3_rejects_pvalue_color(
+    cpdb_degs_results: dict[str, pd.DataFrame],
+) -> None:
+    comm_adata = ov.single.format_cpdb_results(cpdb_degs_results)
+    with pytest.raises(ValueError, match="does not provide statistical p-values"):
+        ov.pl.ccc_heatmap(comm_adata, color_by="pvalue", show=False)

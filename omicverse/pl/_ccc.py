@@ -81,6 +81,25 @@ def _is_comm_adata(adata: anndata.AnnData) -> bool:
     return has_obs and has_layers
 
 
+def _has_relevance_support(adata: anndata.AnnData) -> bool:
+    return (
+        adata.uns.get("support_kind") == "relevance"
+        and "relevance" in adata.layers
+    )
+
+
+def _validate_support_semantics(
+    adata: anndata.AnnData,
+    *,
+    color_by: Literal["score", "pvalue"],
+) -> None:
+    if _has_relevance_support(adata) and color_by == "pvalue":
+        raise ValueError(
+            "CellPhoneDB Method 3 does not provide statistical p-values; it "
+            "provides DEG relevance. Use `color_by='score'`."
+        )
+
+
 def _resolve_comm_adata(
     adata: anndata.AnnData,
     *,
@@ -208,6 +227,13 @@ def _communication_long_table(
 
     means = pd.DataFrame(_to_dense(adata.layers["means"]), index=adata.obs_names, columns=adata.var_names)
     pvalues = pd.DataFrame(_to_dense(adata.layers["pvalues"]), index=adata.obs_names, columns=adata.var_names)
+    relevance = None
+    if _has_relevance_support(adata):
+        relevance = pd.DataFrame(
+            _to_dense(adata.layers["relevance"]).astype(bool),
+            index=adata.obs_names,
+            columns=adata.var_names,
+        )
 
     obs_meta = adata.obs.loc[:, ["sender", "receiver"]].copy()
     obs_meta["sender"] = obs_meta["sender"].astype(str)
@@ -254,8 +280,12 @@ def _communication_long_table(
     long_df["interaction_display"] = long_df["interaction"].map(_display_interaction_label)
     long_df["ligand_display"] = long_df["ligand"].map(_display_gene_label)
     long_df["receptor_display"] = long_df["receptor"].map(_display_gene_label)
-    long_df["significant"] = long_df["pvalue"].astype(float) < float(pvalue_threshold)
-    long_df["neglog10_pvalue"] = -np.log10(np.clip(long_df["pvalue"].astype(float), 1e-300, 1.0))
+    if relevance is None:
+        long_df["significant"] = long_df["pvalue"].astype(float) < float(pvalue_threshold)
+        long_df["neglog10_pvalue"] = -np.log10(np.clip(long_df["pvalue"].astype(float), 1e-300, 1.0))
+    else:
+        long_df["significant"] = relevance.stack(future_stack=True).to_numpy()
+        long_df["neglog10_pvalue"] = np.nan
 
     if sender_use is not None:
         long_df = long_df.loc[long_df["sender"].isin(sender_use)]
@@ -2960,6 +2990,7 @@ def ccc_heatmap(
         classification_reference=classification_reference,
         classification_fallback=classification_fallback,
     )
+    _validate_support_semantics(adata, color_by=color_by)
     if comparison_adata is not None:
         comparison_adata = _resolve_comm_adata(
             comparison_adata,
@@ -2973,6 +3004,7 @@ def ccc_heatmap(
             classification_reference=classification_reference,
             classification_fallback=classification_fallback,
         )
+        _validate_support_semantics(comparison_adata, color_by=color_by)
     default_top_bar = top_anno == "bar"
     default_left_bar = left_anno == "bar"
     default_bottom_cell = bottom_anno == "cell"
@@ -3221,7 +3253,7 @@ def ccc_heatmap(
                 pvalue_threshold=pvalue_threshold,
                 mean_threshold=min_expression,
                 top_interactions=None if auto_selected_pathways else top_n,
-                show_pvalue=True,
+                show_pvalue=not _has_relevance_support(adata),
                 show_mean=True,
                 show_count=(value == "count"),
                 add_violin=add_violin,
@@ -3275,7 +3307,7 @@ def ccc_heatmap(
             pvalue_threshold=max(float(pvalue_threshold), 0.0),
             mean_threshold=min_expression,
             show_all_pairs=True,
-            show_pvalue=True,
+            show_pvalue=not _has_relevance_support(adata),
             show_mean=True,
             show_count=(value == "count"),
             add_violin=add_violin,

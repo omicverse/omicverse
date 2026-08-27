@@ -3,7 +3,7 @@ from types import SimpleNamespace
 import pandas as pd
 import pytest
 
-from omicverse.single._cpdb import _call_cpdb_statistical_analysis
+from omicverse.single._cpdb import _call_cpdb_analysis
 
 
 def test_cpdb_scoring_deduplicates_genes() -> None:
@@ -28,7 +28,7 @@ def test_cpdb_scoring_deduplicates_genes() -> None:
 
     analysis_method = SimpleNamespace(scoring_utils=scoring_utils, call=call)
 
-    result = _call_cpdb_statistical_analysis(analysis_method, {})
+    result = _call_cpdb_analysis(analysis_method, {})
 
     assert result.index.tolist() == ["NRXN1", "CXCL12"]
     assert result.loc["NRXN1"].tolist() == [1.0, 2.0]
@@ -53,7 +53,7 @@ def test_cpdb_scoring_restores_patch_on_error() -> None:
     analysis_method = SimpleNamespace(scoring_utils=scoring_utils, call=call)
 
     with pytest.raises(RuntimeError, match="analysis failed"):
-        _call_cpdb_statistical_analysis(analysis_method, {})
+        _call_cpdb_analysis(analysis_method, {})
 
     assert (
         scoring_utils.heteromer_geometric_expression_per_cell_type is original
