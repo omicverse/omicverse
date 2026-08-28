@@ -3042,12 +3042,13 @@ def ccc_heatmap(
             color_by=color_by,
             allowed_color_by=("score",),
             value=value,
-            allowed_value=("sum", "mean"),
+            allowed_value=("sum", "mean", "count"),
         )
         viz = _build_cellchatviz(adata)
         plotter = viz.netVisual_heatmap_marsilea(
             signaling=_normalize_use_arg(signaling),
             pvalue_threshold=pvalue_threshold,
+            measure="count" if value == "count" else "weight",
             color_heatmap=cmap,
             add_dendrogram=cluster_rows or cluster_columns,
             add_row_sum=True,
@@ -3481,7 +3482,10 @@ def ccc_heatmap(
         top_n_pairs=top_n_pairs,
         facet_by=facet_by,
     )
-    display_color_label = "Interaction Strength" if display_by == "aggregation" and color_by == "score" else color_label
+    if display_by == "aggregation" and color_by == "score":
+        display_color_label = "Number of interactions" if value == "count" else "Interaction Strength"
+    else:
+        display_color_label = color_label
     matrix = _apply_cluster_order(matrix, cluster_rows=cluster_rows, cluster_columns=cluster_columns)
     size_matrix = size_matrix.reindex(index=matrix.index, columns=matrix.columns, fill_value=0.0)
 

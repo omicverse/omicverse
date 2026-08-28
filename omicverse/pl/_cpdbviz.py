@@ -1776,11 +1776,12 @@ class CellChatViz(CellChatVizPlus):
         plt.tight_layout()
         return fig, ax
     
-    def netVisual_heatmap_marsilea(self, signaling=None, pvalue_threshold=0.05, 
+    def netVisual_heatmap_marsilea(self, signaling=None, pvalue_threshold=0.05,
                                 color_heatmap="Reds", add_dendrogram=True,
                                 add_row_sum=True, add_col_sum=True,
                                 show_row_names=False, show_col_names=False,
-                                linewidth=0.5, figsize=(8, 6), title="Communication Heatmap"):
+                                linewidth=0.5, figsize=(8, 6), title="Communication Heatmap",
+                                measure="weight"):
         """
         Draw a CellChat-style communication heatmap with Marsilea.
 
@@ -1813,6 +1814,9 @@ class CellChatViz(CellChatVizPlus):
             at render time.
         title : str
             Base title displayed on the Marsilea heatmap.
+        measure : {"weight", "count"}
+            Plot summed interaction strength or the number of significant
+            interactions. Row totals are outgoing and column totals incoming.
             
         Returns
         -------
@@ -1821,6 +1825,8 @@ class CellChatViz(CellChatVizPlus):
         """
         if not MARSILEA_AVAILABLE:
             raise ImportError("marsilea package is not available. Please install it: pip install marsilea")
+        if measure not in {"weight", "count"}:
+            raise ValueError("`measure` must be either 'weight' or 'count'.")
         
         # Calculate communication matrix
         if signaling is not None:
@@ -1835,7 +1841,8 @@ class CellChatViz(CellChatVizPlus):
                     raise ValueError(f"Pathway '{pathway}' not found. Available pathways: {list(available_pathways)}")
             
             # Calculate communication matrix for specific pathway
-            pathway_matrix = np.zeros((self.n_cell_types, self.n_cell_types))
+            count_matrix = np.zeros((self.n_cell_types, self.n_cell_types))
+            weight_matrix = np.zeros((self.n_cell_types, self.n_cell_types))
             pathway_mask = self.adata.var['classification'].isin(signaling)
             pathway_indices = np.where(pathway_mask)[0]
             
@@ -1853,13 +1860,15 @@ class CellChatViz(CellChatVizPlus):
                 
                 sig_mask = pvals < pvalue_threshold
                 if np.any(sig_mask):
-                    pathway_matrix[sender_idx, receiver_idx] += np.sum(means[sig_mask])
+                    count_matrix[sender_idx, receiver_idx] += np.sum(sig_mask)
+                    weight_matrix[sender_idx, receiver_idx] += np.sum(means[sig_mask])
             
-            matrix = pathway_matrix
+            matrix = count_matrix if measure == "count" else weight_matrix
             heatmap_title = f"{title} - {', '.join(signaling)}"
         else:
             # Use aggregated communication matrix
-            _, matrix = self.compute_aggregated_network(pvalue_threshold)
+            count_matrix, weight_matrix = self.compute_aggregated_network(pvalue_threshold)
+            matrix = count_matrix if measure == "count" else weight_matrix
             heatmap_title = title
         
         # Create DataFrame for better labeling
@@ -1870,7 +1879,8 @@ class CellChatViz(CellChatVizPlus):
         
         # Create marsilea heatmap
         h = ma.Heatmap(df_matrix, linewidth=linewidth, 
-                    cmap=color_heatmap, label="Interaction Strength")
+                    cmap=color_heatmap,
+                    label="Number of interactions" if measure == "count" else "Interaction Strength")
         
         # Add row and column grouping - this is a key step!
         #h.group_rows(df_matrix.index, order=df_matrix.index.tolist())

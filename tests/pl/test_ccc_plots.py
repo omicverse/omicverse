@@ -413,6 +413,108 @@ def test_ccc_heatmap_aggregation_routes_through_cellchatviz_backend(monkeypatch,
     assert called["kwargs"]["show_col_names"] is True
 
 
+def test_ccc_heatmap_count_measure(monkeypatch, comm_adata: AnnData) -> None:
+    called: dict[str, object] = {}
+
+    class _StubViz:
+        def netVisual_heatmap_marsilea(self, **kwargs):
+            called.update(kwargs)
+            return "plotter"
+
+    monkeypatch.setattr(ccc_mod, "_build_cellchatviz", lambda adata, *, palette=None: _StubViz())
+    monkeypatch.setattr(
+        ccc_mod,
+        "_render_plotter_figure",
+        lambda plotter, *, title=None, add_custom_legends=False: plt.subplots(),
+    )
+
+    ov.pl.ccc_heatmap(
+        comm_adata,
+        plot_type="heatmap",
+        display_by="aggregation",
+        value="count",
+        show=False,
+    )
+
+    assert called["measure"] == "count"
+
+
+def test_cpdb_heatmap_count_direction(monkeypatch) -> None:
+    captured: dict[str, object] = {"numbers": {}}
+
+    class _Heatmap:
+        def __init__(self, data, **kwargs):
+            captured["matrix"] = data.to_numpy()
+            captured["label"] = kwargs["label"]
+
+        def add_left(self, plotter, **kwargs):
+            return None
+
+        def add_top(self, plotter, **kwargs):
+            return None
+
+        def add_bottom(self, plotter, **kwargs):
+            return None
+
+        def add_legends(self):
+            return None
+
+        def add_title(self, title):
+            return None
+
+        def add_dendrogram(self, side, **kwargs):
+            return None
+
+    class _Plotter:
+        @staticmethod
+        def Numbers(values, **kwargs):
+            captured["numbers"][kwargs["label"]] = np.asarray(values)
+            return object()
+
+        @staticmethod
+        def Colors(*args, **kwargs):
+            return object()
+
+        @staticmethod
+        def Labels(*args, **kwargs):
+            return object()
+
+    class _Marsilea:
+        Heatmap = _Heatmap
+        plotter = _Plotter
+
+    monkeypatch.setattr(cpdbviz_mod, "MARSILEA_AVAILABLE", True)
+    monkeypatch.setattr(cpdbviz_mod, "ma", _Marsilea)
+
+    viz = ov.pl.CellChatViz(_build_comm_adata_with_duplicate_pairs())
+    viz.netVisual_heatmap_marsilea(measure="count", add_dendrogram=False)
+
+    np.testing.assert_array_equal(captured["matrix"], np.array([[0.0, 3.0], [2.0, 0.0]]))
+    np.testing.assert_array_equal(captured["numbers"]["Outgoing"], np.array([3.0, 2.0]))
+    np.testing.assert_array_equal(captured["numbers"]["Incoming"], np.array([2.0, 3.0]))
+    assert captured["label"] == "Number of interactions"
+
+
+def test_ccc_count_legend(monkeypatch, comm_adata: AnnData) -> None:
+    captured: dict[str, object] = {}
+
+    def _fake_plot(matrix, size_matrix, **kwargs):
+        captured.update(kwargs)
+        return plt.subplots()
+
+    monkeypatch.setattr(ccc_mod, "_dot_matrix_plot", _fake_plot)
+
+    ov.pl.ccc_heatmap(
+        comm_adata,
+        plot_type="bubble",
+        display_by="aggregation",
+        value="count",
+        show=False,
+    )
+
+    assert captured["color_label"] == "Number of interactions"
+
+
 def test_ccc_heatmap_aggregation_rejects_interaction_filters(comm_adata: AnnData) -> None:
     with pytest.raises(ValueError, match="interaction_use"):
         ov.pl.ccc_heatmap(
