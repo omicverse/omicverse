@@ -1,5 +1,10 @@
 """Vendored SAMap (Tarashansky et al. 2021, eLife) + sam-algorithm.
 
+Source: https://github.com/atarashansky/SAMap (Tarashansky, Musser, Khariton,
+Li & Wang, Stanford University). Upstream is MIT-licensed; the license is
+carried verbatim beside this file in ``LICENSE`` and applies to every source
+file in this directory.
+
 Cross-species single-cell integration via BLAST protein-homology graphs and the
 Self-Assembling Manifold algorithm. Vendored (source copied) rather than pip
 -installed because upstream pins ``numpy==1.23.5`` / ``scanpy==1.9.3`` /

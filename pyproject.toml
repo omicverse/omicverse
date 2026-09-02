@@ -503,6 +503,10 @@ exclude = [
 "omicverse.synbio" = ["external/*.fasta", "external/cfd/*.pkl"]
 # Vendored PDBFixer: residue templates + forcefield XML must ship in the wheel
 "omicverse.external.pdbfixer" = ["*.xml", "templates/*.pdb", "LICENSE"]
+# Vendored third-party source: the upstream licence has to travel with the code
+# that it covers, so it ships in the wheel alongside it.
+"omicverse.external.samap" = ["LICENSE"]
+"omicverse.llm.UCE" = ["LICENSE"]
 
 [tool.pytest.ini_options]
 asyncio_mode = "auto"
