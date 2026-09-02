@@ -15,6 +15,7 @@ from ..data_collator import DataCollator
 from ..model import TransformerModel
 from ..tokenizer import GeneVocab
 from ..utils import load_pretrained
+from ...._anndata_compat import as_dtype as _as_dtype
 
 PathLike = Union[str, os.PathLike]
 
@@ -274,7 +275,7 @@ def embed_data(
 
     if return_new_adata:
         obs_df = adata.obs[obs_to_save] if obs_to_save is not None else None
-        return sc.AnnData(X=cell_embeddings, obs=obs_df, dtype="float32")
+        return sc.AnnData(X=_as_dtype(cell_embeddings, "float32"), obs=obs_df)
 
     adata.obsm["X_scGPT"] = cell_embeddings
     return adata

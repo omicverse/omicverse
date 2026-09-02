@@ -11,6 +11,7 @@ from anndata import AnnData
 
 from tqdm import tqdm
 from typing import Optional
+from ..._anndata_compat import as_dtype as _as_dtype
 
 
 # Chromatin structure data related
@@ -215,7 +216,7 @@ def aggregate_peaks_10x(adata_atac, peak_annot_file, linkage_file, peak_dist=200
                 peak_index = np.where(var_names == peak)[0][0]
                 gene_mat[:,i] += adata_atac_X_copy[:,peak_index]
     gene_mat[gene_mat < 0] = 0
-    gene_mat = AnnData(X=sp.csr_matrix(gene_mat), dtype=np.float32)
+    gene_mat = AnnData(X=_as_dtype(sp.csr_matrix(gene_mat), np.float32))
     gene_mat.obs_names = pd.Index(list(adata_atac.obs_names))
     gene_mat.var_names = pd.Index(promoter_genes)
     gene_mat = gene_mat[:,gene_mat.X.sum(0) > 0]

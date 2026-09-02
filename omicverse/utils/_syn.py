@@ -12,6 +12,7 @@ import scipy
 from anndata import AnnData
 #from scanpy import read
 import scanpy as sc
+from .._anndata_compat import as_dtype as _as_dtype
 
 
 logger = logging.getLogger(__name__)
@@ -89,7 +90,7 @@ def _generate_synthetic(
         labels = np.random.randint(0, n_labels, size=(n_obs,))
         labels = np.array([f"label_{i}" for i in labels])
 
-    adata = AnnData(rna, dtype=np.float32)
+    adata = AnnData(_as_dtype(rna, np.float32))
     if n_proteins > 0:
         adata.obsm[protein_expression_key] = protein
         adata.uns[protein_names_key] = protein_names
