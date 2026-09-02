@@ -6,6 +6,7 @@ from tqdm import tqdm
 
 
 from .evaluate import compute_celltype_purity
+from ..._anndata_compat import as_dtype as _as_dtype
 
 
 def SEACells(
@@ -178,7 +179,7 @@ def summarize_by_soft_SEACell(
             seacell_purities.append(celltype.values[0])
 
     seacell_expressions = csr_matrix(np.array(seacell_expressions))
-    seacell_ad = sc.AnnData(seacell_expressions, dtype=seacell_expressions.dtype)
+    seacell_ad = sc.AnnData(_as_dtype(seacell_expressions, seacell_expressions.dtype))
     seacell_ad.var_names = ad.var_names
     seacell_ad.obs["Pseudo-sizes"] = A.sum(0)
     if compute_seacell_celltypes:
@@ -224,7 +225,8 @@ def summarize_by_SEACell(
     # Ann data
 
     # Counts
-    meta_ad = sc.AnnData(csr_matrix(summ_matrix), dtype=csr_matrix(summ_matrix).dtype)
+    _summ = csr_matrix(summ_matrix)
+    meta_ad = sc.AnnData(_as_dtype(_summ, _summ.dtype))
     meta_ad.obs_names, meta_ad.var_names = summ_matrix.index.astype(str), ad.var_names
     meta_ad.layers["raw"] = csr_matrix(summ_matrix)
 

@@ -19,6 +19,7 @@ warnings.filterwarnings("ignore")
 import warnings
 import logging
 import pytorch_lightning as pl
+from ...._anndata_compat import as_dtype as _as_dtype
 #logging.getLogger("pytorch_lightning").setLevel(logging.ERROR)
 logging.getLogger("pytorch_lightning").setLevel(logging.CRITICAL)
 
@@ -67,7 +68,7 @@ def setdata(name:str,sid:str,device:str='cuda:0',k:int=15,diagw:float=1.0)  -> T
         geneset_len = sample_geneset.shape[1]
 
         features = np.concatenate([adata.X,sample_geneset],1)
-        bdata = anndata.AnnData(features,dtype='float32')
+        bdata = anndata.AnnData(_as_dtype(features, 'float32'))
         bdata.obs = adata.obs
         bdata.obsm = adata.obsm
         bdata.uns = adata.uns

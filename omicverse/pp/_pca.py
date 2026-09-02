@@ -40,6 +40,7 @@ from ..utils._memory import (
     AUTO_DENSE_CPU_MEM_FRACTION,
     MAX_SAFE_DENSE_ELEMENTS,
 )
+from .._anndata_compat import as_dtype as _as_dtype
 
 
 def _sparse_density(x: CSBase) -> float:
@@ -811,7 +812,7 @@ def pca(  # noqa: PLR0912, PLR0913, PLR0915
         adata = data
         return_anndata = True
     elif pkg_version("anndata") < Version("0.8.0rc1"):
-        adata = AnnData(data, dtype=data.dtype)
+        adata = AnnData(_as_dtype(data, data.dtype))
         return_anndata = False
     else:
         adata = AnnData(data)

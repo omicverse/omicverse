@@ -2099,6 +2099,7 @@ def _uns_put_colors(adata, key, colors_list):
 
 import numpy as np
 from matplotlib.colors import to_hex, to_rgba
+from .._anndata_compat import sanitize_key as _safe_key
 
 def _uns_supports_str_array(uns) -> bool:
     """检测 .uns 是否能安全读回“字符串数组”。Rust 端通常 False。"""
@@ -2125,10 +2126,10 @@ def _uns_put_colors_dual(adata, name: str, colors_list):
     ]
     # ① RGBA 始终写（Rust/pyanndata 最稳）
     rgba = np.asarray([to_rgba(h) for h in hex_list], dtype=np.float32)
-    adata.uns[f"{name}_colors_rgba"] = rgba
+    adata.uns[f"{_safe_key(name)}_colors_rgba"] = rgba
 
     # ② 若支持字符串数组读取，再额外写 …_colors
-    adata.uns[f"{name}_colors"] = np.asarray(hex_list, dtype="U16")
+    adata.uns[f"{_safe_key(name)}_colors"] = np.asarray(hex_list, dtype="U16")
 
 def _uns_read_colors_dual(adata, name: str):
     """
@@ -2137,7 +2138,7 @@ def _uns_read_colors_dual(adata, name: str):
     """
     # 先试字符串数组（Python anndata 情况）
     try:
-        v = adata.uns[f"{name}_colors"]
+        v = adata.uns[f"{_safe_key(name)}_colors"]
         if hasattr(v, "to_list"):      # Polars Series
             v = v.to_list()
         arr = np.asarray(v)
@@ -2147,6 +2148,6 @@ def _uns_read_colors_dual(adata, name: str):
         pass  # Rust 端可能抛 PanicException 或 TypeError
 
     # 降级到 RGBA
-    v = adata.uns[f"{name}_colors_rgba"]
+    v = adata.uns[f"{_safe_key(name)}_colors_rgba"]
     arr = v.to_numpy() if hasattr(v, "to_numpy") else np.asarray(v)
     return [to_hex(tuple(row), keep_alpha=True) for row in arr]

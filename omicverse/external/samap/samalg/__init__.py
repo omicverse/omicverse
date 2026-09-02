@@ -16,6 +16,7 @@ from numba.core.errors import NumbaWarning
 from sklearn.utils.extmath import svd_flip
 from scipy.linalg import block_diag
 import harmonypy
+from ...._anndata_compat import anndata_version as _ad_version
 
 warnings.filterwarnings("ignore", category=NumbaWarning)
 
@@ -442,7 +443,7 @@ class SAM(object):
                 self.adata_raw.obs_names = self.adata.obs_names
                 self.adata_raw.obs = self.adata.obs
 
-                if version.parse(str(anndata.__version__)) >= version.parse("0.7rc1"):
+                if version.parse('.'.join(map(str, _ad_version()))) >= version.parse("0.7rc1"):
                     del self.adata.raw
                 else:
                     self.adata.raw = None
@@ -504,7 +505,7 @@ class SAM(object):
             y.name = str(y.name) if y.name is not None else None
 
         x.write_h5ad(fname, **kwargs)
-        if version.parse(str(anndata.__version__)) >= version.parse("0.7rc1"):
+        if version.parse('.'.join(map(str, _ad_version()))) >= version.parse("0.7rc1"):
             del x.raw
         else:
             x.raw = None

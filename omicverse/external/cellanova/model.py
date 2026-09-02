@@ -14,6 +14,7 @@ from scipy.sparse.linalg import svds
 import gc
 import sys
 from tqdm import tqdm
+from ..._anndata_compat import as_dtype as _as_dtype
 
 
 
@@ -47,12 +48,12 @@ def calc_ME(adata, integrate_key, k_harmony=70, dim_ME = 70, return_harmony = Fa
     '''
 
     # harmony integration
-    rna_temp = ad.AnnData(adata[:, adata.var.highly_variable].X, dtype = np.float32)
+    rna_temp = ad.AnnData(_as_dtype(adata[:, adata.var.highly_variable].X, np.float32))
     rna_temp.var_names = adata[:, adata.var.highly_variable].var_names
     rna_temp.obs = adata.obs.copy()
     sc.tl.pca(rna_temp, n_comps = k_harmony)
     sce.pp.harmony_integrate(rna_temp, integrate_key, max_iter_harmony = 30)
-    adata_harmony = ad.AnnData(rna_temp.obsm['X_pca_harmony'] @ rna_temp.varm['PCs'].T, dtype = np.float32)
+    adata_harmony = ad.AnnData(_as_dtype(rna_temp.obsm['X_pca_harmony'] @ rna_temp.varm['PCs'].T, np.float32))
     adata_harmony.var_names = rna_temp.var_names
     adata_harmony.obs = rna_temp.obs.copy()
 

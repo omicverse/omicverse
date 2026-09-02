@@ -83,8 +83,15 @@ dependencies = [
     'omicverse-skills>=0.3.0',
     'omicverse-notebook>=0.1.4',
     #'cvxpy>=1.3',
-    'zarr<3.0.0',
-    'anndata<0.12.0',
+    # anndata 0.12 is the only release that works with either zarr generation
+    # (`zarr!=3.0.*,>=2.18.7`); 0.13 requires zarr 3, and 0.11 requires zarr 2.
+    # Supporting the range means the floor is anndata's own, and zarr 3.0.x is
+    # excluded because anndata excludes it. omicverse itself touches zarr in two
+    # places only -- an isinstance check and one zarr.open on a tifffile store --
+    # so the 2-to-3 difference is absorbed by anndata, not by us.
+    # Version differences that do reach our code live in omicverse/_anndata_compat.py.
+    'anndata>=0.10,<0.14',
+    'zarr>=2.18.7,!=3.0.*',
 ]
 
 [project.optional-dependencies]
@@ -157,7 +164,7 @@ easy=[
   'metatime>=1.3.0',
   'graphtools>=1.5',
   'pandas<3.0.0',
-  'anndata<0.12.0',
+  'anndata>=0.10,<0.14',
   'numpy>=1.23',
 ]
 
