@@ -1,0 +1,113 @@
+# Run started at:
+start_time:
+
+# Bonsai run-configurations
+
+###################################### Input-output configurations ###################################################
+
+# dataset [str, required]: Identifier of dataset.
+dataset: new_dataset
+
+# data_folder [str, default='']:
+# Path (absolute or relative to "bonsai-development") to folder where input data can be found. This folder
+# should contain a file with means and standard-deviations in files "delta.txt" and "d_delta.txt" unless filenames_data
+# changes this behaviour.
+data_folder: data/new_dataset
+
+# filenames_data [str, default=features.txt,standard_deviations.txt]:
+# Filenames of input-files for means and standard deviations separated by a comma. These files
+# should have different cells as columns, and features (such as log transcription quotients) as rows.
+filenames_data: features.txt,standard_deviations.txt
+
+# results_folder [str, default='']:
+# Path (absolute or relative to "bonsai-development") to folder where results will be stored.'
+results_folder: results/new_dataset
+
+# verbose [bool, default=true]: False only shows essential print messages
+verbose: true
+
+# input_is_sanity_output [bool, default=true]:
+# The provided means and stds by Sanity are the means and stds of the posterior for the
+# feature: P(x | D), but in Bonsai we need the likelihood of the data given the feature value:
+# P(D | x). These are related through P(x | D) ~ P(D | x) P(x). So, we need to divide
+# out the prior. If the input is Sanity-output, we know how to do this because the reported
+# posterior is Gaussian and the prior was Gaussian around zero (see the SI of the
+# Bonsai-publication.
+# If your input data is not Sanity-output, set this flag to False, but make sure to provide
+# Bonsai with the required means and variances of the likelihood (P(D | x)).
+input_is_sanity_output: true
+
+
+######################################## Running parameters ######################################################
+
+# zscore_cutoff [float, default=1]:
+# Genes with a signal-to-noise ratio under this cutoff will be dropped. Negative means: keep all.
+# Due to the large number of genes dominated by noise, tree-reconstruction is usually better when we discard the most
+# noisy genes, even though we account for error-bars rigorously.
+# zscore is defined as: z_g = frac{1}{C} sum_c frac{(delta_{gc} - bar{delta_g})^2}{epsilon_{gc}^2}
+# where delta_{gc} is the feature value for gene g and cell c, epsilon_{gc} is the standard-deviation
+zscore_cutoff: 1.0
+
+# rescale_by_var [bool, default=True]:
+# This determines whether coordinates are rescaled by the inferred variance per gene (feature).
+# This is equivalent to putting the prior assumption that it is more likely to see change in a certain gene's expression
+# when the gene shows much variation over the whole dataset. We infer feature variances as described in the Bonsai-paper. 
+#
+# If you want to use your own inferred variances instead, you can rescale the data by the variances yourself. This means you just divide the input files (features and standard_deviations) by the square-root of the variances before giving it to Bonsai. In that case, set this flag to False.
+rescale_by_var: true
+
+# nnn_n_randommoves [int, default=1000]:
+# Decides how many random nearest-neighbor-interchange-moves we do before doing them greedily.
+nnn_n_randommoves: 1000
+
+# nnn_n_randomtrees [int, default=10]:
+# Decides how many random trees we create before taking the tree with the highest loglikelihood and doing nnn greedily.
+# Since we parallelized this procedure over the number of random trees, it never hurts to set nnn_n_randomtrees equal to the
+# number of cores that are anyhow reserved, since then the different random trees will be created in parallel.
+nnn_n_randomtrees: 10
+
+
+######################################## Speed-up configurations ######################################################
+
+# use_knn [int, default=10]:
+# Decides whether nearest-neighbours are used to get candidate pairs to merge. Set to -1 for consideringall pairs of
+# leafs. Values between 5 and 20 give good results. Computation time will scale approximately linear with use_knn, but
+# tree likelihood may also increase slightly with this parameter.
+use_knn: 10
+
+# UB_ellipsoid_size [float, default=1.0]:
+# This is a purely computational optimization that does not affect the final result.
+# Decides whether we calculate an upper bound (UB) for the increase in loglikelihood that
+# merging a certain pair can yield, given that a the root stays in a certain ellipsoid. Using these upper bounds, the
+# calculation can be sped up enormously. If the UB_ellipsoid_size < 0, this estimation will not be used. Otherwise,
+# it decides how large the ellipsoid is in root-position/precision space for which we estimate the UB. Larger values
+# will result in looser UB, so that more candidate pairs per merge have to be considered. However, it will also
+# result in longer validity of the UB-estimation, so that more merges can be done without re-calculating the upper
+# bounds.
+# Ellipsoid sizes below 5 are reasonable to try, we recommend to start at 1. Ellipsoid size will be updated dynamically
+# by Bonsai based on the results.
+UB_ellipsoid_size: 1.0
+
+# SPR-strategy [string, default='large_tree']
+# Move to general config-file later. This will determine what strategy we follow for the
+# spr-moves. Current options are 'large_tree', 'long_branch_sorted', 'super_sure'.
+# NOTE: Only large_tree allows for parallelization, the rest will only use 1 CPU.
+spr_strategy: large_tree
+
+
+########################### Information on starting from previous runs configurations ###############################
+
+# pickup_intermediate [bool, default=false]:
+# Decides whether we look for intermediate results from previous runs or not. These
+# intermediate results are periodically stored during any normal run, and can thus be used when a run did not finalize.
+pickup_intermediate: false
+
+
+############################################## Advanced features ######################################################
+
+# (ADVANCED) tmp_folder [str, default='']:
+# Path (absolute path or relative to "bonsai-development") pointing to a tree-folder from which
+# Bonsai reconstruction will start.
+# Relevant if one wants to start from a tree other than the usual star-tree, for example if one already created a
+# tree-object where cellstates were connected to a common ancestor.
+tmp_folder: ''

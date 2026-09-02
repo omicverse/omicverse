@@ -195,6 +195,7 @@ from ._flowsig import (
     plot_flowsig_network,
 )
 from ._embedding import embedding_atlas
+from ._bonsai import bonsai
 from ._cnv import cnv_heatmap, cnv_summary, cnv_umap
 from ._metabolism import metabolism_heatmap
 from ._metacell import (
@@ -380,6 +381,7 @@ __all__ = [
     "trajectory_tree",
     "purple_color",
     "red_color",
+    "bonsai",
     "sc_color",
     "vibrant_palette",
     "palplot",
