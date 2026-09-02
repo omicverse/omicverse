@@ -506,6 +506,10 @@ exclude = [
 # Vendored third-party source: the upstream licence has to travel with the code
 # that it covers, so it ships in the wheel alongside it.
 "omicverse.external.samap" = ["LICENSE"]
+# Vendored Bonsai (CC BY-NC 4.0): the licence, the citation file and the
+# config template the runner seeds every run from all have to ship.
+"omicverse.external.bonsai" = ["LICENSE-CC-BY-NC-4.0.md", "CITATION.cff"]
+"omicverse.external.bonsai.bonsai" = ["config_template_do_not_change/*.yaml"]
 "omicverse.llm.UCE" = ["LICENSE"]
 
 [tool.pytest.ini_options]

@@ -8,7 +8,7 @@ include requirements-latest.txt
 
 # Vendored third-party licences carry no file extension, so the pattern below
 # would miss them; they must ship in the sdist with the code they cover.
-recursive-include omicverse LICENSE*
+recursive-include omicverse LICENSE* CITATION.cff
 recursive-include omicverse *.py *.pyi *.json *.txt *.yaml *.yml *.csv *.tsv *.md *.ipynb *.html *.css *.js *.png *.jpg *.jpeg *.svg *.ico *.db *.npz *.gz *.fasta *.pkl
 include omicverse/external/scMulan/utils/meta_info.pt
 

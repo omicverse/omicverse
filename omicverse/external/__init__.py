@@ -19,6 +19,7 @@ Algorithm categories:
     Trajectory inference:
         - STT: Spatial transition tensor
         - VIA: Velocity integration and annotation
+        - bonsai: Maximum-likelihood cell-state tree (CC BY-NC 4.0)
         - cytotrace2: Developmental potential scoring
         - monocle2_py: Pure-Python reimplementation of Monocle 2 (DDRTree)
         
@@ -86,6 +87,7 @@ _TORCH_HEAVY_MODULES = {
 }
 
 __all__ = [
+    'bonsai',
     'scSLAT',
     'CEFCON',
     'mofapy2',

@@ -1,0 +1,45 @@
+cff-version: 1.2.0
+
+title: "Bonsai-data-representation"
+message: "If you use this software, please cite both the software and the associated preprint."
+type: software
+authors:
+  - family-names: "de Groot"
+    given-names: "Daan H."
+    affiliation: "Biozentrum, University of Basel"
+
+  - family-names: "Morillo Leonardo"
+    given-names: "Sarah X."
+    affiliation: "Biozentrum, University of Basel"
+
+  - family-names: "Pachkov"
+    given-names: "Mikhail"
+    affiliation: "Biozentrum, University of Basel"
+
+  - family-names: "van Nimwegen"
+    given-names: "Erik"
+    affiliation: "Biozentrum, University of Basel"
+
+url: "https://github.com/dhdegroot/Bonsai-data-representation"
+version: 1.0.0
+date-released: 2026-05-25
+
+preferred-citation:
+  type: article
+  title: "Bonsai: Tree representations for distortion-free visualization and exploratory analysis of single-cell omics data"
+  authors:
+    - family-names: "de Groot"
+      given-names: "Daan H."
+
+    - family-names: "Morillo Leonardo"
+      given-names: "Sarah X."
+
+    - family-names: "Pachkov"
+      given-names: "Mikhail"
+
+    - family-names: "van Nimwegen"
+      given-names: "Erik"
+
+  journal: "bioRxiv"
+  year: 2025
+  doi: "10.1101/2025.05.08.652944"
