@@ -114,5 +114,6 @@ used a separate environment with causaldag 0.1a163, CuPy CUDA12 14.2.0 and NVIDI
 CUDA runtime/NVRTC wheels. The obsolete `typing` and `dataclasses` backports
 pulled by causaldag were removed from that test environment because `typing`
 shadowed the Python standard library in a CUDA subprocess. The user's original
-analysis environment was not modified. CI runs CPU validation; real GPU parity
-is a separately reported local test, never counted as passed when skipped.
+analysis environment was not modified. These commands can be run locally;
+this change does not add or modify any CI workflow. Real GPU parity is a
+separately reported local test, never counted as passed when skipped.
