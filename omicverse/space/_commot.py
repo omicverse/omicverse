@@ -1,496 +1,174 @@
-#!/usr/bin/env python3
-"""
-Process all commot entries and create CellChat-style AnnData object
-with obs=cell type pairs, var=ligand-receptor pairs, layers=['pvalues', 'means']
-"""
+"""Select and summarize COMMOT outputs with explicit statistical meaning."""
+import warnings
+from itertools import product
 
+import anndata as ad
 import numpy as np
 import pandas as pd
-import anndata as ad
-from tqdm import tqdm
-from itertools import combinations_with_replacement
+
 from .._registry import register_function
+
 
 def _get_summarize_cluster_gpu():
     from ..external.commot.tools._spatial_communication import summarize_cluster_gpu
-
     return summarize_cluster_gpu
 
-@register_function(
-    aliases=["通信AnnData", "create_communication_anndata", "cellchat格式转换", "commot汇总", "细胞通信汇总"],
-    category="space",
-    description="Build CellChat-style AnnData from commot communication outputs",
-    prerequisites={
-        "optional_functions": []
-    },
-    requires={
-        "obsp": ["commot-*"],
-        "obs": ["clustering_column"]
-    },
-    produces={
-        "layers": ["means", "pvalues"],
-        "obs": ["sender", "receiver", "cell_type_pair"],
-        "var": ["interacting_pair", "classification"]
-    },
-    auto_fix="none",
-    examples=[
-        "comm_adata = ov.space.create_communication_anndata(adata, 'cell_type', n_permutations=100)",
-        "comm_adata.layers['means']",
-    ],
-    related=["space.update_classification_from_database"],
-)
-def create_communication_anndata(adata, clustering_column, n_permutations=100):
-    """
-    Build a CellChat-style communication AnnData from commot outputs.
-    
-    Parameters
-    ----------
-    adata : anndata.AnnData
-        Input spatial AnnData containing commot communication matrices in
-        ``adata.obsp`` and optional commot database metadata in ``adata.uns``.
-    clustering_column : str
-        Column name for cell type clustering
-    n_permutations : int
-        Number of permutations for p-value calculation
-        
-    Returns
-    -------
-    comm_adata : anndata.AnnData
-        Communication results with structure:
-        - obs: cell type pairs ('celltype1|celltype2')  
-        - var: ligand-receptor pairs with metadata
-        - layers: 'pvalues' and 'means'
-    """
-    
-    summarize_cluster_gpu = _get_summarize_cluster_gpu()
 
-    # Get cluster info
-    celltypes = list(adata.obs[clustering_column].unique())
-    celltypes.sort()
-    clusterid = np.array(adata.obs[clustering_column], str)
-    
-    # Find all commot keys and categorize them
-    commot_keys = [key for key in adata.obsp.keys() if key.startswith('commot')]
-    print(f"Found {len(commot_keys)} commot entries")
-    
-    # Extract ligand-receptor information from commot database info
-    lr_pairs = []
-    lr_metadata = []
-    
-    # Find database info
-    database_info_keys = [key for key in adata.uns.keys() if key.startswith('commot-') and key.endswith('-info')]
-    
-    if database_info_keys:
-        # Use database info to get L-R pair details
-        db_key = database_info_keys[0]  # Use first database
-        df_ligrec = adata.uns[db_key]['df_ligrec']
-        
-        for _, row in df_ligrec.iterrows():
-            ligand = row['ligand']
-            receptor = row['receptor'] 
-            pathway = row['pathway']
-            
-            lr_pair_name = f"{ligand}-{receptor}"
-            lr_pairs.append(lr_pair_name)
-            
-            lr_metadata.append({
-                'interacting_pair': lr_pair_name,
-                'partner_a': ligand,
-                'partner_b': receptor,
-                'gene_a': ligand,
-                'gene_b': receptor,
-                'classification': pathway,
-                'secreted': True,  # Default assumption
-                'receptor_a': False,
-                'receptor_b': True,
-                'annotation_strategy': 'commot',
-                'is_integrin': False,
-                'directionality': 'ligand-receptor',
-                'id_cp_interaction': f"commot_{ligand}_{receptor}"
-            })
-    else:
-        # Fallback: extract from commot key names
-        for key in commot_keys:
-            if key.count('-') >= 3:  # Format: commot-database-ligand-receptor
-                parts = key.split('-')
-                if len(parts) >= 4:
-                    ligand = parts[2]
-                    receptor = parts[3]
-                    
-                    lr_pair_name = f"{ligand}-{receptor}"
-                    if lr_pair_name not in lr_pairs:
-                        lr_pairs.append(lr_pair_name)
-                        
-                        lr_metadata.append({
-                            'interacting_pair': lr_pair_name,
-                            'partner_a': ligand,
-                            'partner_b': receptor,
-                            'gene_a': ligand,
-                            'gene_b': receptor,
-                            'classification': 'Unknown',
-                            'secreted': True,
-                            'receptor_a': False,
-                            'receptor_b': True,
-                            'annotation_strategy': 'commot',
-                            'is_integrin': False,
-                            'directionality': 'ligand-receptor',
-                            'id_cp_interaction': f"commot_{ligand}_{receptor}"
-                        })
-    
-    # Create cell type pairs (sender|receiver format)
-    cell_pairs = []
-    for sender in celltypes:
-        for receiver in celltypes:
-            cell_pairs.append(f"{sender}|{receiver}")
-    
-    print(f"Processing {len(cell_pairs)} cell type pairs × {len(commot_keys)} pathways")
-    
-    # Initialize data matrices
-    n_pairs = len(cell_pairs)
-    n_interactions = len(commot_keys)
-    
-    means_matrix = np.zeros((n_pairs, n_interactions))
-    pvalues_matrix = np.ones((n_pairs, n_interactions))  # Default p=1
-    
-    # Create interaction metadata for each commot key
-    interaction_metadata = []
-    
-    # Process each commot entry
-    for j, key in enumerate(tqdm(commot_keys, desc="Processing pathways")):
-        S = adata.obsp[key]
-        df_cluster, df_p_value = summarize_cluster_gpu(S, clusterid, celltypes, n_permutations,scale_factor='sum')
-        
-        # Extract pathway/interaction info from key
-        if key.startswith('commot-cellchat-'):
-            pathway_part = key.replace('commot-cellchat-', '')
-            if '-' in pathway_part and not pathway_part.endswith('-total'):
-                # Individual L-R pair
-                ligand, receptor = pathway_part.split('-', 1)
-                interaction_name = f"{ligand}-{receptor}"
-                classification = "Individual_LR"
-            else:
-                # Pathway or total
-                interaction_name = pathway_part
-                classification = "Pathway" if pathway_part != "total-total" else "Total"
-        else:
-            interaction_name = key
-            classification = "Unknown"
-        
-        # Store interaction metadata
-        interaction_metadata.append({
-            'interacting_pair': interaction_name,
-            'partner_a': interaction_name.split('-')[0] if '-' in interaction_name else interaction_name,
-            'partner_b': interaction_name.split('-')[1] if '-' in interaction_name and len(interaction_name.split('-')) > 1 else interaction_name,
-            'gene_a': interaction_name.split('-')[0] if '-' in interaction_name else interaction_name,
-            'gene_b': interaction_name.split('-')[1] if '-' in interaction_name and len(interaction_name.split('-')) > 1 else interaction_name,
-            'classification': classification,
-            'secreted': True,
-            'receptor_a': False,
-            'receptor_b': True,
-            'annotation_strategy': 'commot',
-            'is_integrin': False,
-            'directionality': 'ligand-receptor',
-            'id_cp_interaction': f"commot_{interaction_name.replace('-', '_')}"
-        })
-        
-        # Fill data matrices
-        for i, (sender, receiver) in enumerate([(pair.split('|')[0], pair.split('|')[1]) for pair in cell_pairs]):
-            if sender in df_cluster.index and receiver in df_cluster.columns:
-                means_matrix[i, j] = df_cluster.loc[sender, receiver]
-                pvalues_matrix[i, j] = df_p_value.loc[sender, receiver]
-    
-    # Create observation metadata
-    obs_data = []
-    for pair in cell_pairs:
-        sender, receiver = pair.split('|')
-        obs_data.append({
-            'sender': sender,
-            'receiver': receiver,
-            'cell_type_pair': pair
-        })
-    
-    obs_df = pd.DataFrame(obs_data, index=cell_pairs)
-    var_df = pd.DataFrame(interaction_metadata, index=commot_keys)
-    
-    # Create AnnData object
-    comm_adata = ad.AnnData(
-        X=means_matrix,  # Default layer
-        obs=obs_df,
-        var=var_df
-    )
-    
-    # Add layers
-    comm_adata.layers['means'] = means_matrix
-    comm_adata.layers['pvalues'] = pvalues_matrix
-    
-    print(f"✅ Created AnnData: {comm_adata.n_obs} obs × {comm_adata.n_vars} vars")
-    print(f"   obs (cell pairs): {list(comm_adata.obs.columns)}")
-    print(f"   var (interactions): {list(comm_adata.var.columns)}")
-    print(f"   layers: {list(comm_adata.layers.keys())}")
-    
-    return comm_adata
+def _result_metadata(adata, database_name=None):
+    available = [key[7:-5] for key in adata.uns
+                 if key.startswith('commot-') and key.endswith('-info')
+                 and isinstance(adata.uns[key], dict) and 'df_ligrec' in adata.uns[key]]
+    if database_name is None:
+        if len(available) != 1:
+            raise ValueError(f'Choose database_name explicitly; available databases: {available}.')
+        database_name = available[0]
+    if database_name not in available:
+        raise ValueError(f'Missing commot-{database_name}-info with df_ligrec; preserve backend metadata.')
+    db = adata.uns[f'commot-{database_name}-info']['df_ligrec']
+    if not {'ligand', 'receptor', 'pathway'}.issubset(db.columns):
+        raise ValueError('df_ligrec requires ligand, receptor, pathway columns.')
+    prefix = f'commot-{database_name}-'
+    records = {}
+
+    def add(key, record):
+        if key in records and records[key] != record:
+            raise ValueError(f'Ambiguous COMMOT result key {key!r}; database identities collide.')
+        records[key] = record
+
+    def record(name, level, pathway, ligand='', receptor=''):
+        return dict(interacting_pair=name, level=level, classification=pathway,
+                    gene_a=ligand, gene_b=receptor, partner_a=ligand, partner_b=receptor,
+                    secreted='Unknown', is_integrin='Unknown',
+                    annotation_strategy='commot_database', directionality='ligand-receptor')
+
+    for (ligand, receptor), rows in db.groupby(['ligand', 'receptor'], sort=False, dropna=False):
+        if pd.isna(ligand) or pd.isna(receptor):
+            raise ValueError('Missing ligand/receptor identity.')
+        pathways = sorted(set(rows['pathway'].dropna().astype(str)))
+        entry = record(f'{ligand}-{receptor}', 'lr', ';'.join(pathways) or 'Unknown',
+                       str(ligand), str(receptor))
+        for field in ('secreted', 'is_integrin'):
+            values = rows[field].dropna().unique() if field in rows else []
+            entry[field] = str(values[0]) if len(values) == 1 else 'Unknown'
+        add(prefix + f'{ligand}-{receptor}', entry)
+    for pathway in db['pathway'].dropna().astype(str).unique():
+        add(prefix + pathway, record(pathway, 'pathway', pathway))
+    add(prefix + 'total-total', record('total-total', 'total', 'Total'))
+    for key, entry in records.items():
+        entry['id_cp_interaction'] = key
+    return database_name, records
+
+
+def _summaries(adata, clustering_column, n_permutations, database_name, level, statistic, use_gpu, seed):
+    if level not in ('lr', 'pathway', 'total', 'all'):
+        raise ValueError("level must be 'lr', 'pathway', 'total', or 'all'.")
+    if statistic not in ('sum', 'mean'):
+        raise ValueError("statistic must be 'sum' or 'mean'.")
+    if not isinstance(n_permutations, int) or n_permutations < 1:
+        raise ValueError('n_permutations must be a positive integer.')
+    if clustering_column not in adata.obs or adata.obs[clustering_column].isna().any():
+        raise ValueError('clustering_column must exist and contain no missing labels.')
+    raw_labels = adata.obs[clustering_column]
+    labels = raw_labels.astype(str).to_numpy()
+    if len(pd.unique(raw_labels)) != len(np.unique(labels)):
+        raise ValueError('Cell-type labels collide after conversion to strings.')
+    celltypes = sorted(set(labels))
+    if any('|' in name for name in celltypes):
+        raise ValueError("Cell-type labels cannot contain the plotting separator '|'.")
+    database_name, metadata = _result_metadata(adata, database_name)
+    selected = {key: value for key, value in metadata.items()
+                if key in adata.obsp and (level == 'all' or value['level'] == level)}
+    if not selected:
+        raise ValueError(f'No {level} result matrices found for {database_name}.')
+    if level == 'all':
+        warnings.warn('LR, pathway and total overlap; select one level before aggregating columns.',
+                      UserWarning, stacklevel=3)
+    summarize = _get_summarize_cluster_gpu()
+    results = {}
+    for key in selected:
+        matrix = adata.obsp[key]
+        values = matrix.data if hasattr(matrix, 'tocsr') else np.asarray(matrix)
+        if not np.isfinite(values).all() or (values < 0).any():
+            raise ValueError(f'Invalid non-finite or negative scores in {key}.')
+        # Legacy backend uses the global NumPy RNG; always restore caller state.
+        state = np.random.get_state()
+        try:
+            if seed is not None:
+                np.random.seed(seed)
+            score, pvalue = summarize(matrix, labels, celltypes, n_permutations,
+                                      use_gpu=use_gpu, scale_factor='sum' if statistic == 'sum' else None)
+        finally:
+            np.random.set_state(state)
+        results[key] = {'communication': score, 'pvalue': pvalue}
+    return database_name, selected, celltypes, labels, results
+
+
+@register_function(aliases=['通信AnnData', 'create_communication_anndata'], category='space',
+                   description='Summarize a selected COMMOT database into plotting AnnData.',
+                   examples=["comm = ov.space.create_communication_anndata(adata, 'cell_type', level='lr')"])
+def create_communication_anndata(adata, clustering_column, n_permutations=100, *,
+                                database_name=None, level='all', statistic='sum', use_gpu=False, seed=0):
+    """Return cell-type-pair by interaction AnnData from existing COMMOT results.
+
+    database_name can be omitted only for one database metadata entry.
+    level='all' preserves legacy selection with a warning because the columns
+    overlap; prefer explicit level='lr'. layers['means'] retains its plotting
+    name but contains the requested statistic, recorded in uns['commot_summary'].
+    P-values test labels on a fixed graph, not experimental condition effects.
+    Unknown database annotations remain 'Unknown', never invented booleans.
+    """
+    database_name, metadata, celltypes, labels, results = _summaries(
+        adata, clustering_column, n_permutations, database_name, level, statistic, use_gpu, seed)
+    pairs = list(product(celltypes, repeat=2))
+    names = [f'{a}|{b}' for a, b in pairs]
+    obs = pd.DataFrame({'sender': [a for a, _ in pairs], 'receiver': [b for _, b in pairs],
+                        'cell_type_pair': names,
+                        'n_sender': [int((labels == a).sum()) for a, _ in pairs],
+                        'n_receiver': [int((labels == b).sum()) for _, b in pairs]}, index=names)
+    var = pd.DataFrame.from_dict(metadata, orient='index')
+    scores = np.column_stack([r['communication'].to_numpy().ravel() for r in results.values()])
+    pvalues = np.column_stack([r['pvalue'].to_numpy().ravel() for r in results.values()])
+    output = ad.AnnData(scores, obs=obs, var=var)
+    output.layers['means'] = scores.copy()
+    output.layers['pvalues'] = pvalues
+    output.uns['commot_summary'] = dict(database_name=database_name, level=level, statistic=statistic,
+        score_layer='means', pvalue_method='cell_type_label_permutation_fixed_graph',
+        n_permutations=n_permutations, seed=seed if seed is not None else 'unspecified')
+    return output
+
+
+def process_all_commot(adata, clustering_column, n_permutations=100, return_format='anndata', **kwargs):
+    """Return selected summaries in AnnData or legacy dictionary format."""
+    if return_format == 'anndata':
+        return create_communication_anndata(adata, clustering_column, n_permutations, **kwargs)
+    if return_format != 'dict':
+        raise ValueError("return_format must be 'anndata' or 'dict'.")
+    options = dict(database_name=None, level='all', statistic='sum', use_gpu=False, seed=0)
+    options.update(kwargs)
+    return _summaries(adata, clustering_column, n_permutations, **options)[-1]
+
 
 def quick_demo(adata, clustering_column, max_pathways=5):
-    """
-    Quick demo with subset of pathways
-    """
-    print("🚀 Running quick demo with subset of pathways...")
-    
-    # Temporarily limit pathways for demo
-    all_keys = [key for key in adata.obsp.keys() if key.startswith('commot')]
-    demo_keys = all_keys[:max_pathways]
-    
-    # Create temporary adata with subset
-    adata_demo = adata.copy()
-    for key in all_keys:
-        if key not in demo_keys:
-            del adata_demo.obsp[key]
-    
-    return create_communication_anndata(adata_demo, clustering_column, n_permutations=10)
+    """Return a small LR summary; this does not run inference."""
+    result = create_communication_anndata(adata, clustering_column, n_permutations=10, level='lr')
+    return result[:, :max_pathways].copy()
 
-def process_all_commot(adata, clustering_column, n_permutations=100, return_format='anndata'):
-    """
-    Simple wrapper that maintains backwards compatibility
-    
-    Parameters
-    ----------
-    adata : AnnData
-        Input spatial data with commot results
-    clustering_column : str  
-        Column name for cell type clustering
-    n_permutations : int
-        Number of permutations for p-value calculation
-    return_format : str
-        'anndata' for CellChat-style AnnData (recommended)
-        'dict' for old dictionary format
-        
-    Returns
-    -------
-    results : AnnData or dict
-        Communication results in requested format
-    """
-    
-    if return_format == 'anndata':
-        return create_communication_anndata(adata, clustering_column, n_permutations)
-    
-    elif return_format == 'dict':
-        # Old format for backwards compatibility
-        celltypes = list(adata.obs[clustering_column].unique())
-        celltypes.sort()
-        clusterid = np.array(adata.obs[clustering_column], str)
-        
-        commot_keys = [key for key in adata.obsp.keys() if key.startswith('commot')]
-        print(f"Found {len(commot_keys)} commot entries to process")
-        
-        results = {}
-        for key in tqdm(commot_keys, desc="Processing"):
-            S = adata.obsp[key]
-            df_cluster, df_p_value = summarize_cluster_gpu(S, clusterid, celltypes, n_permutations,scale_factor='sum')
-            results[key] = {'communication': df_cluster, 'pvalue': df_p_value}
-        
-        print(f"✅ Done! Processed {len(results)} pathways")
-        return results
-    
-    else:
-        raise ValueError("return_format must be 'anndata' or 'dict'")
-
-# =============================================================================
-# USAGE EXAMPLES
-# =============================================================================
 
 def example_usage():
-    """
-    Example usage patterns
-    """
-    print("📝 USAGE EXAMPLES:")
-    print()
-    print("# 1. Create CellChat-style AnnData (RECOMMENDED)")
-    print("comm_adata = create_communication_anndata(adata, 'cell_type')")
-    print("# OR using wrapper:")
-    print("comm_adata = process_all_commot(adata, 'cell_type')")
-    print()
-    print("# 2. Quick demo with subset")  
-    print("demo_adata = quick_demo(adata, 'cell_type', max_pathways=5)")
-    print()
-    print("# 3. Use with CellChatViz")
-    print("from omicverse.pl._cpdbviz import CellChatViz")
-    print("viz = CellChatViz(comm_adata)")
-    print("viz.netVisual_circle(viz.compute_aggregated_network()[1])")
-    print()
-    print("# 4. Access structured results")
-    print("print(f'Shape: {comm_adata.shape}')")
-    print("print(f'Cell pairs: {comm_adata.obs.sender.unique()}')")
-    print("print(f'Pathways: {comm_adata.var.classification.unique()}')")
-    print("print(f'Max communication: {comm_adata.layers[\"means\"].max():.4f}')")
-    print()
-    print("# 5. Backwards compatibility (old dict format)")
-    print("results_dict = process_all_commot(adata, 'cell_type', return_format='dict')")
-    print("print(results_dict['commot-cellchat-total-total']['communication'])")
-    print()
-    print("# 6. Export to CSV")
-    print("# Communication matrix")
-    print("pd.DataFrame(comm_adata.layers['means'], ")
-    print("            index=comm_adata.obs.index, ")
-    print("            columns=comm_adata.var.index).to_csv('communication_means.csv')")
-    print("# P-values")
-    print("pd.DataFrame(comm_adata.layers['pvalues'], ")
-    print("            index=comm_adata.obs.index, ")
-    print("            columns=comm_adata.var.index).to_csv('communication_pvalues.csv')")
+    """Print a minimal example."""
+    print("comm = ov.space.create_communication_anndata(adata, 'cell_type', level='lr')")
 
 
-import pandas as pd
-@register_function(
-    aliases=["更新通信分类", "update_classification_from_database", "commot_pathway_update", "通信数据库注释", "更新pathway分类"],
-    category="space",
-    description="Update communication interaction annotations using commot database metadata",
-    prerequisites={
-        "optional_functions": ["create_communication_anndata"]
-    },
-    requires={
-        "uns": ["commot-*-info"]
-    },
-    produces={
-        "var": ["classification", "gene_a", "gene_b", "partner_a", "partner_b"]
-    },
-    auto_fix="none",
-    examples=[
-        "comm_adata = ov.space.update_classification_from_database(comm_adata, adata)",
-    ],
-    related=["space.create_communication_anndata"],
-)
-def update_classification_from_database(comm_adata, adata_with_db):
-    """
-    Update communication interaction annotations from commot database metadata.
-    
-    Parameters
-    ----------
-    comm_adata : anndata.AnnData
-        Communication AnnData returned by ``create_communication_anndata``.
-    adata_with_db : anndata.AnnData
-        Original spatial AnnData containing ``commot-*-info`` entries in ``uns``.
-        
-    Returns
-    -------
-    comm_adata : anndata.AnnData
-        Updated communication AnnData with refined pathway/classification fields.
-    """
-    
-    # Find database info
-    database_info_keys = [key for key in adata_with_db.uns.keys() if key.startswith('commot-') and key.endswith('-info')]
-    
-    if not database_info_keys:
-        print("❌ No commot database info found in adata_with_db.uns")
-        return comm_adata
-    
-    # Use the first available database info
-    db_key = database_info_keys[0]
-    df_ligrec = adata_with_db.uns[db_key]['df_ligrec']
-    
-    print(f"📖 Found database info: {db_key}")
-    print(f"   Database contains {len(df_ligrec)} ligand-receptor pairs")
-    print(f"   Pathways: {sorted(df_ligrec['pathway'].unique())}")
-    
-    # Create mapping from ligand-receptor pairs to pathways
-    lr_to_pathway = {}
-    for _, row in df_ligrec.iterrows():
-        ligand = row['ligand']
-        receptor = row['receptor']
-        pathway = row['pathway']
-        
-        # Store L-R pair to pathway mapping
-        lr_key = f"{ligand}-{receptor}"
-        lr_to_pathway[lr_key] = {
-            'ligand': ligand,
-            'receptor': receptor,
-            'pathway': pathway
-        }
-    
-    # Update classifications in comm_adata
-    updated_classifications = []
-    updated_gene_a = []
-    updated_gene_b = []
-    updated_partner_a = []
-    updated_partner_b = []
-    
-    print(f"\n🔄 Updating classifications for {len(comm_adata.var)} interactions...")
-    
-    for i, var_name in enumerate(comm_adata.var.index):
-        current_pair = comm_adata.var.loc[var_name, 'interacting_pair']
-        
-        if var_name.startswith('commot-cellchat-'):
-            pathway_part = var_name.replace('commot-cellchat-', '')
-            
-            if pathway_part == 'total-total':
-                # Total across all pathways
-                updated_classifications.append('Total')
-                updated_gene_a.append('total')
-                updated_gene_b.append('total')
-                updated_partner_a.append('total')
-                updated_partner_b.append('total')
-                
-            elif '-' in pathway_part and not pathway_part.endswith('-total'):
-                # Individual ligand-receptor pair
-                if pathway_part.count('-') >= 2:
-                    # Handle complex receptors like TGFBR1_TGFBR2
-                    parts = pathway_part.split('-')
-                    ligand = parts[0]
-                    receptor = '-'.join(parts[1:])  # Join remaining parts
-                else:
-                    # Simple ligand-receptor
-                    ligand, receptor = pathway_part.split('-', 1)
-                
-                lr_key = f"{ligand}-{receptor}"
-                
-                if lr_key in lr_to_pathway:
-                    # Found in database - use database info
-                    info = lr_to_pathway[lr_key]
-                    updated_classifications.append(info['pathway'])
-                    updated_gene_a.append(info['ligand'])
-                    updated_gene_b.append(info['receptor'])
-                    updated_partner_a.append(info['ligand'])
-                    updated_partner_b.append(info['receptor'])
-                    print(f"   ✓ {lr_key} → {info['pathway']}")
-                else:
-                    # Not found in database
-                    updated_classifications.append('Individual_LR')
-                    updated_gene_a.append(ligand)
-                    updated_gene_b.append(receptor)
-                    updated_partner_a.append(ligand)
-                    updated_partner_b.append(receptor)
-                    print(f"   ⚠️  {lr_key} → Individual_LR (not in database)")
-            
-            else:
-                # Pathway summary (e.g., WNT, TGFb, SEMA3)
-                pathway_name = pathway_part
-                updated_classifications.append(pathway_name)
-                updated_gene_a.append(pathway_name)
-                updated_gene_b.append(pathway_name)
-                updated_partner_a.append(pathway_name)
-                updated_partner_b.append(pathway_name)
-                print(f"   ✓ {pathway_name} → {pathway_name} (pathway summary)")
-        
-        else:
-            # Unknown format - keep original
-            updated_classifications.append('Unknown')
-            updated_gene_a.append(current_pair)
-            updated_gene_b.append(current_pair)
-            updated_partner_a.append(current_pair)
-            updated_partner_b.append(current_pair)
-            print(f"   ❓ {var_name} → Unknown")
-    
-    # Update the var DataFrame
-    comm_adata.var['classification'] = updated_classifications
-    comm_adata.var['gene_a'] = updated_gene_a
-    comm_adata.var['gene_b'] = updated_gene_b
-    comm_adata.var['partner_a'] = updated_partner_a
-    comm_adata.var['partner_b'] = updated_partner_b
-    
-    # Print summary
-    pathway_counts = pd.Series(updated_classifications).value_counts()
-    print(f"\n📊 Updated pathway breakdown:")
-    for pathway, count in pathway_counts.items():
-        print(f"   {pathway}: {count} interactions")
-    
-    print(f"\n✅ Successfully updated classifications in comm_adata!")
-    
+@register_function(aliases=['更新通信分类', 'update_classification_from_database'], category='space',
+                   description='Update COMMOT annotations using exact database identities.')
+def update_classification_from_database(comm_adata, adata_with_db, *, database_name=None):
+    """Update known annotations without parsing hyphenated molecular identifiers."""
+    saved = comm_adata.uns.get('commot_summary', {}).get('database_name')
+    if database_name is not None and saved is not None and database_name != saved:
+        raise ValueError('database_name differs from the database used to create this summary.')
+    _, metadata = _result_metadata(adata_with_db, database_name or saved)
+    for key in comm_adata.var_names:
+        if key in metadata:
+            for field, value in metadata[key].items():
+                comm_adata.var.loc[key, field] = value
     return comm_adata
