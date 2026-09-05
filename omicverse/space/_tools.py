@@ -34,26 +34,98 @@ matplotlib symbols as if they were part of the spatial API -- nine of the
 sixty-four public names in ``ov.space`` were other libraries' imports.
 """
 
-@register_function(
-    aliases=["裁剪空间数据", "crop_space_visium", "crop_visium", "空间数据裁剪", "Visium裁剪"],
-    category="space",
-    description="Crop Visium spatial transcriptomics data to focus on specific region of interest",
-    examples=[
-        "# Basic cropping",
-        "adata_cropped = ov.space.crop_space_visium(",
-        "    adata, crop_loc=(500, 500), crop_area=(1000, 1000),",
-        "    library_id='V1_Human_Brain', scale=1.0)",
-        "# Small region cropping",
-        "adata_roi = ov.space.crop_space_visium(",
-        "    adata, crop_loc=(0, 0), crop_area=(800, 600),",
-        "    library_id=list(adata.uns['spatial'].keys())[0], scale=1)",
-        "# High resolution cropping",
-        "adata_hires = ov.space.crop_space_visium(",
-        "    adata, crop_loc=(200, 200), crop_area=(1500, 1500),",
-        "    library_id='sample_1', scale=2, res='hires')"
-    ],
-    related=["space.rotate_space_visium", "space.map_spatial_auto"]
-)
+
+def _resolve_spatial_library(adata, library_id=None, library_key=None):
+    """Resolve one image library and the observations that belong to it."""
+    spatial = adata.uns.get("spatial")
+    if not isinstance(spatial, dict) or not spatial:
+        raise KeyError("adata.uns['spatial'] does not contain any spatial libraries.")
+    available = list(spatial)
+    if library_id is None:
+        if len(available) != 1:
+            raise ValueError(
+                "`library_id` must be specified when multiple spatial libraries are present."
+            )
+        library_id = available[0]
+    if library_id not in spatial:
+        raise KeyError(f"library_id {library_id!r} was not found in adata.uns['spatial'].")
+
+    if library_key is None:
+        if len(available) > 1:
+            raise ValueError(
+                "A multi-library object also requires `library_key` so image "
+                "operations cannot transform observations from other libraries."
+            )
+        mask = np.ones(adata.n_obs, dtype=bool)
+    else:
+        if library_key not in adata.obs:
+            raise KeyError(f"library_key {library_key!r} was not found in adata.obs.")
+        labels = adata.obs[library_key]
+        if labels.isna().any():
+            raise ValueError(f"adata.obs[{library_key!r}] contains missing library labels.")
+        mask = labels.astype(str).to_numpy() == str(library_id)
+        if not mask.any():
+            raise ValueError(
+                f"No observations in adata.obs[{library_key!r}] match library_id "
+                f"{library_id!r}."
+            )
+    return library_id, mask
+
+
+def _record_removed_stale_images(spatial_info, operation, image_keys):
+    """Record image keys removed because their coordinate transform was unknown."""
+    if not image_keys:
+        return
+    metadata = spatial_info.setdefault("metadata", {})
+    records = metadata.setdefault("omicverse_removed_stale_images", {})
+    record_key = f"{len(records):04d}_{operation}"
+    records[record_key] = {
+        "operation": str(operation),
+        "image_keys": np.asarray([str(key) for key in image_keys], dtype=str),
+        "reason": "missing matching tissue_<image_key>_scalef",
+    }
+
+
+def _crop_scaled_image(image, x0, y0, x1, y1):
+    """Crop an image at possibly fractional pixel bounds without shifting its origin."""
+    image = np.asarray(image)
+    width = int(np.ceil(x1 - x0))
+    height = int(np.ceil(y1 - y0))
+    if width <= 0 or height <= 0:
+        return image[:0, :0].copy()
+
+    rounded = np.rint([x0, y0, x1, y1]).astype(int)
+    if np.allclose([x0, y0, x1, y1], rounded, rtol=0, atol=1e-10):
+        ix0, iy0, ix1, iy1 = rounded
+        return image[iy0:iy1, ix0:ix1].copy()
+
+    # A plain floor/ceil slice changes the image origin by up to one pixel when
+    # the requested full-resolution crop maps to fractional pixels at another
+    # resolution. Sample that resolution at the exact origin instead. This
+    # keeps ``new_spatial * tissue_<resolution>_scalef`` aligned to the image.
+    from scipy.ndimage import affine_transform
+
+    trailing_shape = image.shape[2:]
+    flat = image.reshape(image.shape[0], image.shape[1], -1)
+    sampled = np.empty((height, width, flat.shape[2]), dtype=image.dtype)
+    order = 0 if np.issubdtype(image.dtype, np.bool_) else 1
+    for channel in range(flat.shape[2]):
+        channel_image = flat[:, :, channel]
+        if channel_image.dtype == np.float16:
+            # scipy.ndimage does not accept float16 input; calculate in float32
+            # and cast back through the preallocated output.
+            channel_image = channel_image.astype(np.float32)
+        sampled[:, :, channel] = affine_transform(
+            channel_image,
+            matrix=np.eye(2),
+            offset=(float(y0), float(x0)),
+            output_shape=(height, width),
+            order=order,
+            mode="nearest",
+            prefilter=False,
+        )
+    return sampled.reshape((height, width) + trailing_shape)
+
 @register_function(
     aliases=["subset_window", "spatial_window", "spatial_subset",
              "crop spatial subset", "空间窗口子集"],
@@ -110,8 +182,20 @@ def subset_window(adata, xlim, ylim, basis='spatial'):
     return adata[mask].copy()
 
 
+@register_function(
+    aliases=["裁剪空间数据", "crop_space_visium", "crop_visium", "空间数据裁剪", "Visium裁剪"],
+    category="space",
+    description="Crop Visium spatial transcriptomics data to focus on a region of interest",
+    examples=[
+        "adata_cropped = ov.space.crop_space_visium(",
+        "    adata, crop_loc=(500, 500), crop_area=(1000, 1000),",
+        "    library_id='V1_Human_Brain', scale=1.0, coordinate_order='xy')",
+    ],
+    related=["space.rotate_space_visium", "space.map_spatial_auto"],
+)
 def crop_space_visium(adata, crop_loc, crop_area,
-                     library_id, scale, spatial_key='spatial', res='hires'):
+                     library_id, scale, spatial_key='spatial', res='hires',
+                     coordinate_order=None, library_key=None):
     """
     Crop Visium spatial data to a specific region of interest.
     
@@ -133,6 +217,16 @@ def crop_space_visium(adata, crop_loc, crop_area,
             Key in adata.obsm containing spatial coordinates.
         res: str, optional (default='hires')
             Image resolution to use ('hires' or 'lowres').
+        coordinate_order: {'xy', 'yx'} or None, default=None
+            Interpretation of ``crop_loc`` and ``crop_area``. ``'xy'`` means
+            ``(x, y)`` and ``(width, height)``. ``'yx'`` preserves the legacy
+            Squidpy-style ``(y, x)`` / ``(height, width)`` convention. ``None``
+            currently selects legacy ``'yx'`` with a deprecation warning;
+            specify the order explicitly because a future major release will
+            default to ``'xy'``.
+        library_key: str or None
+            Observation column identifying library membership. Required for a
+            multi-library AnnData.
 
     Returns:
         AnnData
@@ -155,24 +249,55 @@ def crop_space_visium(adata, crop_loc, crop_area,
         ...     crop_loc=(500, 500),
         ...     crop_area=(1000, 1000),
         ...     library_id='V1_Human_Brain',
-        ...     scale=1.0
+        ...     scale=1.0,
+        ...     coordinate_order='xy'
         ... )
     """
     if scale != 1:
         raise NotImplementedError(
             "scale != 1 is not yet supported in the squidpy-free implementation. "
-            "Use scale=1 or install squidpy for rescaled crops."
+            "Use scale=1."
         )
 
+    library_id, library_mask = _resolve_spatial_library(
+        adata,
+        library_id=library_id,
+        library_key=library_key,
+    )
     adata1 = adata.copy()
-    scalef = adata1.uns['spatial'][library_id]['scalefactors'][f'tissue_{res}_scalef']
-    full_img = adata1.uns["spatial"][library_id]["images"][res]
+    spatial_info = adata1.uns['spatial'][library_id]
+    images = spatial_info.get("images", {})
+    scalefactors = spatial_info.get("scalefactors", {})
+    if res not in images:
+        raise KeyError(f"Image resolution {res!r} was not found for library {library_id!r}.")
+    scale_key = f'tissue_{res}_scalef'
+    if scale_key not in scalefactors:
+        raise KeyError(f"Scalefactor {scale_key!r} was not found for library {library_id!r}.")
+    scalef = float(scalefactors[scale_key])
+    full_img = np.asarray(images[res])
 
-    # crop_loc = (y0, x0) in pixel coords of the hires image
-    # crop_area = (height, width) in pixel coords of the hires image
-    # Following squidpy crop_corner(y, x, size) convention
-    y0, x0 = int(crop_loc[0]), int(crop_loc[1])
-    h, w = int(crop_area[0]), int(crop_area[1])
+    if coordinate_order is None:
+        import warnings
+
+        warnings.warn(
+            "The implicit crop coordinate order is deprecated and currently "
+            "preserves legacy (y, x)/(height, width) behavior. Pass "
+            "coordinate_order='xy' or 'yx' explicitly.",
+            FutureWarning,
+            stacklevel=2,
+        )
+        coordinate_order = 'yx'
+    coordinate_order = str(coordinate_order).lower()
+    if coordinate_order == 'xy':
+        x0, y0 = map(int, crop_loc)
+        w, h = map(int, crop_area)
+    elif coordinate_order == 'yx':
+        y0, x0 = map(int, crop_loc)
+        h, w = map(int, crop_area)
+    else:
+        raise ValueError("coordinate_order must be 'xy' or 'yx'.")
+    if w <= 0 or h <= 0:
+        raise ValueError("crop_area width and height must be positive.")
 
     # Clamp to image bounds
     img_h, img_w = full_img.shape[:2]
@@ -181,27 +306,63 @@ def crop_space_visium(adata, crop_loc, crop_area,
     y1 = max(0, min(y0 + h, img_h))
     x1 = max(0, min(x0 + w, img_w))
 
-    # Crop image
-    cropped_img = full_img[y0:y1, x0:x1]
+    # Convert the selected-resolution crop to the shared full-resolution
+    # coordinate frame, then crop every image resolution with its own scale.
+    x0_spatial = x0 / scalef
+    y0_spatial = y0 / scalef
+    x1_spatial = x1 / scalef
+    y1_spatial = y1 / scalef
+    cropped_images = {}
+    stale_image_keys = []
+    for image_key, image in list(images.items()):
+        image_scale_key = f"tissue_{image_key}_scalef"
+        if image_scale_key not in scalefactors or image is None:
+            stale_image_keys.append(image_key)
+            continue
+        image_scale = float(scalefactors[image_scale_key])
+        image_array = np.asarray(image)
+        if image_array.ndim < 2:
+            stale_image_keys.append(image_key)
+            continue
+        image_h, image_w = image_array.shape[:2]
+        image_x0 = max(0.0, min(x0_spatial * image_scale, float(image_w)))
+        image_y0 = max(0.0, min(y0_spatial * image_scale, float(image_h)))
+        image_x1 = max(0.0, min(x1_spatial * image_scale, float(image_w)))
+        image_y1 = max(0.0, min(y1_spatial * image_scale, float(image_h)))
+        cropped_images[image_key] = _crop_scaled_image(
+            image_array,
+            image_x0,
+            image_y0,
+            image_x1,
+            image_y1,
+        )
 
     # Scale spatial coords to hires pixel coords
     # Visium obsm['spatial'] columns are (x=col, y=row)
     pixel_coords = adata1.obsm[spatial_key] * scalef
 
     # Filter spots within the crop region [x0, x1) x [y0, y1)
-    mask = (
+    mask = library_mask & (
         (pixel_coords[:, 0] >= x0) & (pixel_coords[:, 0] < x1) &
         (pixel_coords[:, 1] >= y0) & (pixel_coords[:, 1] < y1)
     )
     adata_crop = adata1[mask].copy()
 
     # Update image
-    adata_crop.uns["spatial"][library_id]["images"][res] = cropped_img
+    adata_crop.uns["spatial"][library_id]["images"] = cropped_images
+    _record_removed_stale_images(
+        adata_crop.uns["spatial"][library_id],
+        "crop",
+        stale_image_keys,
+    )
+    adata_crop.uns["spatial"] = {
+        library_id: adata_crop.uns["spatial"][library_id]
+    }
 
     # Adjust spatial coordinates relative to the cropped region
     adata_crop.obsm[spatial_key] = np.column_stack([
-        (adata_crop.obsm[spatial_key][:, 0] * scalef - x0) / scalef,
-        (adata_crop.obsm[spatial_key][:, 1] * scalef - y0) / scalef,
+        adata_crop.obsm[spatial_key][:, 0] - x0_spatial,
+        adata_crop.obsm[spatial_key][:, 1] - y0_spatial,
     ])
 
     return adata_crop
@@ -234,7 +395,8 @@ def rotate_space_visium(
     spatial_key='spatial',
     res='hires',
     library_id=None,
-    interpolation_order=1
+    interpolation_order=1,
+    library_key=None,
 ):
     """
     Rotate Visium spatial data image and coordinates by a specified angle.
@@ -258,6 +420,9 @@ def rotate_space_visium(
         interpolation_order: int, optional (default=1)
             Order of interpolation for image rotation:
             0: nearest neighbor, 1: bilinear, 3: cubic spline.
+        library_key: str or None
+            Observation column identifying library membership. Required for a
+            multi-library AnnData; only matching coordinates are transformed.
 
     Returns:
         AnnData
@@ -281,80 +446,86 @@ def rotate_space_visium(
         ...     library_id='V1_Human_Brain'
         ... )
     """
+    from skimage.transform import rotate as rotate_image
+
+    library_id, library_mask = _resolve_spatial_library(
+        adata,
+        library_id=library_id,
+        library_key=library_key,
+    )
     adata_rotate = adata.copy()
+    if spatial_key not in adata_rotate.obsm:
+        raise KeyError(f"{spatial_key!r} was not found in adata.obsm.")
+    if library_id not in adata_rotate.uns.get("spatial", {}):
+        raise KeyError(f"library_id {library_id!r} was not found in adata.uns['spatial'].")
 
-    if library_id is None:
-        raise ValueError("必须明确指定 library_id.")
+    spatial_info = adata_rotate.uns["spatial"][library_id]
+    if res not in spatial_info.get("images", {}):
+        raise KeyError(f"Image resolution {res!r} was not found for library {library_id!r}.")
+    scale_key = f"tissue_{res}_scalef"
+    if scale_key not in spatial_info.get("scalefactors", {}):
+        raise KeyError(f"Scalefactor {scale_key!r} was not found for library {library_id!r}.")
 
-    # 1. 获取原始图像
-    original_image = adata_rotate.uns["spatial"][library_id]["images"][res].copy()
+    images = spatial_info.get("images", {})
+    scalefactors = spatial_info.get("scalefactors", {})
+    original_spatial = np.asarray(adata_rotate.obsm[spatial_key], dtype=np.float64).copy()
+    if original_spatial.ndim != 2 or original_spatial.shape[1] < 2:
+        raise ValueError(
+            f"adata.obsm[{spatial_key!r}] must have at least two coordinate columns."
+        )
+    if not np.isfinite(original_spatial[:, :2]).all():
+        raise ValueError(f"adata.obsm[{spatial_key!r}] contains non-finite coordinates.")
 
-    # 2. 确定空间坐标旋转中心 (统一使用空间坐标中心)
-    original_spatial = adata_rotate.obsm[spatial_key].copy()
-    if center is None:
-        # 如果 center 为 None，则使用空间坐标的中心作为旋转中心
-        center_x_spatial = original_spatial[:, 0].mean()
-        center_y_spatial = original_spatial[:, 1].mean()
-        rotation_center_spatial = (center_x_spatial, center_y_spatial)
-    else:
-        # 如果提供了 center 参数，直接使用提供的中心 (空间坐标)
-        rotation_center_spatial = center
-
-    # 3. 将空间坐标旋转中心转换为像素坐标，用于图像旋转
-    scalefactors = adata_rotate.uns['spatial'][library_id]['scalefactors']
-    tissue_hires_scalef = scalefactors['tissue_hires_scalef']
-
-    # **重要**: 您需要根据您的数据坐标系统，确定正确的空间坐标到像素坐标的转换公式。
-    #          以下转换公式仅为示例，您很可能需要根据实际情况进行调整!
-    #          您可能需要考虑 offsetX, offsetY 等平移参数，这些参数可能需要从 scalefactors 或其他地方获取。
-    offsetX = 0  # **占位符**:  请替换为实际的 X 轴平移参数 (如果需要)
-    offsetY = 0  # **占位符**:  请替换为实际的 Y 轴平移参数 (如果需要)
-
-    rotation_center_image = (
-        rotation_center_spatial[0] / tissue_hires_scalef + offsetX,
-        rotation_center_spatial[1] / tissue_hires_scalef + offsetY
+    selected_spatial = original_spatial[library_mask, :2]
+    rotation_center_spatial = np.asarray(
+        selected_spatial.mean(axis=0) if center is None else center,
+        dtype=np.float64,
     )
+    if rotation_center_spatial.shape != (2,) or not np.isfinite(rotation_center_spatial).all():
+        raise ValueError("center must contain two finite spatial coordinates (x, y).")
 
-    # 4. 旋转图像 (默认逆时针)，使用转换后的像素坐标中心
-    import scipy.ndimage
-    rotated_image = scipy.ndimage.rotate(
-        original_image,
-        angle=angle,           # 图像旋转角度 (逆时针)
-        reshape=False,         # 保持输出图像尺寸与输入相同
-        order=interpolation_order,  # 使用指定的插值阶数
-        mode='reflect',
+    rotated_images = {}
+    stale_image_keys = []
+    for image_key, image in list(images.items()):
+        image_scale_key = f"tissue_{image_key}_scalef"
+        if image_scale_key not in scalefactors or image is None:
+            stale_image_keys.append(image_key)
+            continue
+        image_array = np.asarray(image)
+        if image_array.ndim < 2:
+            stale_image_keys.append(image_key)
+            continue
+        image_scale = float(scalefactors[image_scale_key])
+        rotation_center_image = tuple(rotation_center_spatial * image_scale)
+        rotated_image = rotate_image(
+            image_array,
+            angle=float(angle),
+            resize=False,
+            center=rotation_center_image,
+            order=int(interpolation_order),
+            mode="reflect",
+            preserve_range=True,
+        )
+        if np.issubdtype(image_array.dtype, np.integer):
+            limits = np.iinfo(image_array.dtype)
+            rotated_image = np.clip(np.rint(rotated_image), limits.min, limits.max)
+        rotated_images[image_key] = rotated_image.astype(image_array.dtype, copy=False)
+    spatial_info["images"] = rotated_images
+    _record_removed_stale_images(spatial_info, "rotate", stale_image_keys)
+
+    theta_rad = np.radians(float(angle))
+    rotation = np.array(
+        [
+            [np.cos(theta_rad), -np.sin(theta_rad)],
+            [np.sin(theta_rad), np.cos(theta_rad)],
+        ]
     )
-
-    # 5. 更新 adata_rotate 中的图像
-    adata_rotate.uns["spatial"][library_id]["images"][res] = rotated_image
-
-    # 6. 旋转空间坐标 (调整为顺时针旋转)，使用空间坐标中心
-    rotated_spatial = np.zeros_like(original_spatial)
-    theta_rad = np.radians(angle) # 角度转弧度
-    rotation_center_spatial = rotation_center_spatial # 空间坐标旋转中心直接使用之前确定的
-
-    for i in range(len(original_spatial)):
-        x_orig = original_spatial[i, 0]
-        y_orig = original_spatial[i, 1]
-
-        # 步骤 1: 将原始空间坐标平移到以旋转中心为原点的坐标系
-        x_centered = x_orig - rotation_center_spatial[0]
-        y_centered = y_orig - rotation_center_spatial[1]
-
-        # 步骤 2: 执行顺时针旋转 (修改 sin(theta_rad) 项的符号)
-        rotated_x_centered = x_centered * np.cos(theta_rad) + y_centered * np.sin(theta_rad)
-        rotated_y_centered = -x_centered * np.sin(theta_rad) + y_centered * np.cos(theta_rad)
-
-        # 步骤 3: 将旋转后的坐标平移回原始的全局空间坐标系
-        rotated_x_orig = rotated_x_centered + rotation_center_spatial[0]
-        rotated_y_orig = rotated_y_centered + rotation_center_spatial[1]
-
-        rotated_spatial[i, 0] = rotated_x_orig
-        rotated_spatial[i, 1] = rotated_y_orig
-
-    # 7. 更新 adata_rotate 中的空间坐标
+    rotated_spatial = original_spatial.copy()
+    rotated_spatial[library_mask, :2] = (
+        (selected_spatial - rotation_center_spatial) @ rotation
+        + rotation_center_spatial
+    )
     adata_rotate.obsm[spatial_key] = rotated_spatial
-
     return adata_rotate
 
 
@@ -429,7 +600,7 @@ def find_image_offset_phase_correlation_array_input(image1_array, image2_array):
 
     # 归一化互功率谱 (为了增强峰值)
     magnitude = np.abs(cross_power_spectrum)
-    normalized_cross_power_spectrum = cross_power_spectrum / magnitude
+    normalized_cross_power_spectrum = cross_power_spectrum / np.maximum(magnitude, 1e-12)
 
     # 计算逆傅里叶变换，得到脉冲响应 (Inverse FFT)
     inverse_fft = np.fft.ifft2(normalized_cross_power_spectrum)
@@ -501,15 +672,23 @@ def find_image_offset_phase_correlation_torch(image1_tensor, image2_tensor):
             ("torch",),
         ) from exc
 
+    if image1_tensor.shape != image2_tensor.shape:
+        raise ValueError(
+            f"image tensors must have the same shape; got {tuple(image1_tensor.shape)} "
+            f"and {tuple(image2_tensor.shape)}."
+        )
+    if image1_tensor.ndim not in (2, 3):
+        raise ValueError("image tensors must have shape (H, W) or (C, H, W).")
+
     device = image1_tensor.device
-    
-    # 转换为灰度图（如果输入是彩色）
-    if image1_tensor.ndim == 3:
-        image1_gray = torch.mean(image1_tensor, dim=0, keepdim=True)
-        image2_gray = torch.mean(image2_tensor, dim=0, keepdim=True)
-    else:
-        image1_gray = image1_tensor
-        image2_gray = image2_tensor
+    original_ndim = image1_tensor.ndim
+    image1_chw = image1_tensor.unsqueeze(0) if original_ndim == 2 else image1_tensor
+    image2_chw = image2_tensor.unsqueeze(0) if original_ndim == 2 else image2_tensor
+    image1_chw = image1_chw.to(device=device, dtype=torch.float32)
+    image2_chw = image2_chw.to(device=device, dtype=torch.float32)
+
+    image1_gray = image1_chw.mean(dim=0, keepdim=True)
+    image2_gray = image2_chw.mean(dim=0, keepdim=True)
 
     # 傅里叶变换
     fft1 = torch.fft.fft2(image1_gray)
@@ -525,8 +704,8 @@ def find_image_offset_phase_correlation_torch(image1_tensor, image2_tensor):
     
     # 寻找峰值位置
     _, h, w = inv_cross_power.shape
-    max_idx = torch.argmax(inv_cross_power.view(-1))
-    shift_y, shift_x = np.unravel_index(max_idx.cpu().numpy(), (h, w))
+    max_idx = int(torch.argmax(torch.abs(inv_cross_power)).item())
+    shift_y, shift_x = np.unravel_index(max_idx, (h, w))
     
     # 计算循环位移量
     if shift_y > h // 2:
@@ -534,15 +713,29 @@ def find_image_offset_phase_correlation_torch(image1_tensor, image2_tensor):
     if shift_x > w // 2:
         shift_x -= w
     
-    # 创建仿射变换矩阵进行图像对齐
-    theta = torch.tensor([[1, 0, -shift_x], [0, 1, -shift_y]], 
-                        dtype=torch.float32, device=device)
-    
-    grid = F.affine_grid(theta.unsqueeze(0), image1_tensor.unsqueeze(0).shape)
-    image1_aligned = F.grid_sample(image1_tensor.unsqueeze(0), grid, 
-                                 padding_mode="zeros", align_corners=True)
-    
-    return (shift_x, shift_y), image1_aligned.squeeze(0)
+    # affine_grid translations use normalized output-to-input coordinates. The
+    # phase-correlation shift already has the correct inverse-sampling sign.
+    tx = 0.0 if w <= 1 else 2.0 * float(shift_x) / float(w - 1)
+    ty = 0.0 if h <= 1 else 2.0 * float(shift_y) / float(h - 1)
+    theta = torch.tensor(
+        [[1.0, 0.0, tx], [0.0, 1.0, ty]],
+        dtype=torch.float32,
+        device=device,
+    )
+
+    batch = image1_chw.unsqueeze(0)
+    grid = F.affine_grid(theta.unsqueeze(0), batch.shape, align_corners=True)
+    aligned = F.grid_sample(
+        batch,
+        grid,
+        mode="nearest",
+        padding_mode="zeros",
+        align_corners=True,
+    ).squeeze(0)
+    if original_ndim == 2:
+        aligned = aligned.squeeze(0)
+
+    return (int(shift_x), int(shift_y)), aligned
 
 def _create_spatial_image(adata, ax, color=None, alpha=1, save_path=None):
     """
@@ -709,17 +902,22 @@ def _map_spatial_img(adata_rotated, color=None,
     examples=[
         "# Basic auto mapping with phase correlation",
         "ov.space.map_spatial_auto(adata_rotated, method='phase')",
-        "# Feature-based alignment",
-        "ov.space.map_spatial_auto(adata_rotated, method='feature')",
-        "# Hybrid alignment approach",
-        "ov.space.map_spatial_auto(adata_rotated, method='hybrid')",
+        "# Torch-accelerated phase correlation",
+        "ov.space.map_spatial_auto(adata_rotated, method='torch')",
         "# After rotation, apply auto mapping",
-        "adata_rotated = ov.space.rotate_space_visium(adata, angle=45)",
+        "adata_rotated = ov.space.rotate_space_visium(",
+        "    adata, angle=45, library_id=library_id)",
         "ov.space.map_spatial_auto(adata_rotated)"
     ],
     related=["space.map_spatial_manual", "space.rotate_space_visium", "space.crop_space_visium"]
 )
-def map_spatial_auto(adata_rotated, method='phase'):
+def map_spatial_auto(
+    adata_rotated,
+    method='phase',
+    library_id=None,
+    library_key=None,
+    res='hires',
+):
     """
     Automatically map and align spatial transcriptomics data.
 
@@ -732,8 +930,15 @@ def map_spatial_auto(adata_rotated, method='phase'):
         method: str, optional (default='phase')
             Alignment method to use:
             - 'phase': Phase correlation-based alignment
-            - 'feature': Feature-based alignment
-            - 'hybrid': Combination of phase and feature methods
+            - 'torch': Torch-accelerated phase correlation
+        library_id: str or None
+            Spatial library whose image should be aligned. Required when more
+            than one library is present.
+        library_key: str or None
+            Observation column identifying library membership. Required for a
+            multi-library AnnData.
+        res: str, default='hires'
+            Image resolution used for registration.
 
     Returns:
         AnnData
@@ -755,32 +960,56 @@ def map_spatial_auto(adata_rotated, method='phase'):
         ...     method='phase'
         ... )
     """
-    # 确保 'temp' 目录存在
-    os.makedirs('temp', exist_ok=True)
-    image1_path = 'temp/image1.png'
-    image2_path = 'temp/image2.png'
+    import tempfile
 
-    ee=pow(10,(len(str(int(adata_rotated.obsm['spatial'][:,0].mean())))-2))
-    fig1, ax1 = plt.subplots(figsize=(adata_rotated.obsm['spatial'][:,0].mean()/ee,
-                                     adata_rotated.obsm['spatial'][:,1].mean()/ee))
-    ax=ax1
-    adata_rotated.obs['test']='1'
-    library_id = list(adata_rotated.uns['spatial'].keys())[0]
-    scalefactors = adata_rotated.uns['spatial'][library_id]['scalefactors']
-    tissue_hires_scalef = scalefactors['tissue_hires_scalef']
-    sc.pl.embedding(
+    method = str(method).lower()
+    if method not in {'phase', 'torch'}:
+        raise ValueError("method must be 'phase' or 'torch'.")
+    library_id, library_mask = _resolve_spatial_library(
         adata_rotated,
+        library_id=library_id,
+        library_key=library_key,
+    )
+    plot_adata = adata_rotated[library_mask].copy()
+    spatial_info = adata_rotated.uns['spatial'][library_id]
+    if res not in spatial_info.get('images', {}):
+        raise KeyError(f"Image resolution {res!r} was not found for library {library_id!r}.")
+    scale_key = f'tissue_{res}_scalef'
+    if scale_key not in spatial_info.get('scalefactors', {}):
+        raise KeyError(f"Scalefactor {scale_key!r} was not found for library {library_id!r}.")
+    img = np.asarray(spatial_info['images'][res])
+    image_height, image_width = img.shape[:2]
+    image_scale_factor = float(spatial_info['scalefactors'][scale_key])
+    if not np.isfinite(image_scale_factor) or image_scale_factor <= 0:
+        raise ValueError(f"Scalefactor {scale_key!r} must be a positive finite value.")
+    plot_adata.obsm['spatial'] = (
+        np.asarray(plot_adata.obsm['spatial'], dtype=np.float64)
+        * image_scale_factor
+    )
+    max_inches = 8.0
+    longest_side = max(image_height, image_width, 1)
+    figsize = (
+        max(2.0, max_inches * image_width / longest_side),
+        max(2.0, max_inches * image_height / longest_side),
+    )
+
+    temp_dir = tempfile.TemporaryDirectory(prefix='omicverse_spatial_align_')
+    image1_path = os.path.join(temp_dir.name, 'image1.png')
+    image2_path = os.path.join(temp_dir.name, 'image2.png')
+
+    fig1, ax1 = plt.subplots(figsize=figsize)
+    ax=ax1
+    sc.pl.embedding(
+        plot_adata,
         basis='spatial',
-        color='Anno_manual',
+        color=None,
         show=False,
         ax=ax1,
         size=10,
-        scale_factor = tissue_hires_scalef,
         #frameon=False,
         legend_loc=None
     )
     cur_coords = np.concatenate([ax1.get_xlim(), ax1.get_ylim()])
-    img=adata_rotated.uns["spatial"][library_id]["images"]["hires"]
     ax.set_xlim(cur_coords[0], cur_coords[1])
     ax.set_ylim(cur_coords[3], cur_coords[2])
     plt.xticks([])
@@ -796,10 +1025,9 @@ def map_spatial_auto(adata_rotated, method='phase'):
     plt.yticks([])
     plt.axis(False)
 
-    fig1.savefig('temp/image1.png',bbox_inches='tight', )
+    fig1.savefig(image1_path,bbox_inches='tight', )
 
-    fig2, ax2 = plt.subplots(figsize=(adata_rotated.obsm['spatial'][:,0].mean()/ee,
-                                 adata_rotated.obsm['spatial'][:,1].mean()/ee))
+    fig2, ax2 = plt.subplots(figsize=figsize)
     ax=ax2
     
     ax2.imshow(img, cmap='gray', alpha=1)
@@ -808,16 +1036,15 @@ def map_spatial_auto(adata_rotated, method='phase'):
     plt.xticks([])
     plt.yticks([])
     plt.axis(False)
-    fig2.savefig('temp/image2.png',bbox_inches='tight', )
+    fig2.savefig(image2_path,bbox_inches='tight', )
 
     
 
     import cv2 # 导入 cv2 只是为了模拟读取 png, 实际您不需要读取文件了
-    image1_path = 'temp/image1.png' # 上图的路径 (您之前保存的)
-    image2_path = 'temp/image2.png' # 下图的路径 (您之前保存的)
-    
     img1_from_memory = cv2.imread(image1_path) # 模拟从内存获取 image1 的 numpy array
     img2_from_memory = cv2.imread(image2_path) # 模拟从内存获取 image2 的 numpy array
+    plt.close(fig1)
+    plt.close(fig2)
     
     
 
@@ -845,19 +1072,24 @@ def map_spatial_auto(adata_rotated, method='phase'):
     elif method == 'phase':
         # 原相位相关法处理
         offset, image1_aligned = find_image_offset_phase_correlation_array_input(img1_from_memory, img2_from_memory)
-    else:
-        raise ValueError("method 参数错误，请输入 'torch' 或 'phase'.")
     # 保持原有坐标修正逻辑不变 ...
     # 1) 先把 spatial1 转成 float64
     adata_rotated.obsm['spatial1'] = adata_rotated.obsm['spatial'].astype(np.float64)
 
-    # 2) 再做就地减法
-    adata_rotated.obsm['spatial1'][:,0] -= offset[0] * (
-        adata_rotated.obsm['spatial'][:,0].mean() / (img1_from_memory.shape[0] / 2)
+    # Convert registration pixels back into plotted coordinate units. This is
+    # derived from the rendered axes span, so centered/negative coordinates do
+    # not collapse the translation to zero.
+    x_span = abs(float(cur_coords[1] - cur_coords[0]))
+    y_span = abs(float(cur_coords[3] - cur_coords[2]))
+    x_per_pixel = (
+        x_span / max(img1_from_memory.shape[1], 1) / image_scale_factor
     )
-    adata_rotated.obsm['spatial1'][:,1] -= offset[1] * (
-        adata_rotated.obsm['spatial'][:,1].mean() / (img1_from_memory.shape[1] / 2)
+    y_per_pixel = (
+        y_span / max(img1_from_memory.shape[0], 1) / image_scale_factor
     )
+    adata_rotated.obsm['spatial1'][library_mask, 0] -= offset[0] * x_per_pixel
+    adata_rotated.obsm['spatial1'][library_mask, 1] -= offset[1] * y_per_pixel
+    temp_dir.cleanup()
     return adata_rotated
 
 @register_function(
@@ -866,7 +1098,8 @@ def map_spatial_auto(adata_rotated, method='phase'):
     description="Manually adjust spatial transcriptomics data alignment with specified offset",
     examples=[
         "# Apply manual offset",
-        "ov.space.map_spatial_manual(adata_rotated, offset=(-1500, 1000))",
+        "ov.space.map_spatial_manual(adata_rotated, offset=(-1500, 1000),",
+        "                            offset_mode='absolute')",
         "# Fine-tune alignment",
         "ov.space.map_spatial_manual(adata_rotated, offset=(50, -30))",
         "# Large adjustment",
@@ -879,6 +1112,11 @@ def map_spatial_auto(adata_rotated, method='phase'):
 def map_spatial_manual(
         adata_rotated,
         offset,
+        spatial_key='spatial',
+        key_added='spatial1',
+        offset_mode='legacy',
+        library_id=None,
+        library_key=None,
 ):
     """
     Manually adjust spatial transcriptomics data alignment.
@@ -891,6 +1129,21 @@ def map_spatial_manual(
             Annotated data matrix containing spatial data to be aligned.
         offset: tuple
             (dx, dy) tuple specifying the manual offset to apply.
+        spatial_key: str, default='spatial'
+            Coordinate matrix to translate.
+        key_added: str, default='spatial1'
+            Coordinate key receiving the translated floating-point values.
+        offset_mode: {'legacy', 'absolute'}, default='legacy'
+            ``'legacy'`` preserves the historical mean/max-scaled subtraction
+            and emits a deprecation warning. ``'absolute'`` applies ``(dx, dy)``
+            directly in the coordinate units, with positive values moving right
+            and down.
+        library_id: str or None
+            Spatial library to translate. Required together with ``library_key``
+            for multi-library objects.
+        library_key: str or None
+            Observation column identifying library membership. Only observations
+            matching ``library_id`` are translated.
 
     Returns:
         AnnData
@@ -898,8 +1151,8 @@ def map_spatial_manual(
 
     Notes:
         - Useful for fine-tuning automatic alignment results
-        - Offset values are in pixel coordinates
-        - Positive dx moves spots right, positive dy moves spots down
+        - In ``offset_mode='absolute'``, offsets use the coordinate units.
+        - Positive absolute dx moves spots right; positive dy moves spots down.
 
     Examples:
         >>> import scanpy as sc
@@ -909,16 +1162,61 @@ def map_spatial_manual(
         >>> # Apply manual offset
         >>> adata_aligned = ov.space.map_spatial_manual(
         ...     adata,
-        ...     offset=(10, -5)  # Move 10 pixels right, 5 pixels up
+        ...     offset=(10, -5),  # Move 10 pixels right, 5 pixels up
+        ...     offset_mode='absolute'
         ... )
     """
-    adata_rotated.obsm['spatial1'] = adata_rotated.obsm['spatial'].copy()
-    adata_rotated.obsm['spatial1'][:, 0] -= (offset[0]) * (
-            adata_rotated.obsm['spatial'][:, 0].mean() / (adata_rotated.obsm['spatial'][:, 0].max())
-    )
-    adata_rotated.obsm['spatial1'][:, 1] -= (offset[1]) * (
-            adata_rotated.obsm['spatial'][:, 1].mean() / (adata_rotated.obsm['spatial'][:, 1].max())
-    )
+    if spatial_key not in adata_rotated.obsm:
+        raise KeyError(f"{spatial_key!r} was not found in adata.obsm.")
+    offset = np.asarray(offset, dtype=np.float64)
+    if offset.shape != (2,) or not np.isfinite(offset).all():
+        raise ValueError("offset must contain two finite values (dx, dy).")
+    translated = np.asarray(adata_rotated.obsm[spatial_key], dtype=np.float64).copy()
+    if translated.ndim != 2 or translated.shape[1] < 2:
+        raise ValueError(f"adata.obsm[{spatial_key!r}] must have at least two columns.")
+    spatial_mapping = adata_rotated.uns.get("spatial")
+    if isinstance(spatial_mapping, dict) and spatial_mapping:
+        if len(spatial_mapping) > 1 or library_id is not None or library_key is not None:
+            _, library_mask = _resolve_spatial_library(
+                adata_rotated,
+                library_id=library_id,
+                library_key=library_key,
+            )
+        else:
+            library_mask = np.ones(adata_rotated.n_obs, dtype=bool)
+    elif library_id is not None or library_key is not None:
+        raise KeyError(
+            "library_id/library_key selection requires non-empty adata.uns['spatial']."
+        )
+    else:
+        library_mask = np.ones(adata_rotated.n_obs, dtype=bool)
+
+    selected = translated[library_mask, :2]
+    offset_mode = str(offset_mode).lower()
+    if offset_mode == 'absolute':
+        translated[library_mask, :2] = selected + offset
+    elif offset_mode == 'legacy':
+        import warnings
+
+        warnings.warn(
+            "offset_mode='legacy' preserves the historical mean/max-scaled "
+            "translation and is deprecated. Use offset_mode='absolute' for "
+            "explicit coordinate-unit offsets.",
+            FutureWarning,
+            stacklevel=2,
+        )
+        maxima = np.max(selected, axis=0)
+        if np.any(np.isclose(maxima, 0)):
+            raise ValueError(
+                "Legacy offset scaling is undefined when a coordinate-axis "
+                "maximum is zero; use offset_mode='absolute'."
+            )
+        translated[library_mask, :2] = selected - offset * (
+            np.mean(selected, axis=0) / maxima
+        )
+    else:
+        raise ValueError("offset_mode must be 'legacy' or 'absolute'.")
+    adata_rotated.obsm[key_added] = translated
     return adata_rotated
 
 
@@ -931,8 +1229,8 @@ def map_spatial_manual(
         "adata = ov.space.read_visium_10x(adata_path)",
         "# With custom parameters",
         "adata = ov.space.read_visium_10x(adata_path, genome='GRCh38')",
-        "# Load with filtering",
-        "adata = ov.space.read_visium_10x(path, min_counts=100)"
+        "# Select an alternate Space Ranger count matrix",
+        "adata = ov.space.read_visium_10x(path, count_file='raw_feature_bc_matrix.h5')"
     ],
     related=["space.svg", "space.crop_space_visium"]
 )
@@ -1021,6 +1319,7 @@ def visium_10x_hd_cellpose_he(
                   mpp=mpp, 
                   labels_key="labels_he"
                  )
+    return adata
     
 @register_function(
     aliases=["Visium细胞扩展", "visium_10x_hd_cellpose_expand", "cellpose_expand", "细胞标签扩展", "空间扩展"],
@@ -1064,8 +1363,8 @@ def visium_10x_hd_cellpose_expand(
 
     Returns
     -------
-    None
-        Updates labels in ``adata`` in place.
+    AnnData
+        The same object after updating labels in place.
     """
     from ..external.bin2cell import expand_labels
     expand_labels(adata, 
@@ -1074,6 +1373,7 @@ def visium_10x_hd_cellpose_expand(
                   max_bin_distance=max_bin_distance,
                   **kwargs,
                  )
+    return adata
     
 @register_function(
     aliases=["Visium细胞基因表达", "visium_10x_hd_cellpose_gex", "cellpose_gex", "细胞基因表达映射", "细胞水平表达"],
@@ -1134,8 +1434,8 @@ def visium_10x_hd_cellpose_gex(
 
     Returns
     -------
-    None
-        Writes ``labels_gex`` back into ``adata``.
+    AnnData
+        The same object after writing ``labels_gex`` in place.
     """
     from ..external.bin2cell import grid_image, cellseg, insert_labels,destripe
     #if gex_save_path's file exist, jump grid_image to stardist
@@ -1160,6 +1460,7 @@ def visium_10x_hd_cellpose_gex(
                   mpp=mpp, 
                   labels_key="labels_gex"
                  )
+    return adata
     
 @register_function(
     aliases=["挂失次级标签", "salvage_secondary_labels", "rescue_labels", "标签救救", "次级标签恢复"],
@@ -1202,13 +1503,14 @@ def salvage_secondary_labels(
 
     Returns
     -------
-    None
-        Updates merged labels in ``adata``.
+    AnnData
+        The same object after updating merged labels in place.
     """
     from ..external.bin2cell import salvage_secondary_labels
     salvage_secondary_labels(adata, primary_label=primary_label,
                              secondary_label=secondary_label,
-                             labels_key=labels_key)  
+                             labels_key=labels_key)
+    return adata
     
     
     
@@ -1231,7 +1533,7 @@ def salvage_secondary_labels(
 def bin2cell(
         adata,
         labels_key="labels_joint",
-        spatial_keys=["spatial"],
+        spatial_keys=None,
         diameter_scale_factor=None,
         add_geometry: bool = True,
         geometry_key: str = "geometry",
@@ -1248,11 +1550,11 @@ def bin2cell(
         Spatial bin-level AnnData.
     labels_key : str, default='labels_joint'
         Label key assigning bins to cells.
-    spatial_keys : list, default=['spatial']
+    spatial_keys : list or None, default=None
         Spatial coordinate keys to aggregate.
     diameter_scale_factor : float, optional
         Optional scaling factor for estimated cell diameters.
-    add_geometry : bool, default=False
+    add_geometry : bool, default=True
         Whether to generate polygon geometry from labeled bins and store
         WKT strings in ``obs[geometry_key]`` of the returned cell-level AnnData.
     geometry_key : str, default='geometry'
@@ -1275,6 +1577,9 @@ def bin2cell(
         Cell-level AnnData generated from labeled bins.
     """
     from ..external.bin2cell import bin_to_cell
+
+    if spatial_keys is None:
+        spatial_keys = ["spatial"]
     cell_adata = bin_to_cell(
         adata,
         labels_key=labels_key,
@@ -1288,7 +1593,13 @@ def bin2cell(
         import warnings
         from concurrent.futures import ThreadPoolExecutor, as_completed
         import pandas as pd
-        import shapely
+        try:
+            import shapely
+        except ImportError as exc:
+            raise ImportError(
+                "`bin2cell(add_geometry=True)` requires Shapely. Install it "
+                "with `pip install shapely`."
+            ) from exc
         from shapely.errors import GEOSException
         try:
             from tqdm.auto import tqdm
