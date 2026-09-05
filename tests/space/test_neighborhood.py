@@ -26,6 +26,7 @@ import pytest
 from anndata import AnnData
 
 from omicverse import space
+from omicverse.space import _svg as svg_module
 
 
 def _lattice(n_side: int = 12, step: float = 7.3, seed: int = 0) -> AnnData:
@@ -53,6 +54,178 @@ def test_missing_graph_names_the_function_that_builds_it():
     adata.obs["cell_type"] = pd.Categorical(["a"] * 5)
     with pytest.raises(KeyError, match="spatial_neighbors"):
         space.interaction_matrix(adata, "cell_type")
+
+
+def test_spatial_neighbors_never_connects_different_libraries():
+    coords = np.array(
+        [
+            [0.0, 0.0],
+            [1.0, 0.0],
+            [0.0, 1.0],
+            [0.01, 0.01],
+            [1.01, 0.01],
+            [0.01, 1.01],
+        ]
+    )
+    adata = AnnData(
+        np.ones((6, 1), dtype=np.float32),
+        obs=pd.DataFrame(
+            {"slice": ["A"] * 3 + ["B"] * 3},
+            index=[f"c{i}" for i in range(6)],
+        ),
+    )
+    adata.obsm["spatial"] = coords
+
+    space.spatial_neighbors(adata, n_neighs=2, library_key="slice")
+
+    graph = adata.obsp["spatial_connectivities"].tocoo()
+    labels = adata.obs["slice"].to_numpy()
+    assert not np.any(labels[graph.row] != labels[graph.col])
+    assert adata.uns["spatial_neighbors"]["params"]["library_sizes"] == {
+        "A": 3,
+        "B": 3,
+    }
+
+
+def test_spatial_neighbors_counts_nonself_neighbors():
+    adata = AnnData(np.ones((5, 1), dtype=np.float32))
+    adata.obsm["spatial"] = np.column_stack(
+        [np.arange(5, dtype=float), np.zeros(5, dtype=float)]
+    )
+
+    space.spatial_neighbors(adata, n_neighs=2)
+
+    degree = adata.obsp["spatial_connectivities"].getnnz(axis=1)
+    assert degree[0] >= 2
+    assert degree[-1] >= 2
+
+
+def _overlapping_library_adata():
+    local_coords = np.array(
+        [[0.0, 0.0], [1.0, 0.0], [0.0, 1.0], [1.0, 1.0]],
+        dtype=float,
+    )
+    adata = AnnData(
+        np.arange(16, dtype=np.float32).reshape(8, 2) + 1,
+        obs=pd.DataFrame(
+            {"slice": ["A"] * 4 + ["B"] * 4},
+            index=[f"cell_{i}" for i in range(8)],
+        ),
+    )
+    adata.var_names = ["g0", "g1"]
+    adata.obsm["spatial"] = np.vstack([local_coords, local_coords])
+    adata.uns["spatial"] = {"A": {}, "B": {}}
+    return adata
+
+
+def _assert_no_cross_library_edges(adata):
+    graph = adata.obsp["spatial_connectivities"].tocoo()
+    labels = adata.obs["slice"].to_numpy()
+    assert not np.any(labels[graph.row] != labels[graph.col])
+
+
+def test_morani_auto_graph_forwards_library_key_without_mutating_input(monkeypatch):
+    adata = _overlapping_library_adata()
+    x_before = np.asarray(adata.X).copy()
+    obs_before = adata.obs.copy(deep=True)
+    var_before = adata.var.copy(deep=True)
+    uns_keys_before = set(adata.uns)
+    obsp_keys_before = set(adata.obsp)
+    captured = {}
+
+    original_spatial_neighbors = svg_module.spatial_neighbors
+
+    def capture_graph(*args, **kwargs):
+        result = original_spatial_neighbors(*args, **kwargs)
+        captured["library_key"] = kwargs.get("library_key")
+        captured["copy"] = kwargs.get("copy")
+        captured["connectivities"] = result[0]
+        return result
+
+    monkeypatch.setattr(svg_module, "spatial_neighbors", capture_graph)
+
+    result = space.moranI(
+        adata,
+        genes=["g0"],
+        auto_spatial_neighbors=True,
+        n_neighs=2,
+        library_key="slice",
+        corr_method=None,
+        copy=True,
+    )
+
+    assert result['gene'].tolist() == ['g0', 'g0']
+    assert result['library'].tolist() == ['A', 'B']
+    assert captured["library_key"] == "slice"
+    assert captured["copy"] is True
+    graph = captured["connectivities"].tocoo()
+    labels = adata.obs["slice"].to_numpy()
+    assert not np.any(labels[graph.row] != labels[graph.col])
+    assert "moranI" not in adata.uns
+    assert set(adata.uns) == uns_keys_before
+    assert set(adata.obsp) == obsp_keys_before
+    np.testing.assert_array_equal(np.asarray(adata.X), x_before)
+    pd.testing.assert_frame_equal(adata.obs, obs_before)
+    pd.testing.assert_frame_equal(adata.var, var_before)
+
+
+def test_morani_stratification_does_not_call_a_pure_library_shift_spatial():
+    adata = _overlapping_library_adata()
+    adata.X = np.concatenate(
+        [
+            np.zeros((4, 2), dtype=np.float32),
+            np.full((4, 2), 10.0, dtype=np.float32),
+        ],
+        axis=0,
+    )
+
+    result = space.moranI(
+        adata,
+        genes=["g0"],
+        auto_spatial_neighbors=True,
+        n_neighs=2,
+        n_perms=19,
+        seed=3,
+        library_key="slice",
+        corr_method=None,
+        copy=True,
+    )
+
+    assert not result['testable'].any()
+    assert result['I'].isna().all()
+    assert result['pval_sim'].isna().all()
+
+
+def test_svg_moran_forwards_library_key_to_automatic_graph():
+    adata = _overlapping_library_adata()
+
+    result = space.svg(
+        adata,
+        mode="moran",
+        n_svgs=1,
+        n_perms=None,
+        library_key="slice",
+    )
+
+    assert result is adata
+    assert int(adata.var["space_variable_features"].sum()) == 0
+    assert list(adata.varm['space_variable_features_by_library'].columns) == ['A', 'B']
+    assert set(adata.uns['spatial_features_by_library']['library']) == {'A', 'B'}
+
+
+def test_spatial_autocorr_copy_does_not_mutate_uns():
+    adata = _lattice(n_side=4)
+    keys_before = set(adata.uns)
+
+    result = space.spatial_autocorr(
+        adata,
+        genes=list(adata.var_names[:2]),
+        copy=True,
+    )
+
+    assert set(result.index) == set(adata.var_names[:2])
+    assert "moranI" not in adata.uns
+    assert set(adata.uns) == keys_before
 
 
 def test_interaction_matrix_counts_every_edge_from_both_ends():
