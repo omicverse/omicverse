@@ -22,15 +22,13 @@ __citation__ = "Zhou, X., Dong, K. & Zhang, S. Integrating spatial transcriptomi
 
 import numpy as np
 import pandas as pd
+from collections.abc import Mapping
 from tqdm import tqdm
 import scipy.sparse as sp
 import sklearn.neighbors
-import random
+import warnings
 
 import torch
-import torch.backends.cudnn as cudnn
-cudnn.deterministic = True
-cudnn.benchmark = True
 
 import torch.nn.functional as F
 from torch_geometric.data import Data
@@ -45,6 +43,93 @@ def _get_staligner_backend():
     from ..external.STAligner.mnn_utils import create_dictionary_mnn
 
     return STAligner, create_dictionary_mnn
+
+
+def _obs_names_match_with_optional_suffix(source_names, combined_names):
+    """Match source names to a combined block, allowing one uniform suffix."""
+    source_names = np.asarray(source_names, dtype=str)
+    combined_names = np.asarray(combined_names, dtype=str)
+    if source_names.shape != combined_names.shape:
+        return False
+    if np.array_equal(source_names, combined_names):
+        return True
+    if not len(source_names):
+        return True
+    suffixes = [
+        combined[len(source):] if combined.startswith(source) else None
+        for source, combined in zip(source_names, combined_names)
+    ]
+    return (
+        all(suffix is not None for suffix in suffixes)
+        and len(set(suffixes)) == 1
+        and bool(suffixes[0])
+    )
+
+
+def _validated_staligner_adjacency(batch, batch_index):
+    """Return an adjacency aligned to current rows, preferring named edges."""
+    if 'adj' not in batch.uns:
+        raise KeyError(
+            f"Batch_list[{batch_index}] needs uns['adj'] from Cal_Spatial_Net()."
+        )
+    stored = sp.csr_matrix(batch.uns['adj'])
+    if stored.shape != (batch.n_obs, batch.n_obs):
+        raise ValueError(
+            f"Batch_list[{batch_index}].uns['adj'] has shape {stored.shape}; "
+            f"expected ({batch.n_obs}, {batch.n_obs}). Rerun Cal_Spatial_Net()."
+        )
+
+    named_edges = batch.uns.get('Spatial_Net')
+    if not isinstance(named_edges, pd.DataFrame) or not {
+        'Cell1', 'Cell2'
+    }.issubset(named_edges.columns):
+        recorded_names = batch.uns.get('_omicverse_staligner_obs_names')
+        if recorded_names is None:
+            raise ValueError(
+                f'Batch_list[{batch_index}] has only a positional adjacency without node identities. '
+                'Rerun Cal_Spatial_Net() before training.'
+            )
+        if recorded_names is not None and not np.array_equal(
+            np.asarray(recorded_names, dtype=str),
+            np.asarray(batch.obs_names, dtype=str),
+        ):
+            raise ValueError(
+                f"Batch_list[{batch_index}] rows changed after its positional "
+                "adjacency was built. Rerun Cal_Spatial_Net()."
+            )
+        return stored
+
+    name_to_pos = {name: i for i, name in enumerate(batch.obs_names)}
+    row = named_edges['Cell1'].map(name_to_pos)
+    col = named_edges['Cell2'].map(name_to_pos)
+    if row.isna().any() or col.isna().any():
+        raise ValueError(
+            f"Batch_list[{batch_index}].uns['Spatial_Net'] references observations "
+            "that are no longer present. Rerun Cal_Spatial_Net()."
+        )
+    named = sp.coo_matrix(
+        (
+            np.ones(len(named_edges), dtype=np.float64),
+            (row.to_numpy(dtype=int), col.to_numpy(dtype=int)),
+        ),
+        shape=(batch.n_obs, batch.n_obs),
+    ).tocsr()
+    named = named + sp.eye(batch.n_obs, format='csr')
+    named.data[:] = 1.0
+    named.eliminate_zeros()
+
+    stored_binary = stored.copy()
+    stored_binary.data[:] = 1.0
+    stored_binary.eliminate_zeros()
+    if (stored_binary != named).nnz:
+        warnings.warn(
+            f"Batch_list[{batch_index}].uns['adj'] is not aligned with its named "
+            "Spatial_Net edges; using the name-aligned graph. Rerun "
+            "Cal_Spatial_Net() to refresh the stored adjacency.",
+            UserWarning,
+            stacklevel=3,
+        )
+    return named
 
 
 @register_function(
@@ -110,29 +195,71 @@ def Cal_Spatial_Net(adata, rad_cutoff=None, k_cutoff=None,
         - Memory efficient implementation for large datasets
         - Critical for downstream integration tasks
     """
-    assert (model in ['Radius', 'KNN'])
+    if model not in {'Radius', 'KNN'}:
+        raise ValueError("`model` must be either 'Radius' or 'KNN'.")
+    if adata.n_obs == 0:
+        raise ValueError("Cannot construct a spatial graph for an empty AnnData object.")
+    if not adata.obs_names.is_unique:
+        raise ValueError('Spatial graph construction requires unique observation names.')
+    if max_neigh < 1:
+        raise ValueError("`max_neigh` must be a positive integer.")
+    if model == 'Radius' and rad_cutoff is None:
+        raise ValueError("`rad_cutoff` is required when model='Radius'.")
+    if model == 'KNN' and (k_cutoff is None or k_cutoff < 1):
+        raise ValueError("A positive `k_cutoff` is required when model='KNN'.")
+    if 'spatial' not in adata.obsm:
+        raise KeyError("adata.obsm['spatial'] is required to construct the graph.")
+    spatial = np.asarray(adata.obsm['spatial'])
+    if spatial.ndim != 2 or spatial.shape[1] < 2:
+        raise ValueError("adata.obsm['spatial'] must be an n_obs-by-2 coordinate array.")
+    if not np.isfinite(spatial[:, :2]).all():
+        raise ValueError("adata.obsm['spatial'] contains non-finite coordinates.")
     if verbose:
         print('------Calculating spatial graph...')
-    coor = pd.DataFrame(adata.obsm['spatial'])
+    coor = pd.DataFrame(spatial[:, :2])
     coor.index = adata.obs.index
     coor.columns = ['imagerow', 'imagecol']
 
+    requested_neigh = int(max_neigh)
+    if model == 'KNN':
+        requested_neigh = max(requested_neigh, int(k_cutoff))
+    query_neigh = min(requested_neigh + 1, adata.n_obs)
     nbrs = sklearn.neighbors.NearestNeighbors(
-        n_neighbors=max_neigh + 1, algorithm='ball_tree').fit(coor)
+        n_neighbors=query_neigh, algorithm='ball_tree').fit(coor)
     distances, indices = nbrs.kneighbors(coor)
 
     if model == 'KNN':
-        indices = indices[:, 1:k_cutoff + 1]
-        distances = distances[:, 1:k_cutoff + 1]
-    if model == 'Radius':
-        indices = indices[:, 1:]
-        distances = distances[:, 1:]
+        effective_k = min(int(k_cutoff), adata.n_obs - 1)
+        if effective_k < int(k_cutoff):
+            warnings.warn(
+                f"`k_cutoff={k_cutoff}` exceeds the {adata.n_obs - 1} available "
+                f"non-self neighbors; using {effective_k}.",
+                UserWarning,
+                stacklevel=2,
+            )
 
     KNN_list = []
     for it in range(indices.shape[0]):
-        KNN_list.append(pd.DataFrame(zip([it] * indices.shape[1], indices[it, :],distances[it, :])))
-    KNN_df = pd.concat(KNN_list)
-    KNN_df.columns = ['Cell1', 'Cell2', 'Distance']
+        # With duplicated coordinates sklearn may return a different zero-distance
+        # spot before the query spot. Remove self by identity, never by position.
+        nonself = indices[it] != it
+        row_indices = indices[it][nonself]
+        row_distances = distances[it][nonself]
+        if model == 'KNN':
+            row_indices = row_indices[:effective_k]
+            row_distances = row_distances[:effective_k]
+        KNN_list.append(
+            pd.DataFrame(
+                {
+                    'Cell1': np.repeat(it, len(row_indices)),
+                    'Cell2': row_indices,
+                    'Distance': row_distances,
+                }
+            )
+        )
+    KNN_df = pd.concat(KNN_list, ignore_index=True) if KNN_list else pd.DataFrame(
+        columns=['Cell1', 'Cell2', 'Distance']
+    )
 
     Spatial_Net = KNN_df.copy()
     if model == 'Radius':
@@ -157,6 +284,10 @@ def Cal_Spatial_Net(adata, rad_cutoff=None, k_cutoff=None,
     G = sp.coo_matrix((np.ones(G_df.shape[0]), (G_df['Cell1'], G_df['Cell2'])), shape=(adata.n_obs, adata.n_obs))
     G = G + sp.eye(G.shape[0])  # self-loop
     adata.uns['adj'] = G
+    adata.uns['_omicverse_staligner_obs_names'] = np.asarray(
+        adata.obs_names,
+        dtype=str,
+    )
 
 
 @register_function(
@@ -178,18 +309,13 @@ def Cal_Spatial_Net(adata, rad_cutoff=None, k_cutoff=None,
     auto_fix='auto',
     examples=[
         "# Basic STAligner integration",
-        "staligner = ov.space.pySTAligner(adata, batch_name='batch',",
-        "                                 device='cuda:0')",
+        "staligner = ov.space.pySTAligner(adata, batch_key='batch',",
+        "                                 Batch_list=[slice1, slice2],",
+        "                                 iter_comb=[(0, 1)], device='cuda:0')",
         "staligner.train()",
-        "adata_integrated = staligner.train_STAligner()",
-        "# Custom parameters",
-        "staligner = ov.space.pySTAligner(adata, batch_name='condition',",
-        "                                 k_cutoff=6, device='cpu')",
-        "# Multi-batch integration",
-        "staligner.train_STAligner(epochs=800, lr=0.001, weight_decay=1e-4)",
+        "adata_integrated = staligner.predicted()",
         "# Access integrated results",
-        "integrated_embedding = adata.obsm['STAligner']",
-        "batch_corrected = adata.obsm['STAligner_embed']"
+        "integrated_embedding = adata_integrated.obsm['STAligner']"
     ],
     related=["space.Cal_Spatial_Net", "space.clusters", "space.svg"]
 )
@@ -236,6 +362,9 @@ class pySTAligner(object):
         Batch-pair list for MNN comparison.
     knn_neigh : int, default=100
         K for mutual nearest-neighbor search.
+    mnn_approx : bool or None, default=None
+        Use hnswlib approximate-neighbor search. ``None`` selects it when
+        available and otherwise falls back to exact scikit-learn neighbors.
     Batch_list : list, optional
         Per-batch AnnData list aligned to ``batch_key``.
     device : torch.device, default=auto cuda/cpu
@@ -268,7 +397,7 @@ class pySTAligner(object):
         >>> staligner = ov.space.pySTAligner(
         ...     adata=adata,
         ...     batch_key='batch',
-        ...     Batch_list=[adata1, adata2]
+        ...     Batch_list={'0': adata1, '1': adata2}
         ... )
         >>> # Train model
         >>> staligner.train()
@@ -277,7 +406,7 @@ class pySTAligner(object):
     """
     
     def __init__(self,adata,
-                 hidden_dims: list = [512, 30],
+                 hidden_dims: list = None,
                  n_epochs: int = 1000,
                  lr: float = 0.001,
                  batch_key: str = 'batch_name',
@@ -289,8 +418,11 @@ class pySTAligner(object):
                  random_seed: int = 666,
                  iter_comb = None,
                  knn_neigh: int = 100,
+                 mnn_approx = None,
                  Batch_list = None,
-                 device = torch.device('cuda:0' if torch.cuda.is_available() else 'cpu')
+                 device = None,
+                 batch_ids = None,
+                 pretrain_epochs = None,
              ) -> None:
         r"""Initialize STAligner spatial integration model.
         
@@ -328,10 +460,23 @@ class pySTAligner(object):
             Batch combinations for pairwise alignment.
         knn_neigh : int, default=100
             MNN neighbor count.
-        Batch_list : list, optional
-            List of per-batch AnnData objects.
+        mnn_approx : bool or None, default=None
+            Whether to use hnswlib approximate neighbors. ``None`` uses it when
+            importable and falls back to exact scikit-learn neighbors.
+        Batch_list : list or mapping, optional
+            Per-batch AnnData objects. A ``{batch_label: AnnData}`` mapping is
+            safest when slices share the same Visium barcodes.
         device : torch.device, default=auto cuda/cpu
             Compute device for model.
+        batch_ids : sequence, optional
+            Explicit identity of each ``Batch_list`` item, in list order. This
+            is required when two source slices have indistinguishable
+            ``obs_names`` and cannot be inferred from a constant
+            ``batch.obs[batch_key]`` column.
+        pretrain_epochs : int, optional
+            Number of STAGATE-only epochs before MNN alignment. Defaults to
+            half of ``n_epochs`` (capped at 500), leaving at least half of short
+            runs for actual alignment.
 
         Notes:
             - Requires pre-computed spatial networks
@@ -340,30 +485,216 @@ class pySTAligner(object):
             - Memory usage scales with dataset size
             - Consider reducing knn_neigh for large datasets
         """
-        self.device = device
+        hidden_dims = [512, 30] if hidden_dims is None else list(hidden_dims)
+        if not isinstance(n_epochs, (int, np.integer)) or n_epochs < 2:
+            raise ValueError(
+                "`n_epochs` must be at least 2 so STAligner runs both its "
+                "pretraining and MNN-alignment stages."
+            )
+        if batch_key not in adata.obs:
+            raise KeyError(f"batch_key {batch_key!r} was not found in adata.obs.")
+        if Batch_list is None:
+            raise ValueError(
+                "`Batch_list` is required and must contain one preprocessed AnnData "
+                "per batch, each with `uns['adj']` from Cal_Spatial_Net()."
+            )
         section_ids = np.array(adata.obs[batch_key].unique())
+        if isinstance(Batch_list, Mapping):
+            if batch_ids is not None:
+                raise ValueError(
+                    "Do not pass `batch_ids` when Batch_list is already a mapping."
+                )
+            missing_ids = [section_id for section_id in section_ids if section_id not in Batch_list]
+            extra_ids = [key for key in Batch_list if key not in set(section_ids)]
+            if missing_ids or extra_ids:
+                raise ValueError(
+                    "Batch_list mapping keys must exactly match adata.obs batch "
+                    f"labels; missing={missing_ids}, extra={extra_ids}."
+                )
+            batch_ids = list(section_ids)
+            Batch_list = [Batch_list[section_id] for section_id in section_ids]
+        else:
+            Batch_list = list(Batch_list)
+        if len(Batch_list) < 2:
+            raise ValueError("STAligner requires at least two batches in `Batch_list`.")
+        too_small = [i for i, batch in enumerate(Batch_list) if batch.n_obs < 2]
+        if too_small:
+            raise ValueError(
+                "STAligner triplet training requires at least two observations "
+                f"per batch; too-small batch indices: {too_small}."
+            )
+        if pretrain_epochs is None:
+            pretrain_epochs = min(500, max(1, n_epochs // 2))
+        if (
+            isinstance(pretrain_epochs, bool)
+            or not isinstance(pretrain_epochs, (int, np.integer))
+            or not 1 <= pretrain_epochs < n_epochs
+        ):
+            raise ValueError(
+                "`pretrain_epochs` must be an integer satisfying "
+                "1 <= pretrain_epochs < n_epochs."
+            )
+
+        self.device = torch.device(
+            'cuda:0' if torch.cuda.is_available() else 'cpu'
+        ) if device is None else torch.device(device)
+        if len(section_ids) != len(Batch_list):
+            raise ValueError(
+                f"adata.obs[{batch_key!r}] contains {len(section_ids)} batches but "
+                f"Batch_list contains {len(Batch_list)} objects."
+            )
+        if not adata.obs_names.is_unique:
+            raise ValueError("`adata.obs_names` must be unique for MNN matching.")
+
+        section_values = np.asarray(adata.obs[batch_key])
+        combined_blocks = []
+        row_start = 0
+        for section_id in section_ids:
+            positions = np.flatnonzero(section_values == section_id)
+            expected = np.arange(row_start, row_start + len(positions))
+            if not np.array_equal(positions, expected):
+                raise ValueError(
+                    "Rows in `adata` must be contiguous by batch in the "
+                    "first-seen order of adata.obs[batch_key]."
+                )
+            combined_blocks.append(np.asarray(adata.obs_names[positions], dtype=str))
+            row_start += len(positions)
+        if row_start != adata.n_obs:
+            raise ValueError("Could not account for every adata row by batch label.")
+
+        resolved_batch_ids = None
+        if batch_ids is not None:
+            resolved_batch_ids = list(batch_ids)
+            if len(resolved_batch_ids) != len(Batch_list):
+                raise ValueError("`batch_ids` must have one entry per Batch_list item.")
+        else:
+            inferred = []
+            for batch in Batch_list:
+                if batch_key not in batch.obs or batch.obs[batch_key].isna().any():
+                    inferred = []
+                    break
+                unique_ids = list(pd.unique(batch.obs[batch_key]))
+                if len(unique_ids) != 1:
+                    inferred = []
+                    break
+                inferred.append(unique_ids[0])
+            if len(inferred) == len(Batch_list):
+                resolved_batch_ids = inferred
+
+        if resolved_batch_ids is not None and [
+            str(value) for value in resolved_batch_ids
+        ] != [str(value) for value in section_ids]:
+            raise ValueError(
+                "`batch_ids` (or per-batch constant batch labels) must match the "
+                "first-seen order of adata.obs[batch_key]."
+            )
+
+        if resolved_batch_ids is None:
+            for i, combined_names in enumerate(combined_blocks):
+                compatible = [
+                    j
+                    for j, candidate in enumerate(Batch_list)
+                    if _obs_names_match_with_optional_suffix(
+                        candidate.obs_names,
+                        combined_names,
+                    )
+                ]
+                if compatible != [i]:
+                    raise ValueError(
+                        "Batch_list order cannot be verified because source "
+                        "obs_names are ambiguous across slices. Pass explicit "
+                        "`batch_ids` in Batch_list order, or add a constant "
+                        f"{batch_key!r} column to each source AnnData."
+                    )
+
+        for i, (section_id, batch, combined_names) in enumerate(
+            zip(section_ids, Batch_list, combined_blocks)
+        ):
+            if not batch.obs_names.is_unique:
+                raise ValueError(f"Batch_list[{i}].obs_names must be unique.")
+            if batch.n_obs != len(combined_names):
+                raise ValueError(
+                    f"Batch_list[{i}] has {batch.n_obs} rows but combined batch "
+                    f"{section_id!r} has {len(combined_names)}."
+                )
+            source_names = np.asarray(batch.obs_names, dtype=str)
+            if not _obs_names_match_with_optional_suffix(source_names, combined_names):
+                raise ValueError(
+                    f"Rows for batch {section_id!r} must match Batch_list[{i}].obs_names "
+                    "in order. A uniform suffix added by AnnData.concatenate is allowed."
+                )
+        batch_adjs = [
+            _validated_staligner_adjacency(batch, i)
+            for i, batch in enumerate(Batch_list)
+        ]
+        if iter_comb is None:
+            iter_comb = [(i, i + 1) for i in range(len(Batch_list) - 1)]
+        else:
+            iter_comb = [tuple(comb) for comb in iter_comb]
+        if not iter_comb:
+            raise ValueError("`iter_comb` must contain at least one batch pair.")
+        for comb in iter_comb:
+            if (
+                len(comb) != 2
+                or not all(isinstance(i, (int, np.integer)) for i in comb)
+                or comb[0] >= comb[1]
+                or min(comb) < 0
+                or max(comb) >= len(Batch_list)
+            ):
+                raise ValueError(
+                    "Each `iter_comb` entry must contain two valid Batch_list indices "
+                    "in ascending order (i, j) with i < j."
+                )
+        if len(set(iter_comb)) != len(iter_comb):
+            raise ValueError("`iter_comb` must not contain duplicate batch pairs.")
+        reachable = {0}
+        changed = True
+        while changed:
+            changed = False
+            for left, right in iter_comb:
+                if left in reachable and right not in reachable:
+                    reachable.add(right)
+                    changed = True
+                elif right in reachable and left not in reachable:
+                    reachable.add(left)
+                    changed = True
+        if reachable != set(range(len(Batch_list))):
+            raise ValueError(
+                "`iter_comb` must form one connected graph covering every batch; "
+                f"uncovered batch indices: {sorted(set(range(len(Batch_list))) - reachable)}."
+            )
 
         comm_gene = adata.var_names
         data_list = []
-        for adata_tmp in Batch_list:
+        for adata_tmp, adjacency in zip(Batch_list, batch_adjs):
             adata_tmp = adata_tmp[:, comm_gene].copy()   # line 268 avoid 'ArrayView'
             adata_tmp_X = adata_tmp.X.toarray() if hasattr(adata_tmp.X, 'toarray') else adata_tmp.X
-            edge_index = np.nonzero(adata_tmp.uns['adj'])
+            edge_index = np.nonzero(adjacency)
             data_list.append(
                 Data(edge_index=torch.LongTensor(np.array([edge_index[0], edge_index[1]])),
                               prune_edge_index=torch.LongTensor(np.array([])),
                               x=torch.FloatTensor(adata_tmp_X)))
 
-        loader = DataLoader(data_list, batch_size=1, shuffle=True)
+        loader_generator = torch.Generator()
+        loader_generator.manual_seed(int(random_seed))
+        loader = DataLoader(
+            data_list,
+            batch_size=1,
+            shuffle=True,
+            generator=loader_generator,
+        )
 
         self.loader=loader
         self.adata = adata
         self.data_list = data_list
+        self.batch_adjs = batch_adjs
+        self._loader_generator = loader_generator
 
         # hyper-parameters
         self.lr=lr
         self.section_ids = section_ids
         self.n_epochs = n_epochs
+        self.pretrain_epochs = int(pretrain_epochs)
         self.weight_decay=weight_decay
         self.hidden_dims = hidden_dims
         self.key_added = key_added
@@ -373,11 +704,48 @@ class pySTAligner(object):
         self.verbose = verbose
         self.iter_comb = iter_comb
         self.knn_neigh = knn_neigh
+        if mnn_approx is None:
+            try:
+                import hnswlib  # noqa: F401
+            except (ImportError, OSError):
+                self.mnn_approx = False
+                warnings.warn(
+                    "hnswlib is unavailable; STAligner will use exact "
+                    "scikit-learn MNN search. Install hnswlib or pass "
+                    "mnn_approx=False to silence this message.",
+                    UserWarning,
+                    stacklevel=2,
+                )
+            else:
+                self.mnn_approx = True
+        else:
+            self.mnn_approx = bool(mnn_approx)
+            if self.mnn_approx:
+                try:
+                    import hnswlib  # noqa: F401
+                except (ImportError, OSError) as exc:
+                    raise ImportError(
+                        "mnn_approx=True requires hnswlib. Install it or use "
+                        "mnn_approx=False for exact neighbor search."
+                    ) from exc
         self.Batch_list = Batch_list
         self.batch_key = batch_key
+        self._is_fitted = False
         STAligner, _ = _get_staligner_backend()
-        self.model = STAligner(hidden_dims=[adata.X.shape[1], hidden_dims[0],
-                                            hidden_dims[1]]).to(device)
+        fork_devices = []
+        if self.device.type == 'cuda':
+            fork_devices = [
+                self.device.index
+                if self.device.index is not None
+                else torch.cuda.current_device()
+            ]
+        with torch.random.fork_rng(devices=fork_devices):
+            torch.manual_seed(int(random_seed))
+            if self.device.type == 'cuda':
+                torch.cuda.manual_seed_all(int(random_seed))
+            self.model = STAligner(
+                hidden_dims=[adata.X.shape[1], hidden_dims[0], hidden_dims[1]]
+            ).to(self.device)
         self.optimizer = torch.optim.Adam(self.model.parameters(), lr=lr,
                                           weight_decay=weight_decay)
 
@@ -415,14 +783,12 @@ class pySTAligner(object):
             - Memory usage increases during training
             - Consider batch size for large datasets
         """
-        seed = self.random_seed
-        random.seed(seed)
-        torch.manual_seed(seed)
-        torch.cuda.manual_seed_all(seed)
-        np.random.seed(seed)
+        self._is_fitted = False
+        rng = np.random.default_rng(self.random_seed)
 
         print('Pretrain with STAGATE...')
-        for epoch in tqdm(range(0, 500)):
+        pretrain_epochs = self.pretrain_epochs
+        for epoch in tqdm(range(pretrain_epochs)):
             for batch in self.loader:
                 self.model.train()
                 self.optimizer.zero_grad()
@@ -431,33 +797,40 @@ class pySTAligner(object):
 
                 loss = F.mse_loss(batch.x, out)  # +adv_loss
                 loss.backward()
-                torch.nn.utils.clip_grad_norm_(self.model.parameters(), 5.)
+                torch.nn.utils.clip_grad_norm_(
+                    self.model.parameters(),
+                    self.gradient_clipping,
+                )
                 self.optimizer.step()
 
 
         with torch.no_grad():
             z_list = []
             for batch in self.data_list:
-                z, _ = self.model.cpu()(batch.x, batch.edge_index)
+                z, _ = self.model(
+                    batch.x.to(self.device),
+                    batch.edge_index.to(self.device),
+                )
                 z_list.append(z.cpu().detach().numpy())
         self.adata.obsm['STAGATE'] = np.concatenate(z_list, axis=0)
-        self.model = self.model.to(self.device)
 
 
         _, create_dictionary_mnn = _get_staligner_backend()
         print('Train with STAligner...')
-        for epoch in tqdm(range(500, self.n_epochs)):
-            if epoch % 100 == 0 or epoch == 500:
+        for epoch in tqdm(range(pretrain_epochs, self.n_epochs)):
+            if epoch % 100 == 0 or epoch == pretrain_epochs:
                 if self.verbose:
                     print('Update spot triplets at epoch ' + str(epoch))
                 with torch.no_grad():
                     z_list = []
                     for batch in self.data_list:
-                        z, _ = self.model.cpu()(batch.x, batch.edge_index)
+                        z, _ = self.model(
+                            batch.x.to(self.device),
+                            batch.edge_index.to(self.device),
+                        )
                         z_list.append(z.cpu().detach().numpy())
 
                 self.adata.obsm['STAGATE'] = np.concatenate(z_list, axis=0)
-                self.model = self.model.to(self.device)
 
                 pair_data_list = []
 
@@ -466,9 +839,16 @@ class pySTAligner(object):
                     i, j = comb[0], comb[1]
                     batch_pair = self.adata[self.adata.obs[self.batch_key].isin([self.section_ids[i],
                                                                                   self.section_ids[j]])]
+                    effective_knn = min(
+                        self.knn_neigh,
+                        self.Batch_list[i].n_obs,
+                        self.Batch_list[j].n_obs,
+                    )
                     mnn_dict = create_dictionary_mnn(batch_pair, use_rep='STAGATE', batch_name=self.batch_key,
-                                                           k=self.knn_neigh,
-                                                           iter_comb=None, verbose=0)
+                                                           k=effective_knn,
+                                                           iter_comb=None,
+                                                           approx=self.mnn_approx,
+                                                           verbose=0)
 
                     batchname_list = batch_pair.obs[self.batch_key]
                     cellname_by_batch_dict = dict()
@@ -480,12 +860,24 @@ class pySTAligner(object):
                     negative_list = []
                     for batch_pair_name in mnn_dict.keys():  # pairwise compare for multiple batches
                         for anchor in mnn_dict[batch_pair_name].keys():
-                            anchor_list.append(anchor)
                             positive_spot = mnn_dict[batch_pair_name][anchor][0]
+                            source_cells = cellname_by_batch_dict[batchname_list[anchor]]
+                            negative_candidates = source_cells[source_cells != anchor]
+                            if not len(negative_candidates):
+                                continue
+                            anchor_list.append(anchor)
                             positive_list.append(positive_spot)
-                            section_size = len(cellname_by_batch_dict[batchname_list[anchor]])
                             negative_list.append(
-                                cellname_by_batch_dict[batchname_list[anchor]][np.random.randint(section_size)])
+                                negative_candidates[rng.integers(len(negative_candidates))]
+                            )
+
+                    if not anchor_list:
+                        raise RuntimeError(
+                            "STAligner found no usable mutual-nearest-neighbor "
+                            f"anchors for batch pair {(i, j)}. Check preprocessing, "
+                            "shared genes, and batch identity; the model was not "
+                            "marked as fitted."
+                        )
 
                     batch_as_dict = dict(zip(list(batch_pair.obs_names),
                                               range(0, batch_pair.shape[0])))
@@ -493,35 +885,46 @@ class pySTAligner(object):
                     positive_ind = list(map(lambda _: batch_as_dict[_], positive_list))
                     negative_ind = list(map(lambda _: batch_as_dict[_], negative_list))
 
-                    edge_list_1 = np.nonzero(self.Batch_list[i].uns['adj'])
+                    edge_list_1 = np.nonzero(self.batch_adjs[i])
 
-                    max_ind = edge_list_1[0].max()
-                    edge_list_2 = np.nonzero(self.Batch_list[j].uns['adj'])
+                    edge_list_2 = np.nonzero(self.batch_adjs[j])
 
-                    edge_list_2 = (edge_list_2[0] + max_ind + 1, edge_list_2[1] + max_ind + 1)
+                    batch_i_size = self.Batch_list[i].n_obs
+                    edge_list_2 = (
+                        edge_list_2[0] + batch_i_size,
+                        edge_list_2[1] + batch_i_size,
+                    )
                     edge_list = [edge_list_1, edge_list_2]
 
                     edge_pairs = [np.append(edge_list[0][0], edge_list[1][0]),
                                    np.append(edge_list[0][1], edge_list[1][1])]
 
-                    pair_data_list.append(Data(edge_index=torch.LongTensor(np.array([edge_pairs[0], edge_pairs[1]])),
-                                           anchor_ind=torch.LongTensor(np.array(anchor_ind)),
-                                           positive_ind=torch.LongTensor(np.array(positive_ind)),
-                                           negative_ind=torch.LongTensor(np.array(negative_ind)),
-                                           x=batch_pair.X)) 
-                    #torch.FloatTensor(batch_pair.X.todense())
+                    pair_x = torch.cat(
+                        [self.data_list[i].x, self.data_list[j].x],
+                        dim=0,
+                    ).clone()
+                    pair_data_list.append(Data(
+                        edge_index=torch.LongTensor(
+                            np.array([edge_pairs[0], edge_pairs[1]])
+                        ),
+                        anchor_ind=torch.LongTensor(np.array(anchor_ind)),
+                        positive_ind=torch.LongTensor(np.array(positive_ind)),
+                        negative_ind=torch.LongTensor(np.array(negative_ind)),
+                        x=pair_x,
+                    ))
 
                 # for temp in pair_data_list:
                 #     temp.to(device)
-                pair_loader = DataLoader(pair_data_list, batch_size=1, shuffle=True)
+                pair_loader = DataLoader(
+                    pair_data_list,
+                    batch_size=1,
+                    shuffle=True,
+                    generator=self._loader_generator,
+                )
 
             for batch in pair_loader:
                 self.model.train()
                 self.optimizer.zero_grad()
-                torch_data = batch.x[0].copy()
-                if hasattr(torch_data, 'toarray'):
-                    torch_data = torch_data.toarray()
-                batch.x = torch.FloatTensor(torch_data)
                 batch = batch.to(self.device)
                 z, out = self.model(batch.x, batch.edge_index)
                 mse_loss = F.mse_loss(batch.x, out)
@@ -539,6 +942,7 @@ class pySTAligner(object):
                 self.optimizer.step()
 
         add_reference(self.adata,'STAligner','spatial integration with STAligner')
+        self._is_fitted = True
 
     def predicted(self):
         r"""Generate and store the final embedding from trained STAligner model.
@@ -552,11 +956,17 @@ class pySTAligner(object):
         AnnData
             AnnData with integrated embedding in ``obsm[key_added]``.
         """ 
+        if not self._is_fitted:
+            raise RuntimeError("Call `train()` before requesting STAligner predictions.")
+        self.model = self.model.to(self.device)
         self.model.eval()
         with torch.no_grad():
             z_list = []
             for batch in self.data_list:
-                z, _ = self.model.cpu()(batch.x, batch.edge_index)
+                z, _ = self.model(
+                    batch.x.to(self.device),
+                    batch.edge_index.to(self.device),
+                )
                 z_list.append(z.cpu().detach().numpy())
 
         self.adata.obsm[self.key_added] = np.concatenate(z_list, axis=0)

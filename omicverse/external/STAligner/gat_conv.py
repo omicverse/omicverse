@@ -12,7 +12,13 @@ from torch_geometric.nn.dense.linear import Linear
 from torch_geometric.nn.conv import MessagePassing
 from torch_geometric.utils import remove_self_loops, add_self_loops, softmax
 
-torch_sparse_install=False
+try:
+    from torch_sparse import SparseTensor, set_diag
+    _TORCH_SPARSE_IMPORT_ERROR = None
+except (ImportError, OSError) as exc:  # Tensor edge_index paths do not require torch-sparse.
+    SparseTensor = None
+    set_diag = None
+    _TORCH_SPARSE_IMPORT_ERROR = exc
 
 class GATConv(MessagePassing):
     r"""The graph attentional operator from the `"Graph Attention Networks"
@@ -60,30 +66,11 @@ class GATConv(MessagePassing):
     """
     _alpha: OptTensor
 
-    def check_torch_sparse(self):
-        """
-        
-        """
-        global torch_sparse_install
-        try:
-            from torch_sparse import SparseTensor, set_diag
-            torch_sparse_install=True
-        except ImportError:
-            raise ImportError(
-                'Please install the torch_sparse: `pip install -U torch_sparse`.'
-            )
-
     def __init__(self, in_channels: Union[int, Tuple[int, int]],
                  out_channels: int, heads: int = 1, concat: bool = True,
                  negative_slope: float = 0.2, dropout: float = 0.0,
                  add_self_loops: bool = True, bias: bool = True,
                  prune_weight: float = 0.0, **kwargs):
-        
-        self.check_torch_sparse()
-        global torch_sparse_install
-        if torch_sparse_install==True:
-            global_imports('torch_sparse', members=['SparseTensor', 'set_diag'], asfunction=True)
-        
 
         kwargs.setdefault('aggr', 'add')
         super(GATConv, self).__init__(node_dim=0, **kwargs)
@@ -184,6 +171,12 @@ class GATConv(MessagePassing):
         else:
             alpha = tied_attention
 
+        if not isinstance(edge_index, Tensor) and SparseTensor is None:
+            raise ImportError(
+                "SparseTensor STAligner inputs require `torch-sparse`; ordinary "
+                "edge_index Tensor inputs do not."
+            ) from _TORCH_SPARSE_IMPORT_ERROR
+
         if self.add_self_loops:
             if isinstance(edge_index, Tensor):
                 # We only want to add self-loops for nodes that appear both as
@@ -194,7 +187,7 @@ class GATConv(MessagePassing):
                 num_nodes = min(size) if size is not None else num_nodes
                 edge_index, _ = remove_self_loops(edge_index)
                 edge_index, _ = add_self_loops(edge_index, num_nodes=num_nodes)
-            elif isinstance(edge_index, SparseTensor):
+            elif SparseTensor is not None and isinstance(edge_index, SparseTensor):
                 edge_index = set_diag(edge_index)
 
         if self.prune_weight == 0:
@@ -219,7 +212,7 @@ class GATConv(MessagePassing):
         if isinstance(return_attention_weights, bool):
             if isinstance(edge_index, Tensor):
                 return out, (edge_index, alpha)
-            elif isinstance(edge_index, SparseTensor):
+            elif SparseTensor is not None and isinstance(edge_index, SparseTensor):
                 return out, edge_index.set_value(alpha, layout='coo')
         else:
             return out
