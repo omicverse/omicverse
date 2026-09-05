@@ -99,6 +99,15 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
+# Spatial flow network learning; GEMs are supplied separately.
+commot = [
+    "torch>=2.0,<3",
+    "POT>=0.9.5",
+]
+flowsig = [
+    "causaldag==0.1a163",
+    "torch>=2.0,<3",
+]
 # Out-of-memory backend (Rust-powered AnnData). Install via:
 #   pip install omicverse[rust]
 # Enables ov.read(path, backend='rust') with chunked preprocessing.

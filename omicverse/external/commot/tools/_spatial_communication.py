@@ -55,8 +55,8 @@ class CellCommunication(object):
             self.recs = list(set(df_ligrec.iloc[:,1]).intersection(data_genes))
             A = np.inf * np.ones([len(self.ligs), len(self.recs)], float)
             for i in tqdm(range(len(df_ligrec))):
-                tmp_lig = df_ligrec.iloc[i][0]
-                tmp_rec = df_ligrec.iloc[i][1]
+                tmp_lig = df_ligrec.iloc[i, 0]
+                tmp_rec = df_ligrec.iloc[i, 1]
                 if tmp_lig in self.ligs and tmp_rec in self.recs:
                     if cost_scale is None:
                         A[self.ligs.index(tmp_lig), self.recs.index(tmp_rec)] = 1.0
@@ -431,7 +431,17 @@ def summarize_cluster_gpu(X, clusterid, clusternames, n_permutations=500, use_gp
             raise ImportError("GPU disabled by user")
     except ImportError:
         print("⚠️  CuPy not available, falling back to CPU computation")
-        return summarize_cluster_optimized(X, clusterid, clusternames, n_permutations)
+        df_cluster, df_p_value = summarize_cluster_optimized(
+            X, clusterid, clusternames, n_permutations
+        )
+        cluster_indices = {
+            name: np.flatnonzero(np.asarray(clusterid) == name)
+            for name in clusternames
+        }
+        scaled = _apply_scaling(
+            df_cluster.to_numpy(), cluster_indices, clusternames, scale_factor
+        )
+        return pd.DataFrame(scaled, index=df_cluster.index, columns=df_cluster.columns), df_p_value
     
     n = len(clusternames)
     
@@ -925,18 +935,18 @@ def spatial_communication(
         data_genes = list(adata.var_names)
         tmp_ligrec = []
         for i in range(df_ligrec.shape[0]):
-            if df_ligrec.iloc[i][0] in data_genes and df_ligrec.iloc[i][1] in data_genes:
-                tmp_ligrec.append([df_ligrec.iloc[i][0], df_ligrec.iloc[i][1], df_ligrec.iloc[i][2]])
+            if df_ligrec.iloc[i, 0] in data_genes and df_ligrec.iloc[i, 1] in data_genes:
+                tmp_ligrec.append([df_ligrec.iloc[i, 0], df_ligrec.iloc[i, 1], df_ligrec.iloc[i, 2]])
         tmp_ligrec = np.array(tmp_ligrec, str)
         df_ligrec = pd.DataFrame(data=tmp_ligrec)
     elif heteromeric:
         data_genes = set(list(adata.var_names))
         tmp_ligrec = []
         for i in range(df_ligrec.shape[0]):
-            tmp_lig = df_ligrec.iloc[i][0].split(heteromeric_delimiter)
-            tmp_rec = df_ligrec.iloc[i][1].split(heteromeric_delimiter)
+            tmp_lig = df_ligrec.iloc[i, 0].split(heteromeric_delimiter)
+            tmp_rec = df_ligrec.iloc[i, 1].split(heteromeric_delimiter)
             if set(tmp_lig).issubset(data_genes) and set(tmp_rec).issubset(data_genes):
-                tmp_ligrec.append([df_ligrec.iloc[i][0], df_ligrec.iloc[i][1], df_ligrec.iloc[i][2]])
+                tmp_ligrec.append([df_ligrec.iloc[i, 0], df_ligrec.iloc[i, 1], df_ligrec.iloc[i, 2]])
         tmp_ligrec = np.array(tmp_ligrec, str)
         df_ligrec = pd.DataFrame(data=tmp_ligrec)
     # Drop duplicate pairs
@@ -1386,18 +1396,18 @@ def cluster_communication_spatial_permutation(
         data_genes = list(adata.var_names)
         tmp_ligrec = []
         for i in range(df_ligrec.shape[0]):
-            if df_ligrec.iloc[i][0] in data_genes and df_ligrec.iloc[i][1] in data_genes:
-                tmp_ligrec.append([df_ligrec.iloc[i][0], df_ligrec.iloc[i][1], df_ligrec.iloc[i][2]])
+            if df_ligrec.iloc[i, 0] in data_genes and df_ligrec.iloc[i, 1] in data_genes:
+                tmp_ligrec.append([df_ligrec.iloc[i, 0], df_ligrec.iloc[i, 1], df_ligrec.iloc[i, 2]])
         tmp_ligrec = np.array(tmp_ligrec, str)
         df_ligrec = pd.DataFrame(data=tmp_ligrec, columns=['ligand','receptor','pathway'])
     elif heteromeric:
         data_genes = set(list(adata.var_names))
         tmp_ligrec = []
         for i in range(df_ligrec.shape[0]):
-            tmp_lig = df_ligrec.iloc[i][0].split(heteromeric_delimiter)
-            tmp_rec = df_ligrec.iloc[i][1].split(heteromeric_delimiter)
+            tmp_lig = df_ligrec.iloc[i, 0].split(heteromeric_delimiter)
+            tmp_rec = df_ligrec.iloc[i, 1].split(heteromeric_delimiter)
             if set(tmp_lig).issubset(data_genes) and set(tmp_rec).issubset(data_genes):
-                tmp_ligrec.append([df_ligrec.iloc[i][0], df_ligrec.iloc[i][1], df_ligrec.iloc[i][2]])
+                tmp_ligrec.append([df_ligrec.iloc[i, 0], df_ligrec.iloc[i, 1], df_ligrec.iloc[i, 2]])
         tmp_ligrec = np.array(tmp_ligrec, str)
         df_ligrec = pd.DataFrame(data=tmp_ligrec, columns=['ligand','receptor','pathway'])
     # Drop duplicate pairs

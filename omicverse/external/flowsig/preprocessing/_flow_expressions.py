@@ -703,6 +703,18 @@ def construct_flows_from_liana(adata: sc.AnnData,
     adata.obsm[flowsig_expr_key] = flow_expressions
     adata.uns[flowsig_network_key] = {'flow_var_info': flow_var_info}
 
+def _commot_ligand_interactions(adata, commot_output_key, ligand, direction):
+    """Resolve exact LR columns from database identities, not gene prefixes."""
+    database = adata.uns[commot_output_key + '-info']['df_ligrec']
+    columns = adata.obsm[commot_output_key + '-sum-' + direction].columns
+    prefix = 'r-' if direction == 'receiver' else 's-'
+    interactions = dict.fromkeys(
+        f"{row.ligand}-{row.receptor}"
+        for row in database.loc[database['ligand'] == ligand].itertuples()
+    )
+    return [interaction for interaction in interactions if prefix + interaction in columns]
+
+
 def construct_inflow_signals_commot(adata: sc.AnnData,
                                     commot_output_key: str):
 
@@ -714,8 +726,10 @@ def construct_inflow_signals_commot(adata: sc.AnnData,
     inflow_interactions = []
     inflow_expressions = np.zeros((adata.n_obs, len(inflow_vars)))
     for i, inflow_var in enumerate(inflow_vars):
-        lig = inflow_var.strip('inflow-')
-        inferred_interactions = [pair.replace('r-', '') for pair in adata.obsm[commot_output_key + '-sum-receiver'].columns if pair.startswith('r-' + lig)]
+        lig = outflow_vars[i]
+        inferred_interactions = _commot_ligand_interactions(
+            adata, commot_output_key, lig, 'receiver'
+        )
         inflow_interactions.append('/'.join(sorted(inferred_interactions)))
 
         # We sum the total received signal across each interaction at each spot
@@ -743,7 +757,9 @@ def construct_outflow_signals_commot(adata: sc.AnnData,
 
     for i, outflow_var in enumerate(outflow_vars):
 
-        inferred_interactions = [pair[2:] for pair in adata.obsm[commot_output_key + '-sum-sender'].columns if pair.startswith('s-' + outflow_var)]
+        inferred_interactions = _commot_ligand_interactions(
+            adata, commot_output_key, outflow_var, 'sender'
+        )
         outflow_interactions.append('/'.join(sorted(inferred_interactions)))
 
         # Outflow signal expression is simply ligand gene expression
