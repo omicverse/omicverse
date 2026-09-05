@@ -16,6 +16,14 @@ from torch_geometric.nn.dense.linear import Linear
 from torch_geometric.nn.conv import MessagePassing
 from torch_geometric.utils import remove_self_loops, add_self_loops, softmax
 
+try:
+    from torch_sparse import SparseTensor, set_diag
+    _TORCH_SPARSE_IMPORT_ERROR = None
+except (ImportError, OSError) as exc:  # Tensor edge_index paths do not require torch-sparse.
+    SparseTensor = None
+    set_diag = None
+    _TORCH_SPARSE_IMPORT_ERROR = exc
+
 
 class Model(torch.nn.Module):
     def __init__(self, hidden_dims):
@@ -98,7 +106,6 @@ class GATConv(MessagePassing):
         # type: (Union[Tensor, OptPairTensor], SparseTensor, Size, NoneType) -> Tensor  # noqa
         # type: (Union[Tensor, OptPairTensor], Tensor, Size, bool) -> Tuple[Tensor, Tuple[Tensor, Tensor]]  # noqa
         # type: (Union[Tensor, OptPairTensor], SparseTensor, Size, bool) -> Tuple[Tensor, SparseTensor]  # noqa
-        from torch_sparse import SparseTensor, set_diag
         r"""
         Args:
             return_attention_weights (bool, optional): If set to :obj:`True`,
@@ -135,6 +142,12 @@ class GATConv(MessagePassing):
         else:
             alpha = tied_attention
 
+        if not isinstance(edge_index, Tensor) and SparseTensor is None:
+            raise ImportError(
+                "SparseTensor BINARY inputs require `torch-sparse`; ordinary "
+                "edge_index Tensor inputs do not."
+            ) from _TORCH_SPARSE_IMPORT_ERROR
+
 
         if self.add_self_loops:
             if isinstance(edge_index, Tensor):
@@ -144,7 +157,7 @@ class GATConv(MessagePassing):
                 num_nodes = min(size) if size is not None else num_nodes
                 edge_index, _ = remove_self_loops(edge_index)
                 edge_index, _ = add_self_loops(edge_index, num_nodes=num_nodes)
-            elif isinstance(edge_index, SparseTensor):
+            elif SparseTensor is not None and isinstance(edge_index, SparseTensor):
                 edge_index = set_diag(edge_index)
 
         out = self.propagate(edge_index, x=x, alpha=alpha, size=size)
@@ -161,7 +174,7 @@ class GATConv(MessagePassing):
         if isinstance(return_attention_weights, bool):
             if isinstance(edge_index, Tensor):
                 return out, (edge_index, alpha)
-            elif isinstance(edge_index, SparseTensor):
+            elif SparseTensor is not None and isinstance(edge_index, SparseTensor):
                 return out, edge_index.set_value(alpha, layout='coo')
         else:
             return out
