@@ -5,6 +5,97 @@ import pandas as pd
 
 from .._registry import register_function
 
+
+def _validate_count_layer(adata, requested_layer, label, method='cell2location'):
+    """Resolve a count layer and reject continuous/invalid count inputs."""
+    from scipy import sparse
+
+    if requested_layer is not None and requested_layer in adata.layers:
+        layer = requested_layer
+        matrix = adata.layers[layer]
+    elif requested_layer in (None, 'counts'):
+        layer = None
+        matrix = adata.X
+    else:
+        raise KeyError(
+            f"Requested {label} count layer {requested_layer!r} was not found."
+        )
+
+    values = matrix.data if sparse.issparse(matrix) else np.asarray(matrix).ravel()
+    values = np.asarray(values)
+    for start in range(0, values.size, 1_000_000):
+        chunk = values[start:start + 1_000_000]
+        if not np.isfinite(chunk).all():
+            raise ValueError(f"{label} count input contains NaN or infinite values.")
+        if np.any(chunk < 0):
+            raise ValueError(f"{label} count input contains negative values.")
+        if not np.allclose(chunk, np.rint(chunk), rtol=0, atol=1e-6):
+            source = f"adata.layers[{layer!r}]" if layer is not None else "adata.X"
+            layer_hint = (
+                f" and pass counts_layer_{'sc' if label == 'reference' else 'sp'}="
+                "'your_layer'"
+                if method == 'cell2location'
+                else ""
+            )
+            raise ValueError(
+                f"{method} requires raw integer-like counts for {label}; {source} "
+                f"contains continuous values. Preserve raw counts in a layer{layer_hint}."
+            )
+    return layer
+
+
+def _starfysh_visium_metadata(adata):
+    """Build Starfysh metadata from canonical Visium ``(x, y)`` coordinates."""
+    spatial_mapping = adata.uns.get('spatial')
+    if not isinstance(spatial_mapping, dict) or not spatial_mapping:
+        raise KeyError("Starfysh requires a non-empty adata.uns['spatial'] mapping.")
+    if len(spatial_mapping) != 1:
+        raise ValueError(
+            "The Starfysh adapter currently accepts one Visium library at a time. "
+            "Subset the requested library before deconvolution."
+        )
+    sample_id = next(iter(spatial_mapping))
+    if 'spatial' not in adata.obsm:
+        raise KeyError("Starfysh requires canonical coordinates in adata.obsm['spatial'].")
+    coords = np.asarray(adata.obsm['spatial'], dtype=np.float64)
+    if coords.ndim != 2 or coords.shape != (adata.n_obs, 2):
+        raise ValueError("adata.obsm['spatial'] must have shape (n_obs, 2).")
+    if not np.isfinite(coords).all():
+        raise ValueError("adata.obsm['spatial'] contains non-finite coordinates.")
+    required_obs = ['array_row', 'array_col']
+    missing_obs = [column for column in required_obs if column not in adata.obs]
+    if missing_obs:
+        raise KeyError(f"Starfysh Visium metadata is missing obs columns: {missing_obs}.")
+
+    spatial_info = spatial_mapping[sample_id]
+    images = spatial_info.get('images', {})
+    scalefactors = spatial_info.get('scalefactors')
+    if 'hires' not in images or scalefactors is None:
+        raise KeyError(
+            "Starfysh requires a hires image and Visium scalefactors in "
+            "adata.uns['spatial'][library_id]."
+        )
+
+    map_info = pd.DataFrame(
+        {
+            'array_row': adata.obs['array_row'].to_numpy(),
+            'array_col': adata.obs['array_col'].to_numpy(),
+            # AnnData/Visium convention: spatial[:, 0] is x/image column and
+            # spatial[:, 1] is y/image row. Starfysh multiplies these full-res
+            # coordinates by tissue_hires_scalef when extracting image patches.
+            'imagerow': coords[:, 1],
+            'imagecol': coords[:, 0],
+            'sample': sample_id,
+        },
+        index=adata.obs_names.copy(),
+    )
+    return sample_id, {
+        'img': images['hires'],
+        'scalefactor': scalefactors,
+        'map_info': map_info,
+    }
+
+
 @register_function(
     aliases=["空间解卷积", "spatial deconvolution", "Deconvolution", "cell type mapping", "空间细胞类型映射"],
     category="space",
@@ -80,32 +171,32 @@ class Deconvolution(object):
 
         #Check the raw counts layer
         if 'counts' in self.adata_sc.layers.keys():
-            print(f"{Colors.GREEN}✓ Existing 'counts' layer in scRNA-seq data{Colors.ENDC}")
+            print(f"{Colors.GREEN}[OK] Existing 'counts' layer in scRNA-seq data{Colors.ENDC}")
         if 'counts' in self.adata_sp.layers.keys():
-            print(f"{Colors.GREEN}✓ Existing 'counts' layer in spatial transcriptomics data{Colors.ENDC}")
+            print(f"{Colors.GREEN}[OK] Existing 'counts' layer in spatial transcriptomics data{Colors.ENDC}")
 
         # Check the normalized expression layer 
         log1p_1e4_warning = False
         if self.adata_sc.X.max()<np.log1p(1e4):
-            print(f"{Colors.GREEN}✓ scRNA-seq data is log-normalized by 1e4{Colors.ENDC}")
+            print(f"{Colors.GREEN}[OK] scRNA-seq data appears log-normalized{Colors.ENDC}")
             log1p_1e4_warning = True
         if self.adata_sp.X.max()<np.log1p(1e4):
-            print(f"{Colors.GREEN}✓ spatial transcriptomics data is log-normalized by 1e4{Colors.ENDC}")
+            print(f"{Colors.GREEN}[OK] spatial transcriptomics data appears log-normalized{Colors.ENDC}")
             log1p_1e4_warning = True
         
         if log1p_1e4_warning:   
-            print(f"{Colors.WARNING}⚠️ 1e4 is the standardized target sum for `scanpy`{Colors.ENDC}")
+            print(f"{Colors.WARNING}[WARN] 1e4 is a common target sum for `scanpy`{Colors.ENDC}")
 
         log1p_50_warning = False
         if self.adata_sc.X.max()<np.log1p(50*1e4):
-            print(f"{Colors.GREEN}✓ scRNA-seq data is log-normalized by 50*1e4{Colors.ENDC}")
+            print(f"{Colors.GREEN}[OK] scRNA-seq values are within the expected numeric range{Colors.ENDC}")
             log1p_50_warning = True
         if self.adata_sp.X.max()<np.log1p(50*1e4):
-            print(f"{Colors.GREEN}✓ spatial transcriptomics data is log-normalized by 50*1e4{Colors.ENDC}")
+            print(f"{Colors.GREEN}[OK] spatial values are within the expected numeric range{Colors.ENDC}")
             log1p_50_warning = True
 
         if log1p_50_warning:   
-            print(f"{Colors.WARNING}⚠️ 50*1e4 is the standardized target sum for `omicverse`{Colors.ENDC}")
+            print(f"{Colors.WARNING}[WARN] 50*1e4 is a common OmicVerse target sum{Colors.ENDC}")
 
     @staticmethod
     def _default_cell2location_device_kwargs():
@@ -153,7 +244,7 @@ class Deconvolution(object):
         self.adata_sc=preprocess(self.adata_sc,mode=mode,n_HVGs=n_HVGs,target_sum=target_sum,**kwargs)
         self.adata_sc.raw = self.adata_sc
         self.adata_sc = self.adata_sc[:, self.adata_sc.var.highly_variable_features]
-        print(f"{Colors.GREEN}✓ scRNA-seq data is preprocessed{Colors.ENDC}")
+        print(f"{Colors.GREEN}[OK] scRNA-seq data is preprocessed{Colors.ENDC}")
         #return self.adata_sc
 
     def preprocess_sp(self,
@@ -207,7 +298,7 @@ class Deconvolution(object):
             self.adata_sp = self.adata_sp[:, self.adata_sp.var.space_variable_features]
         else:
             self.adata_sp = self.adata_sp
-        print(f"{Colors.GREEN}✓ spatial transcriptomics data is preprocessed{Colors.ENDC}")
+        print(f"{Colors.GREEN}[OK] spatial transcriptomics data is preprocessed{Colors.ENDC}")
         #return self.adata_sp
 
     def deconvolution(
@@ -230,6 +321,8 @@ class Deconvolution(object):
         spatial_type='visium',
         gene_sig=None,
         categorical_covariate_keys_sc=None,
+        counts_layer_sc='counts',
+        counts_layer_sp='counts',
     ):
         """
         Infer spot-level cell-type composition from single-cell references.
@@ -256,6 +349,10 @@ class Deconvolution(object):
             Detection alpha hyper-parameter used by cell2location.
         sample_kwargs:dict or None
             Posterior sampling options for cell2location.
+        counts_layer_sc, counts_layer_sp:str or None
+            Raw count layers for the single-cell reference and spatial object.
+            If the requested ``'counts'`` layer is absent, ``.X`` is accepted
+            only when it is finite, non-negative, and integer-like.
         flashdeconv_kwargs:dict or None
             Additional parameters for FlashDeconv.
         starfysh_kwargs:dict or None
@@ -287,6 +384,21 @@ class Deconvolution(object):
         >>> decov.deconvolution(method='RCTD', celltype_key_sc='cell_type',
         ...                     rctd_kwargs={'mode': 'full'})
         """
+        canonical_methods = {
+            'tangram': 'Tangram',
+            'cell2location': 'cell2location',
+            'flashdeconv': 'FlashDeconv',
+            'starfysh': 'starfysh',
+            'rctd': 'RCTD',
+        }
+        normalized_method = str(method).lower()
+        if normalized_method not in canonical_methods:
+            raise ValueError(
+                f"Method {method!r} is not supported. Choose from: "
+                f"{list(canonical_methods.values())}."
+            )
+        method = canonical_methods[normalized_method]
+
         if method=='Tangram':
             self.method='Tangram'
             from ._tangram import Tangram
@@ -295,7 +407,7 @@ class Deconvolution(object):
             tangram=Tangram(self.adata_sc,self.adata_sp,clusters=celltype_key_sc)
             tangram.train(**tangram_kwargs)
             self.adata_cell2location=tangram.cell2location()
-            print(f"{Colors.GREEN}✓ Tangram cell2location is done{Colors.ENDC}")
+            print(f"{Colors.GREEN}[OK] Tangram projection is done{Colors.ENDC}")
             print(f"The cell2location result is saved in self.adata_cell2location")
             #self.adata_impute=tangram.impute()
             self.tangram_model=tangram
@@ -309,9 +421,29 @@ class Deconvolution(object):
             from ..external.space.cell2location.utils import select_slide
             from ..external.space.cell2location.utils.filtering import filter_genes
 
-            selected = filter_genes(
-                self.adata_sc, cell_count_cutoff=5, cell_percentage_cutoff2=0.03, nonz_mean_cutoff=1.12
+            reference_count_layer = _validate_count_layer(
+                self.adata_sc,
+                counts_layer_sc,
+                'reference',
             )
+            spatial_count_layer = _validate_count_layer(
+                self.adata_sp,
+                counts_layer_sp,
+                'spatial',
+            )
+
+            original_reference_x = self.adata_sc.X
+            if reference_count_layer is not None:
+                self.adata_sc.X = self.adata_sc.layers[reference_count_layer]
+            try:
+                selected = filter_genes(
+                    self.adata_sc,
+                    cell_count_cutoff=5,
+                    cell_percentage_cutoff2=0.03,
+                    nonz_mean_cutoff=1.12,
+                )
+            finally:
+                self.adata_sc.X = original_reference_x
 
             # filter the object
             self.adata_sc = self.adata_sc[:, selected].copy()
@@ -319,6 +451,7 @@ class Deconvolution(object):
             # prepare anndata for the regression model
             RegressionModel.setup_anndata(
                 adata=self.adata_sc,
+                layer=reference_count_layer,
                 # 10X reaction / sample / batch
                 batch_key=batch_key_sc,
                 # cell type, covariate used for constructing signatures
@@ -364,7 +497,11 @@ class Deconvolution(object):
 
             print(f"Total number of genes both in the scRNA-seq data and the spatial transcriptomics data: {len(intersect)}")
 
-            Cell2location.setup_anndata(adata=self.adata_sp, batch_key=batch_key_sp)
+            Cell2location.setup_anndata(
+                adata=self.adata_sp,
+                layer=spatial_count_layer,
+                batch_key=batch_key_sp,
+            )
 
 
             self.mod_sp = Cell2location(
@@ -405,7 +542,7 @@ class Deconvolution(object):
             adata_cell2location.uns=self.adata_sp.uns.copy()
             self.adata_cell2location=adata_cell2location
 
-            print(f"{Colors.GREEN}✓ cell2location is done{Colors.ENDC}")
+            print(f"{Colors.GREEN}[OK] cell2location is done{Colors.ENDC}")
             print(f"The cell2location result is saved in self.adata_cell2location")
 
         elif method=='FlashDeconv':
@@ -463,22 +600,26 @@ class Deconvolution(object):
             self.adata_cell2location = adata_cell2location
             self.flashdeconv_params = self.adata_sp.uns.get('flashdeconv_params', flashdeconv_kwargs)
 
-            print(f"{Colors.GREEN}✓ FlashDeconv deconvolution is done{Colors.ENDC}")
+            print(f"{Colors.GREEN}[OK] FlashDeconv deconvolution is done{Colors.ENDC}")
             print(f"The deconvolution result is saved in self.adata_cell2location")
             print(f"Cell type proportions are also stored in self.adata_sp.obsm['flashdeconv']")
 
         elif method=='starfysh':
+            if spatial_type != 'visium':
+                raise NotImplementedError(
+                    "The Starfysh adapter currently supports only spatial_type='visium'."
+                )
+            if gene_sig is None:
+                raise ValueError("Starfysh requires a gene signature via `gene_sig=`.")
             from ..external.starfysh import (AA, utils, plot_utils, post_analysis)
             from ..external.starfysh import _starfysh as sf_model
             self.method='starfysh'
 
             import torch
-            sc.settings.verbosity = 0
-                
+
             starfysh_default_kwargs={
                 'n_repeats':3,
                 'epochs':200,
-                'patience':50,
                 'device':None,
                 'batch_size':32,
                 'alpha_mul':50,
@@ -499,27 +640,9 @@ class Deconvolution(object):
                 full_kwargs = starfysh_default_kwargs.copy()
                 full_kwargs.update(starfysh_kwargs)
                 starfysh_kwargs = full_kwargs
-                
+
             if spatial_type=='visium':
-                sample_id=list(self.adata_sp.uns['spatial'].keys())[0]
-                tissue_position_list = pd.DataFrame(self.adata_sp.obsm['spatial'],index=self.adata_sp.obs.index,)
-                map_info = tissue_position_list#.iloc[:, -4:-2]
-                map_info.columns = ['array_row', 'array_col']
-                map_info.loc[:, 'imagerow'] = tissue_position_list.iloc[:, -2]
-                map_info.loc[:, 'imagecol'] = tissue_position_list.iloc[:, -1]
-                map_info.loc[:, 'sample'] = sample_id
-                map_info['array_row']=self.adata_sp.obs.loc[map_info.index,'array_row']
-                map_info['array_col']=self.adata_sp.obs.loc[map_info.index,'array_col']
-
-                img_metadata={
-                    'img':self.adata_sp.uns['spatial'][sample_id]['images']['hires'],
-                    'scalefactor':self.adata_sp.uns['spatial'][sample_id]['scalefactors'],
-                    'map_info':map_info
-                }
-                if gene_sig is None:
-                    print(f"you need to provide the gene signature for starfysh")
-                    return
-
+                sample_id, img_metadata = _starfysh_visium_metadata(self.adata_sp)
                 # Prepare raw counts adata for starfysh (expects raw counts as first arg)
                 if 'counts' in self.adata_sp.layers:
                     adata_raw = self.adata_sp.copy()
@@ -573,7 +696,6 @@ class Deconvolution(object):
 
                 n_repeats = starfysh_kwargs['n_repeats']
                 epochs = starfysh_kwargs['epochs']
-                patience = starfysh_kwargs['patience']
                 device = starfysh_kwargs['device']
                 if device is None:
                     device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
@@ -586,7 +708,6 @@ class Deconvolution(object):
                 model, loss = utils.run_starfysh(visium_args,
                                                 n_repeats=n_repeats,
                                                 epochs=epochs,
-                                                #patience=patience,
                                                 device=device,
                                                 batch_size=batch_size,
                                                 alpha_mul=alpha_mul,
@@ -599,7 +720,7 @@ class Deconvolution(object):
                 inference_outputs, generative_outputs,adata_ = sf_model.model_eval(model,
                                                                             adata,
                                                                             visium_args,
-                                                                            poe=False,
+                                                                            poe=poe,
                                                                             device=device)
 
                 def cell2proportion(adata):
@@ -614,7 +735,7 @@ class Deconvolution(object):
                 self.adata_cell2location=adata_plot
                 self.adata_sp=adata_normed
                 self.starfysh_model=model 
-                print(f"{Colors.GREEN}✓ starfysh is done{Colors.ENDC}")
+                print(f"{Colors.GREEN}[OK] starfysh is done{Colors.ENDC}")
                 print(f"The starfysh result is saved in self.adata_cell2location")
                 print(f"The starfysh model is saved in self.starfysh_model")
             
@@ -637,25 +758,28 @@ class Deconvolution(object):
             # (with a sanity check) — that handles the case where the user
             # passes raw-counts AnnData directly without going through
             # `preprocess_sc` / `preprocess_sp`.
-            def _counts_view(adata, label):
-                if 'counts' in adata.layers:
-                    counts = adata.layers['counts']
-                else:
-                    counts = adata.X
-                    if hasattr(counts, 'max'):
-                        max_v = float(counts.max())
-                        if max_v <= np.log1p(1e6):
-                            print(
-                                f"{Colors.WARNING}⚠️ {label}.X looks log-normalized (max≈{max_v:.2f}); "
-                                f"RCTD requires raw counts. Pass `adata.layers['counts']` "
-                                f"or set `adata.X = adata.layers['counts']` before calling.{Colors.ENDC}"
-                            )
+            def _counts_view(adata, label, requested_layer):
+                requested_layer = _validate_count_layer(
+                    adata,
+                    requested_layer,
+                    label,
+                    method='RCTD',
+                )
+                counts = adata.layers[requested_layer] if requested_layer is not None else adata.X
                 view = adata.copy()
                 view.X = counts
                 return view
 
-            adata_sc_counts = _counts_view(self.adata_sc, 'adata_sc')
-            adata_sp_counts = _counts_view(self.adata_sp, 'adata_sp')
+            adata_sc_counts = _counts_view(
+                self.adata_sc,
+                'reference',
+                counts_layer_sc,
+            )
+            adata_sp_counts = _counts_view(
+                self.adata_sp,
+                'spatial',
+                counts_layer_sp,
+            )
 
             # ── 2. Set defaults; let user override via rctd_kwargs.
             rctd_defaults = {
@@ -749,13 +873,13 @@ class Deconvolution(object):
             self.adata_sp.obsm['rctd_proportions'] = prop_df.reindex(self.adata_sp.obs_names).fillna(0.0)
             self.adata_cell2location = adata_cell2location
 
-            print(f"{Colors.GREEN}✓ RCTD deconvolution is done{Colors.ENDC}")
+            print(f"{Colors.GREEN}[OK] RCTD deconvolution is done{Colors.ENDC}")
             print(f"The deconvolution result is saved in self.adata_cell2location")
             print(f"Cell type proportions are also stored in self.adata_sp.obsm['rctd_proportions']")
             print(f"The full RCTD result object is saved in self.rctd_result")
 
-        else:
-            raise ValueError(f"Method {method} is not supported. Choose from: 'Tangram', 'cell2location', 'FlashDeconv', 'starfysh', 'RCTD'")
+        else:  # guarded above
+            raise RuntimeError(f"Unhandled deconvolution method {method!r}.")
 
     def impute(self,method='Tangram'):
         """
@@ -779,13 +903,14 @@ class Deconvolution(object):
         >>> deconv.impute(method='Tangram')
         >>> deconv.impute(method='cell2location')
         """
-        if method=='Tangram':
+        normalized_method = str(method).lower()
+        if normalized_method == 'tangram':
             self.method='Tangram'
             from ._tangram import Tangram
             self.adata_impute=self.tangram_model.impute()
-            print(f"{Colors.GREEN}✓ Tangram impute is done{Colors.ENDC}")
+            print(f"{Colors.GREEN}[OK] Tangram impute is done{Colors.ENDC}")
             print(f"The impute result is saved in self.adata_impute")
-        elif method=='cell2location':
+        elif normalized_method == 'cell2location':
             self.method='cell2location'
             from ..external.space.cell2location.models import Cell2location
             expected_dict = self.mod_sp.module.model.compute_expected_per_cell_type(
@@ -794,8 +919,10 @@ class Deconvolution(object):
             # Add to anndata layers
             for i, n in enumerate(self.mod_sp.factor_names_):
                 self.adata_sp.layers[n] = expected_dict["mu"][i]
-            print(f"{Colors.GREEN}✓ cell2location impute is done{Colors.ENDC}")
+            print(f"{Colors.GREEN}[OK] cell2location impute is done{Colors.ENDC}")
             print(f"Compare with the tangram impute result, cell2location's impute stores in self.adata_sp.layers")
+        else:
+            raise ValueError("method must be 'Tangram' or 'cell2location'.")
     
     def load_cell2location_model(self,mod_sp_path):
         """
@@ -819,7 +946,7 @@ class Deconvolution(object):
         from ..utils import load
         #self.mod_sc=load(mod_sc_path)
         self.mod_sp=load(mod_sp_path)
-        print(f"{Colors.GREEN}✓ cell2location model is loaded{Colors.ENDC}")
+        print(f"{Colors.GREEN}[OK] cell2location model is loaded{Colors.ENDC}")
         print(f"The cell2location model is saved in self.mod_sc and self.mod_sp")
 
     def cell2location_inference(self,sample_kwargs=None):
@@ -864,7 +991,7 @@ class Deconvolution(object):
         adata_cell2location.uns=self.adata_sp.uns.copy()
         self.adata_cell2location=adata_cell2location
 
-        print(f"{Colors.GREEN}✓ cell2location is done{Colors.ENDC}")
+        print(f"{Colors.GREEN}[OK] cell2location is done{Colors.ENDC}")
         print(f"The cell2location result is saved in self.adata_cell2location")
 
     def load_tangram_model(self,model_path):
@@ -890,7 +1017,7 @@ class Deconvolution(object):
         from ..utils import load
         
         self.tangram_model=load(model_path)
-        print(f"{Colors.GREEN}✓ Tangram model is loaded{Colors.ENDC}")
+        print(f"{Colors.GREEN}[OK] Tangram model is loaded{Colors.ENDC}")
         print(f"The Tangram model is saved in self.tangram")
 
     def tangram_inference(self,sample_kwargs=None):
@@ -912,7 +1039,7 @@ class Deconvolution(object):
         >>> decov.tangram_inference()
         """
         self.adata_cell2location=self.tangram_model.cell2location()
-        print(f"{Colors.GREEN}✓ Tangram is done{Colors.ENDC}")
+        print(f"{Colors.GREEN}[OK] Tangram is done{Colors.ENDC}")
         print(f"The Tangram result is saved in self.adata_cell2location")
 
 
