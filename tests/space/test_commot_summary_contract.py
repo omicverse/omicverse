@@ -4,7 +4,11 @@ import pandas as pd
 import pytest
 from scipy import sparse
 
-from omicverse.space._commot import create_communication_anndata, process_all_commot, update_classification_from_database
+from omicverse.space._commot import (
+    create_communication_anndata,
+    process_all_commot,
+    update_classification_from_database,
+)
 
 
 def fixture():
@@ -67,3 +71,13 @@ def test_missing_metadata_never_guesses_hyphenated_names():
     a.uns.clear()
     with pytest.raises(ValueError, match='metadata|df_ligrec'):
         create_communication_anndata(a, 'type', 9, database_name='db-one', level='lr')
+
+
+def test_summary_works_with_existing_cellchatviz():
+    from omicverse.pl import CellChatViz
+
+    summary = create_communication_anndata(fixture(), 'type', 9, database_name='db-one', level='lr')
+    viz = CellChatViz(summary)
+    assert set(viz.cell_types) == {'A', 'B'}
+    aggregated = viz.compute_aggregated_network(pvalue_threshold=1.0)
+    assert aggregated is not None
