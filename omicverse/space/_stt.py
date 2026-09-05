@@ -1,5 +1,6 @@
 r"""Module providing encapsulation of STT for spatial transition tensor analysis."""
 from typing import Any
+import warnings
 import scanpy as sc
 import numpy as np
 import pandas as pd
@@ -36,10 +37,6 @@ def _get_stt_modules():
         "stt.stage_estimate()",
         "# Train STT model",
         "stt.train(n_states=10)",
-        "# Vector field analysis",
-        "stt.vector_field()",
-        "# Spatial dynamics",
-        "stt.cal_pseudotime()",
         "# Custom parameters",
         "stt = ov.space.STT(adata, spatial_loc='xy_loc',",
         "                   region='Region')"
@@ -58,8 +55,10 @@ class STT(object):
     ----------
     adata : AnnData
         Spatial AnnData containing spliced/unspliced layers and coordinates.
-    spatial_loc : str, default='xy_loc'
-        Coordinate key in ``adata.obsm``.
+    spatial_loc : str, optional
+        Coordinate key in ``adata.obsm``. When omitted, the legacy ``'xy_loc'``
+        key is retained if present; otherwise the conventional ``'spatial'``
+        key is used.
     region : str, default='Region'
         Region annotation column in ``adata.obs``.
 
@@ -89,18 +88,42 @@ class STT(object):
         >>> # Train the model
         >>> stt.train(n_states=10)
     """
-    def __init__(self,adata,spatial_loc='xy_loc',region='Region'):
+    def __init__(self,adata,spatial_loc=None,region='Region'):
         r"""Initialize STT spatial transition analysis object.
         
         Parameters
         ----------
         adata : AnnData
             Input AnnData with spatial and velocity-related layers.
-        spatial_loc : str, default='xy_loc'
-            Coordinate key in ``adata.obsm``.
+        spatial_loc : str, optional
+            Coordinate key in ``adata.obsm``. Omitting it preserves the legacy
+            ``'xy_loc'`` default when available, with a migration warning, and
+            otherwise uses ``'spatial'``.
         region : str, default='Region'
             Region key in ``adata.obs``.
         """
+        if spatial_loc is None:
+            if 'xy_loc' in adata.obsm:
+                spatial_loc = 'xy_loc'
+                warnings.warn(
+                    "STT is using the legacy default adata.obsm['xy_loc']. Pass "
+                    "spatial_loc='spatial' explicitly to use standard AnnData "
+                    "spatial coordinates; the automatic legacy preference will be "
+                    "removed in a future release.",
+                    FutureWarning,
+                    stacklevel=2,
+                )
+            elif 'spatial' in adata.obsm:
+                spatial_loc = 'spatial'
+            else:
+                raise KeyError(
+                    "Neither adata.obsm['xy_loc'] nor adata.obsm['spatial'] exists; "
+                    "pass `spatial_loc` explicitly."
+                )
+        if spatial_loc not in adata.obsm:
+            raise KeyError(f"spatial_loc {spatial_loc!r} was not found in adata.obsm.")
+        if region not in adata.obs:
+            raise KeyError(f"region {region!r} was not found in adata.obs.")
         self.adata=adata
         self.adata_aggr=None
         self.spatial_loc=spatial_loc
@@ -340,7 +363,7 @@ class STT(object):
         return pl.plot_tensor(self.adata, self.adata_aggr, 
                           list_attractor = list_attractor,basis = self.spatial_loc,**kwargs)
 
-    def construct_landscape(self,coord_key = 'X_xy_loc',**kwargs):
+    def construct_landscape(self,coord_key=None,**kwargs):
         r"""Construct spatial landscape for transition analysis.
         
         This method builds a continuous landscape representation of cell state transitions
@@ -348,8 +371,9 @@ class STT(object):
 
         Parameters
         ----------
-        coord_key : str, default='X_xy_loc'
-            Coordinate key used for landscape construction.
+        coord_key : str, optional
+            Coordinate key used for landscape construction. Defaults to the
+            trained key corresponding to ``spatial_loc``.
         **kwargs : Any
             Additional backend options for landscape construction.
 
@@ -365,6 +389,8 @@ class STT(object):
             - Coordinates preserve both spatial and state information
         """
         tl, _ = _get_stt_modules()
+        if coord_key is None:
+            coord_key = f'X_{self.spatial_loc}'
         tl.construct_landscape(self.adata, coord_key = coord_key,**kwargs)
         self.adata.obsm['trans_coord'] = self.adata.uns['land_out']['trans_coord']
 

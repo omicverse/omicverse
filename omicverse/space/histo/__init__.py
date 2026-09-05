@@ -61,13 +61,12 @@ Backends
                default-and-recommended path when no zero-shot vocabulary
                match is available; works with as little as one paired
                reference slide.
-``bleep``     (Phase 2) Bi-modal contrastive embedding (NeurIPS 2023).
-
 Install
 -------
 ``pip install 'omicverse[histo]'`` pulls ``lazyslide``, ``wsidata``,
 ``spatialdata``, ``tiffslide``/``openslide``, ``timm``, ``huggingface_hub``.
-The vendored iStar code requires ``pip install 'omicverse[histo-istar]'``.
+iStar remains an experimental backend with additional runtime requirements;
+there is currently no separate ``histo-istar`` extra.
 """
 from __future__ import annotations
 
