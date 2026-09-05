@@ -10,7 +10,7 @@ if TYPE_CHECKING:
     from wsidata import WSIData
 
 
-PredictMethod = Literal["stpath", "stflow", "hest_fm", "bleep"]
+PredictMethod = Literal["stpath", "stflow", "hest_fm"]
 SuperResMethod = Literal["istar"]
 
 
@@ -58,13 +58,13 @@ def predict_expression(
         Prediction backend (see :mod:`ov.space.histo`).
     genes
         Gene symbols to retain. ``None`` returns the model's full vocabulary
-        (37k for STPath/STFlow) or all reference genes (HEST-FM/BLEEP).
+        (37k for STPath/STFlow) or all reference genes (HEST-FM).
     organ, tech
         Hint tokens used by STPath/STFlow. Examples: ``organ='Breast'``,
         ``tech='Visium'``. Ignored by HEST-FM.
     reference
         Paired Visium :class:`AnnData` used to fit a per-slide head
-        (HEST-FM, BLEEP). Not required by STPath/STFlow zero-shot.
+        (HEST-FM). Not required by STPath/STFlow zero-shot.
     feature_key
         Name of the tile-level feature table in ``wsi.tables``. Defaults to
         ``'gigapath'`` for STPath/STFlow and ``fm_backbone`` for HEST-FM.
@@ -149,23 +149,8 @@ def predict_expression(
             device=device,
             **kwargs,
         )
-    if method == "bleep":
-        from ._bleep import predict_bleep
-        if reference is None:
-            raise ValueError("method='bleep' requires `reference=`.")
-        return predict_bleep(
-            wsi,
-            reference=reference,
-            tile_key=tile_key,
-            key_added=key_added,
-            genes=genes,
-            feature_key=feature_key,
-            fm_backbone=fm_backbone or "ctranspath",
-            device=device,
-            **kwargs,
-        )
     raise ValueError(
-        f"Unknown method={method!r}. Pick one of: stpath, stflow, hest_fm, bleep."
+        f"Unknown method={method!r}. Pick one of: stpath, stflow, hest_fm."
     )
 
 
