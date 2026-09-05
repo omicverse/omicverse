@@ -694,17 +694,20 @@ def qc(
     **kwargs,
 ):
     r'''
-    Perform quality control on a dictionary of AnnData objects.
+    Perform quality control on an AnnData object.
+
+    Doublet detection is performed after QC threshold filtering and final cell/gene filtering.
 
     Args:
         adata : AnnData object
         mode : The filtering method to use. Valid options are 'seurat'
         and 'mads'. Default is 'seurat'.
-        min_cells : The minimum number of cells for a sample to pass QC. Default is 3.
+        min_cells : The minimum number of cells expressing a gene to retain that gene. Default is 3.
         min_genes : The minimum number of genes for a cell to pass QC. Default is 200.
         max_cells_ratio : The maximum number of cells ratio for a sample to pass QC. Default is 1.
         max_genes_ratio : The maximum number of genes ratio for a cell to pass QC. Default is 1.
         nmads : The number of MADs to use for MADs filtering. Default is 5.
+        batch_key : Column in adata.obs for per-batch MAD filtering and doublet detection. Default is None.
         doublets : Whether to perform doublet detection. Default is True.
         doublets_method : The doublet detection method to use. Options are 'scrublet', 'sccomposite', 'doubletfinder', or 'scdblfinder'. Default is 'scdblfinder' (Python port of R scDblFinder; xgboost on kNN+cxds features) for `cpu` and `cpu-gpu-mixed` modes, falling back to 'scrublet' if pyscdblfinder is not installed. The RAPIDS `gpu` mode keeps 'scrublet' as default for backwards compatibility.
         filter_doublets : Whether to filter out doublets (True) or just flag them (False). Default is True.
@@ -792,23 +795,23 @@ def qc_cpu_gpu_mixed(adata:anndata.AnnData, mode='seurat',
        hb_startswith="^HB[^(P)]",hb_genes=None,
        use_gpu=True,batch_wise_mad=None):
     """
-    Perform quality control on a dictionary of AnnData objects.
+    Perform quality control on an AnnData object.
 
     This function calculates several QC metrics, including mitochondrial percentage, nUMIs,
     and detected genes, and produces several plots visualizing the QC metrics for each sample.
-    The function performs doublet detection using scrublet and filtering using either
-    Seurat or MADs. The function returns a merged AnnData object with cells that passed QC filters
-    and a list of cells that did not pass QC on all samples.
+    Doublet detection is performed after QC threshold filtering and final cell/gene filtering.
+    The function returns an AnnData object containing cells that passed QC filters.
 
     Arguments:
-        adatas : AnnData objects
+        adata : AnnData object
         mode : The filtering method to use. Valid options are 'seurat'
         and 'mads'. Default is 'seurat'.
-        min_cells : The minimum number of cells for a sample to pass QC. Default is 3.
+        min_cells : The minimum number of cells expressing a gene to retain that gene. Default is 3.
         min_genes : The minimum number of genes for a cell to pass QC. Default is 200.
         max_cells_ratio : The maximum number of cells ratio for a sample to pass QC. Default is 1.
         max_genes_ratio : The maximum number of genes ratio for a cell to pass QC. Default is 1.
         nmads : The number of MADs to use for MADs filtering. Default is 5.
+        batch_key : Column in adata.obs for per-batch MAD filtering and doublet detection. Default is None.
         doublets : Whether to perform doublet detection. Default is True.
         doublets_method : The doublet detection method to use. Options are 'scrublet', 'sccomposite', 'doubletfinder', or 'scdblfinder'. Default is 'scdblfinder' (Python port of R scDblFinder; xgboost on kNN+cxds features). Falls back to 'scrublet' if pyscdblfinder is not installed.
         filter_doublets : Whether to filter out doublets (True) or just flag them (False). Default is True.
@@ -1210,23 +1213,23 @@ def qc_cpu(
     **kwargs
 ):
     r"""
-    Perform quality control on a dictionary of AnnData objects.
+    Perform quality control on an AnnData object.
 
     This function calculates several QC metrics, including mitochondrial percentage, nUMIs,
     and detected genes, and produces several plots visualizing the QC metrics for each sample.
-    The function performs doublet detection using scrublet and filtering using either
-    Seurat or MADs. The function returns a merged AnnData object with cells that passed QC filters
-    and a list of cells that did not pass QC on all samples.
+    Doublet detection is performed after QC threshold filtering and final cell/gene filtering.
+    The function returns an AnnData object containing cells that passed QC filters.
 
     Arguments:
-        adatas : AnnData objects
+        adata : AnnData object
         mode : The filtering method to use. Valid options are 'seurat'
         and 'mads'. Default is 'seurat'.
-        min_cells : The minimum number of cells for a sample to pass QC. Default is 3.
+        min_cells : The minimum number of cells expressing a gene to retain that gene. Default is 3.
         min_genes : The minimum number of genes for a cell to pass QC. Default is 200.
         max_cells_ratio : The maximum number of cells ratio for a sample to pass QC. Default is 1.
         max_genes_ratio : The maximum number of genes ratio for a cell to pass QC. Default is 1.
         nmads : The number of MADs to use for MADs filtering. Default is 5.
+        batch_key : Column in adata.obs for per-batch MAD filtering and doublet detection. Default is None.
         doublets : Whether to perform doublet detection. Default is True.
         doublets_method : The doublet detection method to use. Options are 'scrublet', 'sccomposite', 'doubletfinder', or 'scdblfinder'. Default is 'scdblfinder' (Python port of R scDblFinder; xgboost on kNN+cxds features). Falls back to 'scrublet' if pyscdblfinder is not installed.
         filter_doublets : Whether to filter out doublets (True) or just flag them (False). Default is True.
@@ -1643,6 +1646,8 @@ def qc_gpu(adata, mode='seurat',
        hb_startswith="^HB[^(P)]",hb_genes=None):
     '''
     GPU-accelerated quality control using RAPIDS
+
+    Doublet detection is performed after QC threshold filtering and final cell/gene filtering.
     '''
     import rapids_singlecell as rsc
     
