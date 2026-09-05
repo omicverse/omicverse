@@ -152,6 +152,8 @@ class pySTAGATE:
         device : str, default='cuda:0'
             Compute device string.
         """
+        if isinstance(num_epoch, bool) or not isinstance(num_epoch, (int, np.integer)) or num_epoch < 1:
+            raise ValueError('num_epoch must be a positive integer; refusing an untrained random embedding.')
         # Initialize device
         device = torch.device(device if torch.cuda.is_available() else 'cpu')
         self.device=device
@@ -183,6 +185,7 @@ class pySTAGATE:
         self.hidden_dims = hidden_dims
         self.adata=adata
         self.data=data
+        self._is_fitted = False
 
         # Model and optimizer
         self.model = STAGATE(hidden_dims = [data_list[0].x.shape[1]]+self.hidden_dims).to(device)
@@ -222,6 +225,7 @@ class pySTAGATE:
                 self.optimizer.step()
         # The total network
         self.data.to(self.device)
+        self._is_fitted = True
 
     def predicted(self):
         """
@@ -245,6 +249,8 @@ class pySTAGATE:
                 - STAGATE embeddings: adata.obsm['STAGATE']
                 - Reconstructed expression: adata.layers['STAGATE_ReX']
         """
+        if not self._is_fitted:
+            raise RuntimeError('Run train() before predicted().')
         self.model.eval()
         z, out = self.model(self.data.x, self.data.edge_index)
 
@@ -309,7 +315,8 @@ class pySTAGATE:
             sub_adata_x = self.adata[selected_ind, :].obsm['STAGATE']
 
         sum_dists = distance_matrix(sub_adata_x, sub_adata_x).sum(axis=1)
-        self.adata.uns['iroot'] = np.argmax(sum_dists)
+        root = int(np.argmax(sum_dists))
+        self.adata.uns['iroot'] = root if self.adata.shape[0] < max_cell_for_subsampling else int(selected_ind[root])
         sc.tl.diffmap(self.adata)
         sc.tl.dpt(self.adata)
         self.adata.obs.rename({"dpt_pseudotime": psm_key}, axis=1, inplace=True)

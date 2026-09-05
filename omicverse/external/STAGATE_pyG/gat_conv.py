@@ -12,6 +12,13 @@ from torch_geometric.nn.dense.linear import Linear
 from torch_geometric.nn.conv import MessagePassing
 from torch_geometric.utils import remove_self_loops, add_self_loops, softmax
 
+try:
+    from torch_sparse import SparseTensor, set_diag
+    _TORCH_SPARSE_IMPORT_ERROR = None
+except (ImportError, OSError) as exc:  # Tensor edge_index paths do not require torch-sparse.
+    SparseTensor = None
+    set_diag = None
+    _TORCH_SPARSE_IMPORT_ERROR = exc
 
 
 class GATConv(MessagePassing):
@@ -158,7 +165,6 @@ class GATConv(MessagePassing):
         else:
             alpha = tied_attention
 
-        from torch_sparse import SparseTensor, set_diag
         if self.add_self_loops:
             if isinstance(edge_index, Tensor):
                 # We only want to add self-loops for nodes that appear both as
@@ -169,8 +175,13 @@ class GATConv(MessagePassing):
                 num_nodes = min(size) if size is not None else num_nodes
                 edge_index, _ = remove_self_loops(edge_index)
                 edge_index, _ = add_self_loops(edge_index, num_nodes=num_nodes)
-            elif isinstance(edge_index, SparseTensor):
+            elif SparseTensor is not None and isinstance(edge_index, SparseTensor):
                 edge_index = set_diag(edge_index)
+            elif SparseTensor is None:
+                raise ImportError(
+                    "SparseTensor STAGATE inputs require `torch-sparse`; ordinary "
+                    "edge_index Tensor inputs do not."
+                ) from _TORCH_SPARSE_IMPORT_ERROR
 
         # propagate_type: (x: OptPairTensor, alpha: OptPairTensor)
         out = self.propagate(edge_index, x=x, alpha=alpha, size=size)
@@ -186,11 +197,10 @@ class GATConv(MessagePassing):
 
         # if self.bias is not None:
         #     out += self.bias
-        from torch_sparse import SparseTensor, set_diag
         if isinstance(return_attention_weights, bool):
             if isinstance(edge_index, Tensor):
                 return out, (edge_index, alpha)
-            elif isinstance(edge_index, SparseTensor):
+            elif SparseTensor is not None and isinstance(edge_index, SparseTensor):
                 return out, edge_index.set_value(alpha, layout='coo')
         else:
             return out
