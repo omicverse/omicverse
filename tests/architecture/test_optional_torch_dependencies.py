@@ -82,7 +82,7 @@ def _install_space_dependency_stubs():
             "moranI": lambda *args, **kwargs: None,
         },
         "omicverse.space._cast": {"CAST": lambda *args, **kwargs: None},
-        "omicverse.space._tools": {},
+        "omicverse.space._tools": {"__all__": []},
         "omicverse.space._commot": {
             "create_communication_anndata": lambda *args, **kwargs: None,
             "update_classification_from_database": lambda *args, **kwargs: None,
