@@ -6,6 +6,9 @@ Existing `ov.external.commot` and `ov.external.flowsig` APIs remain available.
 
 ## Run COMMOT on one library
 
+Install the runtime with `pip install "omicverse[commot]"`. The vendored
+optimal-transport implementation requires Torch even for CPU execution.
+
 ```python
 import omicverse as ov
 import pandas as pd
@@ -66,7 +69,7 @@ and WNT10 must be reconstructed and their networks rerun.
 
 ## Run FlowSig from supplied GEMs
 
-Install the network backend with `pip install "omicverse[flowsig]"`. GEM training
+Install the combined stack with `pip install "omicverse[commot,flowsig]"`. GEM training
 is separate: supply a validated non-negative `obsm['X_gem']` matrix. This runner
 does not substitute NMF for NSF and does not perform implicit Moran filtering.
 
