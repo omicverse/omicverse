@@ -1,6 +1,7 @@
 import builtins
 import sys
 import types
+from pathlib import Path
 
 import anndata as ad
 import numpy as np
@@ -72,7 +73,7 @@ def test_flowsig_pkg_resources_compat(monkeypatch):
         assert isinstance(observed["working_set"], list)
         assert isinstance(observed["entry_points"], list)
         assert observed["setuptools_version"].split(".")[0].isdigit()
-        assert observed["omicverse_init"].endswith("omicverse/__init__.py")
+        assert Path(observed["omicverse_init"]).parts[-2:] == ("omicverse", "__init__.py")
         assert list(adata.uns["flowsig_network"]["flow_var_info"].index) == [
             "inflow_a",
             "GEM-1",

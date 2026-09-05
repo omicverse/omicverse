@@ -431,7 +431,17 @@ def summarize_cluster_gpu(X, clusterid, clusternames, n_permutations=500, use_gp
             raise ImportError("GPU disabled by user")
     except ImportError:
         print("⚠️  CuPy not available, falling back to CPU computation")
-        return summarize_cluster_optimized(X, clusterid, clusternames, n_permutations)
+        df_cluster, df_p_value = summarize_cluster_optimized(
+            X, clusterid, clusternames, n_permutations
+        )
+        cluster_indices = {
+            name: np.flatnonzero(np.asarray(clusterid) == name)
+            for name in clusternames
+        }
+        scaled = _apply_scaling(
+            df_cluster.to_numpy(), cluster_indices, clusternames, scale_factor
+        )
+        return pd.DataFrame(scaled, index=df_cluster.index, columns=df_cluster.columns), df_p_value
     
     n = len(clusternames)
     
