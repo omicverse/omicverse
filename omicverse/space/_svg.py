@@ -1,9 +1,101 @@
 import numpy as np
 import scipy.sparse as _sp
 import scanpy as sc
+import warnings
 from ..pp import preprocess
 from .._settings import add_reference
 from .._registry import register_function
+
+
+def _select_significant_svg_names(qvals, *, n_svgs, qval_threshold):
+    """Return at most ``n_svgs`` finite q-values below the requested cutoff."""
+    import pandas as pd
+
+    values = pd.Series(qvals, copy=False).replace([np.inf, -np.inf], np.nan).dropna()
+    if qval_threshold is not None:
+        qval_threshold = float(qval_threshold)
+        if not 0 <= qval_threshold <= 1:
+            raise ValueError("qval_threshold must lie in [0, 1] or be None.")
+        values = values[values < qval_threshold]
+    if n_svgs is not None:
+        n_svgs = int(n_svgs)
+        if n_svgs < 0:
+            raise ValueError("n_svgs must be non-negative or None.")
+        values = values.nsmallest(n_svgs)
+    else:
+        values = values.sort_values()
+    return values.index
+
+
+def _adjust_testable_pvalues(values, method='fdr_bh'):
+    from statsmodels.stats.multitest import multipletests
+    values = np.asarray(values, dtype=float)
+    valid = np.isfinite(values) & (values >= 0) & (values <= 1)
+    adjusted = np.full(values.shape, np.nan)
+    if valid.any():
+        adjusted[valid] = multipletests(values[valid], method=method)[1]
+    return adjusted
+
+
+def _autocorr_library_subset(adata, indices):
+    result = adata[indices].copy()
+    result.uns.pop('spatial', None)
+    return result
+
+
+def _svg_multiple_libraries(adata, mode, n_svgs, target_sum, platform,
+                            mt_startwith, library_key, selection, kwargs):
+    import pandas as pd
+    if mode not in ('moran', 'morani', 'somde', 'spatialde'):
+        raise ValueError('Multi-library SVG currently supports Moran, SOMDE and SpatialDE; run other methods per library.')
+    labels = adata.obs[library_key].astype(str).to_numpy()
+    libraries = list(dict.fromkeys(labels))
+    if len(libraries) != adata.obs[library_key].nunique():
+        raise ValueError('Library labels collide after conversion to strings.')
+    frames = []
+    for library in libraries:
+        subset = adata[labels == library].copy()
+        subset.uns.pop('spatial', None)  # Independent coordinates; no image selection is used here.
+        if subset.n_obs < 4:
+            frame = pd.DataFrame({'gene': subset.var_names, 'statistic': np.nan, 'pvalue': np.nan})
+        else:
+            svg(subset, mode=mode, n_svgs=n_svgs, target_sum=target_sum, platform=platform,
+                mt_startwith=mt_startwith, selection='top_n', **kwargs)
+            stat, pval = (('moranI', 'moranI_pval') if mode in ('moran', 'morani')
+                          else (f'{mode}_LLR', f'{mode}_pval'))
+            if stat not in subset.var or pval not in subset.var:
+                raise ValueError(f'{mode} backend did not provide raw statistics/p-values for global adjustment.')
+            frame = pd.DataFrame({'gene': subset.var_names,
+                                   'statistic': subset.var[stat].to_numpy(),
+                                   'pvalue': subset.var[pval].to_numpy()})
+        frame.insert(0, 'library', library)
+        frames.append(frame)
+    table = pd.concat(frames, ignore_index=True)
+    table['qvalue'] = _adjust_testable_pvalues(table['pvalue'])
+    table['testable'] = np.isfinite(table['pvalue']) & np.isfinite(table['statistic'])
+    table['selected'] = False
+    masks = pd.DataFrame(False, index=adata.var_names, columns=libraries)
+    for library in libraries:
+        eligible = table[(table.library == library) & table.testable]
+        if selection == 'significant':
+            eligible = eligible[eligible.qvalue < kwargs.get('qval_threshold', 0.05)]
+            if mode in ('moran', 'morani'):
+                eligible = eligible[eligible.statistic > 0]
+        eligible = eligible.sort_values('statistic', ascending=False, kind='stable')
+        if n_svgs is not None:
+            eligible = eligible.head(n_svgs)
+        table.loc[eligible.index, 'selected'] = True
+        masks.loc[eligible.gene, library] = True
+    table.index = table.index.astype(str)
+    adata.uns['spatial_features_by_library'] = table
+    adata.varm['space_variable_features_by_library'] = masks
+    adata.var['space_variable_features'] = masks.any(axis=1)
+    adata.var['highly_variable'] = adata.var['space_variable_features']
+    adata.uns['space_svg_selection'] = {'method': mode, 'selection': selection,
+        'correction_family': 'all_testable_library_gene_pairs', 'correction_method': 'fdr_bh',
+        'global_mask': 'union_of_per_library_selected_candidates', 'library_key': library_key,
+        'n_svgs_scope': 'per_library'}
+    return adata
 
 
 # ---------------------------------------------------------------------------
@@ -83,6 +175,106 @@ def _analytic_pval(scores, g, mode, n, two_tailed):
 # Public spatial graph / autocorrelation functions
 # ---------------------------------------------------------------------------
 
+
+def _spatial_distance_graph(
+    coords,
+    *,
+    n_neighs,
+    radius,
+    delaunay,
+    set_diag,
+    coord_type,
+):
+    """Build one within-library symmetric spatial distance graph."""
+    from scipy.spatial import Delaunay, QhullError
+    from sklearn.neighbors import NearestNeighbors
+
+    coords = np.asarray(coords, dtype=np.float64)
+    n_obs = coords.shape[0]
+    coord_type = str(coord_type).lower()
+    if coord_type not in {'generic', 'grid'}:
+        raise ValueError("coord_type must be 'generic' or 'grid'.")
+
+    if isinstance(radius, (tuple, list)):
+        if len(radius) != 2:
+            raise ValueError("radius must be a number or a (min_radius, max_radius) pair.")
+        r_min, r_max = map(float, radius)
+    elif radius is None:
+        r_min, r_max = 0.0, None
+    else:
+        r_min, r_max = 0.0, float(radius)
+    if r_min < 0 or (r_max is not None and r_max <= 0) or (
+        r_max is not None and r_min > r_max
+    ):
+        raise ValueError("radius bounds must satisfy 0 <= min_radius <= max_radius and max_radius > 0.")
+
+    if delaunay:
+        if n_obs < coords.shape[1] + 1:
+            raise ValueError(
+                "Delaunay triangulation requires at least n_dims + 1 observations "
+                "within every library. "
+                f"Got {n_obs} observations with {coords.shape[1]} spatial dimensions."
+            )
+        try:
+            tri = Delaunay(coords)
+        except QhullError as exc:
+            raise ValueError(
+                "Failed to build a Delaunay graph from spatial coordinates. "
+                "Check for duplicated/degenerate coordinates within each library."
+            ) from exc
+
+        edge_pairs = []
+        for simplex in np.asarray(tri.simplices, dtype=np.int64):
+            for i in range(len(simplex)):
+                for j in range(i + 1, len(simplex)):
+                    a, b = sorted((int(simplex[i]), int(simplex[j])))
+                    if a != b:
+                        edge_pairs.append((a, b))
+        if edge_pairs:
+            edges = np.unique(np.asarray(edge_pairs, dtype=np.int64), axis=0)
+            distances = np.linalg.norm(coords[edges[:, 0]] - coords[edges[:, 1]], axis=1)
+            row = np.concatenate([edges[:, 0], edges[:, 1]])
+            col = np.concatenate([edges[:, 1], edges[:, 0]])
+            data = np.concatenate([distances, distances])
+            dist_mat = _sp.coo_matrix((data, (row, col)), shape=(n_obs, n_obs)).tocsr()
+        else:
+            dist_mat = _sp.csr_matrix((n_obs, n_obs), dtype=np.float64)
+        if r_max is not None:
+            outside = (dist_mat.data < r_min) | (dist_mat.data > r_max)
+            dist_mat.data[outside] = 0.0
+            dist_mat.eliminate_zeros()
+    elif r_max is not None:
+        nn = NearestNeighbors(algorithm='ball_tree', radius=r_max)
+        nn.fit(coords)
+        dist_mat = nn.radius_neighbors_graph(coords, radius=r_max, mode='distance')
+        if r_min > 0:
+            dist_mat.data[dist_mat.data < r_min] = 0.0
+            dist_mat.eliminate_zeros()
+    else:
+        n_neighs = int(n_neighs)
+        if n_neighs <= 0:
+            raise ValueError("n_neighs must be a positive integer.")
+        # sklearn counts the query observation itself when the fitted coordinates
+        # are passed explicitly. Ask for one extra entry, then drop the diagonal.
+        query_n = min(n_neighs + 1, n_obs)
+        nn = NearestNeighbors(n_neighbors=query_n, algorithm='ball_tree')
+        nn.fit(coords)
+        dist_mat = nn.kneighbors_graph(coords, n_neighbors=query_n, mode='distance')
+        dist_mat.setdiag(0)
+        dist_mat.eliminate_zeros()
+
+        if coord_type == 'grid' and dist_mat.nnz:
+            step = float(np.median(dist_mat.data))
+            dist_mat.data[dist_mat.data > step * 1.4] = 0.0
+            dist_mat.eliminate_zeros()
+
+    if not set_diag:
+        dist_mat.setdiag(0)
+        dist_mat.eliminate_zeros()
+
+    return dist_mat.maximum(dist_mat.T).tocsr()
+
+
 @register_function(
     aliases=["空间邻域图", "spatial_neighbors", "空间邻居", "构建空间图"],
     category="space",
@@ -94,6 +286,8 @@ def _analytic_pval(scores, g, mode, n, two_tailed):
         "ov.space.spatial_neighbors(adata, radius=200)",
         "# Custom number of neighbours",
         "ov.space.spatial_neighbors(adata, n_neighs=8, key_added='spatial')",
+        "# Concatenated slides: never connect across libraries",
+        "ov.space.spatial_neighbors(adata, n_neighs=6, library_key='slice')",
     ],
     related=["space.spatial_autocorr", "space.moranI", "space.svg"],
 )
@@ -107,6 +301,7 @@ def spatial_neighbors(
     key_added: str = 'spatial',
     coord_type: str = 'generic',
     copy: bool = False,
+    library_key=None,
 ):
     r"""Build a spatial neighborhood graph from coordinates stored in ``adata.obsm``.
 
@@ -135,10 +330,16 @@ def spatial_neighbors(
             not change silently; pass ``'grid'`` for array data, and note that
             :func:`omicverse.space.sepal` assumes a lattice and needs it.
         key_added: Prefix for the keys added to ``adata.obsp`` and ``adata.uns``. Default: 'spatial'.
-        copy: If ``True``, return ``(connectivities, distances)`` as sparse matrices. Default: False.
+        copy: If ``True``, return ``(connectivities, distances)`` as sparse matrices
+            without modifying ``adata``. Default: False.
+        library_key: Optional column in ``adata.obs`` identifying independent
+            slides/libraries. When provided, neighbors are built within each
+            library so overlapping coordinate systems cannot create cross-slide
+            edges. Default: None.
 
     Returns:
-        None or (connectivities, distances): Modifies *adata* in-place.  Returns matrices when
+        None or (connectivities, distances): Modifies *adata* in-place when
+        *copy* is ``False``. Returns matrices without modifying *adata* when
         *copy* is ``True``.
 
     Examples:
@@ -147,102 +348,83 @@ def spatial_neighbors(
         >>> # radius graph
         >>> ov.space.spatial_neighbors(adata, radius=150)
     """
-    from scipy.spatial import Delaunay, QhullError
-    from sklearn.neighbors import NearestNeighbors
-
     coords = np.asarray(adata.obsm[spatial_key], dtype=np.float64)
     n_obs  = coords.shape[0]
+    coord_type = str(coord_type).lower()
+    if n_obs == 0:
+        raise ValueError("spatial_neighbors requires at least one observation.")
+    if coords.ndim != 2 or coords.shape[1] < 2:
+        raise ValueError(
+            f"adata.obsm[{spatial_key!r}] must be a 2-D coordinate matrix with "
+            f"at least two columns; got shape {coords.shape}."
+        )
+    if not np.isfinite(coords).all():
+        raise ValueError(f"adata.obsm[{spatial_key!r}] contains NaN or infinite coordinates.")
 
-    if delaunay:
-        if n_obs < coords.shape[1] + 1:
-            raise ValueError(
-                "Delaunay triangulation requires at least n_dims + 1 observations. "
-                f"Got {n_obs} observations with {coords.shape[1]} spatial dimensions."
+    library_sizes = None
+    if library_key is None:
+        spatial_meta = adata.uns.get('spatial', {})
+        if isinstance(spatial_meta, dict) and len(spatial_meta) > 1:
+            warnings.warn(
+                "Multiple spatial libraries are present but `library_key` was not "
+                "provided. If their coordinate systems overlap, the graph may contain "
+                "cross-library edges.",
+                UserWarning,
+                stacklevel=2,
             )
-        try:
-            tri = Delaunay(coords)
-        except QhullError as exc:
-            raise ValueError(
-                "Failed to build a Delaunay graph from `adata.obsm[spatial_key]`. "
-                "Check for duplicated/degenerate spatial coordinates."
-            ) from exc
-
-        simplices = np.asarray(tri.simplices, dtype=np.int64)
-        edge_pairs = []
-        for simplex in simplices:
-            for i in range(len(simplex)):
-                for j in range(i + 1, len(simplex)):
-                    a = int(simplex[i])
-                    b = int(simplex[j])
-                    if a == b:
-                        continue
-                    if a > b:
-                        a, b = b, a
-                    edge_pairs.append((a, b))
-
-        if edge_pairs:
-            edges = np.unique(np.asarray(edge_pairs, dtype=np.int64), axis=0)
-            distances = np.linalg.norm(coords[edges[:, 0]] - coords[edges[:, 1]], axis=1)
-            row = np.concatenate([edges[:, 0], edges[:, 1]])
-            col = np.concatenate([edges[:, 1], edges[:, 0]])
-            data = np.concatenate([distances, distances])
-            dist_mat = _sp.coo_matrix((data, (row, col)), shape=(n_obs, n_obs)).tocsr()
-        else:
-            dist_mat = _sp.csr_matrix((n_obs, n_obs), dtype=np.float64)
-
-        if radius is not None:
-            r_min = radius[0] if isinstance(radius, (tuple, list)) else 0.0
-            r_max = radius[1] if isinstance(radius, (tuple, list)) else float(radius)
-            mask = (dist_mat.data < r_min) | (dist_mat.data > r_max)
-            dist_mat.data[mask] = 0
-            dist_mat.eliminate_zeros()
-
-        if not set_diag:
-            dist_mat.setdiag(0)
-            dist_mat.eliminate_zeros()
-    elif radius is not None:
-        r_min = radius[0] if isinstance(radius, (tuple, list)) else 0.0
-        r_max = radius[1] if isinstance(radius, (tuple, list)) else float(radius)
-        nn = NearestNeighbors(algorithm='ball_tree', radius=r_max)
-        nn.fit(coords)
-        dist_mat = nn.radius_neighbors_graph(coords, radius=r_max, mode='distance')
-        if not set_diag:
-            dist_mat.setdiag(0)
-            dist_mat.eliminate_zeros()
-        if r_min > 0:
-            dist_mat.data[dist_mat.data < r_min] = 0
-            dist_mat.eliminate_zeros()
+        dist_mat = _spatial_distance_graph(
+            coords,
+            n_neighs=n_neighs,
+            radius=radius,
+            delaunay=delaunay,
+            set_diag=set_diag,
+            coord_type=coord_type,
+        )
     else:
-        nn = NearestNeighbors(n_neighbors=n_neighs, algorithm='ball_tree')
-        nn.fit(coords)
-        dist_mat = nn.kneighbors_graph(coords, n_neighbors=n_neighs, mode='distance')
+        if library_key not in adata.obs:
+            raise KeyError(f"library_key {library_key!r} was not found in adata.obs.")
+        library_values = adata.obs[library_key]
+        if library_values.isna().any():
+            raise ValueError(f"adata.obs[{library_key!r}] contains missing library labels.")
 
-        if str(coord_type).lower() == 'grid':
-            # On an array platform every real neighbour sits one lattice step
-            # away. Plain k-NN cannot know that, so a spot on the rim of the
-            # tissue reaches across the gap to fill its quota and picks up
-            # neighbours it does not touch: on the full 2688-spot Visium H&E
-            # slide the ungated graph gives node degrees of 5-8, and 5-10 once
-            # the slide is subsampled, where a hexagonal lattice allows 6.
-            #
-            # The cutoff is not delicate. On that slide the neighbour distances
-            # are bimodal -- the lattice step at 138 px and the next ring at
-            # 238 px, with nothing in between -- so every multiplier from 1.2 to
-            # 1.72 yields the identical 14,646-edge graph. 1.4 sits in the middle
-            # of that plateau. Every edge it keeps is also in squidpy's grid
-            # graph (0 edges found here that squidpy does not have).
-            if dist_mat.nnz:
-                step = float(np.median(dist_mat.data))
-                too_long = dist_mat.data > step * 1.4
-                dist_mat.data[too_long] = 0.0
-                dist_mat.eliminate_zeros()
+        rows = []
+        cols = []
+        values = []
+        library_sizes = {}
+        labels = library_values.astype(str).to_numpy()
+        if len(set(labels)) != library_values.nunique():
+            raise ValueError('Library labels collide after conversion to strings.')
+        for library in dict.fromkeys(labels):
+            obs_idx = np.flatnonzero(labels == library)
+            library_sizes[str(library)] = int(len(obs_idx))
+            sub_dist = _spatial_distance_graph(
+                coords[obs_idx],
+                n_neighs=n_neighs,
+                radius=radius,
+                delaunay=delaunay,
+                set_diag=set_diag,
+                coord_type=coord_type,
+            ).tocoo()
+            rows.append(obs_idx[sub_dist.row])
+            cols.append(obs_idx[sub_dist.col])
+            values.append(sub_dist.data)
 
-    # Symmetrise: edge exists if *either* direction was found
-    dist_mat = dist_mat.maximum(dist_mat.T).tocsr()
+        row = np.concatenate(rows) if rows else np.array([], dtype=np.int64)
+        col = np.concatenate(cols) if cols else np.array([], dtype=np.int64)
+        data = np.concatenate(values) if values else np.array([], dtype=np.float64)
+        dist_mat = _sp.coo_matrix((data, (row, col)), shape=(n_obs, n_obs)).tocsr()
+
     conn_mat = (dist_mat > 0).astype(np.float64).tocsr()
 
     if set_diag:
         conn_mat.setdiag(1.0)
+
+    avg_deg = conn_mat.nnz / n_obs
+    print(f"Spatial neighbors: {n_obs} cells, {conn_mat.nnz} connections "
+          f"(avg {avg_deg:.1f} neighbors/cell).")
+
+    if copy:
+        return conn_mat, dist_mat
 
     adata.obsp[f'{key_added}_connectivities'] = conn_mat
     adata.obsp[f'{key_added}_distances']      = dist_mat
@@ -255,19 +437,14 @@ def spatial_neighbors(
             'delaunay':    delaunay,
             'method':      'spatial',
             'spatial_key': spatial_key,
+            'coord_type':  coord_type,
+            'library_key': library_key,
+            'library_sizes': library_sizes,
         },
     }
-
-    avg_deg = conn_mat.nnz / n_obs
-    print(f"Spatial neighbors: {n_obs} cells, {conn_mat.nnz} connections "
-          f"(avg {avg_deg:.1f} neighbors/cell).")
     print(f"Stored in adata.obsp['{key_added}_connectivities'] "
           f"and adata.obsp['{key_added}_distances'].")
-
     add_reference(adata, 'omicverse', 'spatial neighborhood graph construction')
-
-    if copy:
-        return conn_mat, dist_mat
 
 
 @register_function(
@@ -298,6 +475,8 @@ def spatial_autocorr(
     seed=None,
     copy: bool = False,
     n_jobs: int = 1,
+    library_key=None,
+    _connectivity=None,
 ):
     r"""Compute spatial autocorrelation statistics for gene expression.
 
@@ -321,6 +500,11 @@ def spatial_autocorr(
         seed: Random seed for permutation testing. Default: None.
         copy: Return the result DataFrame instead of (also) storing it in ``adata.uns``. Default: False.
         n_jobs: Reserved for future parallel permutation support. Default: 1.
+        library_key: Column identifying independent libraries. Multiple libraries
+            are tested separately and returned as a long table with library/gene
+            columns, with correction across all testable library-gene pairs.
+            Constant genes and slices with fewer than four spots or no edges are
+            untestable (NaN statistics/p-values), not evidence of significance.
 
     Returns:
         DataFrame: Results with columns ``I`` / ``C``, ``pval_norm``, and optionally
@@ -336,7 +520,13 @@ def spatial_autocorr(
     import pandas as pd
     from sklearn.preprocessing import normalize
 
-    if connectivity_key not in adata.obsp:
+    if library_key is None:
+        graph_key = connectivity_key.removesuffix('_connectivities') + '_neighbors'
+        library_key = adata.uns.get(graph_key, {}).get('params', {}).get('library_key')
+        if library_key is None and len(adata.uns.get('spatial', {})) > 1:
+            raise ValueError('Multiple spatial libraries require an explicit library_key for inference.')
+
+    if _connectivity is None and connectivity_key not in adata.obsp:
         raise KeyError(
             f"'{connectivity_key}' not found in adata.obsp. "
             "Run ov.space.spatial_neighbors(adata) first."
@@ -345,7 +535,48 @@ def spatial_autocorr(
         raise ValueError(f"mode must be 'moran' or 'geary', got '{mode}'")
 
     # ---- weight matrix -----------------------------------------------
-    g = adata.obsp[connectivity_key].astype(np.float64).copy()
+    source_graph = (
+        adata.obsp[connectivity_key]
+        if _connectivity is None
+        else _connectivity
+    )
+    if library_key is not None:
+        if library_key not in adata.obs or adata.obs[library_key].isna().any():
+            raise ValueError('library_key must identify every observation without missing labels.')
+        labels = adata.obs[library_key].astype(str).to_numpy()
+        graph = _sp.csr_matrix(source_graph)
+        edges = graph.tocoo()
+        if np.any(labels[edges.row] != labels[edges.col]):
+            raise ValueError('Connectivity graph contains cross-library edges; rebuild with library_key.')
+        libraries = list(dict.fromkeys(labels))
+        if len(libraries) > 1:
+            frames = []
+            for library in libraries:
+                indices = np.flatnonzero(labels == library)
+                result = spatial_autocorr(
+                    _autocorr_library_subset(adata, indices), genes=genes, mode=mode, transformation=transformation,
+                    n_perms=n_perms, two_tailed=two_tailed, corr_method=None, layer=layer,
+                    seed=seed, copy=True, n_jobs=n_jobs,
+                    _connectivity=graph[indices][:, indices],
+                )
+                result.insert(0, 'gene', result.index.astype(str))
+                result.insert(0, 'library', library)
+                frames.append(result.reset_index(drop=True))
+            result = pd.concat(frames, ignore_index=True)
+            if corr_method is not None:
+                result['pval_adj'] = _adjust_testable_pvalues(
+                    result['pval_sim' if n_perms is not None else 'pval_norm'], corr_method)
+            result.index = result.index.astype(str)
+            if not copy:
+                adata.uns['moranI' if mode == 'moran' else 'gearyC'] = result
+            return result
+        library_key = None
+    if source_graph.shape != (adata.n_obs, adata.n_obs):
+        raise ValueError(
+            "The spatial connectivity matrix must have shape "
+            f"({adata.n_obs}, {adata.n_obs}); got {source_graph.shape}."
+        )
+    g = source_graph.astype(np.float64).copy()
     if transformation:
         g = normalize(g, norm='l1', axis=1)
 
@@ -369,6 +600,18 @@ def spatial_autocorr(
     vals = np.asarray(vals, dtype=np.float64)
 
     n = adata.n_obs
+    if n < 4 or float(g.sum()) <= 0:
+        stat_key, uns_key = ('I', 'moranI') if mode == 'moran' else ('C', 'gearyC')
+        result = pd.DataFrame({stat_key: np.nan, 'pval_norm': np.nan,
+                               'testable': False}, index=genes)
+        if n_perms is not None:
+            result['pval_sim'] = np.nan
+        if corr_method is not None:
+            result['pval_adj'] = np.nan
+        if not copy:
+            adata.uns[uns_key] = result
+        return result
+    library_codes = None
 
     # ---- scores ------------------------------------------------------
     if mode == 'moran':
@@ -380,49 +623,66 @@ def spatial_autocorr(
         stat_key = 'C'
         uns_key  = 'gearyC'
 
-    pvals_norm = _analytic_pval(scores, g, mode, n, two_tailed)
+    if library_codes is None:
+        pvals_norm = _analytic_pval(scores, g, mode, n, two_tailed)
+    else:
+        pvals_norm = np.full(len(genes), np.nan, dtype=np.float64)
 
     df = pd.DataFrame({stat_key: scores, 'pval_norm': pvals_norm}, index=genes)
+    testable = np.isfinite(vals).all(axis=0) & (np.var(vals, axis=0) > 0)
+    df['testable'] = testable
 
     # ---- permutation p-values ----------------------------------------
     if n_perms is not None:
+        if not isinstance(n_perms, (int, np.integer)) or n_perms < 1:
+            raise ValueError("n_perms must be a positive integer or None.")
         rng = np.random.default_rng(seed)
         perm_scores = np.empty((n_perms, len(genes)))
         for i in range(n_perms):
-            perm_idx = rng.permutation(n)
+            if library_codes is None:
+                perm_idx = rng.permutation(n)
+            else:
+                perm_idx = np.arange(n)
+                for code in np.unique(library_codes):
+                    group_idx = np.flatnonzero(library_codes == code)
+                    perm_idx[group_idx] = rng.permutation(group_idx)
             v_perm   = vals[perm_idx]
             perm_scores[i] = (
                 _moran_i_scores(g, v_perm) if mode == 'moran'
                 else _geary_c_scores(g, v_perm)
             )
         if two_tailed:
-            df['pval_sim'] = np.mean(
-                np.abs(perm_scores) >= np.abs(scores)[np.newaxis, :], axis=0
+            expected = -1.0 / (n - 1) if mode == 'moran' else 1.0
+            exceedances = np.sum(
+                np.abs(perm_scores - expected) >= np.abs(scores - expected)[np.newaxis, :], axis=0
             )
         elif mode == 'moran':
-            df['pval_sim'] = np.mean(perm_scores >= scores[np.newaxis, :], axis=0)
+            exceedances = np.sum(perm_scores >= scores[np.newaxis, :], axis=0)
         else:
-            df['pval_sim'] = np.mean(perm_scores <= scores[np.newaxis, :], axis=0)
+            exceedances = np.sum(perm_scores <= scores[np.newaxis, :], axis=0)
+        df['pval_sim'] = (exceedances + 1.0) / (n_perms + 1.0)
         perm_std = perm_scores.std(axis=0)
-        df['pval_z_sim'] = (
+        df['z_sim'] = (
             (scores - perm_scores.mean(axis=0)) / np.maximum(perm_std, 1e-10)
         )
+        from scipy.stats import norm
+        df['pval_z_sim'] = (2 * norm.sf(np.abs(df['z_sim'])) if two_tailed
+                            else norm.sf(df['z_sim']) if mode == 'moran' else norm.cdf(df['z_sim']))
 
+    df.loc[~testable, [col for col in df if col != 'testable']] = np.nan
     # ---- multiple-testing correction ---------------------------------
     if corr_method is not None:
         from statsmodels.stats.multitest import multipletests
         pval_col = 'pval_sim' if (n_perms is not None) else 'pval_norm'
-        _, pvals_adj, _, _ = multipletests(
-            df[pval_col].fillna(1.0).values, method=corr_method
-        )
+        pvals_adj = _adjust_testable_pvalues(df[pval_col], corr_method)
         df['pval_adj'] = pvals_adj
 
     df = df.sort_values(stat_key, ascending=(mode == 'geary'))
 
-    adata.uns[uns_key] = df
-    print(f"Stored {len(genes)} gene results in adata.uns['{uns_key}'].")
-
-    add_reference(adata, 'omicverse', f'spatial autocorrelation ({mode}) analysis')
+    if not copy:
+        adata.uns[uns_key] = df
+        print(f"Stored {len(genes)} gene results in adata.uns['{uns_key}'].")
+        add_reference(adata, 'omicverse', f'spatial autocorrelation ({mode}) analysis')
 
     return df
 
@@ -439,6 +699,8 @@ def spatial_autocorr(
         "df = ov.space.moranI(adata, n_perms=1000, seed=42)",
         "# Auto-build spatial graph and run Moran's I in one call",
         "df = ov.space.moranI(adata, auto_spatial_neighbors=True, n_neighs=6)",
+        "# Concatenated slides: build neighbors within each library",
+        "df = ov.space.moranI(adata, auto_spatial_neighbors=True, library_key='slice')",
         "# Subset to pre-selected SVGs",
         "svgs = adata.var_names[adata.var['space_variable_features']]",
         "df = ov.space.moranI(adata, genes=svgs)",
@@ -460,6 +722,7 @@ def moranI(
     n_neighs: int = 6,
     radius=None,
     spatial_key: str = 'spatial',
+    library_key=None,
 ):
     r"""Compute Moran's I spatial autocorrelation for gene expression.
 
@@ -479,12 +742,17 @@ def moranI(
         corr_method: Multiple-testing correction (``'fdr_bh'``, ``'bonferroni'``, …). Default: 'fdr_bh'.
         layer: Expression layer to use; ``None`` uses ``adata.X``. Default: None.
         seed: Random seed for permutation reproducibility. Default: None.
-        copy: Return the result DataFrame. Default: False.
+        copy: Return the result DataFrame without modifying ``adata``. This also
+            keeps an automatically constructed graph off the input object.
+            Default: False.
         auto_spatial_neighbors: Automatically build the spatial neighborhood graph if
             *connectivity_key* is absent from ``adata.obsp``. Default: False.
         n_neighs: Number of KNN neighbours used when *auto_spatial_neighbors* is ``True``. Default: 6.
         radius: Radius for radius-based graph when *auto_spatial_neighbors* is ``True``. Default: None.
         spatial_key: Key in ``adata.obsm`` holding 2-D coordinates. Default: 'spatial'.
+        library_key: Optional column in ``adata.obs`` identifying independent
+            slides. Forwarded to :func:`spatial_neighbors` when the graph is
+            built automatically, preventing cross-library edges. Default: None.
 
     Returns:
         DataFrame: Moran's I results with columns ``I``, ``pval_norm``, and optionally
@@ -498,15 +766,20 @@ def moranI(
         >>> # One-liner with auto graph building
         >>> df = ov.space.moranI(adata, auto_spatial_neighbors=True)
     """
+    connectivity = None
     if auto_spatial_neighbors and connectivity_key not in adata.obsp:
         print(f"'{connectivity_key}' not found – building spatial neighbors …")
-        spatial_neighbors(
+        graph_result = spatial_neighbors(
             adata,
             spatial_key=spatial_key,
             n_neighs=n_neighs,
             radius=radius,
             key_added=connectivity_key.replace('_connectivities', ''),
+            library_key=library_key,
+            copy=copy,
         )
+        if copy:
+            connectivity, _ = graph_result
 
     return spatial_autocorr(
         adata,
@@ -520,12 +793,14 @@ def moranI(
         layer=layer,
         seed=seed,
         copy=copy,
+        library_key=library_key,
+        _connectivity=connectivity,
     )
 
 @register_function(
     aliases=["空间变异基因", "svg", "spatially_variable_genes", "空间变异基因检测", "SVG检测"],
     category="space",
-    description="Identify spatially variable genes using multiple methods (PROST, Pearson, Spateo, SOMDE, SpatialDE)",
+    description="Identify spatially variable genes using PROST, Moran's I, Spateo, SOMDE, or SpatialDE; Pearson-residual HVGs remain as a non-spatial compatibility prefilter",
     prerequisites={
         'optional_functions': []
     },
@@ -539,8 +814,8 @@ def moranI(
     examples=[
         "# Basic SVG detection with PROST",
         "adata = ov.space.svg(adata, mode='prost', n_svgs=3000)",
-        "# Using Pearson correlation method",
-        "adata = ov.space.svg(adata, mode='pearsonr', n_svgs=2000)",
+        "# Non-spatial Pearson-residual HVG prefilter (compatibility mode)",
+        "adata = ov.space.svg(adata, mode='pearson_residuals', n_svgs=2000)",
         "# High-resolution analysis",
         "adata = ov.space.svg(adata, mode='prost', n_svgs=5000,",
         "                     target_sum=1e5, platform='visium')",
@@ -559,30 +834,44 @@ def moranI(
     related=["pp.preprocess", "space.clusters", "space.pySTAGATE"]
 )
 def svg(adata,mode='prost',n_svgs=3000,target_sum=50*1e4,platform="visium",
-        mt_startwith='MT-',**kwargs):
+        mt_startwith='MT-',library_key=None,selection='significant',**kwargs):
     # somde kwargs: k=20, qval_threshold=0.05, retrain_epoch=0
     r"""Identify spatially variable genes using multiple methods.
     
     This function identifies genes that show significant spatial variation in their
-    expression patterns across the tissue. It supports multiple methods including
-    PROST (Pattern RecognitiOn of Spatial Transcriptomics), Pearson correlation,
-    and Spateo-based analysis.
+    expression patterns across the tissue. It supports spatial methods including
+    PROST, Moran's I, Spateo, SOMDE, and SpatialDE. A clearly marked
+    Pearson-residual non-spatial prefilter is retained for compatibility.
 
     Parameters
     ----------
     adata : AnnData
         Spatial AnnData containing expression matrix and coordinates in
         ``adata.obsm['spatial']``.
-    mode : {'prost', 'pearsonr', 'spateo', 'somde', 'spatialde'}, default='prost'
-        SVG detection backend.
+    mode : {'prost', 'moran', 'spateo', 'somde', 'spatialde', 'pearson_residuals'}, default='prost'
+        SVG detection backend. ``'pearson_residuals'`` is retained as a
+        non-spatial HVG prefilter for compatibility; it does not use coordinates
+        and must not be interpreted as an SVG significance test. The legacy
+        spelling ``'pearsonr'`` is an alias for that prefilter.
+    selection : {'significant', 'top_n'}, default='significant'
+        For Moran, SOMDE and SpatialDE, select significant genes before applying
+        the count cap. Use top_n explicitly for the legacy ranked prefilter.
+        Multiple libraries are tested separately with BH across all testable
+        library-gene pairs; the global mask is a union of selected candidates.
     n_svgs : int, default=3000
-        Number of spatially variable genes to select.
+        Maximum number of genes to select. Significance-based methods may return
+        fewer when fewer genes pass ``qval_threshold``.
     target_sum : float, default=50*1e4
         Target-sum used during normalization.
     platform : str, default='visium'
         Platform identifier used by PROST preprocessing.
     mt_startwith : str, default='MT-'
         Mitochondrial gene prefix excluded by default.
+    library_key : str or None, default=None
+        Observation column identifying independent slides when ``mode='moran'``.
+        The automatically constructed spatial graph is then block-diagonal by
+        library, so overlapping local coordinate systems cannot create
+        cross-slide edges.
     **kwargs
         Additional method-specific options.
         For ``somde``: ``k``, ``qval_threshold``, ``retrain_epoch``.
@@ -600,7 +889,7 @@ def svg(adata,mode='prost',n_svgs=3000,target_sum=50*1e4,platform="visium",
         - PROST mode requires opencv-python package
         - Different modes use different statistical approaches:
             - PROST: Pattern recognition and spatial autocorrelation
-            - pearsonr: Correlation between gene expression and spatial coordinates
+            - pearson_residuals: non-spatial Pearson-residual HVG prefilter
             - spateo: Wasserstein distance-based spatial variation
             - somde: SOM-compressed SpatialDE GP test (fast for large datasets)
         - SOMDE kwargs: ``k`` (cells/node, default 20), ``qval_threshold`` (default 0.05),
@@ -636,6 +925,22 @@ def svg(adata,mode='prost',n_svgs=3000,target_sum=50*1e4,platform="visium",
         >>> # Access SVGs
         >>> svgs = adata.var_names[adata.var['space_variable_features']]
     """
+    import numpy as np
+    mode = str(mode).lower()
+    if n_svgs is not None and (isinstance(n_svgs, bool) or not isinstance(n_svgs, (int, np.integer)) or n_svgs < 0):
+        raise ValueError('n_svgs must be a non-negative integer or None.')
+    threshold = kwargs.get('qval_threshold', 0.05)
+    if not np.isfinite(threshold) or not 0 <= threshold <= 1:
+        raise ValueError('qval_threshold must lie in [0, 1].')
+    if selection not in ('significant', 'top_n'):
+        raise ValueError("selection must be 'significant' or 'top_n'.")
+    if library_key is not None:
+        if library_key not in adata.obs or adata.obs[library_key].isna().any():
+            raise ValueError('library_key must exist without missing labels.')
+        if adata.obs[library_key].nunique() > 1:
+            return _svg_multiple_libraries(adata, mode, n_svgs, target_sum, platform,
+                                           mt_startwith, library_key, selection, kwargs)
+
     if mode=='prost':
         from ..external.PROST import prepare_for_PI,cal_PI,spatial_autocorrelation,feature_selection
 
@@ -643,11 +948,12 @@ def svg(adata,mode='prost',n_svgs=3000,target_sum=50*1e4,platform="visium",
             adata.layers['counts'] = adata.X.copy()
         # Calculate PI
         try:
-            import cv2
-        except ImportError:
-            print("Please install the package cv2 by \"pip install opencv-python\"")
-            import sys
-            sys.exit(1)
+            import cv2  # noqa: F401
+        except ImportError as exc:
+            raise ImportError(
+                "PROST SVG detection requires OpenCV. Install it with "
+                "`pip install opencv-python`."
+            ) from exc
         bdata=adata.copy()
         bdata = prepare_for_PI(bdata, platform=platform)
         bdata = cal_PI(bdata, platform=platform)
@@ -673,7 +979,15 @@ def svg(adata,mode='prost',n_svgs=3000,target_sum=50*1e4,platform="visium",
         adata.var['PI'] = bdata.var['PI']
         add_reference(adata,'PROST','spatial variable gene selection with PROST')
         #print(f'{n_svgs} SVGs are selected!')
-    elif mode=='pearsonr':
+    elif mode in {'pearsonr', 'pearson_residuals'}:
+        warnings.warn(
+            "svg(mode='pearsonr'/'pearson_residuals') selects highly variable "
+            "genes from Pearson residuals and does not use spatial coordinates. "
+            "Treat it as a non-spatial prefilter; use mode='moran', 'prost', "
+            "'somde', or 'spatialde' for spatial evidence.",
+            UserWarning,
+            stacklevel=2,
+        )
         from ..pp import preprocess
         bdata=adata.copy()
         # Pearson-residual HVG selection normalizes each spot by its total count,
@@ -690,32 +1004,46 @@ def svg(adata,mode='prost',n_svgs=3000,target_sum=50*1e4,platform="visium",
         _nonzero = _cell_sums > 0
         if not _nonzero.all():
             n_drop = int((~_nonzero).sum())
-            print(f"   ⚠️ Dropping {n_drop} all-zero spot(s) before Pearson-residual "
+            print(f"   [WARN] Dropping {n_drop} all-zero spot(s) before Pearson-residual "
                   f"SVG selection (issue #860); returned AnnData is unchanged.")
             bdata = bdata[_nonzero].copy()
         bdata=preprocess(bdata,mode='shiftlog|pearson',n_HVGs=n_svgs,target_sum=target_sum)
         adata.var['space_variable_features'] = False
         both_genes = list(set(adata.var_names) & set(bdata.var_names))
         adata.var.loc[both_genes, 'space_variable_features'] = bdata.var.loc[both_genes, 'highly_variable']
-        add_reference(adata,'scanpy','spatial variable gene selection with pearsonr')
-    elif mode=='moranI':
+        adata.uns.setdefault('space_svg_runs', {})['pearson_residuals'] = {
+            'method': 'pearson_residuals',
+            'spatial_evidence': False,
+            'n_selected': int(adata.var['space_variable_features'].sum()),
+            'compatibility_alias': mode == 'pearsonr',
+        }
+        add_reference(adata,'scanpy','non-spatial Pearson-residual HVG prefilter')
+    elif mode in {'morani', 'moran'}:
         n_jobs        = kwargs.get('n_jobs', 1)
         n_perms       = kwargs.get('n_perms', 100)
         genes = adata.var_names.values
-        spatial_neighbors(adata)
+        spatial_neighbors(adata, library_key=library_key,
+                          n_neighs=kwargs.get('n_neighs', 6), radius=kwargs.get('radius'))
         spatial_autocorr(
             adata,
             mode="moran",
             genes=genes,
             n_perms=n_perms,
             n_jobs=n_jobs,
+            library_key=library_key,
+            seed=kwargs.get('seed'), layer=kwargs.get('layer'),
         )
         adata.var['moranI'] = adata.uns['moranI']['I']
-        adata.var['moranI_pval'] = adata.uns['moranI']['pval_norm'] 
+        pval_key = 'pval_sim' if n_perms is not None else 'pval_norm'
+        adata.var['moranI_pval'] = adata.uns['moranI'][pval_key]
         adata.var['pval_adj'] = adata.uns['moranI']['pval_adj']
         #sort by moranI top 3000 genes
         adata.var['space_variable_features'] = False
-        adata.var.loc[adata.var['moranI'].nlargest(n_svgs).index, 'space_variable_features'] = True
+        candidates = adata.var['moranI'].dropna()
+        if selection == 'significant':
+            candidates = candidates[(adata.var.loc[candidates.index, 'pval_adj'] < kwargs.get('qval_threshold', 0.05)) & (candidates > 0)]
+        selected = candidates.sort_values(ascending=False).index if n_svgs is None else candidates.nlargest(n_svgs).index
+        adata.var.loc[selected, 'space_variable_features'] = True
         add_reference(adata,'moranI','spatial variable gene selection with moranI')
     elif mode=='spateo':
         import spateo as st
@@ -787,11 +1115,14 @@ def svg(adata,mode='prost',n_svgs=3000,target_sum=50*1e4,platform="visium",
                 adata.var[f'somde_{col}'] = result_indexed.reindex(adata.var_names)[col].values
 
         # --- select SVGs ---
-        sig_mask = result_indexed.reindex(adata.var_names)['qval'] < qval_thresh
-        #sort by qval top 3000 genes
+        qvals = result_indexed.reindex(adata.var_names)['qval']
         adata.var['space_variable_features'] = False
-        # qval 从小到大排序
-        adata.var.loc[result_indexed.reindex(adata.var_names)['qval'].nsmallest(n_svgs).index, 'space_variable_features'] = True
+        selected = _select_significant_svg_names(
+            qvals,
+            n_svgs=n_svgs,
+            qval_threshold=qval_thresh if selection == 'significant' else None,
+        )
+        adata.var.loc[selected, 'space_variable_features'] = True
 
         add_reference(adata, 'SOMDE', 'spatial variable gene selection with SOMDE')
     elif mode == 'spatialde':
@@ -902,9 +1233,14 @@ def svg(adata,mode='prost',n_svgs=3000,target_sum=50*1e4,platform="visium",
                     results_idx.reindex(pass_genes)[col].values
                 )
 
-        #sort by qval top 3000 genes
+        qvals = adata.var['spatialde_qval']
         adata.var['space_variable_features'] = False
-        adata.var.loc[adata.var['spatialde_qval'].nsmallest(n_svgs).index, 'space_variable_features'] = True
+        selected = _select_significant_svg_names(
+            qvals,
+            n_svgs=n_svgs,
+            qval_threshold=qval_thresh if selection == 'significant' else None,
+        )
+        adata.var.loc[selected, 'space_variable_features'] = True
 
         add_reference(adata, 'SpatialDE', 'spatial variable gene selection with SpatialDE')
     else:
