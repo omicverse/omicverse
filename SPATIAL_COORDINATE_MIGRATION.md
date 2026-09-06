@@ -24,6 +24,11 @@ map_spatial_auto remains an experimental image-correlation heuristic; this PR
 fixes library selection, hard-coded columns and temporary files, not full affine
 registration accuracy. scale != 1 crop remains explicitly unsupported.
 
+The NumPy phase-correlation path and rendered PNG loading no longer require
+OpenCV. Pillow reads RGB pixels and NumPy applies RGB luminance weights;
+the old OpenCV BGR read / RGB grayscale mismatch is removed. Tests block cv2
+imports while exercising real grayscale/RGB/RGBA phase correlation.
+
 Local tests: 20 tool contracts plus 5 reader tests pass, including non-symmetric
 coordinates, library isolation, multi-resolution landmarks and H5AD roundtrip.
 No CI, setup.py or dependency metadata changes.

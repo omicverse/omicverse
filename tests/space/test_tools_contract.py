@@ -199,6 +199,8 @@ def test_manual_mapping_requires_explicit_selection_for_multiple_libraries():
 
 
 def test_auto_mapping_needs_no_magic_obs_column_or_cwd_temp_files(monkeypatch):
+    import sys
+    monkeypatch.setitem(sys.modules, 'cv2', None)
     adata = _visium_adata(np.array([[1.0, 1.0], [2.0, 2.0]]))
     original_subplots = _tools.plt.subplots
 
@@ -223,6 +225,25 @@ def test_auto_mapping_needs_no_magic_obs_column_or_cwd_temp_files(monkeypatch):
     assert result is adata
     assert "test" not in adata.obs
     assert "spatial1" in adata.obsm
+
+
+@pytest.mark.parametrize('channels', [None, 1, 3, 4])
+def test_real_phase_correlation_without_opencv(monkeypatch, channels):
+    import sys
+    monkeypatch.setitem(sys.modules, 'cv2', None)
+    rng = np.random.default_rng(17)
+    reference = rng.uniform(0, 255, (32, 40)).astype(np.float32)
+    if channels is not None:
+        reference = np.repeat(reference[..., None], channels, axis=2)
+    moved = np.roll(reference, shift=(3, -5), axis=(0, 1))
+    offset, aligned = _tools.find_image_offset_phase_correlation_array_input(moved, reference)
+    assert offset == (-5, 3)
+    assert aligned.shape == (32, 40)
+    if channels in (None, 1):
+        expected = reference if channels is None else reference[..., 0]
+    else:
+        expected = reference[..., :3] @ np.array([0.299, 0.587, 0.114], dtype=np.float32)
+    np.testing.assert_allclose(aligned[:29, 5:], expected[:29, 5:], atol=1e-4)
 
 
 def test_auto_mapping_moves_centered_coordinates_and_only_selected_library(monkeypatch):

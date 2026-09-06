@@ -575,16 +575,23 @@ def find_image_offset_phase_correlation_array_input(image1_array, image2_array):
         ... )
         >>> print(f"Detected offset: {offset}")
     """
-    # **不再需要读取图像文件，直接使用输入的 NumPy 数组**
-    import cv2
-    img1 = image1_array
-    img2 = image2_array
+    def as_gray(image):
+        image = np.asarray(image)
+        if image.ndim == 3 and image.shape[2] in (3, 4):
+            # RGB luminance coefficients; ignore alpha, as COLOR_RGB2GRAY did.
+            image = image[..., :3].astype(np.float32) @ np.array(
+                [0.299, 0.587, 0.114], dtype=np.float32
+            )
+        elif image.ndim == 3 and image.shape[2] == 1:
+            image = image[..., 0]
+        if image.ndim != 2 or not image.size or not np.isfinite(image).all():
+            raise ValueError('Images must be non-empty finite grayscale, RGB or RGBA arrays.')
+        return image
 
-    # 确保是灰度图 (如果您的 img 已经是灰度图，则可以跳过)
-    if len(img1.shape) > 2 and img1.shape[2] > 1: # 检查是否是彩色图像
-        img1 = cv2.cvtColor(img1, cv2.COLOR_RGB2GRAY) # 假设是 RGB，转为灰度
-    if len(img2.shape) > 2 and img2.shape[2] > 1:
-        img2 = cv2.cvtColor(img2, cv2.COLOR_RGB2GRAY)
+    img1 = as_gray(image1_array)
+    img2 = as_gray(image2_array)
+    if img1.shape != img2.shape:
+        raise ValueError('Images must have the same spatial shape.')
 
     # 将图像转换为 float32 类型，以便进行傅里叶变换
     img1_float32 = np.float32(img1)
@@ -1040,9 +1047,11 @@ def map_spatial_auto(
 
     
 
-    import cv2 # 导入 cv2 只是为了模拟读取 png, 实际您不需要读取文件了
-    img1_from_memory = cv2.imread(image1_path) # 模拟从内存获取 image1 的 numpy array
-    img2_from_memory = cv2.imread(image2_path) # 模拟从内存获取 image2 的 numpy array
+    from PIL import Image
+    with Image.open(image1_path) as rendered:
+        img1_from_memory = np.array(rendered.convert('RGB'))
+    with Image.open(image2_path) as rendered:
+        img2_from_memory = np.array(rendered.convert('RGB'))
     plt.close(fig1)
     plt.close(fig2)
     
