@@ -246,6 +246,18 @@ def test_real_phase_correlation_without_opencv(monkeypatch, channels):
     np.testing.assert_allclose(aligned[:29, 5:], expected[:29, 5:], atol=1e-4)
 
 
+def test_auto_mapping_real_phase_pipeline_without_opencv(monkeypatch):
+    import sys
+    monkeypatch.setitem(sys.modules, 'cv2', None)
+    coords = np.array([[1., 1.], [2., 3.], [4., 2.]])
+    adata = _visium_adata(coords)
+    result = _tools.map_spatial_auto(adata, method='phase')
+    assert result is adata
+    np.testing.assert_array_equal(result.obsm['spatial'], coords)
+    assert result.obsm['spatial1'].shape == coords.shape
+    assert np.isfinite(result.obsm['spatial1']).all()
+
+
 def test_auto_mapping_moves_centered_coordinates_and_only_selected_library(monkeypatch):
     adata = _multilibrary_adata()
     original_subplots = _tools.plt.subplots
