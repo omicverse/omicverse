@@ -136,8 +136,13 @@ def neighborhood(
     """
     graph, codes, cats = _graph_and_codes(adata, cluster_key, connectivity_key)
 
+    valid_codes = codes >= 0
+    valid_rows = np.flatnonzero(valid_codes)
     onehot = sparse.csr_matrix(
-        (np.ones(len(codes)), (np.arange(len(codes)), np.clip(codes, 0, None))),
+        (
+            np.ones(len(valid_rows)),
+            (valid_rows, codes[valid_codes]),
+        ),
         shape=(len(codes), len(cats)),
     )
     composition = np.asarray((graph @ onehot).todense(), dtype=np.float64)

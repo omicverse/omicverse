@@ -601,7 +601,7 @@ def ripley(
     produces={'uns': ['sepal_score']},
     auto_fix='none',
     examples=[
-        "ov.space.spatial_neighbors(adata, n_neighs=6)",
+        "ov.space.spatial_neighbors(adata, n_neighs=6, coord_type='grid')",
         "ov.space.sepal(adata, max_neighs=6, genes=adata.var_names[:200])",
     ],
 )
@@ -652,6 +652,22 @@ def sepal(
 
     graph = _get_graph(adata, connectivity_key)
     _coords(adata, spatial_key)
+
+    graph_prefix = (
+        connectivity_key[:-len('_connectivities')]
+        if connectivity_key.endswith('_connectivities')
+        else connectivity_key
+    )
+    graph_params = adata.uns.get(f"{graph_prefix}_neighbors", {}).get("params", {})
+    if graph_params.get("method") == "spatial" and (
+        int(graph_params.get("n_neighbors", -1)) != max_neighs
+        or graph_params.get("coord_type") != "grid"
+    ):
+        raise ValueError(
+            "sepal requires a lattice graph built with "
+            f"`ov.space.spatial_neighbors(..., n_neighs={max_neighs}, "
+            "coord_type='grid')`."
+        )
 
     if use_raw:
         source = adata.raw
@@ -856,9 +872,11 @@ def sliding_window(
 ):
     """Tile the tissue into square windows and label every spot with its window.
 
-    Useful for two things: turning a slide into pseudo-replicates so a statistic
-    can be given an error bar, and testing whether a result holds locally rather
-    than only over the whole section.
+    Useful for testing whether a result holds locally rather than only over the
+    whole section, and for block-wise descriptive summaries. Windows from one
+    section are not independent biological replicates: variation between them
+    describes within-section spatial heterogeneity, not population or condition
+    uncertainty, and must not be used for sample-level inferential p-values.
 
     With ``overlap`` above zero the windows are laid down every
     ``window_size - overlap`` units, so a spot can fall in several; the assignment

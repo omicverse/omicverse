@@ -95,6 +95,42 @@ def test_neighborhood_labels_every_spot():
     assert adata.obsm["nb_composition"].shape == (adata.n_obs, 2)
 
 
+def test_neighborhood_does_not_count_missing_labels_as_first_category(monkeypatch):
+    from scipy import sparse
+
+    adata = AnnData(np.ones((3, 1), dtype=np.float32))
+    adata.obs["cell_type"] = pd.Categorical(
+        [np.nan, "A", "B"],
+        categories=["A", "B"],
+    )
+    adata.obsp["spatial_connectivities"] = sparse.csr_matrix(
+        np.array(
+            [
+                [0, 1, 0],
+                [1, 0, 0],
+                [0, 0, 0],
+            ],
+            dtype=float,
+        )
+    )
+    captured = {}
+
+    def fake_cluster_rows(matrix, resolution, seed, n_neighbors):
+        captured["matrix"] = matrix.copy()
+        return np.zeros(matrix.shape[0], dtype=int)
+
+    monkeypatch.setattr(_niche, "_cluster_rows", fake_cluster_rows)
+    space.niche.neighborhood(
+        adata,
+        "cell_type",
+        normalize=False,
+        scale=False,
+        key_added="nb_missing",
+    )
+
+    assert np.array_equal(captured["matrix"][1], [0, 0])
+
+
 def test_utag_labels_every_spot():
     adata = _lattice()
     space.niche.utag(adata, resolution=0.5, key_added="ut")
