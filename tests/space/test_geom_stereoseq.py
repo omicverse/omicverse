@@ -13,7 +13,9 @@ which is why fgw is the default.
 """
 from __future__ import annotations
 
+import builtins
 import gzip
+import sys
 
 import numpy as np
 import pandas as pd
@@ -130,6 +132,23 @@ def test_align_pairwise_rejects_an_unknown_method():
     ref = _slide()
     with pytest.raises(ValueError, match="method must be"):
         space.geom.align_pairwise(ref, ref, method="magic")
+
+
+def test_fgw_missing_dependency_names_pot(monkeypatch):
+    ref = _slide(n=12)
+    original_import = builtins.__import__
+
+    def blocked_import(name, globals=None, locals=None, fromlist=(), level=0):
+        if name.split(".")[0] == "ot":
+            raise ImportError("blocked import: ot")
+        return original_import(name, globals, locals, fromlist, level)
+
+    for name in [key for key in sys.modules if key == "ot" or key.startswith("ot.")]:
+        monkeypatch.delitem(sys.modules, name, raising=False)
+    monkeypatch.setattr(builtins, "__import__", blocked_import)
+
+    with pytest.raises(ImportError, match='pip install POT'):
+        space.geom.align_pairwise(ref, ref, method="fgw")
 
 
 def test_stack_gives_every_section_its_own_z():

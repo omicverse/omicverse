@@ -15,8 +15,8 @@ match spots between two slices using both their expression similarity and the
 geometry of each slice, then read a rigid transform off the resulting coupling.
 It is implemented here over POT rather than by depending on PASTE, so the
 default path needs one small package instead of the whole PASTE stack —
-``pip install POT``. POT is not declared in any omicverse extra, so a plain
-install does not have it; the import error names the package. ``method='icp'``
+``pip install \"POT\"`` (or ``pip install POT``). A plain install
+does not include it; the import error names the package. ``method='icp'``
 and ``method='rigid'`` are the genuinely dependency-free routes (scipy only),
 and ``method='paste'`` hands over to the real package when it is present.
 """
@@ -160,8 +160,8 @@ def align_pairwise(
         except ImportError as exc:
             raise ImportError(
                 "method='paste' needs the PASTE package. Install it with "
-                "`pip install paste-bio`, or use the default method='fgw', which "
-                "solves the same problem over POT and needs no extra install."
+                "`pip install paste-bio`, or use method='fgw' after installing "
+                "`pip install \"POT\"`."
             ) from exc
         plan = pst.pairwise_align(source, target, alpha=alpha)
         rot = _procrustes(src_xy, tgt_xy[plan.argmax(axis=1)], plan.sum(axis=1))
@@ -186,7 +186,13 @@ def align_pairwise(
         return moved + tgt_xy.mean(0), None
 
     # fused Gromov-Wasserstein
-    import ot
+    try:
+        import ot
+    except ImportError as exc:
+        raise ImportError(
+            "method='fgw' requires Python Optimal Transport (POT). Install it "
+            "with `pip install \"POT\"` or `pip install POT`."
+        ) from exc
 
     if use_rep is not None:
         src_x = np.asarray(source.obsm[use_rep], dtype=np.float64)

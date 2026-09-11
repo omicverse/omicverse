@@ -1,4 +1,5 @@
 r"""Module providing encapsulation of SpaceFlow for spatial flow analysis."""
+import copy
 import random
 import numpy as np
 import pandas as pd
@@ -15,6 +16,29 @@ from .._settings import add_reference
 from .._registry import register_function
 
 sf_install = False
+
+
+def _sampled_regularization_distances(z, coords, edge_subset_sz):
+    """Sample independent cell pairs and return normalized latent/spatial distances."""
+    subset_1 = torch.randint(0, z.shape[0], (edge_subset_sz,), device=z.device)
+    subset_2 = torch.randint(0, z.shape[0], (edge_subset_sz,), device=z.device)
+    pdist = torch.nn.PairwiseDistance(p=2, eps=0)
+    z_dists = pdist(
+        torch.index_select(z, 0, subset_1),
+        torch.index_select(z, 0, subset_2),
+    )
+    spatial_dists = pdist(
+        torch.index_select(coords, 0, subset_1),
+        torch.index_select(coords, 0, subset_2),
+    )
+    z_dists = z_dists / torch.clamp(
+        torch.max(z_dists), min=torch.finfo(z_dists.dtype).eps
+    )
+    spatial_dists = spatial_dists / torch.clamp(
+        torch.max(spatial_dists), min=torch.finfo(spatial_dists.dtype).eps
+    )
+    return z_dists, spatial_dists
+
 
 @register_function(
     aliases=["SpaceFlow空间流", "pySpaceFlow", "SpaceFlow", "空间流分析", "伪空间图谱"],
@@ -122,7 +146,16 @@ class pySpaceFlow(object):
                          spatial_locs=adata.obsm['spatial'])
 
         spatial_locs = adata.obsm['spatial']
-        spatial_graph = sf.graph_alpha(spatial_locs, n_neighbors=10)
+        try:
+            spatial_graph = sf.graph_alpha(spatial_locs, n_neighbors=10)
+        except ImportError as exc:
+            if getattr(exc, 'name', None) == 'gudhi' or 'gudhi' in str(exc):
+                raise ImportError(
+                    "pySpaceFlow requires Gudhi for spatial graph construction. "
+                    "Install it with `pip install gudhi` "
+                    "or `pip install gudhi`."
+                ) from exc
+            raise
 
         sf.adata_preprocessed = adata
         sf.spatial_graph = spatial_graph
@@ -176,6 +209,11 @@ class pySpaceFlow(object):
         """
         from ..external.spaceflow import sparse_mx_to_torch_edge_list, corruption
 
+        if isinstance(epochs, bool) or not isinstance(epochs, (int, np.integer)) or epochs < 1:
+            raise ValueError('epochs must be a positive integer.')
+        if edge_subset_sz < 1:
+            raise ValueError('edge_subset_sz must be positive.')
+
         adata_preprocessed, spatial_graph = self.sf.adata_preprocessed, self.sf.spatial_graph
         if not adata_preprocessed:
             print("Data has not been preprocessed, please run preprocessing_data() method first!")
@@ -200,7 +238,7 @@ class pySpaceFlow(object):
         min_loss = np.inf
         patience = 0
         optimizer = torch.optim.Adam(model.parameters(), lr=lr)
-        best_params = model.state_dict()
+        best_params = copy.deepcopy(model.state_dict())
 
         for epoch in tqdm(range(epochs)):
             train_loss = 0.0
@@ -211,24 +249,23 @@ class pySpaceFlow(object):
 
             coords = torch.tensor(adata_preprocessed.obsm['spatial']).float().to(device)
             if regularization_acceleration or adata_preprocessed.shape[0] > 5000:
-                cell_random_subset_1, cell_random_subset_2 = torch.randint(0, z.shape[0], (edge_subset_sz,)).to(
-                    device), torch.randint(0, z.shape[0], (edge_subset_sz,)).to(device)
-                z1, z2 = torch.index_select(z, 0, cell_random_subset_1), torch.index_select(z, 0, cell_random_subset_2)
-                c1, c2 = torch.index_select(coords, 0, cell_random_subset_1), torch.index_select(coords, 0,
-                                                                                                 cell_random_subset_1)
-                pdist = torch.nn.PairwiseDistance(p=2)
-
-                z_dists = pdist(z1, z2)
-                z_dists = z_dists / torch.max(z_dists)
-
-                sp_dists = pdist(c1, c2)
-                sp_dists = sp_dists / torch.max(sp_dists)
+                z_dists, sp_dists = _sampled_regularization_distances(
+                    z,
+                    coords,
+                    edge_subset_sz,
+                )
                 n_items = z_dists.size(dim=0)
             else:
                 z_dists = torch.cdist(z, z, p=2)
-                z_dists = torch.div(z_dists, torch.max(z_dists)).to(device)
+                z_dists = torch.div(
+                    z_dists,
+                    torch.clamp(torch.max(z_dists), min=torch.finfo(z_dists.dtype).eps),
+                ).to(device)
                 sp_dists = torch.cdist(coords, coords, p=2)
-                sp_dists = torch.div(sp_dists, torch.max(sp_dists)).to(device)
+                sp_dists = torch.div(
+                    sp_dists,
+                    torch.clamp(torch.max(sp_dists), min=torch.finfo(sp_dists.dtype).eps),
+                ).to(device)
                 n_items = z.size(dim=0) * z.size(dim=0)
 
             penalty_1 = torch.div(torch.sum(torch.mul(1.0 - z_dists, sp_dists)), n_items).to(device)
@@ -243,7 +280,7 @@ class pySpaceFlow(object):
             else:
                 patience = 0
                 min_loss = train_loss
-                best_params = model.state_dict()
+                best_params = copy.deepcopy(model.state_dict())
             if patience > max_patience and epoch > min_stop:
                 break
 
@@ -306,7 +343,12 @@ class pySpaceFlow(object):
             sub_adata_x = self.adata[selected_ind, :].obsm['spaceflow']
 
         sum_dists = distance_matrix(sub_adata_x, sub_adata_x).sum(axis=1)
-        self.adata.uns['iroot'] = np.argmax(sum_dists)
+        root_in_subset = int(np.argmax(sum_dists))
+        self.adata.uns['iroot'] = (
+            root_in_subset
+            if self.adata.shape[0] < max_cell_for_subsampling
+            else int(selected_ind[root_in_subset])
+        )
         sc.tl.diffmap(self.adata)
         sc.tl.dpt(self.adata)
         self.adata.obs.rename({"dpt_pseudotime": psm_key}, axis=1, inplace=True)

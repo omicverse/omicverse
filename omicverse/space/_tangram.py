@@ -38,7 +38,7 @@ tg_install=False
         "# Project cell types to spatial locations",
         "adata_mapped = tangram.cell2location()",
         "# Gene imputation",
-        "tangram.gene_imputation()",
+        "adata_imputed = tangram.impute()",
         "# Custom marker selection",
         "tangram = ov.space.Tangram(sc_adata, spatial_adata,",
         "                          clusters='leiden', marker_size=200)",
@@ -354,8 +354,17 @@ def construct_obs_plot(df_plot: pd.DataFrame,
     # clip
     df_plot = df_plot.clip(df_plot.quantile(perc), df_plot.quantile(1 - perc), axis=1)
 
-    # normalize
-    df_plot = (df_plot - df_plot.min()) / (df_plot.max() - df_plot.min())
+    # Normalize varying columns. A constant prediction is already finite and
+    # meaningful; dividing by a zero range used to turn the entire column NaN.
+    minima = df_plot.min()
+    ranges = df_plot.max() - minima
+    varying = ranges > 0
+    normalized = df_plot.copy()
+    if varying.any():
+        normalized.loc[:, varying] = (
+            df_plot.loc[:, varying] - minima.loc[varying]
+        ) / ranges.loc[varying]
+    df_plot = normalized
 
     if suffix:
         df_plot = df_plot.add_suffix(" ({})".format(suffix))
