@@ -5,6 +5,7 @@ import types
 
 import numpy as np
 import pandas as pd
+import pytest
 from anndata import AnnData
 
 
@@ -78,7 +79,11 @@ def _install_fake_cell2location(monkeypatch, seen: dict):
     fake_models.Cell2location = FakeCell2location
     fake_plt.plot_spatial = lambda *args, **kwargs: None
     fake_utils.select_slide = lambda *args, **kwargs: None
-    fake_filtering.filter_genes = lambda adata, **kwargs: np.ones(adata.n_vars, dtype=bool)
+    def fake_filter_genes(adata, **kwargs):
+        seen["filter_input_x"] = np.asarray(adata.X).copy()
+        return np.ones(adata.n_vars, dtype=bool)
+
+    fake_filtering.filter_genes = fake_filter_genes
 
     monkeypatch.setitem(sys.modules, "omicverse.external.space.cell2location", fake_root)
     monkeypatch.setitem(sys.modules, "omicverse.external.space.cell2location.models", fake_models)
@@ -150,3 +155,76 @@ def test_cell2location_keeps_explicit_device(monkeypatch):
     assert seen["regression_train"]["device"] == "auto"
     assert seen["spatial_train"]["accelerator"] == "cpu"
     assert seen["spatial_train"]["device"] == "auto"
+
+
+def test_cell2location_routes_explicit_count_layers(monkeypatch):
+    import torch
+    import omicverse as ov
+
+    seen: dict = {}
+    _install_fake_cell2location(monkeypatch, seen)
+    monkeypatch.setattr(torch.cuda, "is_available", lambda: False)
+
+    ad_sp, ad_sc = _synthetic_pair()
+    reference_counts = np.asarray(ad_sc.layers["counts"]).copy()
+    spatial_counts = np.asarray(ad_sp.layers["counts"]).copy()
+    ad_sc.X = np.full(ad_sc.shape, 0.123, dtype=np.float32)
+    ad_sp.X = np.full(ad_sp.shape, 0.456, dtype=np.float32)
+
+    decov = ov.space.Deconvolution(adata_sp=ad_sp, adata_sc=ad_sc)
+    decov.deconvolution(
+        method="cell2location",
+        celltype_key_sc="cell_type",
+        batch_key_sp="sample",
+        cell2location_scrna_kwargs={"max_epochs": 1},
+        cell2location_spatial_kwargs={"max_epochs": 1},
+        sample_kwargs={"num_samples": 1, "batch_size": 2},
+    )
+
+    assert seen["regression_setup"]["layer"] == "counts"
+    assert seen["spatial_setup"]["layer"] == "counts"
+    assert np.array_equal(seen["filter_input_x"], reference_counts)
+    assert np.array_equal(
+        np.asarray(seen["regression_init_adata"].layers["counts"]),
+        reference_counts,
+    )
+    assert np.array_equal(
+        np.asarray(seen["spatial_init_adata"].layers["counts"]),
+        spatial_counts,
+    )
+
+
+def test_cell2location_rejects_continuous_x_when_counts_are_missing(monkeypatch):
+    import omicverse as ov
+
+    seen: dict = {}
+    _install_fake_cell2location(monkeypatch, seen)
+    ad_sp, ad_sc = _synthetic_pair()
+    del ad_sc.layers["counts"]
+    ad_sc.X = np.full(ad_sc.shape, 0.123, dtype=np.float32)
+
+    decov = ov.space.Deconvolution(adata_sp=ad_sp, adata_sc=ad_sc)
+    with pytest.raises(ValueError, match="raw integer-like counts.*reference"):
+        decov.deconvolution(method="cell2location")
+
+
+def test_starfysh_rejects_missing_signature_before_loading_heavy_backend():
+    import omicverse as ov
+
+    ad_sp, ad_sc = _synthetic_pair()
+    decov = ov.space.Deconvolution(adata_sp=ad_sp, adata_sc=ad_sc)
+    with pytest.raises(ValueError, match="gene signature"):
+        decov.deconvolution(method="starfysh", gene_sig=None)
+
+
+def test_starfysh_rejects_unsupported_spatial_type_explicitly():
+    import omicverse as ov
+
+    ad_sp, ad_sc = _synthetic_pair()
+    decov = ov.space.Deconvolution(adata_sp=ad_sp, adata_sc=ad_sc)
+    with pytest.raises(NotImplementedError, match="spatial_type='visium'"):
+        decov.deconvolution(
+            method="starfysh",
+            spatial_type="cosmx",
+            gene_sig=pd.DataFrame({"A": [1.0]}, index=["g0"]),
+        )

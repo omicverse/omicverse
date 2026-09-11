@@ -247,6 +247,52 @@ def test_rctd_unknown_mode_raises(monkeypatch):
         )
 
 
+def test_rctd_rejects_continuous_x_without_raw_count_layer(monkeypatch):
+    seen: dict = {}
+    _install_fake_rctd(monkeypatch, seen)
+
+    import omicverse as ov
+
+    ad_sp, ad_sc = _synthetic_pair()
+    del ad_sc.layers["counts"]
+    ad_sc.X = sp.csr_matrix(np.full(ad_sc.shape, 0.25, dtype=np.float32))
+    decov = ov.space.Deconvolution(adata_sp=ad_sp, adata_sc=ad_sc)
+
+    with pytest.raises(ValueError, match="raw integer-like counts.*reference"):
+        decov.deconvolution(method="RCTD", celltype_key_sc="cell_type")
+
+
+def test_rctd_routes_custom_raw_count_layers(monkeypatch):
+    seen: dict = {}
+    _install_fake_rctd(monkeypatch, seen)
+
+    import omicverse as ov
+
+    ad_sp, ad_sc = _synthetic_pair()
+    ad_sc.layers["raw"] = ad_sc.layers["counts"].copy()
+    ad_sp.layers["raw"] = ad_sp.layers["counts"].copy()
+    del ad_sc.layers["counts"]
+    del ad_sp.layers["counts"]
+    ad_sc.X = sp.csr_matrix(np.full(ad_sc.shape, 0.25, dtype=np.float32))
+    ad_sp.X = sp.csr_matrix(np.full(ad_sp.shape, 0.5, dtype=np.float32))
+
+    decov = ov.space.Deconvolution(adata_sp=ad_sp, adata_sc=ad_sc)
+    decov.deconvolution(
+        method="rctd",
+        celltype_key_sc="cell_type",
+        counts_layer_sc="raw",
+        counts_layer_sp="raw",
+        rctd_kwargs={"mode": "full"},
+    )
+
+    expected = ad_sc.layers["raw"]
+    observed = seen["reference_adata"].X
+    np.testing.assert_array_equal(
+        observed.toarray() if sp.issparse(observed) else observed,
+        expected.toarray() if sp.issparse(expected) else expected,
+    )
+
+
 def test_rctd_unknown_method_raise_message_lists_rctd():
     """Future regression: the dispatcher's `else: raise ValueError` should
     list 'RCTD' alongside the other backends."""
@@ -276,6 +322,9 @@ def test_rctd_full_mode_real_smoke():
     import omicverse as ov
 
     ad_sp, ad_sc = _synthetic_pair()
+    # The real sigma estimator requires spots with >300 UMI. The generic
+    # routing fixture has ~200 UMI and is not a valid full-runtime fixture.
+    ad_sp.layers['counts'] = ad_sp.layers['counts'] * 3
     decov = ov.space.Deconvolution(adata_sp=ad_sp, adata_sc=ad_sc)
     decov.deconvolution(
         method="RCTD",
