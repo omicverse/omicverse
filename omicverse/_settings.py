@@ -494,7 +494,6 @@ reference_dict = {
     'SLAT': 'Zhao, C., & Zhang, W. (2023). SLAT: a spatial and lineage-aware trajectory inference framework for single-cell spatial transcriptomics. Nature Communications, 14(1), 7247.',
     'GPTCelltype': 'Su, W., Yan, Y., Liu, W., Zhao, J., Chen, Z., Li, S., ... & Han, S. (2024). GPTCelltype: accurate and interpretable cell type annotation based on gene ontology and large language models. Nature Methods, 21(5), 882-895.',
     'PROST': 'Wang, Y., Li, S., Song, M., Wang, Y., Liang, J., Zhang, L., ... & Tang, F. (2024). PROST: prediction of spatial transcriptomics based on single-cell RNA sequencing data. Nature Communications, 15(1), 696.',
-    'CytoTrace2': 'Shaham, O., & Buenrostro, J. D. (2024). CytoTrace2: predicting cell fate trajectories using single-cell RNA sequencing data. bioRxiv, 2024-03.',
     'GraphST': 'Ma, X., Du, S., Sun, S., Wang, H., & Chen, J. (2023). GraphST: a Graph Neural Network for Spatial Transcriptomics analysis. Nature Communications, 14(1), 1269.',
     'COMPOSITE': 'Xu, Z., Xu, H., Zhou, Z., Lin, Y., & Chen, X. (2024). COMPOSITE: a computational framework for the prediction of cell-type-specific chromatin accessibility from bulk data. Nature Communications, 15(1), 4991.',
     'mellon': 'Pang, A., Galdos, R., Zhang, J., & Setty, M. (2024). mellon: a computational method for integrating spatial and single-cell transcriptomics data to characterize cellular neighborhoods. Nature Methods, 21(8), 1437-1446.',

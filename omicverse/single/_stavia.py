@@ -134,7 +134,7 @@ def _suppress_via_plots():
         "stavia.fit()",
         "ov.pl.plot_stream(stavia, method='stavia')",
     ],
-    related=["single.TrajInfer", "single.Monocle", "single.cytotrace2"],
+    related=["single.TrajInfer", "single.Monocle"],
 )
 class StaVIA:
     """AnnData-native wrapper around the StaVIA/VIA backend.

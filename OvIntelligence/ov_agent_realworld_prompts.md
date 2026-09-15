@@ -62,7 +62,6 @@ Use these scenario-driven prompts to ask `ov.Agent` to reproduce or adapt the wo
 | `Tutorials-single/t_scdeg.ipynb` | "Single-cell data from treated organoids needs condition-specific differential expression per cell type. Lead a pipeline that controls for donor effects and outputs ranked gene tables." |
 | `Tutorials-single/t_scenic.ipynb` | "Help reconstruct regulatory networks from single-cell data by running SCENIC-like steps, highlighting transcription factor regulons active in exhausted T cells." |
 | `Tutorials-single/t_cellfate_genesets.ipynb` | "Our stem cell group curated custom fate gene sets. Show how to score these programs across cells and visualize trajectories towards desired fates." |
-| `Tutorials-single/t_cytotrace.ipynb` | "We need to rank progenitor potential across cells in a differentiation assay. Walk through running a CytoTRACE-style maturity score and interpret gradients." |
 | `Tutorials-single/t_scdrug.ipynb` | "A pharmacology screen collected single-cell profiles post drug treatment. Demonstrate how to predict compound sensitivity per cell state and highlight resistant subpopulations." |
 | `Tutorials-single/t_cellmatch.ipynb` | "We want to match rare cell states across datasets from different labs. Provide a workflow for cross-dataset label transfer with confidence metrics." |
 | `Tutorials-single/t_anno_noref.ipynb` | "Annotate a new single-cell atlas when no good reference exists by leveraging marker discovery, clustering, and expert-curated dictionaries." |
