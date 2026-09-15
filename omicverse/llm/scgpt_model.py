@@ -998,7 +998,7 @@ class ScGPTModel(SCLLMBase):
                 raise ValueError("No genes matched the vocabulary! Check gene naming conventions.")
             
             # Keep only genes in vocabulary
-            adata_processed = adata_processed[:, adata_processed.var["id_in_vocab"] >= 0]
+            adata_processed = adata_processed[:, adata_processed.var["id_in_vocab"] >= 0].copy()
             SCLLMOutput.status(f"Retained {adata_processed.n_vars} genes", 'loaded')
         
         # Step 2: Initialize preprocessor with Tutorial-exact parameters
@@ -1125,6 +1125,13 @@ class ScGPTModel(SCLLMBase):
         else:
             SCLLMOutput.status(f"Using existing preprocessed data", 'info')
         
+        # AnnData/Scanpy filtering can drop unused categories and renumber domains.
+        batch_key = kwargs.get('batch_key', 'batch')
+        if batch_key in adata.obs and isinstance(adata.obs[batch_key].dtype, pd.CategoricalDtype):
+            adata_processed.obs[batch_key] = adata_processed.obs[batch_key].cat.set_categories(
+                adata.obs[batch_key].cat.categories,
+                ordered=adata.obs[batch_key].cat.ordered,
+            )
         return adata_processed
     
     def predict(self, adata: AnnData, task: str = "annotation", **kwargs) -> Dict[str, Any]:
@@ -1142,6 +1149,12 @@ class ScGPTModel(SCLLMBase):
         if not self.is_loaded:
             raise ValueError("Model not loaded. Call load_model() first.")
         
+        if task == "integration":
+            if adata.n_obs == 0:
+                raise ValueError("Integration requires at least one cell")
+            if self.model.cell_emb_style != "cls":
+                raise ValueError("Integration requires cell_emb_style='cls'")
+
         # Preprocess data
         adata_processed = self.preprocess(adata, **kwargs)
         
@@ -1343,7 +1356,11 @@ class ScGPTModel(SCLLMBase):
         return {"embeddings": result.get("embeddings")}
     
     def _predict_integration(self, adata: AnnData, **kwargs) -> Dict[str, Any]:
-        """Perform batch integration following Tutorial_Integration exactly."""
+        """Return L2-normalized CLS embeddings in input cell order.
+
+        Inference is unmasked by default. Batch categories must retain the
+        category order used during training, including when subsetting cells.
+        """
         # Check for batch information
         batch_key = kwargs.get('batch_key', 'batch')
         if batch_key not in adata.obs:
@@ -1372,6 +1389,8 @@ class ScGPTModel(SCLLMBase):
         
         # Process batch labels
         batch_labels = adata.obs[batch_key].astype('category').cat.codes.values
+        if (batch_labels < 0).any():
+            raise ValueError("Integration batch labels must not contain missing values")
         unique_batches = np.unique(batch_labels)
         num_batches = len(unique_batches)
         
@@ -1401,94 +1420,54 @@ class ScGPTModel(SCLLMBase):
             pad_token=self.config.pad_token,
             pad_value=-2,
             append_cls=True,
-            include_zero_gene=kwargs.get('include_zero_gene', False),
+            include_zero_gene=kwargs.get('include_zero_gene', True),
         )
         
-        # Integration uses higher masking ratio (Tutorial: 0.4)
-        mask_ratio = kwargs.get('mask_ratio', 0.4)
+        # Evaluation uses unmasked values; masking remains an explicit opt-in.
+        mask_ratio = kwargs.get('mask_ratio', 0.0)
+        input_values = tokenized_data["values"].float()
         if mask_ratio > 0:
-            SCLLMOutput.status(f"Applying masking (ratio={mask_ratio})...", 'preprocessing', indent=1)
-        
-        input_values = random_mask_value(
-            tokenized_data["values"],
-            mask_ratio=mask_ratio,
-            mask_value=-1,
-            pad_value=-2,
-        )
-        
-        # Create dataset with batch labels
-        dataset_dict = {
-            "gene_ids": tokenized_data["genes"],
-            "values": input_values,
-            "target_values": tokenized_data["values"],
-            "batch_labels": torch.from_numpy(batch_labels).long(),
-        }
-        
-        # Create data loader
-        batch_size = kwargs.get('batch_size', 32)
-        dataset = SimpleDataset(dataset_dict)
-        dataloader = DataLoader(dataset, batch_size=batch_size, shuffle=False)
-        SCLLMOutput.status(f"Created dataloader: {len(dataloader)} batches (batch_size={batch_size})", indent=1)
-        
-        # Make predictions with batch-aware model
-        self.model.eval()
-        all_embeddings = []
-        
-        SCLLMOutput.status(f"Running integration inference...", 'integrating', indent=1)
-        
-        with torch.no_grad():
-            pbar = SCLLMOutput.progress_bar(
-                total=len(dataloader), 
-                desc="Integration batches", 
-                model_name="scGPT"
+            input_values = random_mask_value(
+                input_values, mask_ratio=mask_ratio, mask_value=-1, pad_value=-2,
             )
-            
-            for batch_idx, batch_data in enumerate(dataloader):
-                pbar.update(1)
-                input_gene_ids = batch_data["gene_ids"].to(self.device)
-                input_values = batch_data["values"].to(self.device)
-                batch_labels_tensor = batch_data["batch_labels"].to(self.device)
-                
-                src_key_padding_mask = input_gene_ids.eq(self.vocab[self.config.pad_token])
-                
-                #if batch_idx == 0:
-                    # First batch debug info removed for cleaner output
-                
-                # Tutorial exact model call for integration
-                # Note: For integration, we enable batch-aware features
-                output_dict = self.model(
-                    input_gene_ids,
-                    input_values,
-                    src_key_padding_mask=src_key_padding_mask,
-                    batch_labels=batch_labels_tensor if self.config.use_batch_labels else None,
-                    CLS=False,          # Integration focuses on embeddings, not classification
-                    CCE=False,          # Contrastive cell embedding can be enabled if needed
-                    MVC=self.config.do_mvc,  # Masked Value Prediction (GEPC)
-                    ECS=self.config.do_ecs,  # Elastic Cell Similarity  
-                    do_sample=False,    # No sampling during inference
+
+        batch_size = kwargs.get('batch_size', 32)
+        if batch_size <= 0:
+            raise ValueError("batch_size must be positive")
+        input_gene_ids = tokenized_data["genes"]
+        padding_mask = input_gene_ids.eq(self.vocab[self.config.pad_token])
+        needs_batch_labels = (
+            self.model.use_batch_labels or self.model.domain_spec_batchnorm
+        )
+        # DSBN chooses its domain from the first label of each minibatch.
+        # Encode each domain separately, then restore the caller's cell order.
+        groups = (
+            [np.flatnonzero(batch_labels == label) for label in unique_batches]
+            if getattr(self.model, "dsbn", None) is not None
+            else [np.arange(adata.n_obs)]
+        )
+        self.model.eval()
+        embeddings = np.empty((adata.n_obs, self.model.d_model), dtype=np.float32)
+        with torch.no_grad():
+            for indices in groups:
+                embeddings[indices] = self.model.encode_batch(
+                    input_gene_ids[indices],
+                    input_values[indices],
+                    src_key_padding_mask=padding_mask[indices],
+                    batch_size=batch_size,
+                    batch_labels=torch.from_numpy(batch_labels[indices]).long()
+                    if needs_batch_labels else None,
+                    time_step=0,
+                    return_np=True,
                 )
-                
-                # Extract cell embeddings for integration
-                if "cell_emb" in output_dict:
-                    embeddings = output_dict["cell_emb"].cpu().numpy()
-                    all_embeddings.append(embeddings)
-                    
-                    if batch_idx == 0:
-                        SCLLMOutput.status(f"Embeddings: {embeddings.shape[1]} dimensions", indent=2)
-                else:
-                    SCLLMOutput.status(f"No cell embeddings found, using encoder output", 'warning', indent=2)
-                    # Fallback: use the last hidden state
-                    if "encoder_output" in output_dict:
-                        # Use CLS token embedding as fallback
-                        encoder_output = output_dict["encoder_output"]
-                        cls_embeddings = encoder_output[:, 0, :].cpu().numpy()  # CLS token
-                        all_embeddings.append(cls_embeddings)
-            
-            pbar.close()
-        
+        # Match scGPT's integration evaluation representation.
+        norms = np.linalg.norm(embeddings, axis=1, keepdims=True)
+        if not np.isfinite(norms).all() or (norms == 0).any():
+            raise RuntimeError("Integration produced non-finite or zero-norm embeddings")
+        embeddings /= norms
+
         results = {}
-        if all_embeddings:
-            embeddings = np.concatenate(all_embeddings)
+        if len(embeddings):
             results["embeddings"] = embeddings
             results["batch_labels"] = batch_labels
             results["integrated_embeddings"] = embeddings  # Same as embeddings for compatibility
@@ -1523,6 +1502,12 @@ class ScGPTModel(SCLLMBase):
             batch_key: Column name for batch labels
             **kwargs: Additional parameters including:
                 - correction_method: Post-hoc correction method ('combat', 'mnn', 'center_scale', 'none')
+                - include_zero_gene: For fine-tuned integration, include
+                  zero-expression genes (default True, matching scGPT evaluation).
+                  The current fine-tuning helpers use
+                  nonzero genes; pass False to use that gene inclusion policy.
+                  Sequences exceeding config.max_seq_len randomly sample genes
+                  while retaining CLS, so repeated calls may differ.
                 - Other integration parameters
             
         Returns:
@@ -1537,39 +1522,10 @@ class ScGPTModel(SCLLMBase):
         if has_integration_training:
             SCLLMOutput.status(f"Using fine-tuned integration model", 'info')
             # Use the trained integration capabilities
-            return self._predict_integration(adata, batch_key=batch_key, **kwargs)
+            return self.predict(adata, task="integration", batch_key=batch_key, **kwargs)
         else:
             SCLLMOutput.status(f"Using pre-trained model with post-hoc correction", 'info')
             return self._apply_post_hoc_integration(adata, batch_key=batch_key, **kwargs)
-    
-    def _predict_integration(self, adata: AnnData, batch_key: str = "batch", **kwargs) -> Dict[str, Any]:
-        """Use trained integration model for prediction."""
-        SCLLMOutput.status(f"Using trained integration model", 'info', indent=1)
-        
-        # This would use the actual integration model prediction
-        # Similar to the predict method but for integration task
-        adata_processed = self.preprocess(adata, add_cls_token=True)
-        
-        # Get integrated embeddings from the trained model
-        # Implementation would depend on the trained integration model
-        embeddings = self.get_embeddings(adata_processed, **kwargs)
-        
-        batch_labels = adata.obs[batch_key].astype('category').cat.codes.values
-        
-        results = {
-            'embeddings': embeddings,
-            'batch_labels': batch_labels,
-            'integration_method': 'trained_model',
-            'integration_stats': {
-                'num_batches': len(np.unique(batch_labels)),
-                'batch_distribution': np.bincount(batch_labels).tolist(),
-                'total_cells': len(batch_labels),
-                'method': 'fine_tuned_integration'
-            }
-        }
-        
-        SCLLMOutput.status(f"Integration completed using fine-tuned model", 'loaded')
-        return results
     
     def _apply_post_hoc_integration(self, adata: AnnData, batch_key: str = "batch", **kwargs) -> Dict[str, Any]:
         """Apply post-hoc batch correction methods to pre-trained embeddings."""

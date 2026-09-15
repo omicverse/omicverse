@@ -47,7 +47,7 @@ jobs:
         # (transitively via mellon), which is broken against numpy 2.4.x
         # (`np.dtypes.StringDType`) and crashes test collection. jax 0.6.2 is
         # the version py3.10 already resolved + passed with, on numpy 2.2.6.
-        uv pip install --python .venv/bin/python 'numpy>=2,<2.5' 'jax<0.7' 'jaxlib<0.7' flake8 torch tensorboard mellon torch_geometric POT wget lifelines boltons ctxcore ktplotspy leidenalg datashader graphtools phate python-dotplot metatime pydeseq2 bioservices tomli wandb munch datasets
+        uv pip install --python .venv/bin/python 'numpy>=2,<2.5' 'jax<0.7' 'jaxlib<0.7' flake8 torch tensorboard mellon torch_geometric POT wget lifelines boltons ctxcore ktplotspy leidenalg datashader graphtools phate python-dotplot metatime pydeseq2 bioservices tomli wandb munch 'datasets>=4'
         uv pip install --python .venv/bin/python -e ".[tests,mcp]" 'numpy>=2,<2.5' 'jax<0.7' 'jaxlib<0.7'
     - name: Lint with flake8
       run: |
