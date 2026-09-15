@@ -64,7 +64,7 @@ def validate_metadata(decorator_content, function_name):
 
 
 def main():
-    """Test all 36 functions across all 5 phases for complete prerequisite metadata."""
+    """Test all 35 functions across all 5 phases for complete prerequisite metadata."""
 
     # All phases with their functions (using correct file paths from actual implementation)
     all_phases = {
@@ -83,10 +83,9 @@ def main():
             ('cosg', 'omicverse/single/_cosg.py'),
             ('TrajInfer', 'omicverse/single/_TI.py'),
         ],
-        'Phase 2 - Annotation/Analysis (9)': [
+        'Phase 2 - Annotation/Analysis (8)': [
             ('pySCSA', 'omicverse/single/_scsa.py'),
             ('batch_correction', 'omicverse/single/_batch.py'),
-            ('cytotrace2', 'omicverse/single/_cytotrace2.py'),
             ('get_celltype_marker', 'omicverse/utils/_data.py'),
             ('scanpy_cellanno_from_dict', 'omicverse/utils/_data.py'),
             ('gptcelltype', 'omicverse/single/_gptcelltype.py'),
@@ -118,7 +117,7 @@ def main():
 
     print("=" * 100)
     print(" " * 30 + "LAYER 1 COMPLETE VALIDATION")
-    print(" " * 25 + "All Phases (0, 1, 2, 3, 4) - 36 Functions")
+    print(" " * 25 + "All Phases (0, 1, 2, 3, 4) - 35 Functions")
     print("=" * 100)
     print()
 
@@ -240,7 +239,7 @@ def main():
     print("  ✅ Cell type annotation (SCSA, GPT, weighted KNN)")
     print("  ✅ Trajectory inference (TrajInfer, pyVIA)")
     print("  ✅ Differential expression and marker genes (DEG, COSG)")
-    print("  ✅ Cell cycle scoring and CytoTRACE2")
+    print("  ✅ Cell cycle scoring")
     print("  ✅ Differential composition analysis (DCT)")
     print()
     print("Spatial Transcriptomics Workflows (~95% coverage):")

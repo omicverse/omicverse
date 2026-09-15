@@ -30,7 +30,6 @@ Trajectory analysis:
     StaVIA: Spatial/temporal trajectory inference
     TrajInfer: Trajectory inference framework
     scLTNN: Lineage tracing with neural networks
-    cytotrace2: Developmental potential scoring
 
 Examples:
     >>> import omicverse as ov
@@ -230,15 +229,6 @@ bind_optional_symbols(
 
 bind_optional_symbols(
     globals(),
-    "._cytotrace2",
-    ["cytotrace2"],
-    package=__name__,
-    feature="omicverse.single.cytotrace2",
-    dependencies=("torch",),
-)
-
-bind_optional_symbols(
-    globals(),
     "._scdiffusion",
     ["scDiffusion"],
     package=__name__,
@@ -338,7 +328,6 @@ __all__ = [
     'scLTNN',
     'plot_origin_tesmination',
     'find_related_gene',
-    'cytotrace2',
     
     # Cell fate and development
     'Fate',

@@ -61,7 +61,6 @@ Each table maps a tutorial notebook in `omicverse_guide/docs` to the concrete da
 | `Tutorials-single/t_cellvote_pbmc3k.ipynb` | ./data/pbmc3k.h5ad, pbmc3k.h5ad | Small (~150 MB) | Bundled with repo |
 | `Tutorials-single/t_cluster.ipynb` | Uses remote API only | None (API-only) | http://scikit-learn.org/stable/modules/generated/sklearn.mixture.GaussianMixture.html, https://colab.research.google.com/drive/1d_szq-y-g7O0C5rJgK22XC7uWTUNrYpK?usp=sharing, https://starlitnightly.github.io/omicverse/Tutorials-single/t_cnmf/ |
 | `Tutorials-single/t_cnmf.ipynb` | Uses remote API only | None (API-only) | https://github.com/dylkot/cNMF |
-| `Tutorials-single/t_cytotrace.ipynb` | Uses remote API only | None (API-only) | https://doi.org/10.1101/2024.03.19.585637, https://figshare.com/ndownloader/files/47258749 |
 | `Tutorials-single/t_deg_single.ipynb` | Uses remote API only | None (API-only) | https://pertpy.readthedocs.io/en/stable/tutorials/notebooks/milo.html, https://pertpy.readthedocs.io/en/stable/tutorials/notebooks/sccoda.html |
 | `Tutorials-single/t_gptanno.ipynb` | Uses remote API only | None (API-only) | http://cf.10xgenomics.com/samples/cell-exp/1.1.0/pbmc3k/pbmc3k_filtered_gene_bc_matrices.tar.gz, https://api.moonshot.cn/v1, https://api.openai.com/v1/ … |
 | `Tutorials-single/t_lazy.ipynb` | Uses remote API only | None (API-only) | https://github.com/Starlitnightly/omicverse/issues](https://github.com/Starlitnightly/omicverse/issues, https://starlitnightly.github.io/single/scRNA_analysis_report.html |

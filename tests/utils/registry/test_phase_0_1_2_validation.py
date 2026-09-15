@@ -38,7 +38,6 @@ phase_1_functions = [
 phase_2_functions = [
     ('pySCSA', 'omicverse/single/_anno.py'),
     ('batch_correction', 'omicverse/single/_batch.py'),
-    ('cytotrace2', 'omicverse/single/_cytotrace2.py'),
     ('get_celltype_marker', 'omicverse/single/_anno.py'),
     ('scanpy_cellanno_from_dict', 'omicverse/single/_anno.py'),
     ('gptcelltype', 'omicverse/single/_gptcelltype.py'),

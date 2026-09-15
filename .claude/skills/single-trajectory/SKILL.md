@@ -103,7 +103,6 @@ velo.graphvelo(
 ## Downstream fate scoring notebooks
 - **CellFateGenie**: For pseudotime-associated gene discovery, use `search_skills('CellFateGenie fate genes')` to load the dedicated CellFateGenie skill.
 - **`t_metacells.ipynb`**: Aggregate metacell trajectories for robustness checks and meta-state differential expression.
-- **`t_cytotrace.ipynb`**: Integrate CytoTRACE differentiation potential with velocity-informed lineages for maturation scoring.
 
 ## Required preprocessing
 1. Quality control: remove low-quality cells/genes, apply doublet filtering.

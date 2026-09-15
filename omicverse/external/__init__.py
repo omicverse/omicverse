@@ -20,7 +20,6 @@ Algorithm categories:
         - STT: Spatial transition tensor
         - VIA: Velocity integration and annotation
         - bonsai: Maximum-likelihood cell-state tree (CC BY-NC 4.0)
-        - cytotrace2: Developmental potential scoring
         - monocle2_py: Pure-Python reimplementation of Monocle 2 (DDRTree)
         
     Multi-omics integration:
@@ -76,7 +75,6 @@ _TORCH_HEAVY_MODULES = {
     'STAGATE_pyG',
     'STAligner',
     'PROST',
-    'cytotrace2',
     'GraphST',
     'starfysh',
     'scdiffusion',
@@ -99,7 +97,6 @@ __all__ = [
     'STAligner',
     'spatrio',
     'PROST',
-    'cytotrace2',
     'GraphST',
     'commot',
     'cnmf',

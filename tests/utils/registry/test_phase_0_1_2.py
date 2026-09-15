@@ -59,7 +59,6 @@ if __name__ == "__main__":
     phase_2_functions = [
         'pySCSA',                    # SCSA cell annotation
         'batch_correction',          # Batch correction
-        'cytotrace2',                # Cell potency prediction
         'get_celltype_marker',       # Extract marker genes
         'scanpy_cellanno_from_dict', # Manual annotation
         'gptcelltype',               # GPT-powered annotation
