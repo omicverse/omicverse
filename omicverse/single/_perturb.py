@@ -1006,7 +1006,7 @@ def _run_sctenifoldknk(
             )
 
     # Per-cell ΔX via one-step propagation through the perturbed PCNet:
-    #   ΔX[cell, gene_j] = sum_i X[cell, gene_i] * (KO[i,j] - WT[i,j])
+    #   ΔX[cell, gene_j] = sum_i X[cell, gene_i] * (perturbed[i,j] - WT[i,j])
     # The PCNets are gene × gene weight matrices indexed by
     # ``shared_gene_names`` (the genes that survived scTenifold's QC).
     delta_X = None
@@ -1020,9 +1020,16 @@ def _run_sctenifoldknk(
             shared_in_adata = [g for g in shared if g in adata.var_names]
             if len(shared_in_adata) == len(shared):
                 X_sub = _expression_matrix(adata[:, shared], layer=layer)
-                ko_arr = np.asarray(ko_tensor, dtype=np.float64)
-                wt_arr = np.asarray(wt_tensor, dtype=np.float64)
-                delta_X = X_sub @ (ko_arr - wt_arr)
+                if mode == "ko":
+                    pert_arr = np.asarray(ko_tensor, dtype=np.float64)
+                    wt_arr = np.asarray(wt_tensor, dtype=np.float64)
+                else:
+                    import networkx as nx
+
+                    # Use equally thresholded graphs for the KD/OE approximation.
+                    pert_arr = nx.to_numpy_array(grn_pert, nodelist=shared)
+                    wt_arr = nx.to_numpy_array(grn_base, nodelist=shared)
+                delta_X = X_sub @ (pert_arr - wt_arr)
                 cell_names = list(adata.obs_names)
                 # Compute transition_prob if an embedding is available
                 for emb_key in ("X_umap", "X_draw_graph_fa", "X_pca"):
@@ -1152,22 +1159,18 @@ def _run_cell_oracle(
             oracle.perform_PCA()
             n_cells = oracle.adata.shape[0]
             k = backend_kwargs.pop("knn_k", max(4, min(8, n_cells - 1)))
-            try:
-                oracle.knn_imputation(
-                    n_pca_dims=backend_kwargs.pop("n_pca_dims", 20),
-                    k=k,
-                    balanced=False,
-                    b_sight=backend_kwargs.pop("b_sight", min(max(n_cells // 4, k * 2), 200)),
-                    b_maxl=backend_kwargs.pop("b_maxl", min(max(n_cells // 10, k), 50)),
-                    n_jobs=backend_kwargs.pop("knn_n_jobs", 4),
-                )
-            except Exception:  # pragma: no cover - falls back to a no-op imputation
-                # If kNN imputation fails (typically due to tiny demos), fall
-                # back to using the raw counts as the imputed layer so
-                # downstream simulate_shift can proceed.
-                oracle.adata.layers["imputed_count"] = oracle.adata.X
+            oracle.knn_imputation(
+                n_pca_dims=backend_kwargs.pop("n_pca_dims", 20),
+                k=k,
+                balanced=False,
+                b_sight=backend_kwargs.pop("b_sight", min(max(n_cells // 4, k * 2), 200)),
+                b_maxl=backend_kwargs.pop("b_maxl", min(max(n_cells // 10, k), 50)),
+                n_jobs=backend_kwargs.pop("knn_n_jobs", 4),
+            )
         if grn_base is None:
-            grn_base = adata.uns.get("base_grn") or adata.uns.get("celloracle_base_grn")
+            grn_base = adata.uns.get("base_grn")
+        if grn_base is None:
+            grn_base = adata.uns.get("celloracle_base_grn")
         if grn_base is None:
             raise ValueError(
                 "CellOracle backend needs a base GRN. Pass `grn_base=` or "
