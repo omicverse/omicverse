@@ -29,7 +29,10 @@ def create_dictionary_mnn(adata, use_rep, batch_name, k = 50, save_on_disk = Tru
     for comb in iter_comb:
         i = comb[0]
         j = comb[1]
-        key_name1 = batch_name_df.loc[comb[0]].values[0] + "_" + batch_name_df.loc[comb[1]].values[0]
+        key_name1 = (
+            f"{batch_name_df.loc[comb[0]].values[0]}_"
+            f"{batch_name_df.loc[comb[1]].values[0]}"
+        )
         mnns[key_name1] = {} # for multiple-slice setting, the key_names1 can avoid the mnns replaced by previous slice-pair
         if(verbose > 0):
             print('Processing datasets {}'.format((i, j)))
@@ -45,17 +48,9 @@ def create_dictionary_mnn(adata, use_rep, batch_name, k = 50, save_on_disk = Tru
         match = mnn(ds1, ds2, names1, names2, knn=k, save_on_disk = save_on_disk, approx = approx)
 
         G = nx.Graph()
-        G.add_edges_from(match)
-        node_names = np.array(G.nodes)
-        anchors = list(node_names)
-        adj = nx.adjacency_matrix(G)
-        tmp = np.split(adj.indices, adj.indptr[1:-1])
-
-        for i in range(0, len(anchors)):
-            key = anchors[i]
-            i = tmp[i]
-            names = list(node_names[i])
-            mnns[key_name1][key]= names
+        G.add_edges_from(sorted(match, key=lambda edge: (str(edge[0]), str(edge[1]))))
+        for anchor in sorted(G.nodes, key=str):
+            mnns[key_name1][anchor] = sorted(G.neighbors(anchor), key=str)
     return(mnns)
 
 def validate_sparse_labels(Y):
@@ -97,7 +92,7 @@ def nn_approx(ds1, ds2, names1, names2, knn=50):
 
 def nn(ds1, ds2, names1, names2, knn=50, metric_p=2):
     # Find nearest neighbors of first dataset.
-    nn_ = NearestNeighbors(knn, p=metric_p)
+    nn_ = NearestNeighbors(n_neighbors=knn, p=metric_p)
     nn_.fit(ds2)
     ind = nn_.kneighbors(ds1, return_distance=False)
 

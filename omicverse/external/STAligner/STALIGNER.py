@@ -1,10 +1,4 @@
-import numpy as np
-
 import torch
-import torch.nn as nn
-import torch.backends.cudnn as cudnn
-cudnn.deterministic = True
-cudnn.benchmark = True
 import torch.nn.functional as F
 from .gat_conv import GATConv
 
