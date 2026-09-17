@@ -52,6 +52,19 @@ def _progress(message: str, level: str = "info") -> None:
 def _read_table_with_auto_sep(path: Path) -> pd.DataFrame:
     if path.suffix == ".parquet":
         return pd.read_parquet(path)
+    if path.name == "tissue_positions_list.csv":
+        return pd.read_csv(
+            path,
+            header=None,
+            names=[
+                "barcode",
+                "in_tissue",
+                "array_row",
+                "array_col",
+                "pxl_row_in_fullres",
+                "pxl_col_in_fullres",
+            ],
+        )
     try:
         return pd.read_csv(path, sep=",")
     except Exception:
@@ -180,7 +193,7 @@ def read_visium(
             - **uns['spatial'][library_id]['images']** – ``{'hires': ndarray, 'lowres': ndarray}``
             - **uns['spatial'][library_id]['scalefactors']** – parsed scalefactors JSON
             - **uns['spatial'][library_id]['metadata']** – chemistry/version info
-            - **obsm['spatial']** – spot pixel coordinates (row, col in full-res image)
+            - **obsm['spatial']** – spot pixel coordinates (x=column, y=row in full-res image)
 
     Examples:
         >>> import omicverse as ov
@@ -223,22 +236,26 @@ def read_visium(
         elif tissue_df.index.name != "barcode" and len(tissue_df.columns) > 0:
             tissue_df = tissue_df.set_index(tissue_df.columns[0])
 
-        # Legacy files (tissue_positions_list.csv) have no header
-        if tissue_df.columns.tolist() != [
-            "in_tissue", "array_row", "array_col",
-            "pxl_col_in_fullres", "pxl_row_in_fullres",
-        ]:
-            tissue_df.columns = [
-                "in_tissue", "array_row", "array_col",
-                "pxl_col_in_fullres", "pxl_row_in_fullres",
-            ]
+        expected_position_columns = {
+            "in_tissue",
+            "array_row",
+            "array_col",
+            "pxl_row_in_fullres",
+            "pxl_col_in_fullres",
+        }
+        missing_position_columns = expected_position_columns.difference(tissue_df.columns)
+        if missing_position_columns:
+            raise ValueError(
+                f"Tissue positions file {tissue_positions_file} is missing required "
+                f"columns: {sorted(missing_position_columns)}."
+            )
 
         adata.obs = pd.merge(
             adata.obs, tissue_df, left_index=True, right_index=True, how="left"
         )
 
         adata.obsm["spatial"] = adata.obs[
-            ["pxl_row_in_fullres", "pxl_col_in_fullres"]
+            ["pxl_col_in_fullres", "pxl_row_in_fullres"]
         ].to_numpy()
 
         # Images and scale factors
