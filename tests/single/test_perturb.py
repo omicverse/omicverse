@@ -93,8 +93,11 @@ def _install_fake_sctenifoldknk(monkeypatch, base_graph):
             for g in self.ko_genes:
                 if g in idx:
                     ko[idx[g], :] = 0.0
-                    ko[:, idx[g]] = 0.0
-            self.tensor_dict = {"WT": wt, "KO": ko}
+            self.tensor_dict = {
+                key: pd.DataFrame(value, index=self.shared_gene_names,
+                                  columns=self.shared_gene_names)
+                for key, value in {"WT": wt, "KO": ko}.items()
+            }
 
     fake.scTenifoldKnk = _FakeKnk
     monkeypatch.setitem(sys.modules, "scTenifold", fake)
@@ -257,6 +260,49 @@ def test_sctenifoldknk_delta_matches_perturbation(
     np.testing.assert_allclose(result.delta_X, expected)
     assert result.cell_names == list(tiny_adata.obs_names)
     assert (result.grn is not None) == grn_output
+
+
+@pytest.mark.parametrize("mode, factor", [("kd", 1 / 3), ("oe", 3.0)])
+@pytest.mark.parametrize("unrelated_weight", [1.0, 3.0])
+def test_sctenifoldknk_numeric_effect_ignores_display_threshold(
+    monkeypatch, tiny_adata, fake_grn, mode, factor, unrelated_weight,
+):
+    from omicverse.single import perturb
+
+    fake_grn.remove_edges_from(list(fake_grn.edges))
+    fake_grn.add_edge("G0", "G1", weight=0.01)
+    fake_grn.add_edge("G4", "G5", weight=unrelated_weight)
+    _install_fake_sctenifoldknk(monkeypatch, fake_grn)
+    result = perturb(tiny_adata, target="G0", mode=mode, fold_change=3.0,
+                     backend="sctenifoldknk")
+    expected = np.zeros_like(tiny_adata.X)
+    expected[:, 1] = tiny_adata.X[:, 0] * 0.01 * (factor - 1)
+    np.testing.assert_allclose(result.delta_X, expected)
+
+
+@pytest.mark.parametrize("mode, factor, fold_change", [
+    ("ko", 0.0, 3.0), ("kd", 1 / 3, 3.0), ("oe", 3.0, 3.0),
+    ("kd", 1.0, 1.0), ("oe", 1.0, 1.0),
+])
+def test_sctenifoldknk_scales_only_target_rows_once(
+    monkeypatch, tiny_adata, fake_grn, mode, factor, fold_change,
+):
+    from omicverse.single import perturb
+    import networkx as nx
+
+    fake_grn.add_edge("G4", "G0", weight=-0.5)
+    fake_grn.add_edge("G1", "G2", weight=-0.2)
+    _install_fake_sctenifoldknk(monkeypatch, fake_grn)
+    result = perturb(tiny_adata, target=["G0", "G1", "G0"], mode=mode,
+                     fold_change=fold_change, backend="sctenifoldknk")
+    wt = nx.to_numpy_array(fake_grn, nodelist=list(tiny_adata.var_names))
+    delta_input = np.zeros_like(tiny_adata.X)
+    delta_input[:, [0, 1]] = tiny_adata.X[:, [0, 1]] * (factor - 1)
+    np.testing.assert_allclose(result.delta_X, delta_input @ wt)
+    assert result.grn["G4"]["G0"]["weight"] == -0.5
+    pert = nx.to_numpy_array(result.grn, nodelist=list(tiny_adata.var_names))
+    assert pert[0, 1] == pytest.approx(factor)
+    assert pert[1, 2] == pytest.approx(-0.2 * factor)
 
 
 def test_sctenifoldknk_backend_missing_raises(monkeypatch, tiny_adata):

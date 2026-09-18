@@ -834,6 +834,11 @@ def perturb(
 
     Notes
     -----
+    For scTenifoldKnk, KD/OE are one-step linear approximations, not native
+    backend simulations: target rows of the full WT network are scaled once
+    and ``delta_X = X @ (W_perturbed - W_WT)``. GRN outputs are thresholded
+    summaries; their edge-based ``delta_expr`` is not predicted expression.
+
     See ``Tutorials-single/t_perturb_in_silico.ipynb`` for end-to-end
     KO / OE workflows on a public dataset.
     """
@@ -925,7 +930,7 @@ def _run_sctenifoldknk(
     1. Build (or take) a PCNet from the scRNA counts via scTenifoldKnk
        / scTenifoldNet under the hood.
     2. For each target gene g:
-         - ``mode='ko'``: zero out g's row/column in the network.
+         - ``mode='ko'``: use the backend's knockout network.
          - ``mode='kd'``: scale by ``1/fold_change``.
          - ``mode='oe'``: scale by ``fold_change``.
     3. Compare control vs perturbed network. The Δ-edge table is the
@@ -973,7 +978,7 @@ def _run_sctenifoldknk(
 
     grn_base = _tensor_to_graph(wt_tensor, gene_names=gene_names)
     # For KO the KO tensor produced by scTenifoldKnk is the perturbed graph.
-    # For KD / OE we scale the WT edges in/out of each target.
+    # For KD / OE we scale the outgoing WT edges of each target.
     if mode == "ko" and ko_tensor is not None:
         grn_pert = _tensor_to_graph(ko_tensor, gene_names=gene_names)
     else:
@@ -1024,11 +1029,11 @@ def _run_sctenifoldknk(
                     pert_arr = np.asarray(ko_tensor, dtype=np.float64)
                     wt_arr = np.asarray(wt_tensor, dtype=np.float64)
                 else:
-                    import networkx as nx
-
-                    # Use equally thresholded graphs for the KD/OE approximation.
-                    pert_arr = nx.to_numpy_array(grn_pert, nodelist=shared)
-                    wt_arr = nx.to_numpy_array(grn_base, nodelist=shared)
+                    wt_arr = np.asarray(wt_tensor, dtype=np.float64)
+                    pert_arr = wt_arr.copy()
+                    target_rows = [i for i, gene in enumerate(shared) if gene in targets]
+                    factor = 1.0 / fold_change if mode == "kd" else fold_change
+                    pert_arr[target_rows, :] *= factor
                 delta_X = X_sub @ (pert_arr - wt_arr)
                 cell_names = list(adata.obs_names)
                 # Compute transition_prob if an embedding is available
@@ -1754,10 +1759,13 @@ def _apply_perturbation_to_graph(graph, *, targets, mode, fold_change):
         return None
     import networkx as nx
     pert = graph.copy()
-    for g in targets:
+    for g in dict.fromkeys(targets):
         if g not in pert:
             continue
-        for u, v, data in list(pert.in_edges(g, data=True)) + list(pert.out_edges(g, data=True)):
+        edges = list(pert.out_edges(g, data=True))
+        if mode == "ko":
+            edges += list(pert.in_edges(g, data=True))
+        for u, v, data in edges:
             w = float(data.get("weight", 1.0))
             if mode == "ko":
                 w_new = 0.0
