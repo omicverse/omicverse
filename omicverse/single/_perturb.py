@@ -834,6 +834,11 @@ def perturb(
 
     Notes
     -----
+    For scTenifoldKnk, KD/OE are one-step linear approximations, not native
+    backend simulations: target rows of the full WT network are scaled once
+    and ``delta_X = X @ (W_perturbed - W_WT)``. GRN outputs are thresholded
+    summaries; their edge-based ``delta_expr`` is not predicted expression.
+
     See ``Tutorials-single/t_perturb_in_silico.ipynb`` for end-to-end
     KO / OE workflows on a public dataset.
     """
@@ -925,7 +930,7 @@ def _run_sctenifoldknk(
     1. Build (or take) a PCNet from the scRNA counts via scTenifoldKnk
        / scTenifoldNet under the hood.
     2. For each target gene g:
-         - ``mode='ko'``: zero out g's row/column in the network.
+         - ``mode='ko'``: use the backend's knockout network.
          - ``mode='kd'``: scale by ``1/fold_change``.
          - ``mode='oe'``: scale by ``fold_change``.
     3. Compare control vs perturbed network. The Δ-edge table is the
@@ -973,7 +978,7 @@ def _run_sctenifoldknk(
 
     grn_base = _tensor_to_graph(wt_tensor, gene_names=gene_names)
     # For KO the KO tensor produced by scTenifoldKnk is the perturbed graph.
-    # For KD / OE we scale the WT edges in/out of each target.
+    # For KD / OE we scale the outgoing WT edges of each target.
     if mode == "ko" and ko_tensor is not None:
         grn_pert = _tensor_to_graph(ko_tensor, gene_names=gene_names)
     else:
@@ -1006,7 +1011,7 @@ def _run_sctenifoldknk(
             )
 
     # Per-cell ΔX via one-step propagation through the perturbed PCNet:
-    #   ΔX[cell, gene_j] = sum_i X[cell, gene_i] * (KO[i,j] - WT[i,j])
+    #   ΔX[cell, gene_j] = sum_i X[cell, gene_i] * (perturbed[i,j] - WT[i,j])
     # The PCNets are gene × gene weight matrices indexed by
     # ``shared_gene_names`` (the genes that survived scTenifold's QC).
     delta_X = None
@@ -1020,9 +1025,16 @@ def _run_sctenifoldknk(
             shared_in_adata = [g for g in shared if g in adata.var_names]
             if len(shared_in_adata) == len(shared):
                 X_sub = _expression_matrix(adata[:, shared], layer=layer)
-                ko_arr = np.asarray(ko_tensor, dtype=np.float64)
-                wt_arr = np.asarray(wt_tensor, dtype=np.float64)
-                delta_X = X_sub @ (ko_arr - wt_arr)
+                if mode == "ko":
+                    pert_arr = np.asarray(ko_tensor, dtype=np.float64)
+                    wt_arr = np.asarray(wt_tensor, dtype=np.float64)
+                else:
+                    wt_arr = np.asarray(wt_tensor, dtype=np.float64)
+                    pert_arr = wt_arr.copy()
+                    target_rows = [i for i, gene in enumerate(shared) if gene in targets]
+                    factor = 1.0 / fold_change if mode == "kd" else fold_change
+                    pert_arr[target_rows, :] *= factor
+                delta_X = X_sub @ (pert_arr - wt_arr)
                 cell_names = list(adata.obs_names)
                 # Compute transition_prob if an embedding is available
                 for emb_key in ("X_umap", "X_draw_graph_fa", "X_pca"):
@@ -1152,22 +1164,18 @@ def _run_cell_oracle(
             oracle.perform_PCA()
             n_cells = oracle.adata.shape[0]
             k = backend_kwargs.pop("knn_k", max(4, min(8, n_cells - 1)))
-            try:
-                oracle.knn_imputation(
-                    n_pca_dims=backend_kwargs.pop("n_pca_dims", 20),
-                    k=k,
-                    balanced=False,
-                    b_sight=backend_kwargs.pop("b_sight", min(max(n_cells // 4, k * 2), 200)),
-                    b_maxl=backend_kwargs.pop("b_maxl", min(max(n_cells // 10, k), 50)),
-                    n_jobs=backend_kwargs.pop("knn_n_jobs", 4),
-                )
-            except Exception:  # pragma: no cover - falls back to a no-op imputation
-                # If kNN imputation fails (typically due to tiny demos), fall
-                # back to using the raw counts as the imputed layer so
-                # downstream simulate_shift can proceed.
-                oracle.adata.layers["imputed_count"] = oracle.adata.X
+            oracle.knn_imputation(
+                n_pca_dims=backend_kwargs.pop("n_pca_dims", 20),
+                k=k,
+                balanced=False,
+                b_sight=backend_kwargs.pop("b_sight", min(max(n_cells // 4, k * 2), 200)),
+                b_maxl=backend_kwargs.pop("b_maxl", min(max(n_cells // 10, k), 50)),
+                n_jobs=backend_kwargs.pop("knn_n_jobs", 4),
+            )
         if grn_base is None:
-            grn_base = adata.uns.get("base_grn") or adata.uns.get("celloracle_base_grn")
+            grn_base = adata.uns.get("base_grn")
+        if grn_base is None:
+            grn_base = adata.uns.get("celloracle_base_grn")
         if grn_base is None:
             raise ValueError(
                 "CellOracle backend needs a base GRN. Pass `grn_base=` or "
@@ -1751,10 +1759,13 @@ def _apply_perturbation_to_graph(graph, *, targets, mode, fold_change):
         return None
     import networkx as nx
     pert = graph.copy()
-    for g in targets:
+    for g in dict.fromkeys(targets):
         if g not in pert:
             continue
-        for u, v, data in list(pert.in_edges(g, data=True)) + list(pert.out_edges(g, data=True)):
+        edges = list(pert.out_edges(g, data=True))
+        if mode == "ko":
+            edges += list(pert.in_edges(g, data=True))
+        for u, v, data in edges:
             w = float(data.get("weight", 1.0))
             if mode == "ko":
                 w_new = 0.0

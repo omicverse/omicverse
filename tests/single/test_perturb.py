@@ -93,8 +93,11 @@ def _install_fake_sctenifoldknk(monkeypatch, base_graph):
             for g in self.ko_genes:
                 if g in idx:
                     ko[idx[g], :] = 0.0
-                    ko[:, idx[g]] = 0.0
-            self.tensor_dict = {"WT": wt, "KO": ko}
+            self.tensor_dict = {
+                key: pd.DataFrame(value, index=self.shared_gene_names,
+                                  columns=self.shared_gene_names)
+                for key, value in {"WT": wt, "KO": ko}.items()
+            }
 
     fake.scTenifoldKnk = _FakeKnk
     monkeypatch.setitem(sys.modules, "scTenifold", fake)
@@ -229,20 +232,77 @@ def test_sctenifoldknk_backend_ko(monkeypatch, tiny_adata, fake_grn):
     assert "G1" in result.grn_base.successors("G0")
 
 
-def test_sctenifoldknk_backend_oe(monkeypatch, tiny_adata, fake_grn):
+@pytest.mark.parametrize("mode, factor", [("ko", 0.0), ("kd", 1 / 3), ("oe", 3.0)])
+@pytest.mark.parametrize("grn_output", [True, False])
+def test_sctenifoldknk_delta_matches_perturbation(
+    monkeypatch, tiny_adata, fake_grn, mode, factor, grn_output,
+):
     from omicverse.single import perturb
 
+    tiny_adata = tiny_adata[:, ::-1].copy()
+    tiny_adata.layers["counts"] = tiny_adata.X * 2
+    fake_grn.add_edge("G4", "G6", weight=0.001)
     _install_fake_sctenifoldknk(monkeypatch, fake_grn)
 
-    result = perturb(tiny_adata, target="G0", mode="oe",
-                     fold_change=3.0, backend="sctenifoldknk")
-    assert result.mode == "oe"
+    result = perturb(tiny_adata, target="G0", mode=mode, layer="counts",
+                     fold_change=3.0, backend="sctenifoldknk",
+                     grn_output=grn_output)
+    assert result.mode == mode
     out_edges = result.delta_grn[result.delta_grn["source"] == "G0"]
-    # weights should be tripled
     np.testing.assert_allclose(
         out_edges["weight_pert"].to_numpy(),
-        out_edges["weight_base"].to_numpy() * 3.0,
+        out_edges["weight_base"].to_numpy() * factor,
     )
+    expected = np.zeros((tiny_adata.n_obs, len(result.gene_names)))
+    target_counts = tiny_adata[:, "G0"].layers["counts"][:, 0]
+    for gene, weight in [("G1", 1.0), ("G2", 0.7), ("G3", 0.4)]:
+        expected[:, result.gene_names.index(gene)] = target_counts * weight * (factor - 1)
+    np.testing.assert_allclose(result.delta_X, expected)
+    assert result.cell_names == list(tiny_adata.obs_names)
+    assert (result.grn is not None) == grn_output
+
+
+@pytest.mark.parametrize("mode, factor", [("kd", 1 / 3), ("oe", 3.0)])
+@pytest.mark.parametrize("unrelated_weight", [1.0, 3.0])
+def test_sctenifoldknk_numeric_effect_ignores_display_threshold(
+    monkeypatch, tiny_adata, fake_grn, mode, factor, unrelated_weight,
+):
+    from omicverse.single import perturb
+
+    fake_grn.remove_edges_from(list(fake_grn.edges))
+    fake_grn.add_edge("G0", "G1", weight=0.01)
+    fake_grn.add_edge("G4", "G5", weight=unrelated_weight)
+    _install_fake_sctenifoldknk(monkeypatch, fake_grn)
+    result = perturb(tiny_adata, target="G0", mode=mode, fold_change=3.0,
+                     backend="sctenifoldknk")
+    expected = np.zeros_like(tiny_adata.X)
+    expected[:, 1] = tiny_adata.X[:, 0] * 0.01 * (factor - 1)
+    np.testing.assert_allclose(result.delta_X, expected)
+
+
+@pytest.mark.parametrize("mode, factor, fold_change", [
+    ("ko", 0.0, 3.0), ("kd", 1 / 3, 3.0), ("oe", 3.0, 3.0),
+    ("kd", 1.0, 1.0), ("oe", 1.0, 1.0),
+])
+def test_sctenifoldknk_scales_only_target_rows_once(
+    monkeypatch, tiny_adata, fake_grn, mode, factor, fold_change,
+):
+    from omicverse.single import perturb
+    import networkx as nx
+
+    fake_grn.add_edge("G4", "G0", weight=-0.5)
+    fake_grn.add_edge("G1", "G2", weight=-0.2)
+    _install_fake_sctenifoldknk(monkeypatch, fake_grn)
+    result = perturb(tiny_adata, target=["G0", "G1", "G0"], mode=mode,
+                     fold_change=fold_change, backend="sctenifoldknk")
+    wt = nx.to_numpy_array(fake_grn, nodelist=list(tiny_adata.var_names))
+    delta_input = np.zeros_like(tiny_adata.X)
+    delta_input[:, [0, 1]] = tiny_adata.X[:, [0, 1]] * (factor - 1)
+    np.testing.assert_allclose(result.delta_X, delta_input @ wt)
+    assert result.grn["G4"]["G0"]["weight"] == -0.5
+    pert = nx.to_numpy_array(result.grn, nodelist=list(tiny_adata.var_names))
+    assert pert[0, 1] == pytest.approx(factor)
+    assert pert[1, 2] == pytest.approx(-0.2 * factor)
 
 
 def test_sctenifoldknk_backend_missing_raises(monkeypatch, tiny_adata):
@@ -322,6 +382,43 @@ def test_cell_oracle_requires_base_grn(monkeypatch, tiny_adata, fake_grn):
 
     with pytest.raises(ValueError, match="(?i)needs a base GRN"):
         perturb(tiny_adata, target="G0", backend="cell_oracle")
+
+
+@pytest.mark.parametrize("key", ["base_grn", "celloracle_base_grn"])
+def test_cell_oracle_dataframe_grn_in_uns(monkeypatch, tiny_adata, fake_grn, key):
+    from omicverse.single import perturb
+
+    backend = _install_fake_celloracle(monkeypatch, fake_grn, adata=tiny_adata)
+    grn = pd.DataFrame({"gene_short_name": ["G1"], "peak_id": ["peak1"], "G0": [1]})
+    tiny_adata.uns[key] = grn
+    if key == "base_grn":
+        tiny_adata.uns["celloracle_base_grn"] = pd.DataFrame()
+    received = []
+    monkeypatch.setattr(backend.Oracle, "import_TF_data",
+                        lambda self, TF_info_matrix: received.append(TF_info_matrix))
+
+    result = perturb(tiny_adata, target="G0", backend="auto")
+    assert result.backend == "cell_oracle"
+    assert len(received) == 1 and received[0] is grn
+    assert result.grn_base.has_edge("G0", "G1")
+
+
+def test_cell_oracle_imputation_failure_stops_simulation(monkeypatch, tiny_adata, fake_grn):
+    from omicverse.single import perturb
+
+    hits = {"calls": []}
+    backend = _install_fake_celloracle(monkeypatch, fake_grn,
+                                       adata=tiny_adata, hit_simulate=hits)
+    monkeypatch.setattr(backend.Oracle, "perform_PCA", lambda self: None, raising=False)
+
+    def fail_imputation(self, **kwargs):
+        raise ValueError("invalid imputation input")
+
+    monkeypatch.setattr(backend.Oracle, "knn_imputation", fail_imputation, raising=False)
+    with pytest.raises(ValueError, match="invalid imputation input"):
+        perturb(tiny_adata, target="G0", backend="cell_oracle", grn_base=fake_grn)
+    assert not hits["calls"]
+    assert "imputed_count" not in tiny_adata.layers
 
 
 def test_auto_backend_picks_sctenifoldknk_without_base_grn(monkeypatch, tiny_adata, fake_grn):
