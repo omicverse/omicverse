@@ -601,7 +601,7 @@ def ripley(
     produces={'uns': ['sepal_score']},
     auto_fix='none',
     examples=[
-        "ov.space.spatial_neighbors(adata, n_neighs=6)",
+        "ov.space.spatial_neighbors(adata, n_neighs=6, coord_type='grid')",
         "ov.space.sepal(adata, max_neighs=6, genes=adata.var_names[:200])",
     ],
 )
@@ -653,6 +653,22 @@ def sepal(
     graph = _get_graph(adata, connectivity_key)
     _coords(adata, spatial_key)
 
+    graph_prefix = (
+        connectivity_key[:-len('_connectivities')]
+        if connectivity_key.endswith('_connectivities')
+        else connectivity_key
+    )
+    graph_params = adata.uns.get(f"{graph_prefix}_neighbors", {}).get("params", {})
+    if graph_params.get("method") == "spatial" and (
+        int(graph_params.get("n_neighbors", -1)) != max_neighs
+        or graph_params.get("coord_type") != "grid"
+    ):
+        raise ValueError(
+            "sepal requires a lattice graph built with "
+            f"`ov.space.spatial_neighbors(..., n_neighs={max_neighs}, "
+            "coord_type='grid')`."
+        )
+
     if use_raw:
         source = adata.raw
         var_names = list(source.var_names)
@@ -690,7 +706,7 @@ def sepal(
         raise ValueError(
             f"No spot has exactly {max_neighs} neighbours — the graph is not the "
             f"lattice this score assumes. Rebuild with "
-            f"`ov.space.spatial_neighbors(adata, n_neighs={max_neighs})`."
+            f"`ov.space.spatial_neighbors(adata, n_neighs={max_neighs}, coord_type='grid')`."
         )
 
     sat_idx = np.vstack([graph.indices[graph.indptr[i]:graph.indptr[i + 1]] for i in sat])
