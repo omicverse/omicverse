@@ -5,6 +5,45 @@ import pandas as pd
 
 from .._registry import register_function
 
+
+def _validate_count_layer(adata, requested_layer, label, method='cell2location'):
+    """Resolve a count layer and reject continuous/invalid count inputs."""
+    from scipy import sparse
+
+    if requested_layer is not None and requested_layer in adata.layers:
+        layer = requested_layer
+        matrix = adata.layers[layer]
+    elif requested_layer in (None, 'counts'):
+        layer = None
+        matrix = adata.X
+    else:
+        raise KeyError(
+            f"Requested {label} count layer {requested_layer!r} was not found."
+        )
+
+    values = matrix.data if sparse.issparse(matrix) else np.asarray(matrix).ravel()
+    values = np.asarray(values)
+    for start in range(0, values.size, 1_000_000):
+        chunk = values[start:start + 1_000_000]
+        if not np.isfinite(chunk).all():
+            raise ValueError(f"{label} count input contains NaN or infinite values.")
+        if np.any(chunk < 0):
+            raise ValueError(f"{label} count input contains negative values.")
+        if not np.allclose(chunk, np.rint(chunk), rtol=0, atol=1e-6):
+            source = f"adata.layers[{layer!r}]" if layer is not None else "adata.X"
+            layer_hint = (
+                f" and pass counts_layer_{'sc' if label == 'reference' else 'sp'}="
+                "'your_layer'"
+                if method == 'cell2location'
+                else ""
+            )
+            raise ValueError(
+                f"{method} requires raw integer-like counts for {label}; {source} "
+                f"contains continuous values. Preserve raw counts in a layer{layer_hint}."
+            )
+    return layer
+
+
 @register_function(
     aliases=["空间解卷积", "spatial deconvolution", "Deconvolution", "cell type mapping", "空间细胞类型映射"],
     category="space",
@@ -230,6 +269,8 @@ class Deconvolution(object):
         spatial_type='visium',
         gene_sig=None,
         categorical_covariate_keys_sc=None,
+        counts_layer_sc='counts',
+        counts_layer_sp='counts',
     ):
         """
         Infer spot-level cell-type composition from single-cell references.
@@ -256,6 +297,10 @@ class Deconvolution(object):
             Detection alpha hyper-parameter used by cell2location.
         sample_kwargs:dict or None
             Posterior sampling options for cell2location.
+        counts_layer_sc, counts_layer_sp:str or None
+            Raw count layers for the single-cell reference and spatial object.
+            If the requested ``'counts'`` layer is absent, ``.X`` is accepted
+            only when it is finite, non-negative, and integer-like.
         flashdeconv_kwargs:dict or None
             Additional parameters for FlashDeconv.
         starfysh_kwargs:dict or None
@@ -309,9 +354,31 @@ class Deconvolution(object):
             from ..external.space.cell2location.utils import select_slide
             from ..external.space.cell2location.utils.filtering import filter_genes
 
-            selected = filter_genes(
-                self.adata_sc, cell_count_cutoff=5, cell_percentage_cutoff2=0.03, nonz_mean_cutoff=1.12
+            reference_count_layer = _validate_count_layer(
+                self.adata_sc,
+                counts_layer_sc,
+                'reference',
             )
+            spatial_count_layer = _validate_count_layer(
+                self.adata_sp,
+                counts_layer_sp,
+                'spatial',
+            )
+
+            if self.adata_sc.is_view:
+                self.adata_sc = self.adata_sc.copy()
+            original_reference_x = self.adata_sc.X
+            if reference_count_layer is not None:
+                self.adata_sc.X = self.adata_sc.layers[reference_count_layer]
+            try:
+                selected = filter_genes(
+                    self.adata_sc,
+                    cell_count_cutoff=5,
+                    cell_percentage_cutoff2=0.03,
+                    nonz_mean_cutoff=1.12,
+                )
+            finally:
+                self.adata_sc.X = original_reference_x
 
             # filter the object
             self.adata_sc = self.adata_sc[:, selected].copy()
@@ -319,6 +386,7 @@ class Deconvolution(object):
             # prepare anndata for the regression model
             RegressionModel.setup_anndata(
                 adata=self.adata_sc,
+                layer=reference_count_layer,
                 # 10X reaction / sample / batch
                 batch_key=batch_key_sc,
                 # cell type, covariate used for constructing signatures
@@ -364,7 +432,11 @@ class Deconvolution(object):
 
             print(f"Total number of genes both in the scRNA-seq data and the spatial transcriptomics data: {len(intersect)}")
 
-            Cell2location.setup_anndata(adata=self.adata_sp, batch_key=batch_key_sp)
+            Cell2location.setup_anndata(
+                adata=self.adata_sp,
+                layer=spatial_count_layer,
+                batch_key=batch_key_sp,
+            )
 
 
             self.mod_sp = Cell2location(
@@ -474,7 +546,7 @@ class Deconvolution(object):
 
             import torch
             sc.settings.verbosity = 0
-                
+
             starfysh_default_kwargs={
                 'n_repeats':3,
                 'epochs':200,
@@ -499,7 +571,7 @@ class Deconvolution(object):
                 full_kwargs = starfysh_default_kwargs.copy()
                 full_kwargs.update(starfysh_kwargs)
                 starfysh_kwargs = full_kwargs
-                
+
             if spatial_type=='visium':
                 sample_id=list(self.adata_sp.uns['spatial'].keys())[0]
                 tissue_position_list = pd.DataFrame(self.adata_sp.obsm['spatial'],index=self.adata_sp.obs.index,)
@@ -637,25 +709,28 @@ class Deconvolution(object):
             # (with a sanity check) — that handles the case where the user
             # passes raw-counts AnnData directly without going through
             # `preprocess_sc` / `preprocess_sp`.
-            def _counts_view(adata, label):
-                if 'counts' in adata.layers:
-                    counts = adata.layers['counts']
-                else:
-                    counts = adata.X
-                    if hasattr(counts, 'max'):
-                        max_v = float(counts.max())
-                        if max_v <= np.log1p(1e6):
-                            print(
-                                f"{Colors.WARNING}⚠️ {label}.X looks log-normalized (max≈{max_v:.2f}); "
-                                f"RCTD requires raw counts. Pass `adata.layers['counts']` "
-                                f"or set `adata.X = adata.layers['counts']` before calling.{Colors.ENDC}"
-                            )
+            def _counts_view(adata, label, requested_layer):
+                requested_layer = _validate_count_layer(
+                    adata,
+                    requested_layer,
+                    label,
+                    method='RCTD',
+                )
+                counts = adata.layers[requested_layer] if requested_layer is not None else adata.X
                 view = adata.copy()
                 view.X = counts
                 return view
 
-            adata_sc_counts = _counts_view(self.adata_sc, 'adata_sc')
-            adata_sp_counts = _counts_view(self.adata_sp, 'adata_sp')
+            adata_sc_counts = _counts_view(
+                self.adata_sc,
+                'reference',
+                counts_layer_sc,
+            )
+            adata_sp_counts = _counts_view(
+                self.adata_sp,
+                'spatial',
+                counts_layer_sp,
+            )
 
             # ── 2. Set defaults; let user override via rctd_kwargs.
             rctd_defaults = {
