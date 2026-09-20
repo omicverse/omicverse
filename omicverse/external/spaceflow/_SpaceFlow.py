@@ -1,5 +1,6 @@
 # -*- coding: utf-8 -*-
 import math
+import copy
 import os
 import torch
 import random
@@ -180,6 +181,10 @@ class SpaceFlow(object):
         return G
 
     def train(self, embedding_save_filepath="./embedding.tsv", spatial_regularization_strength=0.1, z_dim=50, lr=1e-3, epochs=1000, max_patience=50, min_stop=100, random_seed=42, gpu=0, regularization_acceleration=True, edge_subset_sz=1000000):
+        if isinstance(epochs, bool) or not isinstance(epochs, (int, np.integer)) or epochs < 1:
+            raise ValueError('epochs must be a positive integer.')
+        if edge_subset_sz < 1:
+            raise ValueError('edge_subset_sz must be positive.')
         adata_preprocessed, spatial_graph = self.adata_preprocessed, self.spatial_graph
         """
         Training the Deep GraphInfomax Model
@@ -230,7 +235,7 @@ class SpaceFlow(object):
         min_loss = np.inf
         patience = 0
         optimizer = torch.optim.Adam(model.parameters(), lr=lr)
-        best_params = model.state_dict()
+        best_params = copy.deepcopy(model.state_dict())
 
         for epoch in range(epochs):
             train_loss = 0.0
@@ -245,20 +250,26 @@ class SpaceFlow(object):
                     device), torch.randint(0, z.shape[0], (edge_subset_sz,)).to(device)
                 z1, z2 = torch.index_select(z, 0, cell_random_subset_1), torch.index_select(z, 0, cell_random_subset_2)
                 c1, c2 = torch.index_select(coords, 0, cell_random_subset_1), torch.index_select(coords, 0,
-                                                                                                 cell_random_subset_1)
-                pdist = torch.nn.PairwiseDistance(p=2)
+                                                                                                 cell_random_subset_2)
+                pdist = torch.nn.PairwiseDistance(p=2, eps=0)
 
                 z_dists = pdist(z1, z2)
-                z_dists = z_dists / torch.max(z_dists)
+                z_dists = z_dists / torch.clamp(torch.max(z_dists), min=torch.finfo(z_dists.dtype).eps)
 
                 sp_dists = pdist(c1, c2)
-                sp_dists = sp_dists / torch.max(sp_dists)
+                sp_dists = sp_dists / torch.clamp(torch.max(sp_dists), min=torch.finfo(sp_dists.dtype).eps)
                 n_items = z_dists.size(dim=0)
             else:
                 z_dists = torch.cdist(z, z, p=2)
-                z_dists = torch.div(z_dists, torch.max(z_dists)).to(device)
+                z_dists = torch.div(
+                    z_dists,
+                    torch.clamp(torch.max(z_dists), min=torch.finfo(z_dists.dtype).eps),
+                ).to(device)
                 sp_dists = torch.cdist(coords, coords, p=2)
-                sp_dists = torch.div(sp_dists, torch.max(sp_dists)).to(device)
+                sp_dists = torch.div(
+                    sp_dists,
+                    torch.clamp(torch.max(sp_dists), min=torch.finfo(sp_dists.dtype).eps),
+                ).to(device)
                 n_items = z.size(dim=0) * z.size(dim=0)
 
             penalty_1 = torch.div(torch.sum(torch.mul(1.0 - z_dists, sp_dists)), n_items).to(device)
@@ -273,7 +284,7 @@ class SpaceFlow(object):
             else:
                 patience = 0
                 min_loss = train_loss
-                best_params = model.state_dict()
+                best_params = copy.deepcopy(model.state_dict())
             if epoch % 10 == 1:
                 print(f"Epoch {epoch + 1}/{epochs}, Loss: {str(train_loss)}")
             if patience > max_patience and epoch > min_stop:
@@ -413,7 +424,12 @@ class SpaceFlow(object):
                 selected_ind = np.random.choice(indices, max_cell_for_subsampling, False)
                 sub_adata_x = adata.X[selected_ind, :]
             sum_dists = distance_matrix(sub_adata_x, sub_adata_x).sum(axis=1)
-            adata.uns['iroot'] = np.argmax(sum_dists)
+            root_in_subset = int(np.argmax(sum_dists))
+            adata.uns['iroot'] = (
+                root_in_subset
+                if adata.shape[0] < max_cell_for_subsampling
+                else int(selected_ind[root_in_subset])
+            )
             sc.tl.diffmap(adata)
             sc.tl.dpt(adata)
             pSM_values = adata.obs['dpt_pseudotime'].to_numpy()

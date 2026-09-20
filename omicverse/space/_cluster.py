@@ -69,8 +69,9 @@ class pySTAGATE:
         Number of tiles along x-axis for mini-batch graph construction.
     num_batch_y : int
         Number of tiles along y-axis for mini-batch graph construction.
-    spatial_key : list, default=['X', 'Y']
-        Coordinate columns in ``adata.obs`` used to build spatial graph.
+    spatial_key : str or list, optional
+        Coordinate key in obsm or two columns in obs. If omitted, uses
+        obs X/Y when present, otherwise obsm['spatial'].
     batch_size : int, default=1
         Number of tiled graphs per optimization step.
     rad_cutoff : int, default=200
@@ -117,7 +118,7 @@ class pySTAGATE:
                  adata: AnnData,
                  num_batch_x,
                  num_batch_y,
-                 spatial_key: list = ['X','Y'],
+                 spatial_key=None,
                  batch_size: int = 1,
                 rad_cutoff: int = 200,
                 num_epoch: int = 1000,
@@ -135,8 +136,10 @@ class pySTAGATE:
             Number of x-axis tiles for batch graph generation.
         num_batch_y : int
             Number of y-axis tiles for batch graph generation.
-        spatial_key : list, default=['X', 'Y']
-            Coordinate columns in ``adata.obs``.
+        spatial_key : str or list, optional
+            An obsm coordinate key or two obs coordinate columns. If omitted,
+            uses obs X/Y when present, otherwise obsm['spatial'].
+            Selected coordinates are used on a working copy.
         batch_size : int, default=1
             Number of tiled samples per gradient step.
         rad_cutoff : int, default=200
@@ -152,6 +155,49 @@ class pySTAGATE:
         device : str, default='cuda:0'
             Compute device string.
         """
+        if (
+            isinstance(num_epoch, bool)
+            or not isinstance(num_epoch, (int, np.integer))
+            or num_epoch < 1
+        ):
+            raise ValueError(
+                "`num_epoch` must be a positive integer; zero epochs would "
+                "return an untrained random STAGATE embedding."
+            )
+        source_adata = adata
+        adata = adata.copy()
+        if spatial_key is None:
+            if all(column in adata.obs for column in ('X', 'Y')):
+                spatial_columns = ['X', 'Y']
+            elif 'spatial' in adata.obsm:
+                spatial_columns = ['__ov_stagate_x', '__ov_stagate_y']
+                coords = np.asarray(adata.obsm['spatial'], dtype=np.float64)
+                adata.obs[spatial_columns[0]] = coords[:, 0]
+                adata.obs[spatial_columns[1]] = coords[:, 1]
+            else:
+                raise KeyError(
+                    "STAGATE needs either legacy adata.obs['X'/'Y'] columns or "
+                    "adata.obsm['spatial']."
+                )
+        elif isinstance(spatial_key, str):
+            if spatial_key not in adata.obsm:
+                raise KeyError(f"spatial_key {spatial_key!r} was not found in adata.obsm.")
+            spatial_columns = ['__ov_stagate_x', '__ov_stagate_y']
+            coords = np.asarray(adata.obsm[spatial_key], dtype=np.float64)
+            adata.obs[spatial_columns[0]] = coords[:, 0]
+            adata.obs[spatial_columns[1]] = coords[:, 1]
+        else:
+            spatial_columns = list(spatial_key)
+
+        if len(spatial_columns) != 2 or any(column not in adata.obs for column in spatial_columns):
+            raise KeyError(
+                "STAGATE needs either `adata.obsm['spatial']` or two coordinate "
+                f"columns in adata.obs; received {spatial_columns}."
+            )
+        selected_coords = adata.obs[spatial_columns].to_numpy(dtype=np.float64)
+        if not np.isfinite(selected_coords).all():
+            raise ValueError("STAGATE spatial coordinates must be finite.")
+        adata.obsm['spatial'] = selected_coords
         # Initialize device
         device = torch.device(device if torch.cuda.is_available() else 'cpu')
         self.device=device
@@ -159,7 +205,7 @@ class pySTAGATE:
 
         # Create batches
         batch_list = Batch_Data(adata, num_batch_x=num_batch_x, num_batch_y=num_batch_y,
-                                    spatial_key=spatial_key, plot_Stats=True)
+                                    spatial_key=spatial_columns, plot_Stats=True)
         for temp_adata in batch_list:
             Cal_Spatial_Net(temp_adata, rad_cutoff=rad_cutoff)
 
@@ -172,6 +218,7 @@ class pySTAGATE:
         Cal_Spatial_Net(adata, rad_cutoff=rad_cutoff)
         data = Transfer_pytorch_Data(adata)
         Stats_Spatial_Net(adata)
+        source_adata.uns['Spatial_Net'] = adata.uns['Spatial_Net'].copy()
 
         # batch_size=1 or 2
         self.loader = DataLoader(data_list, batch_size=batch_size, shuffle=True)
@@ -181,8 +228,9 @@ class pySTAGATE:
         self.lr=lr
         self.weight_decay=weight_decay
         self.hidden_dims = hidden_dims
-        self.adata=adata
+        self.adata=source_adata
         self.data=data
+        self._is_fitted = False
 
         # Model and optimizer
         self.model = STAGATE(hidden_dims = [data_list[0].x.shape[1]]+self.hidden_dims).to(device)
@@ -222,6 +270,7 @@ class pySTAGATE:
                 self.optimizer.step()
         # The total network
         self.data.to(self.device)
+        self._is_fitted = True
 
     def predicted(self):
         """
@@ -245,6 +294,8 @@ class pySTAGATE:
                 - STAGATE embeddings: adata.obsm['STAGATE']
                 - Reconstructed expression: adata.layers['STAGATE_ReX']
         """
+        if not self._is_fitted:
+            raise RuntimeError("Run `train()` before `predicted()`.")
         self.model.eval()
         z, out = self.model(self.data.x, self.data.edge_index)
 
@@ -309,7 +360,12 @@ class pySTAGATE:
             sub_adata_x = self.adata[selected_ind, :].obsm['STAGATE']
 
         sum_dists = distance_matrix(sub_adata_x, sub_adata_x).sum(axis=1)
-        self.adata.uns['iroot'] = np.argmax(sum_dists)
+        root_in_subset = int(np.argmax(sum_dists))
+        self.adata.uns['iroot'] = (
+            root_in_subset
+            if self.adata.shape[0] < max_cell_for_subsampling
+            else int(selected_ind[root_in_subset])
+        )
         sc.tl.diffmap(self.adata)
         sc.tl.dpt(self.adata)
         self.adata.obs.rename({"dpt_pseudotime": psm_key}, axis=1, inplace=True)
