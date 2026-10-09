@@ -1,10 +1,11 @@
 from __future__ import annotations
 
-from typing import Mapping
+from collections.abc import Mapping
 
 import anndata
 import pandas as pd
 
+from ._pycellchat import _looks_like_pycellchat_results, format_pycellchat_results
 
 _DEFAULT_RESULT_UNS_KEYS = (
     "liana_res",
@@ -12,6 +13,7 @@ _DEFAULT_RESULT_UNS_KEYS = (
     "cellphonedb_results",
     "cpdb_res",
     "comm_adata",
+    "cellchat",
 )
 _LIANA_PRIMARY_COLUMNS = {"source", "target", "ligand_complex", "receptor_complex"}
 
@@ -72,7 +74,8 @@ def to_comm_adata(
         supported CCC results in ``adata.uns``.
     data
         Explicit result object to convert. Supported inputs are:
-        communication AnnData, LIANA result DataFrame, or CellPhoneDB result dict.
+        communication AnnData, LIANA result DataFrame, CellPhoneDB result dict,
+        or a pycellchat CellChat object / result mapping / source AnnData.
     result_uns_key
         Preferred ``adata.uns`` key to inspect when ``data`` is omitted.
     """
@@ -82,6 +85,8 @@ def to_comm_adata(
     if data is not None:
         if isinstance(data, anndata.AnnData) and _is_comm_adata(data):
             return data
+        if _looks_like_pycellchat_results(data):
+            return format_pycellchat_results(data, separator=separator)
         if _looks_like_liana_results(data):
             return format_liana_results(
                 liana_res=data,
@@ -97,7 +102,7 @@ def to_comm_adata(
             return format_cpdb_results(data, separator=separator)
         raise TypeError(
             "`data` must be a communication AnnData, LIANA result DataFrame, or "
-            "CellPhoneDB result dict."
+            "CellPhoneDB result dict, or pycellchat result."
         )
 
     if adata is None:
@@ -116,6 +121,8 @@ def to_comm_adata(
     value = adata.uns[resolved_key]
     if isinstance(value, anndata.AnnData) and _is_comm_adata(value):
         return value
+    if _looks_like_pycellchat_results(value):
+        return format_pycellchat_results(value, separator=separator)
     if _looks_like_liana_results(value):
         return format_liana_results(
             adata=adata,
@@ -133,7 +140,7 @@ def to_comm_adata(
 
     raise ValueError(
         f"`adata.uns['{resolved_key}']` is not a supported communication result. "
-        "Expected LIANA results, CellPhoneDB results, or a communication AnnData."
+        "Expected LIANA, CellPhoneDB, or pycellchat results, or a communication AnnData."
     )
 
 

@@ -73,6 +73,7 @@ from ._cpdb import (
 )
 from ._liana import run_liana, format_liana_results, format_liana_results_for_viz
 from ._comm import to_comm_adata, extract_comm_adata
+from ._pycellchat import format_pycellchat_results
 
 from ._scgsea import (
     geneset_aucell,pathway_aucell,pathway_aucell_enrichment,
@@ -363,6 +364,7 @@ __all__ = [
     'run_liana',
     'format_liana_results',
     'format_liana_results_for_viz',
+    'format_pycellchat_results',
     'to_comm_adata',
     'extract_comm_adata',
     # Pathway and functional analysis
