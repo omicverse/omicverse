@@ -18,7 +18,7 @@ Use this skill when a user wants to reconstruct single-cell profiles from bulk R
    - Instantiate `ov.bulk2single.Bulk2Single(bulk_data=bulk_df, single_data=adata, celltype_key='clusters', bulk_group=['dg_d_1', 'dg_d_2', 'dg_d_3'], top_marker_num=200, ratio_num=1, gpu=0)`.
    - Explain GPU selection (`gpu=-1` forces CPU) and how `bulk_group` names align with column IDs in the bulk matrix.
 3. **Estimate cell fractions**
-   - Call `model.predicted_fraction()` to run the integrated TAPE estimator, then plot stacked bar charts per sample to validate proportions.
+   - Call `model.predicted_fraction()` to run the default Scaden estimator, or pass `method='tape'` explicitly to use TAPE, then plot stacked bar charts per sample to validate proportions.
    - Encourage saving the fraction table for downstream reporting (`df.to_csv(...)`).
 4. **Preprocess for beta-VAE**
    - Execute `model.bulk_preprocess_lazy()`, `model.single_preprocess_lazy()`, and `model.prepare_input()` to produce matched feature spaces.

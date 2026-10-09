@@ -26,6 +26,7 @@ model = ov.bulk2single.Bulk2Single(
     gpu=0,
 )
 
+# Scaden is the default; use method='tape' to select TAPE explicitly.
 fractions = model.predicted_fraction()
 ax = fractions.plot(kind='bar', stacked=True, figsize=(8, 4))
 ax.set_ylabel('Cell Fraction')
