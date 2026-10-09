@@ -526,6 +526,8 @@ exclude = [
 # Vendored third-party source: the upstream licence has to travel with the code
 # that it covers, so it ships in the wheel alongside it.
 "omicverse.external.samap" = ["LICENSE"]
+# CellChat (PyTorch port): CellChatDB v2 tables exported from R CellChat + provenance notice.
+"omicverse.external.cellchat" = ["data/*.csv.gz", "data/NOTICE"]
 # Vendored Bonsai (CC BY-NC 4.0): the licence, the citation file and the
 # config template the runner seeds every run from all have to ship.
 "omicverse.external.bonsai" = ["LICENSE-CC-BY-NC-4.0.md", "CITATION.cff"]
