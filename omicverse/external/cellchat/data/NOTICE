@@ -1,0 +1,5 @@
+CellChatDB v2 (human, mouse, zebrafish) exported from the R package CellChat
+2.2.0.9001 (https://github.com/jinworks/CellChat, GPL-3) objects
+CellChatDB.<species>$interaction / $complex / $cofactor. The interaction table
+keeps R's rownames as `id` and a subset of the annotation columns.
+Cite: Jin S. et al. Nat Commun 12, 1088 (2021); Jin S. et al. Nat Protoc (2025).

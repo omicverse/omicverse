@@ -100,6 +100,20 @@ def _validate_support_semantics(
         )
 
 
+# Expression-scale defaults for pathway summaries. CellPhoneDB/LIANA ``means`` are
+# expression levels (~0.1-5); CellChat ``means`` are communication probabilities
+# (~1e-4-1e-1) whose significance comes from the permutation p-value, as in R.
+_SCALE_DEFAULTS = {"default": (0.1, 0.5), "cellchat": (np.finfo(float).tiny, 0.0)}
+
+
+def _scale_thresholds(adata: anndata.AnnData, min_expression, strength_threshold):
+    """Fill ``None`` thresholds with defaults matching the score scale of ``adata``."""
+    source = str(adata.uns.get("comm_source", "")) if isinstance(adata, anndata.AnnData) else ""
+    default_expr, default_strength = _SCALE_DEFAULTS.get(source, _SCALE_DEFAULTS["default"])
+    return (default_expr if min_expression is None else min_expression,
+            default_strength if strength_threshold is None else strength_threshold)
+
+
 def _resolve_comm_adata(
     adata: anndata.AnnData,
     *,
@@ -1253,12 +1267,13 @@ def _pathway_summary_table(
     signaling=None,
     pathway_method: str = "mean",
     min_lr_pairs: int = 1,
-    min_expression: float = 0.1,
-    strength_threshold: float = 0.5,
+    min_expression: float | None = None,
+    strength_threshold: float | None = None,
     pvalue_threshold: float = 0.05,
     min_significant_pairs: int = 1,
     verbose: bool = True,
 ) -> pd.DataFrame:
+    min_expression, strength_threshold = _scale_thresholds(adata, min_expression, strength_threshold)
     viz = _build_cellchatviz(adata, palette=palette)
     stdout_context = nullcontext() if verbose else redirect_stdout(io.StringIO())
     with stdout_context:
@@ -2794,7 +2809,7 @@ def ccc_heatmap(
     facet_by: Literal["sender", "receiver"] | None = None,
     pathway_method: str = "mean",
     min_lr_pairs: int = 1,
-    min_expression: float = 0.1,
+    min_expression: float | None = None,
     group_pathways: bool = True,
     transpose: bool = False,
     add_violin: bool = False,
@@ -2916,8 +2931,10 @@ def ccc_heatmap(
     min_lr_pairs : int, default=1
         Minimum number of ligand-receptor pairs required for a pathway to be
         retained.
-    min_expression : float, default=0.1
+    min_expression : float or None, default=None
         Minimum grouped expression threshold used by pathway-level summaries.
+        ``None`` picks a scale-aware default: ``0.1`` for expression-based
+        results (CellPhoneDB, LIANA) and ``> 0`` for CellChat probabilities.
     group_pathways : bool, default=True
         Whether to combine related pathways in pathway-focused bubble views.
     transpose : bool, default=False
@@ -2991,6 +3008,7 @@ def ccc_heatmap(
         classification_fallback=classification_fallback,
     )
     _validate_support_semantics(adata, color_by=color_by)
+    min_expression, _ = _scale_thresholds(adata, min_expression, None)
     if comparison_adata is not None:
         comparison_adata = _resolve_comm_adata(
             comparison_adata,
@@ -5104,7 +5122,10 @@ def ccc_network_plot(
             sources=_normalize_use_arg(sender_use),
             targets=_normalize_use_arg(receiver_use),
             pvalue_threshold=pvalue_threshold,
-            count_min=1,
+            # with `signaling`, the chord matrix sums scores rather than counting
+            # interactions, so the cut-off must follow the score scale
+            count_min=1 if signaling is None or _scale_thresholds(adata, None, None)[0] >= 0.1
+            else _scale_thresholds(adata, None, None)[0],
             rotate_names=rotate_names,
             figsize=figsize,
             title_name=title or "Communication chord diagram",
@@ -5127,7 +5148,7 @@ def ccc_network_plot(
             targets_use=receiver_use,
             signaling=_normalize_use_arg(signaling),
             pvalue_threshold=pvalue_threshold,
-            mean_threshold=0.1,
+            mean_threshold=_scale_thresholds(adata, None, None)[0],
             rotate_names=rotate_names,
             figsize=figsize,
             title_name=title or "Gene-level chord diagram",
@@ -5812,8 +5833,8 @@ def ccc_stat_plot(
     min_receiver_flow: float = 0.0,
     pathway_method: str = "mean",
     min_lr_pairs: int = 1,
-    min_expression: float = 0.1,
-    strength_threshold: float = 0.5,
+    min_expression: float | None = None,
+    strength_threshold: float | None = None,
     min_significant_pairs: int = 1,
     palette=None,
     measures: Sequence[str] | None = None,
@@ -5910,10 +5931,14 @@ def ccc_stat_plot(
     min_lr_pairs : int, default=1
         Minimum number of ligand-receptor pairs required for a pathway to be
         retained in pathway summaries.
-    min_expression : float, default=0.1
+    min_expression : float or None, default=None
         Minimum grouped expression threshold used by pathway-level summaries.
-    strength_threshold : float, default=0.5
+        ``None`` picks a scale-aware default: ``0.1`` for expression-based
+        results (CellPhoneDB, LIANA) and ``> 0`` for CellChat probabilities.
+    strength_threshold : float or None, default=None
         Minimum pathway strength retained in pathway summary statistics.
+        ``None`` means ``0.5`` for expression-based results and ``0`` for
+        CellChat, whose pathway significance comes from p-values only.
     min_significant_pairs : int, default=1
         Minimum number of significant ligand-receptor pairs required for a
         pathway to be highlighted.
@@ -5956,6 +5981,7 @@ def ccc_stat_plot(
         classification_reference=classification_reference,
         classification_fallback=classification_fallback,
     )
+    min_expression, strength_threshold = _scale_thresholds(adata, min_expression, strength_threshold)
     if comparison_adata is not None:
         comparison_adata = _resolve_comm_adata(
             comparison_adata,
@@ -6228,6 +6254,7 @@ def ccc_stat_plot(
             contribution_result = viz.netAnalysis_contribution(
                 signaling=_normalize_use_arg(signaling),
                 pvalue_threshold=pvalue_threshold,
+                mean_threshold=min_expression,
                 top_pairs=top_n,
                 figsize=figsize,
                 save=None,

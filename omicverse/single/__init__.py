@@ -72,6 +72,10 @@ from ._cpdb import (
     download_cellphonedb_database, validate_cpdb_database,
 )
 from ._liana import run_liana, format_liana_results, format_liana_results_for_viz
+from ._cellchat import (
+    run_cellchat, format_cellchat_results, cellchat_centrality,
+    cellchat_communication_patterns, cellchat_subset_communication,
+)
 from ._comm import to_comm_adata, extract_comm_adata
 
 from ._scgsea import (
@@ -363,6 +367,11 @@ __all__ = [
     'run_liana',
     'format_liana_results',
     'format_liana_results_for_viz',
+    'run_cellchat',
+    'format_cellchat_results',
+    'cellchat_centrality',
+    'cellchat_communication_patterns',
+    'cellchat_subset_communication',
     'to_comm_adata',
     'extract_comm_adata',
     # Pathway and functional analysis

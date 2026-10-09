@@ -57,6 +57,14 @@ Use the `ccc_*` functions by default when the goal is to quickly generate public
      )
      ```
    - Save `cpdb_results` and `adata_cpdb` so downstream plotting can be repeated without rerunning permutations.
+   - **CellChat alternative** (no R, no extra install beyond PyTorch): `ov.single.run_cellchat` reproduces R CellChat 2.2 (identical over-expressed genes/LR pairs, probabilities to ~1e-15) and stores `adata.uns['cellchat_res']`, which every `ov.pl.ccc_*` call reads directly:
+     ```python
+     ov.single.run_cellchat(adata, groupby="cell_labels", species="human")  # log-normalised X
+     comm = ov.single.format_cellchat_results(adata)                         # optional explicit comm AnnData
+     df = ov.single.cellchat_subset_communication(adata, signaling=["TGFb"])  # significant LR table
+     centr = ov.single.cellchat_centrality(adata)                             # sender/receiver/mediator/influencer
+     ```
+     CellChat scores are probabilities (~1e-3), not expression; pathway summaries pick scale-aware thresholds automatically. Groups with `<= min_cells` (default 10) cells are removed, as in R `filterCommunication`.
 4. **Prefer the new public plotting APIs for standard visualization requests**
    - Use `ov.pl.ccc_heatmap(...)` for matrix-like plots:
      - `plot_type="heatmap"` for aggregated pathway-level communication.

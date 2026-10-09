@@ -11,6 +11,7 @@ _DEFAULT_RESULT_UNS_KEYS = (
     "cpdb_results",
     "cellphonedb_results",
     "cpdb_res",
+    "cellchat_res",
     "comm_adata",
 )
 _LIANA_PRIMARY_COLUMNS = {"source", "target", "ligand_complex", "receptor_complex"}
@@ -72,10 +73,12 @@ def to_comm_adata(
         supported CCC results in ``adata.uns``.
     data
         Explicit result object to convert. Supported inputs are:
-        communication AnnData, LIANA result DataFrame, or CellPhoneDB result dict.
+        communication AnnData, LIANA result DataFrame, CellPhoneDB result dict,
+        or a CellChat result dict from :func:`omicverse.single.run_cellchat`.
     result_uns_key
         Preferred ``adata.uns`` key to inspect when ``data`` is omitted.
     """
+    from ._cellchat import _looks_like_cellchat_results, format_cellchat_results
     from ._cpdb import format_cpdb_results
     from ._liana import format_liana_results
 
@@ -95,9 +98,11 @@ def to_comm_adata(
             )
         if _looks_like_cpdb_results(data):
             return format_cpdb_results(data, separator=separator)
+        if _looks_like_cellchat_results(data):
+            return format_cellchat_results(result=data, separator=separator)
         raise TypeError(
-            "`data` must be a communication AnnData, LIANA result DataFrame, or "
-            "CellPhoneDB result dict."
+            "`data` must be a communication AnnData, LIANA result DataFrame, "
+            "CellPhoneDB result dict, or CellChat result dict."
         )
 
     if adata is None:
@@ -130,10 +135,12 @@ def to_comm_adata(
         )
     if _looks_like_cpdb_results(value):
         return format_cpdb_results(value, separator=separator)
+    if _looks_like_cellchat_results(value):
+        return format_cellchat_results(result=value, separator=separator)
 
     raise ValueError(
         f"`adata.uns['{resolved_key}']` is not a supported communication result. "
-        "Expected LIANA results, CellPhoneDB results, or a communication AnnData."
+        "Expected LIANA, CellPhoneDB or CellChat results, or a communication AnnData."
     )
 
 
