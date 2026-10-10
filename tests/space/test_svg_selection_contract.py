@@ -573,3 +573,55 @@ def test_multilibrary_preserves_backend_native_qvalues(mode, monkeypatch):
     table = result.uns['spatial_features_by_library']
     np.testing.assert_array_equal(table.qvalue, [.01, .8, .01, .8])
     np.testing.assert_array_equal(table.selected, [True, False, True, False])
+
+
+@pytest.mark.parametrize('mode', ['moran', 'geary'])
+@pytest.mark.parametrize('transformation', [False, True])
+@pytest.mark.parametrize('n_perms', [None, 9])
+@pytest.mark.parametrize('graph_kind', ['dense', 'csc', 'bool', 'int8'])
+def test_autocorr_graph_representation_preserves_statistics(
+    mode, transformation, n_perms, graph_kind,
+):
+    data = AnnData(np.random.default_rng(6).normal(size=(20, 3)))
+    graph = sparse.diags([np.ones(19), np.ones(19)], [-1, 1], format='csr')
+    if graph_kind == 'int8':
+        graph = (graph * 10).astype(np.int8)
+    elif graph_kind == 'bool':
+        graph = graph.astype(bool)
+    elif graph_kind == 'dense':
+        graph = graph.toarray()
+    elif graph_kind == 'csc':
+        graph = graph.tocsc()
+    options = dict(mode=mode, transformation=transformation, n_perms=n_perms,
+                   seed=42, copy=True)
+    data.obsp['spatial_connectivities'] = sparse.csr_matrix(graph, dtype=np.float64)
+    expected = spatial_autocorr(data, **options)
+    data.obsp['spatial_connectivities'] = graph.copy()
+    actual = spatial_autocorr(data, **options)
+    pd.testing.assert_frame_equal(actual, expected)
+    stored = data.obsp['spatial_connectivities']
+    assert type(stored) is type(graph)
+    assert stored.dtype == graph.dtype
+    np.testing.assert_array_equal(stored.toarray() if sparse.issparse(stored) else stored,
+                                  graph.toarray() if sparse.issparse(graph) else graph)
+
+
+@pytest.mark.parametrize('mode', ['moran', 'geary'])
+def test_autocorr_ignores_stored_zero_cross_library_edges(mode):
+    data = AnnData(np.random.default_rng(6).normal(size=(12, 3)))
+    data.obs['slice'] = ['a'] * 6 + ['b'] * 6
+    path = sparse.diags([np.ones(5), np.ones(5)], [-1, 1], format='csr')
+    graph = sparse.block_diag([path, path], format='coo')
+    data.obsp['spatial_connectivities'] = graph.tocsr()
+    expected = spatial_autocorr(data, library_key='slice', mode=mode, copy=True)
+    graph = sparse.csr_matrix((np.r_[graph.data, 0.],
+                               (np.r_[graph.row, 0], np.r_[graph.col, 6])), shape=(12, 12))
+    data.obsp['spatial_connectivities'] = graph.copy()
+    actual = spatial_autocorr(data, library_key='slice', mode=mode, copy=True)
+    pd.testing.assert_frame_equal(actual, expected)
+    stored = data.obsp['spatial_connectivities']
+    for attr in ('data', 'indices', 'indptr'):
+        np.testing.assert_array_equal(getattr(stored, attr), getattr(graph, attr))
+    stored[0, 6] = 1.
+    with pytest.raises(ValueError, match='cross-library edges'):
+        spatial_autocorr(data, library_key='slice', mode=mode, copy=True)

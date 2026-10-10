@@ -511,7 +511,8 @@ def spatial_autocorr(
         labels = adata.obs[library_key].astype(str).to_numpy()
         if len(set(labels)) != adata.obs[library_key].nunique():
             raise ValueError('Library labels collide after conversion to strings.')
-        graph = _sp.csr_matrix(source_graph)
+        graph = _sp.csr_matrix(source_graph, copy=True)
+        graph.eliminate_zeros()
         edges = graph.tocoo()
         if np.any(labels[edges.row] != labels[edges.col]):
             raise ValueError('Connectivity graph contains cross-library edges; rebuild with library_key.')
@@ -540,7 +541,7 @@ def spatial_autocorr(
             "The spatial connectivity matrix must have shape "
             f"({adata.n_obs}, {adata.n_obs}); got {source_graph.shape}."
         )
-    g = source_graph.copy()
+    g = _sp.csr_matrix(source_graph, dtype=np.float64, copy=True)
     if transformation:
         g = normalize(g, norm='l1', axis=1)
 
