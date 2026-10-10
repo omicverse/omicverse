@@ -14,7 +14,7 @@ import numpy as np
 from scipy import optimize
 from scipy import linalg
 from scipy import stats
-from scipy.misc import derivative
+from .._finite_difference import derivative
 from scipy.special import logsumexp
 
 import pandas as pd
