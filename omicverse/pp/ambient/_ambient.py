@@ -39,9 +39,10 @@ import pandas as pd
 import scipy.sparse as sp
 
 from ..._registry import register_function
+from ._envelope import run_envelope as _run_envelope
 from ._diagnostics import count_integrity_check
 
-_NATIVE_METHODS = ("soupx", "decontx", "fastcar", "sccdc")
+_NATIVE_METHODS = ("soupx", "decontx", "fastcar", "sccdc", "envelope")
 _DL_METHODS = ("cellbender", "scar")
 _ALL_METHODS = _NATIVE_METHODS + _DL_METHODS
 
@@ -287,6 +288,7 @@ _DISPATCH = {
     "decontx": _run_decontx,
     "fastcar": _run_fastcar,
     "sccdc": _run_sccdc,
+    "envelope": _run_envelope,
     "cellbender": _run_cellbender,
     "scar": _run_scar,
 }
