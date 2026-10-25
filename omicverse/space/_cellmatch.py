@@ -460,42 +460,59 @@ def _match_with_images(fixed, moving, fixed_ids, moving_ids, fixed_image, moving
                  "warped_moving": warped, "n_moving": len(moving), "n_fixed": len(fixed)}
 
 
-def _grow(fixed, warped, mi, fj, cap, k=8, n_iter=10):
-    """Grow the matching outward with local deformation from matched neighbours.
+def _local_pred(anchor_xy, anchor_res, query_xy, k, exclude_self=False):
+    """Residual at each query point from a local linear fit of nearby anchors."""
+    tree = cKDTree(anchor_xy)
+    kk = min(k + int(exclude_self), len(anchor_xy))
+    _, nb = tree.query(query_xy, k=kk)
+    nb = nb.reshape(len(query_xy), kk)
+    if exclude_self:
+        nb = nb[:, 1:]
+    out = np.empty((len(query_xy), 2))
+    for r in range(len(query_xy)):
+        j = nb[r]
+        X = np.c_[np.ones(len(j)), anchor_xy[j] - query_xy[r]]
+        if len(j) >= 4:
+            coef, *_ = np.linalg.lstsq(X, anchor_res[j], rcond=None)
+            out[r] = coef[0]
+        else:
+            out[r] = np.median(anchor_res[j], axis=0)
+    return out
 
-    Matched pairs give the residual displacement fixed - warped where the
-    registration is right. An unmatched cell borrows a local linear fit of
-    its matched neighbours' residuals, which follows the deformation where
-    the global warp is still off (typically the field borders), and the
-    still-unmatched cells are then assigned one-to-one within ``cap``.
+
+def _grow(fixed, warped, mi, fj, cap, k=8, n_iter=10):
+    """Prune and grow the matching with the local deformation of neighbours.
+
+    Matched pairs give the residual ``fixed - warped`` where the registration
+    is right. Each round (1) drops pairs whose residual disagrees with the
+    local linear fit of their neighbours' residuals -- a wrong pair occupies
+    two cells and blocks their true partners -- and (2) gives every unmatched
+    cell its neighbours' local residual and assigns the still-unmatched cells
+    one-to-one within ``cap``. This follows the deformation where the global
+    warp is still off, typically at the borders of the field.
     """
-    mi, fj = list(mi), list(fj)
-    for _ in range(n_iter):
-        if len(mi) < 4:
-            break
-        m_idx, f_idx = np.asarray(mi), np.asarray(fj)
-        res = fixed[f_idx] - warped[m_idx]
-        tree = cKDTree(warped[m_idx])
-        um = np.setdiff1d(np.arange(len(warped)), m_idx)
-        uf = np.setdiff1d(np.arange(len(fixed)), f_idx)
-        if len(um) == 0 or len(uf) == 0:
-            break
-        kk = min(k, len(m_idx))
-        _, nb = tree.query(warped[um], k=kk)
-        nb = nb.reshape(len(um), kk)
-        pred = np.empty((len(um), 2))
-        for r, m in enumerate(um):
-            j = nb[r]
-            X = np.c_[np.ones(len(j)), warped[m_idx[j]] - warped[m]]
-            if len(j) >= 4:
-                coef, *_ = np.linalg.lstsq(X, res[j], rcond=None)
-                pred[r] = warped[m] + coef[0]
-            else:
-                pred[r] = warped[m] + np.median(res[j], axis=0)
-        a, b, _ = _assign(fixed[uf], pred, cap)
-        if len(a) == 0:
-            break
-        mi.extend(um[a].tolist())
-        fj.extend(uf[b].tolist())
     mi, fj = np.asarray(mi, int), np.asarray(fj, int)
+    for _ in range(n_iter):
+        if len(mi) < 6:
+            break
+        res = fixed[fj] - warped[mi]
+        pred = _local_pred(warped[mi], res, warped[mi], k, exclude_self=True)
+        keep = np.linalg.norm(res - pred, axis=1) <= cap
+        mi_k, fj_k = mi[keep], fj[keep]
+        if len(mi_k) < 6:
+            break
+        um = np.setdiff1d(np.arange(len(warped)), mi_k)
+        uf = np.setdiff1d(np.arange(len(fixed)), fj_k)
+        if len(um) == 0 or len(uf) == 0:
+            mi, fj = mi_k, fj_k
+            break
+        res_k = fixed[fj_k] - warped[mi_k]
+        p = warped[um] + _local_pred(warped[mi_k], res_k, warped[um], k)
+        a, b, _ = _assign(fixed[uf], p, cap)
+        new_mi = np.r_[mi_k, um[a]].astype(int)
+        new_fj = np.r_[fj_k, uf[b]].astype(int)
+        changed = len(new_mi) != len(mi) or set(zip(new_mi, new_fj)) != set(zip(mi, fj))
+        mi, fj = new_mi, new_fj
+        if not changed:
+            break
     return mi, fj
