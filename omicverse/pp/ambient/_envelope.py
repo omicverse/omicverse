@@ -586,6 +586,11 @@ def run_envelope(
     return sp.csr_matrix(C), rho, int(adata.n_vars), meta
 
 
+def _str_index(values):
+    import pandas as pd
+    return pd.Index([str(v) for v in values])
+
+
 def _codes(series):
     import pandas as pd
     cat = pd.Categorical(series)
@@ -593,7 +598,41 @@ def _codes(series):
 
 
 def _empties_from_raw(adata, raw, *, batch_key, empty_batch, n_batch, uniq):
-    """Empty droplets = raw barcodes that are not called cells."""
+    """Empty droplets = raw barcodes that are not called cells.
+
+    Both matrices must share barcodes and genes. A ``raw`` whose barcodes do
+    not contain the called cells would otherwise make *every* raw row an
+    "empty droplet" -- cells included -- and the soup profile would silently
+    become the cells' own expression profile.
+    """
+    import warnings
+
+    raw_bc = _str_index(raw.obs_names)
+    in_raw = _str_index(adata.obs_names).isin(raw_bc)
+    if not in_raw.any():
+        raise ValueError(
+            "method='envelope': none of the called cells' barcodes "
+            f"(adata.obs_names, e.g. {list(adata.obs_names[:2])}) occur in "
+            f"raw.obs_names (e.g. {list(raw.obs_names[:2])}). raw must be the "
+            "unfiltered matrix of the SAME run, containing the called cells "
+            "under the same barcodes plus the empty droplets; otherwise every "
+            "raw row, cells included, would be treated as an empty droplet.")
+    if not in_raw.all():
+        warnings.warn(
+            f"method='envelope': {int((~in_raw).sum())} of {adata.n_obs} called "
+            "cells are absent from raw.obs_names; raw is expected to contain "
+            "all called cells plus the empty droplets.", stacklevel=3)
+
+    # raw genes in adata's order: positional columns would silently mix genes
+    # whenever the two matrices list them differently.
+    if list(raw.var_names) != list(adata.var_names):
+        missing = _str_index(adata.var_names).difference(_str_index(raw.var_names))
+        if len(missing):
+            raise ValueError(
+                f"method='envelope': {len(missing)} genes of adata are missing "
+                f"from raw.var_names (e.g. {list(missing[:3])}).")
+        raw = raw[:, adata.var_names]
+
     called = set(map(str, adata.obs_names))
     mask = np.array([str(b) not in called for b in raw.obs_names])
     E = raw.X[mask]
