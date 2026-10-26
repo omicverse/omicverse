@@ -271,8 +271,9 @@ def match_cells(
     rotations: Optional[Sequence[float]] = None,
     scales: Optional[Sequence[float]] = None,
     allow_flip: bool = True,
-    coarse_sigma: float = 1.5,
+    coarse_sigma: float = 0.5,
     nonrigid: bool = True,
+    use_cpd: bool = False,
     cpd_beta: float = 4.0,
     cpd_lambda: float = 2.0,
     cpd_outlier: float = 0.2,
@@ -314,6 +315,9 @@ def match_cells(
         Refine the affine non-rigidly: Coherent Point Drift, then a smoothed
         thin-plate spline on coherent pairs. Turn off only for data known to
         be rigidly related.
+    use_cpd
+        Run Coherent Point Drift before the spline (point-only path). Off by
+        default: with many cells lacking a partner it can drift the whole set.
     cpd_beta, cpd_lambda, cpd_outlier
         CPD motion-field width (in units of the fixed cells' median spacing),
         smoothness weight, and expected fraction of cells without a partner.
@@ -385,7 +389,7 @@ def match_cells(
         # Only the moving cells near the fixed field enter CPD (cost is M x N).
         near = cKDTree(fixed).query(moved, k=1)[0] <= 3.0 * spacing
         warped = moved.copy()
-        if near.sum() >= 10:
+        if use_cpd and near.sum() >= 10:
             warped[near] = _cpd_nonrigid(fixed, moved[near], beta=cpd_beta * spacing,
                                          lam=cpd_lambda, w=cpd_outlier)
         warped = _nonrigid(fixed, warped, spacing, tps_iter, tps_smoothing)
@@ -395,7 +399,7 @@ def match_cells(
     cap = 0.5 * spacing if max_distance is None else float(max_distance)
     mi, fj, _ = _assign(fixed, warped, cap)
     if grow:
-        mi, fj = _grow(fixed, warped, mi, fj, cap)
+        mi, fj, warped = _grow(fixed, warped, mi, fj, cap)
     dist = np.linalg.norm(warped[mi] - fixed[fj], axis=1)
     out = pd.DataFrame({"moving_id": moving_ids[mi], "fixed_id": fixed_ids[fj],
                         "distance": dist}).sort_values("distance").reset_index(drop=True)
@@ -450,7 +454,7 @@ def _match_with_images(fixed, moving, fixed_ids, moving_ids, fixed_image, moving
     mi, fj, _ = _assign(fixed, warped, cap)
     n_first = len(mi)
     if grow:
-        mi, fj = _grow(fixed, warped, mi, fj, cap)
+        mi, fj, warped = _grow(fixed, warped, mi, fj, cap)
     dist = np.linalg.norm(warped[mi] - fixed[fj], axis=1)
     out = pd.DataFrame({"moving_id": moving_ids[mi], "fixed_id": fixed_ids[fj],
                         "distance": dist}).sort_values("distance").reset_index(drop=True)
@@ -492,6 +496,7 @@ def _grow(fixed, warped, mi, fj, cap, k=8, n_iter=10):
     warp is still off, typically at the borders of the field.
     """
     mi, fj = np.asarray(mi, int), np.asarray(fj, int)
+    pos = np.asarray(warped, float).copy()      # positions the pairs were assigned on
     for _ in range(n_iter):
         if len(mi) < 6:
             break
@@ -509,10 +514,11 @@ def _grow(fixed, warped, mi, fj, cap, k=8, n_iter=10):
         res_k = fixed[fj_k] - warped[mi_k]
         p = warped[um] + _local_pred(warped[mi_k], res_k, warped[um], k)
         a, b, _ = _assign(fixed[uf], p, cap)
+        pos[um[a]] = p[a]
         new_mi = np.r_[mi_k, um[a]].astype(int)
         new_fj = np.r_[fj_k, uf[b]].astype(int)
         changed = len(new_mi) != len(mi) or set(zip(new_mi, new_fj)) != set(zip(mi, fj))
         mi, fj = new_mi, new_fj
         if not changed:
             break
-    return mi, fj
+    return mi, fj, pos

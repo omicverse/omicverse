@@ -130,18 +130,31 @@ def _global_vote(fixed, moving, rotations, scales, flips, half, centres, radius)
     return best
 
 
-def _block_displacements(fixed, warped, valid, grid, half, radius, min_score):
+def _block_displacements(fixed, warped, valid, grid, half, radius, min_score,
+                         local_maps=(), retry_below=0.6):
     """Per-block shift of ``warped`` that best matches ``fixed`` (template NCC).
 
     Only the template must lie inside the fixed image; the search window is
     clipped at the border, so blocks close to the edge still contribute.
-    (Templates cropped by the border were tried and are less reliable: they
-    carry too little texture and their wrong shifts bend the field.)
+
+    ``local_maps`` are 2x2 linear maps (local scale/rotation) tried for blocks
+    whose translation-only match scores below ``retry_below``. A thin-plate
+    deformation stretches and rotates tissue locally -- by 30% and tens of
+    degrees where it bends most -- and a translation-only template cannot
+    match there. The window is resampled under each map about the block
+    centre, matched, and the shift mapped back.
     """
     from skimage.feature import match_template
 
     H, W = fixed.shape
     pts, disp, score = [], [], []
+
+    def sub(v, i):
+        if 0 < i < len(v) - 1:
+            d = v[i - 1] - 2 * v[i] + v[i + 1]
+            return i + (0.5 * (v[i - 1] - v[i + 1]) / d if abs(d) > 1e-12 else 0.0)
+        return float(i)
+
     for y in range(half, H - half, grid):
         for x in range(half, W - half, grid):
             tpl = fixed[y - half:y + half + 1, x - half:x + half + 1]
@@ -152,19 +165,28 @@ def _block_displacements(fixed, warped, valid, grid, half, radius, min_score):
                 continue
             res = match_template(win, tpl)
             r, c = np.unravel_index(int(np.argmax(res)), res.shape)
-            if res[r, c] < min_score:
+            best = (res[r, c],
+                    x0 + sub(res[r, :], c) + half - x,
+                    y0 + sub(res[:, c], r) + half - y)
+            if best[0] < retry_below and local_maps:
+                # local window centred on the block, resampled under L
+                ry = np.arange(-half - radius, half + radius + 1)
+                gy, gx = np.meshgrid(ry, ry, indexing="ij")
+                for L in local_maps:
+                    qx = x + L[0, 0] * gx + L[0, 1] * gy
+                    qy = y + L[1, 0] * gx + L[1, 1] * gy
+                    rw = ndimage.map_coordinates(warped, [qy, qx], order=1, cval=0.0)
+                    if rw.std() < 1e-6:
+                        continue
+                    rr = match_template(rw, tpl)
+                    r2, c2 = np.unravel_index(int(np.argmax(rr)), rr.shape)
+                    if rr[r2, c2] > best[0]:
+                        dq = np.array([sub(rr[r2, :], c2) - radius, sub(rr[:, c2], r2) - radius])
+                        dd = L @ dq            # shift in the warped frame
+                        best = (rr[r2, c2], dd[0], dd[1])
+            if best[0] < min_score:
                 continue
-
-            def sub(v, i):
-                if 0 < i < len(v) - 1:
-                    d = v[i - 1] - 2 * v[i] + v[i + 1]
-                    return i + (0.5 * (v[i - 1] - v[i + 1]) / d if abs(d) > 1e-12 else 0.0)
-                return float(i)
-
-            # template top-left at window (r, c) -> its centre in image coords
-            cy = y0 + sub(res[:, c], r) + half
-            cx = x0 + sub(res[r, :], c) + half
-            pts.append((x, y)); disp.append((cx - x, cy - y)); score.append(res[r, c])
+            pts.append((x, y)); disp.append((best[1], best[2])); score.append(best[0])
     return np.array(pts, float), np.array(disp, float), np.array(score, float)
 
 
@@ -211,6 +233,8 @@ def register_images(
     levels: Sequence[tuple] = ((4, 8, 8, 6, 6), (2, 10, 8, 6, 4), (1, 18, 10, 6, 2), (1, 14, 8, 3, 1)),
     min_score: float = 0.3,
     smoothing: float = 2.0,
+    local_scales: Sequence[float] = (0.75, 0.87, 1.0, 1.15, 1.33),
+    local_rotations: Sequence[float] = (-20.0, -10.0, 0.0, 10.0, 20.0),
     return_info: bool = False,
 ):
     """Map fixed-image pixel coordinates to moving-image coordinates.
@@ -246,6 +270,11 @@ def register_images(
         Template-matching NCC below which a refinement block is ignored.
     smoothing
         Spline smoothing per control point; larger = stiffer field.
+    local_scales, local_rotations
+        Local scale/rotation hypotheses tried for blocks that match poorly by
+        translation alone. Where a smooth deformation bends most, tissue is
+        locally stretched and turned (by tens of percent and degrees), which a
+        translation-only block cannot follow. Empty tuples disable it.
 
     Returns
     -------
@@ -331,6 +360,13 @@ def register_images(
         return base(q + _disp_at(q))
 
     level_info = []
+    maps = []
+    for sc_ in local_scales:
+        for rt in local_rotations:
+            if abs(sc_ - 1.0) < 1e-9 and abs(rt) < 1e-9:
+                continue
+            maps.append(_similarity(rt, sc_, False))
+
     def _shrink(img, k):
         return img if k == 1 else ndimage.zoom(ndimage.gaussian_filter(img, 0.5 * k), 1.0 / k, order=1)
 
@@ -341,7 +377,7 @@ def register_images(
                  (q[:, 1] >= 0) & (q[:, 1] <= M.shape[0] - 1)).reshape(H, W).astype(float)
         Fk, Wk, Vk = _shrink(F, k), _shrink(warped, k), _shrink(valid, k)
         bp, disp, _ = _block_displacements(Fk, Wk, Vk > 0.5, int(g), int(hp),
-                                           int(radius), min_score)
+                                           int(radius), min_score, local_maps=maps)
         if len(bp) >= 8:
             keep = coherence(bp, disp, tol=max(1.5, 0.35 * radius))
             bp, disp = bp[keep], disp[keep]
