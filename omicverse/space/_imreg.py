@@ -289,7 +289,7 @@ def register_images(
     local_rotations: Sequence[float] = (-20.0, -10.0, 0.0, 10.0, 20.0),
     local_affine: bool = False,
     local_maps: Optional[Sequence] = None,
-    ecc_rounds: int = 1,
+    ecc_rounds: int = 3,
     return_info: bool = False,
 ):
     """Map fixed-image pixel coordinates to moving-image coordinates.
