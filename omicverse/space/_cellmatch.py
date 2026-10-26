@@ -7,7 +7,16 @@ cell centroids in two coordinate frames. They differ by a global similarity
 non-rigid deformation from handling the slide, partial overlap of the imaged
 fields, and independent segmentation (cells missing or split on either side).
 
-:func:`match_cells` recovers a **one-to-one** matching in four stages:
+:func:`match_cells` recovers a **one-to-one** matching.
+
+**With the images** (recommended; ``fixed_image=``, ``moving_image=``), the
+warp comes from :func:`register_images` -- patch-voting global pose,
+coarse-to-fine block matching, affine ECC repair of strongly deformed
+regions -- run in two variants (translation-only and local-affine blocks); the
+variant that lines up more cells one-to-one is kept. Cell centroids are close
+to random, so the images are what carries the registration.
+
+**Centroids only**, in four stages:
 
 1. **coarse search** -- both point sets are rendered as Gaussian density maps
    and every flip x rotation x scale on a grid is scored by FFT
@@ -16,14 +25,15 @@ fields, and independent segmentation (cells missing or split on either side).
    ICP-from-scratch;
 2. **robust affine** -- mutual nearest neighbours within a shrinking radius,
    least-squares affine on them, residual trimming;
-3. **non-rigid** -- Coherent Point Drift (soft correspondences + smooth
-   Gaussian motion field) for deformations up to about the cell spacing, then
-   a smoothed thin-plate spline on mutual pairs that agree with their
-   neighbours' displacement;
+3. **non-rigid** -- a smoothed thin-plate spline on mutual pairs that agree
+   with their neighbours' displacement (Coherent Point Drift is available,
+   off by default); works for deformations below about the cell spacing;
 4. **assignment** -- the Hungarian algorithm on warped distances, with a
-   distance cap so cells without a partner stay unmatched; then the matching
-   is grown outward, each unmatched cell borrowing the local deformation of
-   its matched neighbours.
+   distance cap so cells without a partner stay unmatched.
+
+Both paths end with **prune-and-grow**: pairs that disagree with the local
+linear fit of their neighbours' residuals are dropped, and unmatched cells
+borrow their matched neighbours' local deformation and are assigned again.
 
 Everything is NumPy/SciPy; nothing is fitted to a particular dataset. The
 distance scales default to multiples of the median nearest-neighbour spacing
