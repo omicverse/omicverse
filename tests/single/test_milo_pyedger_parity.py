@@ -14,12 +14,9 @@ matrix, using the identical options this module uses:
     fit <- glmQLFit(dge, design, robust=FALSE, legacy=FALSE)   # edgeR 4.x default
     qlf <- glmQLFTest(fit, coef=2)
 
-Findings (pinned below): **logFC is bit-exact** vs edgeR (max|Δ| < 1e-3);
-**F / PValue are very high agreement but not bit-exact** (Pearson > 0.99,
-PValue Spearman > 0.99) because pyedger's quasi-likelihood variance moderation
-(``squeezeVar``) is not yet a bit-exact port of limma's. The same
-edgeR-vs-pyedger F/PValue gap holds against ``miloR::testNhoods``'s default
-(trended-dispersion + robust=TRUE) engine — within the same tolerance.
+Findings (pinned below): with pyedger >= 0.2.0, which tracks edgeR 4.10 (whose
+``legacy=FALSE`` QL method is identical to 4.4's on this matrix), logFC agrees to
+~1e-13 and F / PValue to ~2e-9 relative.
 """
 from pathlib import Path
 
@@ -52,7 +49,7 @@ def _simulate_nhood_counts():
 
 def _pyedger_da(Y, cond):
     """The exact NB-GLM pipeline milo.da_nhoods runs (pyedger)."""
-    from omicverse.external import pyedger as edger
+    import pyedger as edger
 
     X = np.column_stack([np.ones(len(cond)), cond.astype(float)])
     dge = edger.DGEList(counts=Y, norm_factors=np.ones(len(cond)),
@@ -66,22 +63,13 @@ def _pyedger_da(Y, cond):
 
 
 def test_milo_pyedger_matches_bioconductor_edger():
-    from scipy.stats import spearmanr
-
     ref = pd.read_csv(_REF, index_col=0)
     Y, cond = _simulate_nhood_counts()
     tab = _pyedger_da(Y, cond).loc[ref.index]
 
-    # logFC: R-parity (bit-exact up to GLM-IRLS tolerance)
-    d_lfc = np.abs(tab["logFC"].to_numpy() - ref["logFC"].to_numpy())
-    assert d_lfc.max() < 1e-2, f"logFC max|Δ|={d_lfc.max():.2e} vs edgeR"
-
-    # F / PValue: high agreement (pyedger QL squeezeVar is not yet a bit-exact
-    # limma port — documented in the module docstring).
-    f_pear = np.corrcoef(tab["F"], ref["F"])[0, 1]
-    p_spear = spearmanr(tab["PValue"], ref["PValue"]).correlation
-    assert f_pear > 0.99, f"F Pearson={f_pear:.4f} vs edgeR"
-    assert p_spear > 0.99, f"PValue Spearman={p_spear:.4f} vs edgeR"
+    for col in ("logFC", "F", "PValue"):
+        np.testing.assert_allclose(tab[col].to_numpy(), ref[col].to_numpy(), rtol=1e-6, atol=1e-9,
+                                   err_msg=f"{col} vs edgeR")
 
 
 def test_milo_da_nhoods_runs_without_inmoose(monkeypatch):
