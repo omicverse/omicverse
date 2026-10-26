@@ -91,3 +91,52 @@ def test_hematoxylin_channel_marks_nuclei():
     h = hematoxylin_channel(img)
     assert h.shape == (20, 20)
     assert h[7, 7] > 0.8 and h[15, 15] < 0.2
+
+
+def _tissue_images(seed=0, theta=33.0, warp=12.0):
+    """A nuclear-like image pair: fixed crop of a 'section', moving = rotated,
+    shifted, smoothly warped, larger field. Returns images and a ground-truth
+    fixed->moving mapping."""
+    from scipy import ndimage
+
+    rng = np.random.default_rng(seed)
+    S = 520
+    nuc = np.zeros((S, S))
+    pts = _cells(1100, S, 12.0, rng)
+    nuc[pts[:, 1].astype(int), pts[:, 0].astype(int)] = 1.0
+    nuc = ndimage.gaussian_filter(nuc, 2.5)
+    nuc *= 0.5 + ndimage.gaussian_filter(rng.random((S, S)), 30) * 2  # tissue density
+    t = np.deg2rad(theta)
+    R = np.array([[np.cos(t), -np.sin(t)], [np.sin(t), np.cos(t)]])
+
+    def fixed_to_section(p):                  # fixed crop origin (90, 90)
+        return p + 90.0
+
+    def section_to_moving(p):                 # rotate about centre, shift, warp
+        q = (p - S / 2) @ R.T + np.array([230.0, 230.0])
+        return q + warp * np.c_[np.sin(q[:, 1] / 80.0), np.cos(q[:, 0] / 95.0)]
+
+    fixed = nuc[90:430, 90:430]
+    # moving image by inverse sampling on a dense grid
+    yy, xx = np.mgrid[0:S, 0:S]
+    sec = np.c_[xx.ravel(), yy.ravel()].astype(float)
+    mov_pts = section_to_moving(sec)
+    moving = np.zeros((460, 460))
+    ok = (mov_pts[:, 0] >= 0) & (mov_pts[:, 0] < 459) & (mov_pts[:, 1] >= 0) & (mov_pts[:, 1] < 459)
+    mi = np.round(mov_pts[ok]).astype(int)
+    np.maximum.at(moving, (mi[:, 1], mi[:, 0]), nuc.ravel()[ok])
+    moving = ndimage.grey_closing(moving, size=3)
+    truth = lambda p: section_to_moving(fixed_to_section(np.asarray(p, float)))  # noqa: E731
+    return fixed, moving, truth
+
+
+def test_register_images_recovers_rotation_and_warp():
+    from omicverse.space._imreg import register_images
+
+    fixed, moving, truth = _tissue_images()
+    mapping, info = register_images(fixed, moving, return_info=True)
+    rng = np.random.default_rng(1)
+    p = rng.uniform(40, 300, (200, 2))
+    err = np.linalg.norm(mapping(p) - truth(p), axis=1)
+    assert np.median(err) < 2.0, (np.median(err), info["rotation"])
+    assert np.mean(err < 5.0) > 0.9
