@@ -239,6 +239,7 @@ def register_images(
     local_scales: Sequence[float] = (0.75, 0.87, 1.0, 1.15, 1.33),
     local_rotations: Sequence[float] = (-20.0, -10.0, 0.0, 10.0, 20.0),
     local_affine: bool = False,
+    local_maps: Optional[Sequence] = None,
     return_info: bool = False,
 ):
     """Map fixed-image pixel coordinates to moving-image coordinates.
@@ -370,12 +371,15 @@ def register_images(
         return base(q + _disp_at(q))
 
     level_info = []
-    maps = []
-    for sc_ in local_scales:
-        for rt in local_rotations:
-            if abs(sc_ - 1.0) < 1e-9 and abs(rt) < 1e-9:
-                continue
-            maps.append(_similarity(rt, sc_, False))
+    if local_maps is not None:
+        maps = [np.asarray(L, float) for L in local_maps]
+    else:
+        maps = []
+        for sc_ in local_scales:
+            for rt in local_rotations:
+                if abs(sc_ - 1.0) < 1e-9 and abs(rt) < 1e-9:
+                    continue
+                maps.append(_similarity(rt, sc_, False))
 
     def _shrink(img, k):
         return img if k == 1 else ndimage.zoom(ndimage.gaussian_filter(img, 0.5 * k), 1.0 / k, order=1)

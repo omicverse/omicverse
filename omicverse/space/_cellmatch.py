@@ -300,7 +300,7 @@ def match_cells(
         from :func:`register_images` (patch voting + block matching), and the
         point-only search below is skipped. Use ``*_rgb=True`` for an RGB H&E
         image (converted to its haematoxylin channel). ``image_kwargs`` goes to
-:func:`register_images`. Unless it sets ``local_affine``, the
+        :func:`register_images`. Unless it sets ``local_affine``, the
         translation-only and the local-affine block matching are both run and
         the one that lines up more cells one-to-one is kept.
     rotations, scales
@@ -451,8 +451,10 @@ def _match_with_images(fixed, moving, fixed_ids, moving_ids, fixed_image, moving
         mapping, reg = register_images(fixed_image, moving_image, fixed_rgb=fixed_rgb,
                                        moving_rgb=moving_rgb, return_info=True, **kw)
         # invert the fixed->moving mapping on a grid to carry moving cells home
+        # tiny smoothing: points clamped at the image border can coincide,
+        # which makes an exactly interpolating spline singular
         inv = RBFInterpolator(mapping(g), g, kernel="thin_plate_spline", neighbors=64,
-                              smoothing=0.0, degree=1)
+                              smoothing=1e-3, degree=1)
         moved = inv(moving)
         warped = _nonrigid(fixed, moved, spacing, tps_iter, tps_smoothing) if nonrigid else moved
         mi, fj, _ = _assign(fixed, warped, cap)
