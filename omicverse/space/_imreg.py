@@ -131,14 +131,16 @@ def _global_vote(fixed, moving, rotations, scales, flips, half, centres, radius)
 
 
 def _block_displacements(fixed, warped, valid, grid, half, radius, min_score,
-                         local_maps=(), retry_below=0.6):
+                         local_maps=(), retry_below=0.5, retry_margin=0.1):
     """Per-block shift of ``warped`` that best matches ``fixed`` (template NCC).
 
     Only the template must lie inside the fixed image; the search window is
     clipped at the border, so blocks close to the edge still contribute.
 
     ``local_maps`` are 2x2 linear maps (local scale/rotation) tried for blocks
-    whose translation-only match scores below ``retry_below``. A thin-plate
+    whose translation-only match scores below ``retry_below``; a map replaces
+    the translation-only answer only if it scores ``retry_margin`` higher, so
+    look-alike texture under some distortion does not win by a hair. A thin-plate
     deformation stretches and rotates tissue locally -- by 30% and tens of
     degrees where it bends most -- and a translation-only template cannot
     match there. The window is resampled under each map about the block
@@ -168,6 +170,7 @@ def _block_displacements(fixed, warped, valid, grid, half, radius, min_score,
             best = (res[r, c],
                     x0 + sub(res[r, :], c) + half - x,
                     y0 + sub(res[:, c], r) + half - y)
+            plain = best[0]
             if best[0] < retry_below and local_maps:
                 # local window centred on the block, resampled under L
                 ry = np.arange(-half - radius, half + radius + 1)
@@ -180,7 +183,7 @@ def _block_displacements(fixed, warped, valid, grid, half, radius, min_score,
                         continue
                     rr = match_template(rw, tpl)
                     r2, c2 = np.unravel_index(int(np.argmax(rr)), rr.shape)
-                    if rr[r2, c2] > best[0]:
+                    if rr[r2, c2] > best[0] and rr[r2, c2] >= plain + retry_margin:
                         dq = np.array([sub(rr[r2, :], c2) - radius, sub(rr[:, c2], r2) - radius])
                         dd = L @ dq            # shift in the warped frame
                         best = (rr[r2, c2], dd[0], dd[1])
@@ -188,6 +191,53 @@ def _block_displacements(fixed, warped, valid, grid, half, radius, min_score,
                 continue
             pts.append((x, y)); disp.append((best[1], best[2])); score.append(best[0])
     return np.array(pts, float), np.array(disp, float), np.array(score, float)
+
+
+def _repair_pass(fixed, warped, valid, grid, half, radius, local_maps, bad_below,
+                 good_above, accept_score, accept_margin):
+    """Targeted repair: re-search only poorly matching blocks, with local maps.
+
+    Blocks that already correlate well at the current alignment anchor the
+    correction at zero, so correct regions cannot be moved. Poor blocks are
+    searched over translation and the local scale/rotation hypotheses, and a
+    result is kept only if it is good in absolute terms and clearly better
+    than the current alignment. Repeating the pass grows the repaired region
+    outward from the well-registered tissue next to it.
+    """
+    from skimage.feature import match_template
+
+    H, W = fixed.shape
+    pts, disp, kind = [], [], []
+    ry = np.arange(-half - radius, half + radius + 1)
+    gy, gx = np.meshgrid(ry, ry, indexing="ij")
+    maps = [np.eye(2)] + list(local_maps)
+    for y in range(half, H - half, grid):
+        for x in range(half, W - half, grid):
+            tpl = fixed[y - half:y + half + 1, x - half:x + half + 1]
+            cur = warped[y - half:y + half + 1, x - half:x + half + 1]
+            if tpl.std() < 1e-6 or valid[y - half:y + half + 1, x - half:x + half + 1].mean() < 0.9:
+                continue
+            ncc0 = float(np.corrcoef(tpl.ravel(), cur.ravel())[0, 1]) if cur.std() > 1e-6 else -1.0
+            if ncc0 >= good_above:
+                pts.append((x, y)); disp.append((0.0, 0.0)); kind.append(0)
+                continue
+            if ncc0 >= bad_below:
+                continue
+            best = (-1.0, 0.0, 0.0)
+            for L in maps:
+                qx = x + L[0, 0] * gx + L[0, 1] * gy
+                qy = y + L[1, 0] * gx + L[1, 1] * gy
+                rw = ndimage.map_coordinates(warped, [qy, qx], order=1, cval=0.0)
+                if rw.std() < 1e-6:
+                    continue
+                rr = match_template(rw, tpl)
+                r2, c2 = np.unravel_index(int(np.argmax(rr)), rr.shape)
+                if rr[r2, c2] > best[0]:
+                    dd = L @ np.array([c2 - radius, r2 - radius], float)
+                    best = (rr[r2, c2], dd[0], dd[1])
+            if best[0] >= accept_score and best[0] >= ncc0 + accept_margin:
+                pts.append((x, y)); disp.append((best[1], best[2])); kind.append(1)
+    return np.array(pts, float), np.array(disp, float), np.array(kind, int)
 
 
 def _coherent(pts, disp, tol, k=8):
@@ -235,6 +285,7 @@ def register_images(
     smoothing: float = 2.0,
     local_scales: Sequence[float] = (0.75, 0.87, 1.0, 1.15, 1.33),
     local_rotations: Sequence[float] = (-20.0, -10.0, 0.0, 10.0, 20.0),
+    repair_passes: int = 4,
     return_info: bool = False,
 ):
     """Map fixed-image pixel coordinates to moving-image coordinates.
@@ -274,7 +325,13 @@ def register_images(
         Local scale/rotation hypotheses tried for blocks that match poorly by
         translation alone. Where a smooth deformation bends most, tissue is
         locally stretched and turned (by tens of percent and degrees), which a
-        translation-only block cannot follow. Empty tuples disable it.
+        translation-only block cannot follow. Used only in the targeted
+        repair below; empty tuples disable it.
+    repair_passes
+        Rounds of targeted repair after the pyramid: blocks that correlate
+        poorly at the current alignment are re-searched with the local
+        scale/rotation hypotheses, while well-matching blocks anchor the
+        correction at zero, so correct regions are never moved.
 
     Returns
     -------
@@ -377,7 +434,7 @@ def register_images(
                  (q[:, 1] >= 0) & (q[:, 1] <= M.shape[0] - 1)).reshape(H, W).astype(float)
         Fk, Wk, Vk = _shrink(F, k), _shrink(warped, k), _shrink(valid, k)
         bp, disp, _ = _block_displacements(Fk, Wk, Vk > 0.5, int(g), int(hp),
-                                           int(radius), min_score, local_maps=maps)
+                                           int(radius), min_score)
         if len(bp) >= 8:
             keep = coherence(bp, disp, tol=max(1.5, 0.35 * radius))
             bp, disp = bp[keep], disp[keep]
@@ -404,6 +461,30 @@ def register_images(
         level_info.append({"scale": k, "grid": g, "radius": radius, "passes": len(counts),
                            "n_blocks": counts[-1], "n_blocks_by_pass": counts})
 
+    # --- targeted repair of poorly matching regions (local scale/rotation) ---
+    n_repaired = 0
+    for _ in range(int(repair_passes)):
+        q = mapping(grid_xy)
+        warped = ndimage.map_coordinates(M, [q[:, 1], q[:, 0]], order=1, cval=0.0).reshape(H, W)
+        valid = ((q[:, 0] >= 0) & (q[:, 0] <= M.shape[1] - 1) &
+                 (q[:, 1] >= 0) & (q[:, 1] <= M.shape[0] - 1)).reshape(H, W)
+        rp, rd, rk = _repair_pass(F, warped, valid, 14, 10, 12, maps, bad_below=0.4,
+                                  good_above=0.6, accept_score=0.5, accept_margin=0.15)
+        moved = rk == 1
+        if moved.sum() >= 3:
+            ok = _coherent(rp[moved], rd[moved], tol=4.0) if moved.sum() > 6 else np.ones(moved.sum(), bool)
+            keep = ~moved
+            keep[np.where(moved)[0][ok]] = True
+            rp, rd, moved = rp[keep], rd[keep], moved[keep]
+        if moved.sum() < 3 or len(rp) < 8:
+            break
+        n_repaired += int(moved.sum())
+        u = RBFInterpolator(rp, rd, kernel="thin_plate_spline",
+                            smoothing=0.5 * len(rp), degree=1)(grid_xy)
+        D_new = u + _disp_at(grid_xy + u)
+        Dx[:] = D_new[:, 0].reshape(H, W)
+        Dy[:] = D_new[:, 1].reshape(H, W)
+
     if not return_info:
         return mapping
     q = mapping(grid_xy)
@@ -412,5 +493,6 @@ def register_images(
     corr = float(np.corrcoef(F[good], warped[good])[0, 1]) if good.sum() > 10 else float("nan")
     return mapping, {"vote_fraction": float(frac), "rotation": float(th), "scale": float(s),
                      "flip": bool(flip), "n_vote_inliers": int(ok.sum()),
-                     "levels": level_info, "final_correlation": corr,
+                     "levels": level_info, "repaired_blocks": n_repaired,
+                     "final_correlation": corr,
                      "overlap_fraction": float(good.mean())}
