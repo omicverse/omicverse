@@ -193,6 +193,55 @@ def _block_displacements(fixed, warped, valid, grid, half, radius, min_score,
     return np.array(pts, float), np.array(disp, float), np.array(score, float)
 
 
+def _ecc_pass(fixed, warped, half, grid, good_above, bad_below, min_cc, shifts, stretches):
+    """Affine ECC on poorly matching blocks; well-matching blocks anchor at zero.
+
+    Where a smooth deformation bends hardest, tissue is stretched or squeezed
+    anisotropically (2x along one direction is not unusual), and neither
+    translation-only matching nor a grid of similarity hypotheses reaches the
+    right local map. The enhanced-correlation-coefficient method (Evangelidis &
+    Psarakis, 2008) optimises the full local affine continuously; it is run
+    from several starting shifts and stretches and the best converged
+    correlation is kept if it is high. Needs OpenCV.
+    """
+    import cv2
+
+    H, W = fixed.shape
+    F32, W32 = fixed.astype(np.float32), warped.astype(np.float32)
+    crit = (cv2.TERM_CRITERIA_EPS | cv2.TERM_CRITERIA_COUNT, 200, 1e-5)
+    pts, disp, kind = [], [], []
+    c0 = np.array([half, half], float)
+    for y in range(half, H - half, grid):
+        for x in range(half, W - half, grid):
+            a = F32[y - half:y + half + 1, x - half:x + half + 1]
+            b = W32[y - half:y + half + 1, x - half:x + half + 1]
+            if a.std() < 1e-6 or b.std() < 1e-6:
+                continue
+            ncc0 = float(np.corrcoef(a.ravel(), b.ravel())[0, 1])
+            if ncc0 >= good_above:
+                pts.append((x, y)); disp.append((0.0, 0.0)); kind.append(0)
+                continue
+            if ncc0 >= bad_below:
+                continue
+            best_cc, best_A = -1.0, None
+            for sx in shifts:
+                for sy in shifts:
+                    for L in stretches:
+                        A = np.zeros((2, 3), np.float32)
+                        A[:, :2] = L
+                        A[:, 2] = np.array([x, y]) - L @ c0 + (sx, sy)
+                        try:
+                            cc, A2 = cv2.findTransformECC(a, W32, A, cv2.MOTION_AFFINE, crit, None, 3)
+                        except cv2.error:
+                            continue
+                        if cc > best_cc:
+                            best_cc, best_A = cc, A2
+            if best_A is not None and best_cc >= min_cc:
+                centre = best_A[:, :2] @ c0 + best_A[:, 2]
+                pts.append((x, y)); disp.append(tuple(centre - (x, y))); kind.append(1)
+    return np.array(pts, float), np.array(disp, float), np.array(kind, int)
+
+
 def _coherent(pts, disp, tol, k=8):
     """Keep displacements predicted by a local linear fit to their neighbours.
 
@@ -240,6 +289,7 @@ def register_images(
     local_rotations: Sequence[float] = (-20.0, -10.0, 0.0, 10.0, 20.0),
     local_affine: bool = False,
     local_maps: Optional[Sequence] = None,
+    ecc_rounds: int = 1,
     return_info: bool = False,
 ):
     """Map fixed-image pixel coordinates to moving-image coordinates.
@@ -280,6 +330,12 @@ def register_images(
         translation alone. Where a smooth deformation bends most, tissue is
         locally stretched and turned (by tens of percent and degrees), which a
         translation-only block cannot follow. Used when ``local_affine``.
+    ecc_rounds
+        Rounds of affine ECC refinement (OpenCV) on blocks that still match
+        poorly after the pyramid, with well-matching blocks anchoring the
+        correction at zero. Recovers anisotropically stretched regions that
+        translation and similarity searches cannot reach. 0 disables; skipped
+        with a warning if OpenCV is missing.
     local_affine
         Retry poorly matching blocks (translation-only NCC < 0.6) under the
         local scale/rotation hypotheses inside every pyramid level. It follows
@@ -420,6 +476,37 @@ def register_images(
         level_info.append({"scale": k, "grid": g, "radius": radius, "passes": len(counts),
                            "n_blocks": counts[-1], "n_blocks_by_pass": counts})
 
+    # --- affine ECC on blocks that still match poorly ------------------------
+    n_ecc = 0
+    if ecc_rounds:
+        try:
+            import cv2  # noqa: F401
+        except ImportError:
+            import warnings
+            warnings.warn("register_images: OpenCV not installed, skipping ECC refinement "
+                          "(pip install opencv-python-headless)", stacklevel=2)
+            ecc_rounds = 0
+    stretches = [np.eye(2), np.diag([0.6, 1.2]), np.diag([1.2, 0.6])]
+    for _ in range(int(ecc_rounds)):
+        q = mapping(grid_xy)
+        warped = ndimage.map_coordinates(M, [q[:, 1], q[:, 0]], order=1, cval=0.0).reshape(H, W)
+        ep, ed, ek = _ecc_pass(F, warped, 24, 12, good_above=0.6, bad_below=0.5, min_cc=0.8,
+                               shifts=(-24, -12, 0, 12, 24), stretches=stretches)
+        moved = ek == 1
+        if moved.sum() > 6:
+            ok = _coherent(ep[moved], ed[moved], tol=5.0)
+            keep = ~moved
+            keep[np.where(moved)[0][ok]] = True
+            ep, ed, moved = ep[keep], ed[keep], moved[keep]
+        if moved.sum() < 3 or len(ep) < 8:
+            break
+        n_ecc += int(moved.sum())
+        u = RBFInterpolator(ep, ed, kernel="thin_plate_spline",
+                            smoothing=0.5 * len(ep), degree=1)(grid_xy)
+        D_new = u + _disp_at(grid_xy + u)
+        Dx[:] = D_new[:, 0].reshape(H, W)
+        Dy[:] = D_new[:, 1].reshape(H, W)
+
     if not return_info:
         return mapping
     q = mapping(grid_xy)
@@ -429,5 +516,6 @@ def register_images(
     return mapping, {"vote_fraction": float(frac), "rotation": float(th), "scale": float(s),
                      "flip": bool(flip), "n_vote_inliers": int(ok.sum()),
                      "levels": level_info, "local_affine": bool(local_affine),
+                     "ecc_moved_blocks": n_ecc,
                      "final_correlation": corr,
                      "overlap_fraction": float(good.mean())}
