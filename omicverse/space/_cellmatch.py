@@ -300,7 +300,9 @@ def match_cells(
         from :func:`register_images` (patch voting + block matching), and the
         point-only search below is skipped. Use ``*_rgb=True`` for an RGB H&E
         image (converted to its haematoxylin channel). ``image_kwargs`` goes to
-        :func:`register_images`.
+:func:`register_images`. Unless it sets ``local_affine``, the
+        translation-only and the local-affine block matching are both run and
+        the one that lines up more cells one-to-one is kept.
     rotations, scales
         Coarse-search grid. Default: every 2 degrees over the full circle, and
         nine scales from 0.8 to 1.25. Narrow them when the frames are known to
@@ -439,22 +441,38 @@ def _match_with_images(fixed, moving, fixed_ids, moving_ids, fixed_image, moving
     from scipy.interpolate import RBFInterpolator
     from ._imreg import register_images
 
-    mapping, reg = register_images(fixed_image, moving_image, fixed_rgb=fixed_rgb,
-                                   moving_rgb=moving_rgb, return_info=True, **image_kwargs)
-    # invert the fixed->moving mapping on a grid to carry moving cells home
     H, W = np.asarray(fixed_image).shape[:2]
     step = max(int(spacing / 2), 2)
     yy, xx = np.mgrid[0:H:step, 0:W:step]
     g = np.c_[xx.ravel(), yy.ravel()].astype(float)
-    inv = RBFInterpolator(mapping(g), g, kernel="thin_plate_spline", neighbors=64,
-                          smoothing=0.0, degree=1)
-    moved = inv(moving)
-    warped = _nonrigid(fixed, moved, spacing, tps_iter, tps_smoothing) if nonrigid else moved
     cap = 0.5 * spacing if max_distance is None else float(max_distance)
-    mi, fj, _ = _assign(fixed, warped, cap)
-    n_first = len(mi)
-    if grow:
-        mi, fj, warped = _grow(fixed, warped, mi, fj, cap)
+
+    def attempt(kw):
+        mapping, reg = register_images(fixed_image, moving_image, fixed_rgb=fixed_rgb,
+                                       moving_rgb=moving_rgb, return_info=True, **kw)
+        # invert the fixed->moving mapping on a grid to carry moving cells home
+        inv = RBFInterpolator(mapping(g), g, kernel="thin_plate_spline", neighbors=64,
+                              smoothing=0.0, degree=1)
+        moved = inv(moving)
+        warped = _nonrigid(fixed, moved, spacing, tps_iter, tps_smoothing) if nonrigid else moved
+        mi, fj, _ = _assign(fixed, warped, cap)
+        n_first = len(mi)
+        if grow:
+            mi, fj, warped = _grow(fixed, warped, mi, fj, cap)
+        return mi, fj, warped, reg, n_first
+
+    # Registration variants are compared by the size of their consensus: under
+    # a fixed distance cap, the more accurate registration lines up more cells
+    # one-to-one (the RANSAC criterion). An explicit local_affine pins one.
+    if "local_affine" in image_kwargs:
+        variants = [dict(image_kwargs)]
+    else:
+        variants = [dict(image_kwargs, local_affine=False),
+                    dict(image_kwargs, local_affine=True)]
+    tried = [attempt(kw) for kw in variants]
+    best = max(range(len(tried)), key=lambda i: len(tried[i][0]))
+    mi, fj, warped, reg, n_first = tried[best]
+    reg = dict(reg, n_pairs_by_variant=[len(t[0]) for t in tried])
     dist = np.linalg.norm(warped[mi] - fixed[fj], axis=1)
     out = pd.DataFrame({"moving_id": moving_ids[mi], "fixed_id": fixed_ids[fj],
                         "distance": dist}).sort_values("distance").reset_index(drop=True)
