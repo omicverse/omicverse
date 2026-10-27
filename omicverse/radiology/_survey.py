@@ -124,8 +124,8 @@ def _locate(study: DicomStudy, spec: Dict, manifest: Sequence[Dict]) -> Optional
 )
 def structure_survey(study: DicomStudy, out_dir: str = "survey", *,
                      structures: Optional[Sequence[Union[str, Dict]]] = None,
-                     region_mm: float = 90.0, crop_mm: float = 60.0, depth_mm: float = 15.0,
-                     cells: int = 3, max_sheets: int = 24, tile_px: int = 320,
+                     region_mm: float = 90.0, crop_mm: float = 80.0, depth_mm: float = 25.0,
+                     cells: int = 4, max_sheets: int = 24, tile_px: int = 320,
                      max_tiles: int = 24, max_px: int = 1800) -> List[Dict]:
     """Write reading sheets + ``manifest.json`` and return the sheets in order.
 
@@ -491,7 +491,11 @@ def ledger_hotspots(ledger: Union[str, Sequence[Dict]], *, radius_mm: float = 15
         contra = int((np.linalg.norm(Q - ctr, axis=1) <= radius_mm).sum()) if len(Q) else 0
         top = max(mem, key=lambda m: (int(m["severity"]), m.get("confidence") == "high"))
         hi = [m for m in mem if int(m["severity"]) >= max(sev)]
-        out.append({"xyz_mm": np.round(ctr, 1).tolist(), "max_severity": max(sev),
+        # centre on the most severe reads (single linkage chains large clusters,
+        # whose mean can drift away from the lesion)
+        ctr_hi = np.mean([m["xyz_mm"] for m in hi], axis=0)
+        out.append({"xyz_mm": np.round(ctr_hi, 1).tolist(), "cluster_centre_mm": np.round(ctr, 1).tolist(),
+                    "max_severity": max(sev),
                     "n_slices_max": len({(m["series"], int(m["instance"])) for m in hi}),
                     "n_series_max": len({m["series"] for m in hi}),
                     "mean_severity": round(float(np.mean(sev)), 2), "n_slices": len(slices),
