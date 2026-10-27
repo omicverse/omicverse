@@ -221,6 +221,77 @@ def effect_modifier_scan(
 
 
 # --------------------------------------------------------------------------- #
+# stepwise conditional selection (data-driven shortlist size)                 #
+# --------------------------------------------------------------------------- #
+def _stepwise_select(M, y, candidates, m_idx, criterion, alpha, max_iter=2000):
+    """Forward selection by likelihood ratio, each step conditional on the
+    features already selected (and on the modifier, if any).
+
+    A candidate enters as its main effect (+ its interaction with the
+    modifier). Stops when the best remaining candidate fails the criterion:
+    ``'bic'`` — LR stat <= df * log(n); ``'bonferroni'`` — chi2 p-value x
+    number of remaining candidates >= ``alpha``. Afterwards the modifier's own
+    main effect is tested the same way (drop-one), so a modifier with an
+    effect of its own is still reported as a determinant.
+    """
+    from scipy.stats import chi2
+
+    n = len(y)
+    big_c = 1e4                               # ~unpenalised for likelihood ratios
+    mv = M[:, [m_idx]] if m_idx is not None else None
+
+    def block(j):
+        x = M[:, [j]]
+        return np.hstack([x, x * mv]) if mv is not None else x
+
+    def fit_ll(D):
+        if D is None or D.shape[1] == 0:
+            p0 = np.clip(y.mean(), 1e-12, 1 - 1e-12)
+            return float(y.sum() * np.log(p0) + (n - y.sum()) * np.log(1 - p0))
+        f = _logit(big_c, max_iter).fit(D, y)
+        return _loglik(f, D, y)
+
+    def passes(lr, dof, n_left):
+        if criterion == "bic":
+            return lr > dof * np.log(n)
+        return chi2.sf(lr, dof) * max(n_left, 1) < alpha
+
+    base = mv
+    L = fit_ll(base)
+    selected, path = [], []
+    remaining = [int(j) for j in candidates if j != m_idx]
+    while remaining:
+        best = None
+        for j in remaining:
+            D = block(j) if base is None else np.hstack([base, block(j)])
+            l = fit_ll(D)
+            if best is None or l > best[0]:
+                best = (l, j, D)
+        l, j, D = best
+        dof = D.shape[1] - (0 if base is None else base.shape[1])
+        lr = max(0.0, 2.0 * (l - L))
+        ok = passes(lr, dof, len(remaining))
+        path.append({"feature_idx": j, "lr_stat": lr, "df": dof,
+                     "p_value": float(chi2.sf(lr, dof)), "n_candidates_left": len(remaining),
+                     "accepted": bool(ok)})
+        if not ok:
+            break
+        selected.append(j)
+        remaining.remove(j)
+        base, L = D, l
+
+    mod_is_det, mod_lr = False, None
+    if m_idx is not None and selected:
+        rest = np.hstack([block(j) for j in selected])
+        D_full = np.hstack([mv, rest])
+        l_full = fit_ll(D_full)
+        l_drop = fit_ll(rest)
+        mod_lr = max(0.0, 2.0 * (l_full - l_drop))
+        mod_is_det = passes(mod_lr, 1, 1)
+    return selected, path, mod_is_det, mod_lr
+
+
+# --------------------------------------------------------------------------- #
 # determinant ranking                                                          #
 # --------------------------------------------------------------------------- #
 @register_function(
@@ -262,6 +333,9 @@ def trait_determinants(
     C: float = 1.0,
     max_iter: int = 2000,
     direction: str = "both",
+    select: Optional[str] = "bic",
+    max_candidates: int = 40,
+    alpha: float = 0.05,
 ) -> pd.DataFrame:
     """Effect-modification-aware ranking of trait determinants.
 
@@ -278,6 +352,19 @@ def trait_determinants(
        the modifier present, whichever stratum it acts in. The modifier is
        scored by ``|b_modifier|`` only (it is a background, not a determinant,
        unless it has an effect of its own).
+    4. ``select``: how many features are determinants is decided by the data,
+       not by a fixed count. Forward stepwise selection over the top
+       ``max_candidates`` features by score: at each step the candidate (main
+       effect + interaction with the modifier) with the largest likelihood
+       gain *conditional on the features already selected* is tested, and
+       selection stops at the first candidate that fails — ``'bic'``
+       (default; LR > df x log n, strict at large n) or ``'bonferroni'``
+       (p x candidates left < ``alpha``). A feature that only travels with a
+       selected determinant adds nothing once that determinant is in the
+       model, so it is not selected. Selected features are flagged
+       ``is_determinant`` and placed first (by score); the modifier is a
+       determinant only if its own main effect passes a drop-one test.
+       ``select=None`` keeps the plain score order.
 
     Parameters
     ----------
@@ -292,6 +379,9 @@ def trait_determinants(
     direction
         ``'both'`` scores |log-odds|; ``'risk'`` scores only positive
         (trait-increasing) effects, ``'protective'`` only negative ones.
+    select, max_candidates, alpha
+        Data-driven determinant set (step 4): ``'bic'``, ``'bonferroni'`` or
+        ``None``.
 
     Returns
     -------
@@ -299,8 +389,12 @@ def trait_determinants(
         Sorted by ``score``: ``feature``, ``score``, ``rank`` (1 = strongest),
         ``beta_main`` (b), ``beta_with_modifier`` (b + g), ``acts_in``
         (``'all'`` / ``'modifier_present'`` / ``'modifier_absent'``),
-        ``is_modifier``, ``frac_present``. ``df.attrs`` holds ``modifier`` and
-        the screen table (``modifier_scan``) when one was run.
+        ``is_modifier``, ``frac_present``, ``is_determinant``,
+        ``selection_step`` (order of entry), ``selection_lr``. ``df.attrs``
+        holds ``modifier``, ``n_determinants``, ``selection_path`` (every step
+        incl. the first rejected one) and the screen table
+        (``modifier_scan``) when one was run. The shortlist is
+        ``df[df.is_determinant]`` — its size is decided by the data.
     """
     M, names, index = _as_matrix(X, feature_names)
     M, yv, _ = _labelled(M, y, index)
@@ -353,11 +447,37 @@ def trait_determinants(
         "beta_with_modifier": bg, "acts_in": acts,
         "is_modifier": [j == m_idx for j in range(len(names))],
         "frac_present": prev,
-    }).sort_values("score", ascending=False, kind="mergesort").reset_index(drop=True)
+    })
+    out["is_determinant"] = False
+    out["selection_step"] = np.nan
+    out["selection_lr"] = np.nan
+    path_df = None
+    if select is not None:
+        if select not in ("bic", "bonferroni"):
+            raise ValueError("select must be 'bic', 'bonferroni' or None")
+        cand = [int(j) for j in np.argsort(-score, kind="mergesort") if j != m_idx]
+        cand = [j for j in cand if score[j] > 0][:max_candidates]
+        sel, path, mod_det, mod_lr = _stepwise_select(M, yv, cand, m_idx, select, alpha)
+        for k, j in enumerate(sel):
+            out.loc[j, ["is_determinant", "selection_step"]] = [True, k + 1]
+        for rec in path:
+            out.loc[rec["feature_idx"], "selection_lr"] = rec["lr_stat"]
+        if m_idx is not None and mod_det:
+            out.loc[m_idx, "is_determinant"] = True
+            out.loc[m_idx, "selection_lr"] = mod_lr
+        path_df = pd.DataFrame(path)
+        if len(path_df):
+            path_df.insert(0, "feature", [names[j] for j in path_df.pop("feature_idx")])
+    out = out.sort_values(["is_determinant", "score"], ascending=[False, False],
+                          kind="mergesort").reset_index(drop=True)
     out["rank"] = np.arange(1, len(out) + 1)
-    out = out[["feature", "score", "rank", "beta_main", "beta_with_modifier",
-               "acts_in", "is_modifier", "frac_present"]]
+    out = out[["feature", "score", "rank", "is_determinant", "beta_main",
+               "beta_with_modifier", "acts_in", "is_modifier", "frac_present",
+               "selection_step", "selection_lr"]]
     out.attrs["modifier"] = names[m_idx] if m_idx is not None else None
+    out.attrs["n_determinants"] = int(out["is_determinant"].sum()) if select else None
+    if path_df is not None:
+        out.attrs["selection_path"] = path_df
     if scan is not None:
         out.attrs["modifier_scan"] = scan
     return out
@@ -376,6 +496,38 @@ def _stack(M, Y, traits):
     return np.concatenate(rows), np.concatenate(ys)
 
 
+def _trait_attributes(groups, target=None) -> pd.DataFrame:
+    """Normalise trait metadata to a DataFrame (index = trait, columns = attributes).
+
+    A mapping trait -> group becomes one column ``group``. A ``smiles`` column
+    (any case) is replaced by ``n_components`` — the number of '.'-separated
+    molecules, which distinguishes a combination product (e.g. an agent plus an
+    inhibitor) from a single agent without any chemistry knowledge table.
+    """
+    if isinstance(groups, pd.DataFrame):
+        meta = groups.copy()
+        if target is not None and str(target) not in meta.index.astype(str):
+            # trait names held in a column rather than the index
+            for c in meta.columns:
+                if meta[c].astype(str).eq(str(target)).any() and meta[c].astype(str).is_unique:
+                    meta = meta.set_index(c)
+                    break
+    elif isinstance(groups, pd.Series):
+        meta = groups.rename("group").to_frame()
+    else:
+        meta = pd.Series(dict(groups)).rename("group").to_frame()
+    meta.index = meta.index.astype(str)
+    for c in list(meta.columns):
+        if str(c).lower() == "smiles":
+            meta["n_components"] = meta[c].astype(str).str.count(r"\.") + 1
+            meta = meta.drop(columns=c)
+    return meta
+
+
+def _match_score(meta, a, b, cols):
+    return sum(str(meta.at[a, c]) == str(meta.at[b, c]) for c in cols)
+
+
 @register_function(
     aliases=[
         "transfer_trait_predict", "related_trait_transfer", "zero_shot_trait_transfer",
@@ -385,18 +537,21 @@ def _stack(M, Y, traits):
     category="genetics",
     description=(
         "Predict a binary trait that has NO labels (e.g. resistance to a "
-        "held-out drug) from a samples x features genotype matrix, by fitting "
-        "one penalised logistic model on the stacked labels of related, "
-        "labelled traits — by default those in the same group (e.g. the same "
-        "drug class / subclass from a drug table). Reports leave-one-trait-out "
-        "AUROC / MCC inside the group so the transfer can be validated "
-        "without target labels. Pooling across groups is usually worse than "
-        "staying within the group; pass sources explicitly to override."
+        "held-out drug) from a samples x features genotype matrix, using "
+        "labelled related traits: sources are the labelled traits of the same "
+        "group that best match the target on all metadata attributes (e.g. "
+        "class, subclass, combination / inhibitor flag, SMILES component "
+        "count). If the target matches some source on every attribute, one "
+        "pooled logistic model is used; if it differs from all sources, a "
+        "sample is called positive only when every source model agrees "
+        "(determinants that act in some sources but not others are not "
+        "trusted). Reports leave-one-trait-out metrics, per-source "
+        "probabilities and the features whose effects disagree across sources."
     ),
     examples=[
-        "res = ov.genetics.transfer_trait_predict(genomes_df, labels_wide, target='drugX', groups=drug_to_class)",
-        "res['proba']  # Series of P(trait) per sample",
-        "res['validation']  # leave-one-trait-out metrics within the group",
+        "res = ov.genetics.transfer_trait_predict(genomes_df, labels_wide, target='drugX', groups=drug_meta_df)",
+        "res['proba'], res['call'], res['decision'], res['source_match']",
+        "res['validation']  # leave-one-trait-out metrics within the sources",
     ],
     related=["ov.genetics.trait_determinants"],
 )
@@ -406,13 +561,16 @@ def transfer_trait_predict(
     target: str,
     *,
     sources: Optional[Sequence[str]] = None,
-    groups: Optional[Mapping[str, str]] = None,
+    groups=None,
+    group_col: Optional[str] = None,
+    decision: str = "auto",
     C: float = 1.0,
     max_iter: int = 3000,
     threshold: float = 0.5,
     validate: bool = True,
+    n_discordant: int = 30,
 ) -> dict:
-    """Pooled-source logistic transfer to an unlabelled trait.
+    """Transfer to an unlabelled trait from labelled related traits.
 
     Parameters
     ----------
@@ -420,27 +578,42 @@ def transfer_trait_predict(
         Samples x features; a DataFrame indexed by sample id is aligned to
         ``Y``'s index.
     Y
-        Wide label table, samples x traits (NaN = unlabelled), values in any
-        binary coding (``'R'``/``'S'``, 0/1 ...). A long table can be pivoted
-        first: ``long.pivot(index='isolate_id', columns='drug', values='phenotype')``.
+        Wide label table, samples x traits (NaN = unlabelled), any binary
+        coding. From a long table:
+        ``long.pivot(index='isolate_id', columns='drug', values='phenotype')``.
     target
-        Name of the trait to predict (need not be a column of ``Y``).
+        Trait to predict (need not be a column of ``Y``).
     sources
-        Labelled traits to pool. Default: the columns of ``Y`` whose
-        ``groups`` value equals ``groups[target]``.
+        Labelled traits to use; overrides the metadata-based choice.
     groups
-        Mapping trait -> group (e.g. drug -> subclass).
-    threshold
-        Probability cut for the hard call.
+        Trait metadata covering labelled AND unlabelled traits: a mapping
+        trait -> group, or a DataFrame indexed by trait with any number of
+        attribute columns (e.g. the whole drug table indexed by drug). A
+        ``smiles`` column becomes ``n_components``.
+    group_col
+        Attribute that defines the group (default: the first column). Sources
+        must share it with the target.
+    decision
+        ``'pooled'`` — one model on the stacked source labels, call at
+        ``threshold``. ``'consensus'`` — one model per source; call positive
+        only if every source model calls positive; ``proba`` is the minimum
+        over sources. ``'auto'`` (default) — ``'pooled'`` if some source
+        matches the target on every attribute (or there is a single source),
+        otherwise ``'consensus'``.
     validate
-        If two or more sources: leave each source out, fit on the rest, and
-        score the left-out source (AUROC, MCC at ``threshold``).
+        Leave-one-source-out AUROC / MCC (needs >= 2 sources).
+    n_discordant
+        Size of the table of features whose per-source effects disagree most.
 
     Returns
     -------
     dict
-        ``proba`` (Series indexed like ``X``), ``call`` (Series 0/1),
-        ``sources``, ``validation`` (DataFrame or None), ``model``.
+        ``proba``, ``call`` (Series indexed like ``X``), ``sources``,
+        ``decision`` (the rule used), ``source_match`` (candidate sources with
+        their attribute agreement), ``per_source_proba`` (DataFrame),
+        ``source_agreement`` (fraction of source models calling positive),
+        ``discordant_features`` (per-source coefficients, largest spread
+        first), ``validation`` and ``model`` (the pooled model).
     """
     from sklearn.metrics import matthews_corrcoef, roc_auc_score
 
@@ -449,41 +622,88 @@ def transfer_trait_predict(
     else:
         Xd = pd.DataFrame(np.asarray(X, dtype=float), index=Y.index)
     Yd = Y.reindex(Xd.index)
+    Yd.columns = Yd.columns.astype(str)
     M = Xd.to_numpy(dtype=float)
+    target = str(target)
 
-    if groups is not None and not isinstance(groups, Mapping):
-        groups = pd.Series(groups).to_dict()          # Series / 2-col frame -> dict
+    match_tab = None
+    exact = False
     if sources is None:
-        if groups is None or target not in groups:
-            known = sorted(map(str, groups)) if groups is not None else []
+        if groups is None:
+            raise ValueError("give `sources`, or `groups` (trait metadata incl. the target)")
+        meta = _trait_attributes(groups, target)
+        if target not in meta.index:
             raise ValueError(
                 f"target {target!r} has no group: pass `sources=[...]`, or `groups` "
                 f"built from the full trait metadata (labelled AND unlabelled traits, "
-                f"e.g. dict(zip(meta.drug, meta.subclass))); groups has {known}")
-        g = groups[target]
-        sources = [t for t in Yd.columns if t != target and groups.get(t) == g
-                   and Yd[t].notna().any()]
-        if not sources:
-            raise ValueError(f"no labelled trait shares group {g!r} with {target!r}")
-    sources = [s for s in sources if s != target]
+                f"e.g. dict(zip(meta.drug, meta.subclass)) or meta.set_index('drug')); "
+                f"groups has {sorted(meta.index)}")
+        gcol = group_col if group_col is not None else meta.columns[0]
+        others = [c for c in meta.columns if c != gcol]
+        labelled = [t for t in Yd.columns if t != target and t in meta.index
+                    and Yd[t].notna().any()]
+        cand = [t for t in labelled if str(meta.at[t, gcol]) == str(meta.at[target, gcol])]
+        if not cand:
+            raise ValueError(f"no labelled trait shares {gcol}={meta.at[target, gcol]!r} "
+                             f"with {target!r}")
+        scores = {t: _match_score(meta, t, target, others) for t in cand}
+        best = max(scores.values())
+        sources = [t for t in cand if scores[t] == best]
+        exact = best == len(others)
+        match_tab = pd.DataFrame({"source": cand,
+                                  "attributes_matched": [scores[t] for t in cand],
+                                  "attributes_total": len(others),
+                                  "used": [t in sources for t in cand]})
+    else:
+        sources = [str(s) for s in sources if str(s) != target]
+        exact = True
+
+    if decision == "auto":
+        decision = "pooled" if (exact or len(sources) < 2) else "consensus"
+    if decision not in ("pooled", "consensus"):
+        raise ValueError("decision must be 'auto', 'pooled' or 'consensus'")
 
     r, yv = _stack(M, Yd, sources)
     model = _logit(C, max_iter).fit(M[r], yv)
-    proba = pd.Series(model.predict_proba(M)[:, 1], index=Xd.index, name=target)
+    pooled = model.predict_proba(M)[:, 1]
+
+    per, coefs = {}, {}
+    if len(sources) >= 2:
+        for s_ in sources:
+            rr, yy = _stack(M, Yd, [s_])
+            f = _logit(C, max_iter).fit(M[rr], yy)
+            per[s_] = f.predict_proba(M)[:, 1]
+            coefs[s_] = f.coef_[0]
+    per_df = pd.DataFrame(per, index=Xd.index) if per else None
+
+    if decision == "consensus" and per:
+        p = per_df.min(axis=1).to_numpy()
+    else:
+        p = pooled
+    proba = pd.Series(p, index=Xd.index, name=target)
+    agreement = ((per_df >= threshold).mean(axis=1) if per_df is not None else None)
+
+    disc = None
+    if coefs:
+        cf = pd.DataFrame(coefs, index=Xd.columns.astype(str))
+        disc = cf.assign(spread=cf.max(axis=1) - cf.min(axis=1)) \
+                 .sort_values("spread", ascending=False).head(n_discordant)
 
     val = None
     if validate and len(sources) >= 2:
         rec = []
-        for s in sources:
-            rest = [t for t in sources if t != s]
+        for s_ in sources:
+            rest = [t for t in sources if t != s_]
             rr, yy = _stack(M, Yd, rest)
             mdl = _logit(C, max_iter).fit(M[rr], yy)
-            ok = Yd[s].notna().to_numpy()
-            ys = _as_binary(Yd[s][ok])
+            ok = Yd[s_].notna().to_numpy()
+            ys = _as_binary(Yd[s_][ok])
             ps = mdl.predict_proba(M[ok])[:, 1]
-            rec.append({"held_out": s, "trained_on": ",".join(rest), "n": int(ok.sum()),
+            rec.append({"held_out": s_, "trained_on": ",".join(rest), "n": int(ok.sum()),
                         "auroc": float(roc_auc_score(ys, ps)) if len(set(ys)) > 1 else np.nan,
                         "mcc": float(matthews_corrcoef(ys, (ps >= threshold).astype(int)))})
         val = pd.DataFrame(rec)
     return {"proba": proba, "call": (proba >= threshold).astype(int),
-            "sources": list(sources), "validation": val, "model": model}
+            "sources": list(sources), "decision": decision, "source_match": match_tab,
+            "per_source_proba": per_df, "source_agreement": agreement,
+            "discordant_features": disc, "validation": val, "model": model}
