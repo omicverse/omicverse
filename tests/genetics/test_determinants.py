@@ -82,3 +82,7 @@ def test_transfer_trait_predict_group_pooling():
     assert (val["auroc"] > 0.75).all()
     with pytest.raises(ValueError):
         transfer_trait_predict(X, Y, "zz", groups={"zz": "C", **groups})
+    with pytest.raises(ValueError, match="has no group"):
+        transfer_trait_predict(X, Y, "a4", groups=groups)
+    res2 = transfer_trait_predict(X, Y, "a3", groups=pd.Series(groups), validate=False)
+    assert res2["sources"] == ["a1", "a2"] and res2["validation"] is None

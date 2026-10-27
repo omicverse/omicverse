@@ -451,9 +451,15 @@ def transfer_trait_predict(
     Yd = Y.reindex(Xd.index)
     M = Xd.to_numpy(dtype=float)
 
+    if groups is not None and not isinstance(groups, Mapping):
+        groups = pd.Series(groups).to_dict()          # Series / 2-col frame -> dict
     if sources is None:
         if groups is None or target not in groups:
-            raise ValueError("give `sources`, or `groups` that contains the target")
+            known = sorted(map(str, groups)) if groups is not None else []
+            raise ValueError(
+                f"target {target!r} has no group: pass `sources=[...]`, or `groups` "
+                f"built from the full trait metadata (labelled AND unlabelled traits, "
+                f"e.g. dict(zip(meta.drug, meta.subclass))); groups has {known}")
         g = groups[target]
         sources = [t for t in Yd.columns if t != target and groups.get(t) == g
                    and Yd[t].notna().any()]
