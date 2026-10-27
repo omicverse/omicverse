@@ -18,6 +18,11 @@ WHAT LIVES HERE
                      tendon / ligament / nerve / fascia, against its own intact
                      portion, on several sequences at once.
 
+    survey           ``structure_survey``: deterministic, bounded reading sheets +
+                     manifest (regional survey per plane; per-structure
+                     consecutive-slice crops on every series);
+                     ``sheet_cell_to_patient``; ``ledger_concordance``.
+
 WHAT DOES NOT
     Radiomics feature extraction from a mask (PyRadiomics) and segmentation
     models. No anatomy, diagnosis or threshold tables: what is abnormal is read
@@ -28,9 +33,10 @@ from ._dicom import (DicomSeries, DicomStudy, landmark_measurement, plane_of,
                      read_dicom_study, sequence_weighting)
 from ._profile import abnormal_segments, path_profile, profile_slices
 from ._render import montage, region_sheets, render_slices
+from ._survey import ledger_concordance, sheet_cell_to_patient, structure_survey
 
 __all__ = [
     "DicomSeries", "DicomStudy", "read_dicom_study", "plane_of", "sequence_weighting",
     "landmark_measurement", "render_slices", "montage", "path_profile", "abnormal_segments", "profile_slices",
-    "region_sheets",
+    "region_sheets", "structure_survey", "sheet_cell_to_patient", "ledger_concordance",
 ]

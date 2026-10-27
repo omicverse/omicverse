@@ -170,3 +170,31 @@ def test_region_sheets_cover_body(tmp_path, study):
         r0, r1, c0, c1 = x["crop"]
         assert 0 <= r0 < r1 <= 64 and 0 <= c0 < c1 <= 64
         assert set(x["instances"]) <= set(study["Sag STIR"].instance_numbers)
+
+
+def test_structure_survey_two_phases(tmp_path, study):
+    import json
+    out = str(tmp_path / "sv")
+    sh = rad.structure_survey(study, out, region_mm=20, max_sheets=10)
+    assert 0 < len(sh) <= 10 and all(x["kind"] == "region" for x in sh)
+    assert [x["id"] for x in sh] == [f"R{k + 1:02d}" for k in range(len(sh))]
+    assert sh[0]["plane"] == "SAG" and sh[0]["weighting"] == "fluid_sensitive"
+    assert json.load(open(f"{out}/manifest.json"))["sheets"][0]["id"] == "R01"
+    xyz = rad.sheet_cell_to_patient(study, sh[0], sh[0]["instances"][0], "B2")
+    sh2 = rad.structure_survey(study, out, structures=[
+        "unnamed", {"name": "band", "sheet": "R01", "instance": sh[0]["instances"][0], "cell": "B2"}])
+    m = json.load(open(f"{out}/manifest_structures.json"))
+    assert m["unlocalised"] == ["unnamed"]
+    assert {x["description"] for x in sh2} >= {"Sag T1", "Sag STIR"}
+    assert all(np.allclose(x["centre_xyz_mm"], xyz, atol=0.11) for x in sh2)
+
+
+def test_ledger_concordance():
+    led = [{"sheet": "R01", "series": "A", "instance": 3, "structure": "x", "abnormality": "gap", "acute": True},
+           {"sheet": "S01", "series": "B", "instance": 7, "structure": "x", "abnormality": "gap"},
+           {"sheet": "R01", "series": "A", "instance": 5, "structure": "y", "abnormality": "fluid"},
+           {"sheet": "R01", "series": "A", "instance": 3, "structure": "x", "normal": True}]
+    t = rad.ledger_concordance(led)
+    assert t.iloc[0]["structure"] == "x" and bool(t.iloc[0]["concordant"])
+    assert t.iloc[0]["contradicting_reads_same_slice"] == 1
+    assert not bool(t.set_index("structure").loc["y", "concordant"])

@@ -226,8 +226,13 @@ def render_slices(study: Optional[DicomStudy], series: Sequence[Union[str, int, 
 def montage(series: DicomSeries, instances: Optional[Iterable[int]] = None, *,
             crop: Optional[Tuple[int, int, int, int]] = None, ncols: int = 4,
             tile_px: int = 400, out: str = "montage.png",
-            window: Tuple[float, float] = (1.0, 99.5), max_px: int = 1800) -> Dict:
-    """Grid of slices of one series. Keep tiles ≥ ~300 px: split long series
+            window: Tuple[float, float] = (1.0, 99.5), max_px: int = 1800,
+            cells: int = 0) -> Dict:
+    """Grid of slices of one series.
+
+    ``cells=n`` divides every tile into an n x n lettered grid (columns A.., rows
+    1..) so a reader can name a location as ``inst 11 B2``; convert it back
+    with :func:`ov.radiology.sheet_cell_to_patient`. Keep tiles ≥ ~300 px: split long series
     into several montages (``instances=``, ≤ 12–16 per sheet) rather than
     shrinking the tiles; the sheet is capped at ``max_px`` on its longest side."""
     import matplotlib
@@ -255,6 +260,15 @@ def montage(series: DicomSeries, instances: Optional[Iterable[int]] = None, *,
         ax.imshow(px, cmap="gray", vmin=lo, vmax=hi, aspect=inst.ps[0] / inst.ps[1])
         ax.text(0.02, 0.98, f"inst {i}", transform=ax.transAxes, ha="left", va="top",
                 fontsize=10, color="yellow", fontweight="bold")
+        if cells and cells > 1:
+            h, w = px.shape
+            for k in range(1, cells):
+                ax.axhline(k * h / cells - 0.5, color="cyan", lw=0.4, alpha=0.5)
+                ax.axvline(k * w / cells - 0.5, color="cyan", lw=0.4, alpha=0.5)
+            for a in range(cells):
+                for b in range(cells):
+                    ax.text((b + 0.97) * w / cells, (a + 0.97) * h / cells, f"{chr(65 + b)}{a + 1}",
+                            color="cyan", fontsize=6, ha="right", va="bottom", alpha=0.8)
     fig.suptitle(f"{series.description} ({series.plane}); image right = {d['right']}, "
                  f"down = {d['down']}" + (f"; crop rows {crop[0]}-{crop[1]}, cols {crop[2]}-{crop[3]}"
                                           if crop else ""), fontsize=9)
@@ -280,7 +294,7 @@ def montage(series: DicomSeries, instances: Optional[Iterable[int]] = None, *,
 def region_sheets(series: DicomSeries, *, region_mm: float = 90.0, overlap: float = 0.2,
                   instances: Optional[Iterable[int]] = None, max_tiles: int = 24, ncols: int = 6,
                   tile_px: int = 260, out_prefix: str = "region",
-                  window: Tuple[float, float] = (1.0, 99.5)) -> List[Dict]:
+                  window: Tuple[float, float] = (1.0, 99.5), cells: int = 0) -> List[Dict]:
     """Region-by-region montages of one series.
 
     The body is found on the slice-wise maximum (signal above 10 % of the
@@ -328,13 +342,17 @@ def region_sheets(series: DicomSeries, *, region_mm: float = 90.0, overlap: floa
                     if (imgs[i][crop[0]:crop[1], crop[2]:crop[3]] > thr).mean() > 0.05]
             if not keep:
                 continue
-            for j in range(0, len(keep), max_tiles):
-                part = keep[j:j + max_tiles]
-                out = f"{out_prefix}_r{k:02d}_{j // max_tiles}.png"
+            nparts = int(np.ceil(len(keep) / max_tiles))
+            size = int(np.ceil(len(keep) / nparts))          # balanced parts, no 1-tile sheets
+            for j in range(0, len(keep), size):
+                part = keep[j:j + size]
+                out = f"{out_prefix}_r{k:02d}_{j // size}.png"
                 res = montage(series, part, crop=crop, ncols=min(ncols, len(part)), tile_px=tile_px,
-                              out=out, window=window)
+                              out=out, window=window, cells=cells)
                 mid = part[len(part) // 2]
                 sheets.append({"path": out, "region": k, "crop": crop, "instances": part,
+                               "series_instance_uid": series.uid, "description": series.description,
+                               "plane": series.plane, "cells": cells,
                                "centre_xyz_mm": np.round(series.pixel_to_patient(
                                    mid, (crop[0] + crop[1]) / 2, (crop[2] + crop[3]) / 2), 1).tolist(),
                                "directions": res["directions"]})
