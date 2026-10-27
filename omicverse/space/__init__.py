@@ -88,6 +88,7 @@ from ..single._ccc_cytosignal import run_cytosignal
 from ._tissue_zones import nmf_tissue_zones, TissueZones
 from ._deconvolution import Deconvolution,calculate_gene_signature
 from ._cluster_signature import cluster_marker_profile, score_cluster_signatures, cluster_neighbor_composition
+from ._markerdb import markerdb_signatures, panel_gene_map
 from ._split import split_balance, split_purify, split_reassign_residuals, split_spatial_score
 from ._spata2 import (
     spata2_extract_variables,
@@ -149,6 +150,8 @@ __all__ = [
     'cluster_marker_profile',
     'score_cluster_signatures',
     'cluster_neighbor_composition',
+    'markerdb_signatures',
+    'panel_gene_map',
 
     # Spatial clustering and domains
     'pySTAGATE',
