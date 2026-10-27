@@ -198,3 +198,21 @@ def test_ledger_concordance():
     assert t.iloc[0]["structure"] == "x" and bool(t.iloc[0]["concordant"])
     assert t.iloc[0]["contradicting_reads_same_slice"] == 1
     assert not bool(t.set_index("structure").loc["y", "concordant"])
+
+
+def test_ledger_add_read_and_hotspots(tmp_path, study):
+    out = str(tmp_path / "sv")
+    sh = rad.structure_survey(study, out, region_mm=40, max_sheets=10)
+    s0 = sh[0]
+    i1, i2 = s0["instances"][0], s0["instances"][1]
+    text = (f"inst {i1}: B2 – band interrupted, dark core replaced by bright signal, confidence high.\n"
+            f"inst {i2}: B2 – gap in the band with fluid, medium.\n"
+            f"inst {s0['instances'][2]}: none\n\nSummary: no fracture.")
+    led = str(tmp_path / "ledger.json")
+    new = rad.ledger_add_read(led, study, s0, text)
+    assert [e["severity"] for e in new] == [3, 3, 0]
+    assert new[2]["normal"] and new[0]["confidence"] == "high"
+    neg = rad.ledger_add_read(led, study, s0, f"inst {i1}: C3 - no tear, no gap; small fluid. low")
+    assert neg[0]["severity"] == 1
+    hs = rad.ledger_hotspots(led, radius_mm=10)
+    assert hs.iloc[0]["max_severity"] == 3 and hs.iloc[0]["n_slices_max"] == 2

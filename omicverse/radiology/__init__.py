@@ -21,7 +21,9 @@ WHAT LIVES HERE
     survey           ``structure_survey``: deterministic, bounded reading sheets +
                      manifest (regional survey per plane; per-structure
                      consecutive-slice crops on every series);
-                     ``sheet_cell_to_patient``; ``ledger_concordance``.
+                     ``sheet_cell_to_patient``; ``ledger_add_read`` (reader text
+                     -> ledger), ``ledger_hotspots`` (rank locations),
+                     ``ledger_concordance``.
 
 WHAT DOES NOT
     Radiomics feature extraction from a mask (PyRadiomics) and segmentation
@@ -33,10 +35,12 @@ from ._dicom import (DicomSeries, DicomStudy, landmark_measurement, plane_of,
                      read_dicom_study, sequence_weighting)
 from ._profile import abnormal_segments, path_profile, profile_slices
 from ._render import montage, region_sheets, render_slices
-from ._survey import ledger_concordance, sheet_cell_to_patient, structure_survey
+from ._survey import (DEFAULT_SEVERITY_TERMS, ledger_add_read, ledger_concordance, ledger_hotspots,
+                      sheet_cell_to_patient, structure_survey)
 
 __all__ = [
     "DicomSeries", "DicomStudy", "read_dicom_study", "plane_of", "sequence_weighting",
     "landmark_measurement", "render_slices", "montage", "path_profile", "abnormal_segments", "profile_slices",
     "region_sheets", "structure_survey", "sheet_cell_to_patient", "ledger_concordance",
+    "ledger_add_read", "ledger_hotspots", "DEFAULT_SEVERITY_TERMS",
 ]
