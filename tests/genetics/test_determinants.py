@@ -57,6 +57,8 @@ def test_trait_determinants_top_set_excludes_passengers_and_modifier():
 def test_trait_determinants_without_modifier_and_string_labels():
     X, y = _simulate(seed=1)
     lab = np.where(y == 1, "R", "S")
+    lab = pd.Series(lab, index=X.index, dtype=object)
+    lab.iloc[:50] = np.nan                      # unlabelled samples are dropped
     res = trait_determinants(X, lab, modifier=None)
     assert res.attrs["modifier"] is None
     assert (res["acts_in"] == "all").all()

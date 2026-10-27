@@ -60,10 +60,26 @@ def _as_matrix(X, feature_names=None):
     return M, names, index
 
 
+def _labelled(M, y, index=None):
+    """Align ``y`` to the rows of ``M`` and drop unlabelled (NaN) rows."""
+    if isinstance(y, pd.Series) and index is not None:
+        y = y.reindex(index)
+    ys = pd.Series(np.asarray(y, dtype=object).ravel())
+    ok = ys.notna().to_numpy()
+    if len(ys) != M.shape[0]:
+        raise ValueError("y length does not match the rows of X")
+    return M[ok], _as_binary(ys[ok]), ok
+
+
 def _as_binary(y, index=None) -> np.ndarray:
     if isinstance(y, pd.Series) and index is not None:
         y = y.reindex(index)
     y = pd.Series(np.asarray(y).ravel())
+    if y.dtype == object:
+        try:
+            y = pd.to_numeric(y)
+        except (ValueError, TypeError):
+            pass
     if y.dtype == object or str(y.dtype).startswith(("string", "category")):
         u = y.astype(str).str.strip().str.upper()
         pos = u.isin(["R", "1", "TRUE", "YES", "CASE", "RESISTANT", "POS", "POSITIVE"])
@@ -142,7 +158,8 @@ def effect_modifier_scan(
         absence is the intended input; dosages work too.
     y
         Binary trait per sample (0/1, bool, ``'R'``/``'S'`` ...). If a Series
-        and ``X`` is a DataFrame, it is aligned on the index.
+        and ``X`` is a DataFrame, it is aligned on the index. Samples with a
+        missing label (NaN) are dropped.
     feature_names
         Column names when ``X`` is an array.
     shortlist
@@ -167,7 +184,7 @@ def effect_modifier_scan(
     from scipy.stats import chi2
 
     M, names, index = _as_matrix(X, feature_names)
-    yv = _as_binary(y, index)
+    M, yv, _ = _labelled(M, y, index)
     _, _, S = _shortlist(M, yv, shortlist, C, 2000)
     XS = M[:, S]
     pos = {int(j): i for i, j in enumerate(S)}
@@ -286,7 +303,7 @@ def trait_determinants(
         the screen table (``modifier_scan``) when one was run.
     """
     M, names, index = _as_matrix(X, feature_names)
-    yv = _as_binary(y, index)
+    M, yv, _ = _labelled(M, y, index)
     prev = (M > 0).mean(0)
 
     scan = None
