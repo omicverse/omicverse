@@ -10,6 +10,11 @@ Spatial clustering and segmentation:
     clusters: Spatial domain identification
     merge_cluster: Merge spatial clusters
     CAST: Cellular spatial organization analysis
+
+Cell segmentation (``ov.space.seg``):
+    segment: Image segmentation (watershed, cellpose, stardist, SAM, SAM2, micro-SAM, CellSAM)
+    segment_transcripts: Transcript-based segmentation (Baysor)
+    assign_transcripts / aggregate / evaluate / compare
     
 Spatial integration and alignment:
     pySTAligner: Multi-sample spatial alignment
@@ -61,7 +66,7 @@ from ._spatrio import CellMap,CellLoc
 from ._stt import STT
 from ._svg import svg,spatial_neighbors,spatial_autocorr,moranI
 from ._niche import molecular as _niche_molecular
-from . import geom, nb, niche
+from . import geom, nb, niche, seg
 from ._neighborhood import (
     interaction_matrix,
     nhood_enrichment,
@@ -205,4 +210,5 @@ __all__ = [
     'nb',
     'niche',
     'geom',
+    'seg',
 ]

@@ -129,148 +129,6 @@ def normalize(img):
     ma = np.percentile(img,99.8)
     return ((img - mi) / ( ma - mi + eps ))
 
-# -*- coding: utf-8 -*-
-# Drop-in replacement for bin2cell.stardist using Cellpose with tiled inference.
-
-
-
-
-
-def _ensure_gray(img: np.ndarray) -> np.ndarray:
-    from skimage.color import rgb2gray
-    if img.ndim == 3 and img.shape[-1] in (3, 4):
-        # skimage.rgb2gray handles RGB/RGBA -> grayscale [0..1]
-
-        g = rgb2gray(img)
-        # keep dtype close to original
-        if img.dtype.kind in ("u", "i"):
-            g = (g * np.iinfo(img.dtype).max).astype(img.dtype)
-        return g
-    return img
-
-def _tiles(H: int, W: int, block: int, overlap: int, context: int):
-    """
-    Yield tile windows with overlap+context.
-    Returns tuples: (y0,y1,x0,x1) = effective crop (with context),
-                    (yy0,yy1,xx0,xx1) = paste window (without context, i.e., core).
-    """
-    stride = block - overlap
-    y_starts = list(range(0, max(H - block, 0) + 1, stride)) or [0]
-    x_starts = list(range(0, max(W - block, 0) + 1, stride)) or [0]
-    # Ensure last tile reaches image border
-    if y_starts[-1] + block < H:
-        y_starts.append(H - block)
-    if x_starts[-1] + block < W:
-        x_starts.append(W - block)
-
-    for ys in y_starts:
-        for xs in x_starts:
-            core_y0, core_y1 = ys, min(ys + block, H)
-            core_x0, core_x1 = xs, min(xs + block, W)
-
-            y0 = max(0, core_y0 - context)
-            x0 = max(0, core_x0 - context)
-            y1 = min(H, core_y1 + context)
-            x1 = min(W, core_x1 + context)
-
-            # core (without context) in global coords:
-            yield (y0, y1, x0, x1), (core_y0, core_y1, core_x0, core_x1)
-
-def _merge_labels_overlapping(
-    base_core: np.ndarray,
-    new_core: np.ndarray,
-    iou_thresh: float = 0.5,
-) -> Dict[int, int]:
-    """
-    In overlapping paste area between existing labels (base_core) and new labels (new_core),
-    compute IoU and decide a mapping from new IDs -> existing IDs (to avoid duplicates).
-    Returns a dict: {new_id: existing_id}
-    """
-    mapping = {}
-    # quickly skip if nearly empty
-    if base_core.max() == 0 or new_core.max() == 0:
-        return mapping
-
-    # Build contingency of pairs (base_id, new_id) on overlapping pixels where both > 0
-    overlap_mask = (base_core > 0) & (new_core > 0)
-    if not overlap_mask.any():
-        return mapping
-
-    base_ids = base_core[overlap_mask]
-    new_ids = new_core[overlap_mask]
-    pairs = np.stack([base_ids, new_ids], axis=1)
-
-    # Count intersection per (base_id, new_id)
-    # We compress pairs into unique rows and counts
-    # Using np.unique with return_counts
-    uniq_pairs, counts = np.unique(pairs, axis=0, return_counts=True)
-    # Build areas
-    base_area = np.bincount(base_core.ravel())
-    new_area = np.bincount(new_core.ravel())
-
-    for (b_id, n_id), inter in zip(uniq_pairs, counts):
-        if b_id == 0 or n_id == 0:  # safety
-            continue
-        # IoU = inter / (area_b + area_n - inter)
-        if b_id < len(base_area) and n_id < len(new_area):
-            union = base_area[b_id] + new_area[n_id] - inter
-            if union > 0 and (inter / union) >= iou_thresh:
-                # prefer first strong match; if multiple, keep largest IoU by updating only if better
-                # We don't precompute IoU ranking for brevity; this heuristic works well in practice.
-                if n_id not in mapping:
-                    mapping[n_id] = b_id
-    return mapping
-
-def _paste_with_relabel(
-    global_rows, global_cols, global_vals,
-    tile_mask: np.ndarray,
-    paste_win: Tuple[int, int, int, int],
-    existing_global: Optional[np.ndarray],
-    next_label_start: int,
-    iou_thresh: float = 0.5,
-):
-    """
-    Accumulate sparse coordinates for tile_mask pasted into global coords with ID relabeling.
-    - existing_global: optional small array view (current labels) of the same paste window;
-                       if provided, used to compute IoU-based merge mapping.
-    Returns new_next_label, and extends lists global_rows, global_cols, global_vals
-    """
-    y0, y1, x0, x1 = paste_win
-    core_h, core_w = (y1 - y0), (x1 - x0)
-    core = tile_mask[:core_h, :core_w]  # ensure exact core cut (tile_mask is already cropped to core)
-
-    # Determine mapping using IoU in the paste area
-    mapping = {}
-    if existing_global is not None:
-        mapping = _merge_labels_overlapping(existing_global, core, iou_thresh=iou_thresh)
-
-    # Relabel: new IDs -> either mapped to existing, or shifted by next_label_start
-    # Compute relabel array:
-    max_id = core.max()
-    if max_id == 0:
-        return next_label_start
-
-    relabel = np.zeros(max_id + 1, dtype=np.int32)
-    for nid in range(1, max_id + 1):
-        if nid in mapping:
-            relabel[nid] = mapping[nid]
-        else:
-            relabel[nid] = next_label_start
-            next_label_start += 1
-
-    core_re = relabel[core]  # remapped core IDs
-
-    # Append nonzero pixels into global sparse coordinates
-    nz = core_re.nonzero()
-    if len(nz[0]) == 0:
-        return next_label_start
-    gy = nz[0] + y0
-    gx = nz[1] + x0
-    global_rows.append(gy)
-    global_cols.append(gx)
-    global_vals.append(core_re[nz])
-
-    return next_label_start
 
 def cellseg(
     image_path: str,
@@ -279,7 +137,6 @@ def cellseg(
     block_size: int = 2048,
     min_overlap: int = 256,
     context: int = 64,
-    # Cellpose-related knobs (can be passed via **kwargs in original calls)
     gpu: bool = False,
     diameter: Optional[float] = None,
     mask_threshold: Optional[float] = None,   # maps from prob_thresh if provided
@@ -293,8 +150,11 @@ def cellseg(
     **kwargs,
 ):
     """
-    Cell segmentation with tiled inference using Cellpose or CellSAM.
+    Tiled cell segmentation of a bin2cell image with any ``ov.space.seg`` backend.
     Writes a SciPy sparse CSR label matrix to labels_npz_path.
+
+    Tiles are stitched by centroid ownership (see ``ov.space.seg.segment_tiled``),
+    so a cell crossing a tile seam keeps one label.
 
     Parameters
     ----------
@@ -303,23 +163,26 @@ def cellseg(
     labels_npz_path : str
         Output path for the sparse label matrix (.npz).
     stardist_model : str
-        Model hint. For cellpose: '2D_versatile_he' -> 'cyto',
-        '2D_versatile_fluo' -> 'nuclei'. Ignored for CellSAM.
+        Image hint: '2D_versatile_he' (H&E) or '2D_versatile_fluo' (expression
+        or fluorescence image). It is the model for ``backend='stardist'``;
+        for Cellpose < 4 it selects 'cyto' / 'nuclei'.
     block_size, min_overlap, context : int
-        Tiling parameters.
+        Tile size; the margin segmented around each tile is
+        ``max(context, min_overlap // 2)``.
     gpu : bool
         Whether to use GPU.
     backend : str
-        Segmentation backend: 'cellpose' (default) or 'cellsam'.
+        'cellpose' (default), 'stardist', 'watershed', 'sam', 'sam2',
+        'micro_sam' or 'cellsam'.
     bbox_threshold : float
         CellSAM bounding box confidence threshold. Default 0.4.
     show_progress : bool
         Display progress bar.
     **kwargs
-        Additional arguments forwarded to the backend.
+        Additional arguments forwarded to the backend
+        (see ``ov.space.seg.segment``); ``iou_merge_threshold`` and
+        ``build_sparse_directly`` are accepted for compatibility and unused.
     """
-    from skimage.io import imread
-
     if backend == "cellsam":
         return _cellseg_cellsam(
             image_path, labels_npz_path,
@@ -329,190 +192,37 @@ def cellseg(
             bbox_threshold=bbox_threshold, **kwargs,
         )
 
-    # --- Cellpose backend ---
-    from cellpose import models
-    if stardist_model == "2D_versatile_he":
-        model_type = "cyto"
-    elif stardist_model == "2D_versatile_fluo":
-        model_type = "nuclei"
-    else:
-        model_type = "cyto"
+    from ...space.seg import segment
 
-    # map StarDist prob_thresh -> Cellpose mask_threshold if user passed it in kwargs
-    if "prob_thresh" in kwargs and mask_threshold is None:
-        mask_threshold = kwargs.pop("prob_thresh")
-
-    # load image
-    img = imread(image_path)
-    img = _ensure_gray(img)
-    H, W = img.shape[:2]
-
-    # init model
-    cp = models.CellposeModel(gpu=gpu, model_type=model_type)
-    # inspect eval signature once for compatibility handling
-    import inspect
-    eval_params = inspect.signature(cp.eval).parameters
-    supports_channels = "channels" in eval_params
-    supports_channel_axis = "channel_axis" in eval_params
-
-    # holders for building sparse
-    global_rows, global_cols, global_vals = [], [], []
-    # For overlap IoU merge we need a small existing view; we won't build a dense global label.
-    # Instead, for each paste window, we materialize an "existing view" from what we've already
-    # appended by rasterizing only that window to a small dense array. To keep memory small,
-    # we do it window-by-window.
-    # We'll keep a simple list of pasted windows and their sparse coords to reconstruct a small view.
-
-    pasted_windows = []  # list of tuples (y0,y1,x0,x1, rows_sub, cols_sub, vals_sub)
-
-    next_label = 1
-
-    # Setup progress bar over tiles
-    pbar = None
-    use_fallback_progress = False
-    tiles_done = 0
-    print_every = 1
-    if show_progress:
-        # compute total number of tiles with same logic as _tiles()
-        stride = block_size - min_overlap
-        y_starts = list(range(0, max(H - block_size, 0) + 1, stride)) or [0]
-        x_starts = list(range(0, max(W - block_size, 0) + 1, stride)) or [0]
-        if y_starts[-1] + block_size < H:
-            y_starts.append(H - block_size)
-        if x_starts[-1] + block_size < W:
-            x_starts.append(W - block_size)
-        total_tiles = len(y_starts) * len(x_starts)
-        try:
-            from tqdm import tqdm  # type: ignore
-            pbar = tqdm(total=total_tiles, desc=progress_desc or "bin2cell.cellseg", unit="tile")
-        except Exception:
-            use_fallback_progress = True
-            print_every = max(1, total_tiles // 10) if total_tiles > 0 else 1
-
-    for (y0, y1, x0, x1), (cy0, cy1, cx0, cx1) in _tiles(H, W, block_size, min_overlap, context):
-        # crop with context
-        tile = img[y0:y1, x0:x1]
-
-        # run cellpose on tile
-        # channels=[0,0] meaning single-channel grayscale
-        eval_kwargs = {}
-        if diameter is not None:
-            eval_kwargs["diameter"] = diameter
+    # an H&E hint on a single-channel image still segments, as before
+    image_type = "fluorescence" if stardist_model == "2D_versatile_fluo" else "auto"
+    method_kwargs = dict(kwargs)
+    if backend == "cellpose":
+        # StarDist-style threshold names used by the Visium HD wrappers
+        prob = method_kwargs.pop("prob_thresh", None)
+        method_kwargs.pop("nms_thresh", None)
+        if mask_threshold is None:
+            mask_threshold = prob
         if mask_threshold is not None:
-            # cellpose versions differ: prefer 'cellprob_threshold'; fall back to 'mask_threshold' if needed
-            if "cellprob_threshold" in eval_params:
-                eval_kwargs["cellprob_threshold"] = mask_threshold
-            elif "mask_threshold" in eval_params:
-                eval_kwargs["mask_threshold"] = mask_threshold
+            method_kwargs["cellprob_threshold"] = mask_threshold
         if flow_threshold is not None:
-            # only pass if supported by current cellpose version
-            if "flow_threshold" in eval_params:
-                eval_kwargs["flow_threshold"] = flow_threshold
-        # forward supported extra kwargs to Cellpose eval (e.g., min_size, stitch_threshold, tile_overlap, niter, etc.)
-        for _k, _v in list(kwargs.items()):
-            if _k in eval_params and _k not in ("channels", "channel_axis", "progress") and _k not in eval_kwargs:
-                eval_kwargs[_k] = _v
-
-        # guard against very small tiles that can cause mask computation errors in cellpose
-        if tile.shape[0] < 11 or tile.shape[1] < 11:
-            masks = np.zeros(tile.shape[:2], dtype=np.int32)
-            flows, styles, diams = None, None, None
-        else:
-            # build call-time kwargs for channel specification depending on version
-            call_kwargs = {**eval_kwargs}
-            # prefer channel_axis in newer versions to avoid deprecation warnings
-            if supports_channel_axis:
-                call_kwargs["channel_axis"] = None  # 2D grayscale image
-            elif supports_channels:
-                call_kwargs["channels"] = [0, 0]
+            method_kwargs["flow_threshold"] = flow_threshold
+        if "model" not in method_kwargs:
+            from importlib.metadata import version
             try:
-                _out = cp.eval(tile, **call_kwargs)
-                # robustly unpack depending on cellpose version
-                if isinstance(_out, tuple):
-                    if len(_out) == 4:
-                        masks, flows, styles, diams = _out
-                    elif len(_out) == 3:
-                        masks, flows, styles = _out
-                        diams = None
-                    elif len(_out) == 2:
-                        masks, flows = _out
-                        styles = diams = None
-                    else:
-                        masks = _out[0]
-                        flows = styles = diams = None
-                else:
-                    masks = _out
-                    flows = styles = diams = None
-            except Exception as e:
-                # safe fallback: yield empty mask for this tile
-                print(f"[bin2cell.cellseg] Cellpose eval failed on a tile: {e}. Using empty mask for this tile.")
-                masks = np.zeros(tile.shape[:2], dtype=np.int32)
-                flows, styles, diams = None, None, None
+                major = int(version("cellpose").split(".")[0])
+            except Exception:
+                major = 4
+            if major < 4:  # keep the models this path always used before Cellpose-SAM
+                method_kwargs["model"] = "nuclei" if image_type == "fluorescence" else "cyto"
+    elif backend == "stardist":
+        method_kwargs.setdefault("model", stardist_model)
 
-        # cut back to core (remove context)
-        core_y0, core_y1 = cy0 - y0, cy1 - y0
-        core_x0, core_x1 = cx0 - x0, cx1 - x0
-        core_mask = masks[core_y0:core_y1, core_x0:core_x1]
-
-        # Build a small dense "existing" view just for the paste window to compute IoU
-        existing = None
-        if pasted_windows:
-            # rasterize the existing sparse pixels intersecting this paste window
-            ph, pw = (cy1 - cy0), (cx1 - cx0)
-            existing = np.zeros((ph, pw), dtype=np.int32)
-            for (py0, py1, px0, px1, r, c, v) in pasted_windows:
-                # intersection with current paste window
-                iy0 = max(py0, cy0)
-                ix0 = max(px0, cx0)
-                iy1 = min(py1, cy1)
-                ix1 = min(px1, cx1)
-                if iy0 >= iy1 or ix0 >= ix1:
-                    continue
-                # select those coords that fall into intersection
-                sel = (r >= iy0) & (r < iy1) & (c >= ix0) & (c < ix1)
-                if not np.any(sel):
-                    continue
-                rr = r[sel] - cy0
-                cc = c[sel] - cx0
-                existing[rr, cc] = v[sel]
-
-        # accumulate sparse coordinates with IoU-based relabel/merge
-        next_label = _paste_with_relabel(
-            global_rows, global_cols, global_vals,
-            core_mask,
-            (cy0, cy1, cx0, cx1),
-            existing,
-            next_label_start=next_label,
-            iou_thresh=iou_merge_threshold,
-        )
-
-        # cache what we just pasted (for future "existing" rasterization)
-        r = global_rows[-1] if global_rows else np.array([], dtype=np.int32)
-        c = global_cols[-1] if global_cols else np.array([], dtype=np.int32)
-        v = global_vals[-1] if global_vals else np.array([], dtype=np.int32)
-        pasted_windows.append((cy0, cy1, cx0, cx1, r, c, v))
-
-        # progress update
-        if pbar is not None:
-            pbar.update(1)
-        elif use_fallback_progress:
-            tiles_done += 1
-            if (tiles_done % print_every == 0) or (tiles_done == total_tiles):
-                print(f"[bin2cell.cellseg] Processed {tiles_done}/{total_tiles} tiles")
-
-    # close progress bar if used
-    if pbar is not None:
-        pbar.close()
-
-    # Build global sparse CSR (H x W) without ever materializing dense full image
-    if len(global_rows) == 0:
-        labels_csr = sparse.csr_matrix((H, W), dtype=np.int32)
-    else:
-        rows = np.concatenate(global_rows)
-        cols = np.concatenate(global_cols)
-        vals = np.concatenate(global_vals)
-        labels_csr = sparse.csr_matrix((vals, (rows, cols)), shape=(H, W), dtype=np.int32)
-
+    labels_csr = segment(
+        image_path, method=backend, image_type=image_type, diameter=diameter, gpu=gpu,
+        tile_size=block_size, context=max(context, min_overlap // 2), sparse=True,
+        show_progress=show_progress, **method_kwargs,
+    )
     sparse.save_npz(labels_npz_path, labels_csr)
 
 

@@ -205,6 +205,20 @@ histo = [
   'shapely>=2.0; python_version >= "3.10"',
 ]
 
+# Cell segmentation backends for ``ov.space.seg`` (methods from the Nat.
+# Methods 2026 spatial segmentation benchmark). The watershed baseline needs
+# none of these. StarDist (TensorFlow), micro-SAM (conda-forge only), CellSAM
+# (GitHub) and Baysor (Julia CLI) are installed separately; see
+# ``ov.space.seg.methods()``. SAM 2 needs Python >= 3.10.
+# Install via: pip install omicverse[seg]
+seg = [
+  "cellpose>=3.0",
+  "segment-anything>=1.0",
+  'sam2>=1.0; python_version >= "3.10"',
+  "huggingface_hub>=0.24",
+  "shapely>=2.0",
+]
+
 # Trajectory inference zoo — Python ports of the dynbenchmark methods
 # (Saelens et al. 2019). Pulls one wrapper per method that registers as a
 # backend for ``ov.single.TrajInfer(method=...)``. Slingshot is bundled in
