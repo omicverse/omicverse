@@ -253,7 +253,8 @@ def montage(series: DicomSeries, instances: Optional[Iterable[int]] = None, *,
     for ax, i, px in zip(axes.ravel(), ids, imgs):
         inst = series.instance(i)
         ax.imshow(px, cmap="gray", vmin=lo, vmax=hi, aspect=inst.ps[0] / inst.ps[1])
-        ax.set_title(f"inst {i}", fontsize=9, color="black")
+        ax.text(0.02, 0.98, f"inst {i}", transform=ax.transAxes, ha="left", va="top",
+                fontsize=10, color="yellow", fontweight="bold")
     fig.suptitle(f"{series.description} ({series.plane}); image right = {d['right']}, "
                  f"down = {d['down']}" + (f"; crop rows {crop[0]}-{crop[1]}, cols {crop[2]}-{crop[3]}"
                                           if crop else ""), fontsize=9)
