@@ -160,3 +160,13 @@ def test_profile_slices_marks_only_the_defect_slice(study):
                              factor=3.0, reference_mm=(0, 8))
     hit = tab[tab.length_mm > 0].instance_number.unique().tolist()
     assert hit == [t1.instance_numbers[2]]
+
+
+def test_region_sheets_cover_body(tmp_path, study):
+    sh = rad.region_sheets(study["Sag STIR"], region_mm=20, out_prefix=str(tmp_path / "rg"))
+    assert len(sh) >= 2
+    for x in sh:
+        assert (tmp_path / x["path"].split("/")[-1]).exists()
+        r0, r1, c0, c1 = x["crop"]
+        assert 0 <= r0 < r1 <= 64 and 0 <= c0 < c1 <= 64
+        assert set(x["instances"]) <= set(study["Sag STIR"].instance_numbers)

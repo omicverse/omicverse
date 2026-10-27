@@ -24,7 +24,7 @@ import numpy as np
 from .._registry import register_function
 from ._dicom import DicomSeries, DicomStudy
 
-__all__ = ["render_slices", "montage"]
+__all__ = ["render_slices", "montage", "region_sheets"]
 
 
 def _window(img: np.ndarray, lo: float = 1.0, hi: float = 99.5) -> Tuple[float, float]:
@@ -262,3 +262,81 @@ def montage(series: DicomSeries, instances: Optional[Iterable[int]] = None, *,
     fig.savefig(out, dpi=100)
     plt.close(fig)
     return {"path": out, "instances": ids, "directions": d}
+
+
+@register_function(
+    aliases=["分区阅片图", "区域切片总览", "region sheets", "zoomed regional survey",
+             "systematic regional montage", "tile the field of view"],
+    category="radiology",
+    description="Systematic zoomed survey of a series: split the body's field of view into overlapping "
+                "square regions and, for each region, montage that crop over every slice that contains "
+                "tissue — each structure is seen magnified on all its slices, unlike whole-slice thumbnails",
+    requires={},
+    produces={},
+    auto_fix="none",
+    examples=["sheets = ov.radiology.region_sheets(st['Sag STIR'], region_mm=70, out_prefix='reg_stir')",
+              "for sh in sheets: vision__analyze_image(path=sh['path'], prompt=...)"],
+)
+def region_sheets(series: DicomSeries, *, region_mm: float = 90.0, overlap: float = 0.2,
+                  instances: Optional[Iterable[int]] = None, max_tiles: int = 24, ncols: int = 6,
+                  tile_px: int = 260, out_prefix: str = "region",
+                  window: Tuple[float, float] = (1.0, 99.5)) -> List[Dict]:
+    """Region-by-region montages of one series.
+
+    The body is found on the slice-wise maximum (signal above 10 % of the
+    99th percentile), its bounding box is covered by square regions of
+    ``region_mm`` with fractional ``overlap``, and each region is montaged
+    over the slices where it contains tissue (``max_tiles`` per sheet; longer
+    runs are split). Every tile shows the same crop, so a structure can be
+    followed from slice to slice and compared with itself.
+
+    Returns one dict per sheet: ``path``, ``region`` (index), ``crop``
+    ``(r0, r1, c0, c1)``, ``instances``, the patient-mm centre of the region
+    on the middle slice and the image directions.
+    """
+    ids = list(instances) if instances is not None else series.instance_numbers
+    i0 = series.instance(ids[0])
+    imgs = {i: series.pixels(i) for i in ids}
+    mx = np.max(np.stack([imgs[i] for i in ids]), axis=0)
+    thr = 0.10 * np.percentile(mx, 99)
+    body = mx > thr
+    rr = np.where(body.any(1))[0]
+    cc = np.where(body.any(0))[0]
+    if rr.size == 0:
+        return []
+    R0, R1, C0, C1 = int(rr[0]), int(rr[-1]) + 1, int(cc[0]), int(cc[-1]) + 1
+    hr = max(8, int(round(region_mm / i0.ps[0])))
+    hc = max(8, int(round(region_mm / i0.ps[1])))
+
+    def starts(a, b, h):
+        if b - a <= h:
+            return [max(0, (a + b - h) // 2)]
+        step = max(1, int(h * (1 - overlap)))
+        s = list(range(a, b - h, step))
+        if s and (b - h) - s[-1] < step / 2:
+            s[-1] = b - h          # shift the last region to the edge instead of adding a near-duplicate
+        else:
+            s.append(b - h)
+        return sorted(set(s))
+
+    sheets: List[Dict] = []
+    k = 0
+    for r0 in starts(R0, R1, hr):
+        for c0 in starts(C0, C1, hc):
+            crop = (max(0, r0), min(i0.rows, r0 + hr), max(0, c0), min(i0.cols, c0 + hc))
+            keep = [i for i in ids
+                    if (imgs[i][crop[0]:crop[1], crop[2]:crop[3]] > thr).mean() > 0.05]
+            if not keep:
+                continue
+            for j in range(0, len(keep), max_tiles):
+                part = keep[j:j + max_tiles]
+                out = f"{out_prefix}_r{k:02d}_{j // max_tiles}.png"
+                res = montage(series, part, crop=crop, ncols=min(ncols, len(part)), tile_px=tile_px,
+                              out=out, window=window)
+                mid = part[len(part) // 2]
+                sheets.append({"path": out, "region": k, "crop": crop, "instances": part,
+                               "centre_xyz_mm": np.round(series.pixel_to_patient(
+                                   mid, (crop[0] + crop[1]) / 2, (crop[2] + crop[3]) / 2), 1).tolist(),
+                               "directions": res["directions"]})
+            k += 1
+    return sheets

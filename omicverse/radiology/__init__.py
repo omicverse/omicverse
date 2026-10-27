@@ -10,8 +10,10 @@ WHAT LIVES HERE
                      two-point distance, midpoint-to-reference distance.
     rendering        ``render_slices`` (aspect-correct, gridded, orientation-
                      labelled crops side by side across sequences) and
-                     ``montage`` (instance-labelled overview) — images sized
-                     for visual reading.
+                     ``montage`` (instance-labelled overview) and
+                     ``region_sheets`` (each region of the field of view
+                     magnified over all slices) — images sized for visual
+                     reading.
     profiles         ``path_profile`` / ``abnormal_segments`` / ``profile_slices``: signal along a
                      tendon / ligament / nerve / fascia, against its own intact
                      portion, on several sequences at once.
@@ -25,9 +27,10 @@ WHAT DOES NOT
 from ._dicom import (DicomSeries, DicomStudy, landmark_measurement, plane_of,
                      read_dicom_study, sequence_weighting)
 from ._profile import abnormal_segments, path_profile, profile_slices
-from ._render import montage, render_slices
+from ._render import montage, region_sheets, render_slices
 
 __all__ = [
     "DicomSeries", "DicomStudy", "read_dicom_study", "plane_of", "sequence_weighting",
     "landmark_measurement", "render_slices", "montage", "path_profile", "abnormal_segments", "profile_slices",
+    "region_sheets",
 ]
