@@ -8,6 +8,7 @@ cell x gene AnnData either way.
 """
 from __future__ import annotations
 
+import importlib.util
 import os
 import shutil
 import subprocess
@@ -18,6 +19,7 @@ from typing import Literal, Sequence
 import numpy as np
 import pandas as pd
 
+from ..._optional import build_optional_dependency_error
 from ..._registry import register_function
 
 
@@ -160,7 +162,7 @@ def aggregate(
     pixel_size: float = 1.0,
     offset: Sequence[float] = (0.0, 0.0),
     transform=None,
-    geometry: bool = True,
+    geometry: bool | None = None,
     library_id: str = "seg",
 ):
     """Build a cell x gene count matrix from assigned transcripts.
@@ -176,10 +178,13 @@ def aggregate(
         counts once otherwise.
     labels
         The label image the ``cell`` ids came from. Adds ``obs['area']``
-        (transcript units squared) and, with ``geometry=True``,
+        (transcript units squared) and, with ``geometry``,
         ``obs['geometry']`` WKT polygons for :func:`ov.pl.spatialseg`.
     pixel_size, offset, transform
         Same mapping as :func:`assign_transcripts`.
+    geometry
+        Write cell outlines (needs ``shapely``). ``None`` writes them when
+        ``shapely`` is installed; ``True`` requires it.
     library_id
         Key under ``uns['spatial']``.
 
@@ -219,7 +224,16 @@ def aggregate(
         scale = abs(np.linalg.det(np.linalg.inv(np.asarray(transform, dtype=float))[:2, :2])) \
             if transform is not None else pixel_size ** 2
         adata.obs["area"] = area_px[ids] * scale
+        if geometry is None:
+            geometry = importlib.util.find_spec("shapely") is not None
         if geometry:
+            try:
+                import shapely  # noqa: F401
+            except ImportError as exc:
+                raise build_optional_dependency_error(
+                    "ov.space.seg.aggregate(geometry=True)", ("shapely",),
+                    install_hint="Install with `pip install shapely` or pass geometry=False.",
+                ) from exc
             adata.obs["geometry"] = _polygons_wkt(labels, ids, pixel_size=pixel_size,
                                                   offset=offset, transform=transform)
     diam = 2 * np.sqrt(np.nanmedian(adata.obs["area"]) / np.pi) if "area" in adata.obs and adata.n_obs else 10.0

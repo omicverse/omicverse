@@ -7,6 +7,7 @@ stitching, assignment, counting and metrics code is all real.
 """
 from __future__ import annotations
 
+import importlib.util
 import sys
 import textwrap
 import types
@@ -287,13 +288,28 @@ def test_assign_and_aggregate_round_trip():
     assert adata[odd, ["B1", "B2", "B3"]].X.sum() == 0
     np.testing.assert_allclose(adata.obs["area"], np.bincount(truth.ravel())[1:] * px ** 2)
 
+    assert "seg" in adata.uns["spatial"]
+
+    if importlib.util.find_spec("shapely") is None:
+        assert "geometry" not in adata.obs  # outlines are optional
+        return
     from shapely import wkt
     from shapely.geometry import Point
     for (cx, cy), poly in zip(adata.obsm["spatial"], adata.obs["geometry"]):
         shape = wkt.loads(poly)
         assert shape.contains(Point(cx, cy))
         assert abs(shape.area - np.pi * (12 * px) ** 2) < 0.15 * np.pi * (12 * px) ** 2
-    assert "seg" in adata.uns["spatial"]
+
+
+def test_aggregate_geometry_needs_shapely(monkeypatch):
+    truth = _discs(60, 60, [(30, 30)], 8)
+    tx = _molecules(truth, 1.0, (0.0, 0.0))
+    monkeypatch.setitem(sys.modules, "shapely", None)
+    cell = seg.assign_transcripts(tx, truth)
+    adata = seg.aggregate(tx.assign(cell=cell), labels=truth, geometry=False)
+    assert "geometry" not in adata.obs and adata.obs["area"].gt(0).all()
+    with pytest.raises(ImportError, match="pip install shapely"):
+        seg.aggregate(tx.assign(cell=cell), labels=truth, geometry=True)
 
 
 def test_aggregate_with_counts_and_string_cells():
