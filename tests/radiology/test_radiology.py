@@ -152,3 +152,11 @@ def test_render(tmp_path, study):
     assert r["panels"][1]["instance_number"] == 3
     m = rad.montage(study["Sag STIR"], out=str(tmp_path / "m.png"), tile_px=120)
     assert (tmp_path / "m.png").exists() and m["instances"] == [5, 4, 3, 2, 1]
+
+
+def test_profile_slices_marks_only_the_defect_slice(study):
+    t1, stir = study["Sag T1"], study["Sag STIR"]
+    tab = rad.profile_slices(t1, t1.instance_numbers, [(2, 31), (62, 29)], compare={"stir": stir},
+                             factor=3.0, reference_mm=(0, 8))
+    hit = tab[tab.length_mm > 0].instance_number.unique().tolist()
+    assert hit == [t1.instance_numbers[2]]

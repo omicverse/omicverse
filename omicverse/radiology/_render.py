@@ -78,7 +78,8 @@ def render_slices(study: Optional[DicomStudy], series: Sequence[Union[str, int, 
                   points: Optional[Dict[str, Tuple[float, float]]] = None,
                   paths: Optional[Dict[str, Sequence[Tuple[float, float]]]] = None,
                   out: str = "slices.png", panel_px: int = 900, grid: Optional[int] = None,
-                  window: Tuple[float, float] = (1.0, 99.5), title: Optional[str] = None) -> Dict:
+                  window: Tuple[float, float] = (1.0, 99.5), title: Optional[str] = None,
+                  max_px: int = 1800) -> Dict:
     """Render one slice per series, side by side.
 
     Parameters
@@ -106,6 +107,10 @@ def render_slices(study: Optional[DicomStudy], series: Sequence[Union[str, int, 
         do not go below ~600 for fine structures).
     grid
         Grid step in reference pixels; default ≈ 1/10 of the crop.
+    max_px
+        Cap on the output's longest side; panels shrink to fit. Very large
+        images are slow for (and may time out in) a vision model — prefer fewer
+        panels or a tighter crop to shrinking below ~600 px per panel.
 
     Returns
     -------
@@ -144,7 +149,9 @@ def render_slices(study: Optional[DicomStudy], series: Sequence[Union[str, int, 
     # size each panel from the crop's physical aspect: longest side = panel_px
     h_mm, w_mm = (r1 - r0) * ri.ps[0], (c1 - c0) * ri.ps[1]
     ph, pw = (panel_px, panel_px * w_mm / h_mm) if h_mm >= w_mm else (panel_px * h_mm / w_mm, panel_px)
-    fig, axes = plt.subplots(1, n, figsize=(n * (pw / 100.0 + 0.8), ph / 100.0 + 1.0), squeeze=False)
+    fw, fh = n * (pw + 80.0), ph + 100.0
+    k = min(1.0, max_px / max(fw, fh))
+    fig, axes = plt.subplots(1, n, figsize=(fw * k / 100.0, fh * k / 100.0), squeeze=False)
     meta = []
     for ax, (s, ti, (a0, a1, b0, b1), oop) in zip(axes[0], panels):
         inst = s.instance(ti)
@@ -219,15 +226,18 @@ def render_slices(study: Optional[DicomStudy], series: Sequence[Union[str, int, 
 def montage(series: DicomSeries, instances: Optional[Iterable[int]] = None, *,
             crop: Optional[Tuple[int, int, int, int]] = None, ncols: int = 4,
             tile_px: int = 400, out: str = "montage.png",
-            window: Tuple[float, float] = (1.0, 99.5)) -> Dict:
+            window: Tuple[float, float] = (1.0, 99.5), max_px: int = 1800) -> Dict:
     """Grid of slices of one series. Keep tiles ≥ ~300 px: split long series
-    into several montages (``instances=``) rather than shrinking the tiles."""
+    into several montages (``instances=``, ≤ 12–16 per sheet) rather than
+    shrinking the tiles; the sheet is capped at ``max_px`` on its longest side."""
     import matplotlib
     matplotlib.use("Agg")
     import matplotlib.pyplot as plt
 
     ids = list(instances) if instances is not None else series.instance_numbers
     nrow = int(np.ceil(len(ids) / ncols))
+    # keep the whole sheet under max_px: shrink tiles (better: fewer instances per sheet)
+    tile_px = int(min(tile_px, max_px / max(ncols, nrow)))
     fig, axes = plt.subplots(nrow, ncols, figsize=(ncols * tile_px / 100, nrow * tile_px / 100 + 0.4),
                              squeeze=False)
     imgs = []

@@ -12,7 +12,7 @@ WHAT LIVES HERE
                      labelled crops side by side across sequences) and
                      ``montage`` (instance-labelled overview) — images sized
                      for visual reading.
-    profiles         ``path_profile`` / ``abnormal_segments``: signal along a
+    profiles         ``path_profile`` / ``abnormal_segments`` / ``profile_slices``: signal along a
                      tendon / ligament / nerve / fascia, against its own intact
                      portion, on several sequences at once.
 
@@ -24,10 +24,10 @@ WHAT DOES NOT
 
 from ._dicom import (DicomSeries, DicomStudy, landmark_measurement, plane_of,
                      read_dicom_study, sequence_weighting)
-from ._profile import abnormal_segments, path_profile
+from ._profile import abnormal_segments, path_profile, profile_slices
 from ._render import montage, render_slices
 
 __all__ = [
     "DicomSeries", "DicomStudy", "read_dicom_study", "plane_of", "sequence_weighting",
-    "landmark_measurement", "render_slices", "montage", "path_profile", "abnormal_segments",
+    "landmark_measurement", "render_slices", "montage", "path_profile", "abnormal_segments", "profile_slices",
 ]
