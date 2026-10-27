@@ -58,6 +58,11 @@ Synthetic data            ``simulate_gwas_study`` — one coherent cohort
                           known ground truth, for tutorials / tests
 GWAS core (no backend)    ``gwas_qc``, ``gwas_association``,
                           ``genomic_inflation``
+Trait determinants        ``trait_determinants`` (conditional +
+                          effect-modifier-aware ranking of the features
+                          driving a binary trait), ``effect_modifier_scan``,
+                          ``transfer_trait_predict`` (unlabelled trait from
+                          pooled related traits)
 Pipeline helpers          ``sample_qc_metrics``, ``scan_cis_genes``,
                           ``genotype_pca``, ``clump_loci``, ``grade_loci``,
                           ``prune_by_distance``, ``make_coloc_dataset``,
@@ -125,6 +130,10 @@ _LAZY_ATTRS: dict[str, tuple[str, str]] = {
     "gwas_qc":                   ("._gwas", "gwas_qc"),
     "gwas_association":          ("._gwas", "gwas_association"),
     "genomic_inflation":         ("._gwas", "genomic_inflation"),
+    # Genotype -> binary trait determinants / related-trait transfer
+    "effect_modifier_scan":      ("._determinants", "effect_modifier_scan"),
+    "trait_determinants":        ("._determinants", "trait_determinants"),
+    "transfer_trait_predict":    ("._determinants", "transfer_trait_predict"),
     # eQTL mapping
     "eqtl_map":                  ("._eqtl", "eqtl_map"),
     # Fine-mapping
@@ -180,6 +189,7 @@ _REGISTRY_SUBMODULES = (
     "._simulate",
     "._utils",
     "._gwas",
+    "._determinants",
     "._eqtl",
     "._finemap",
     "._coloc",
