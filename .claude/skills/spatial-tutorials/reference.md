@@ -28,7 +28,7 @@ adata = ov.space.read_visium_10x(
 )
 ov.pp.filter_genes(adata, min_cells=3)
 ov.pp.filter_cells(adata, min_counts=1)
-adata = ov.space.visium_10x_hd_cellpose_he(
+ov.space.visium_10x_hd_cellpose_he(  # in place, returns None
     adata,
     mpp=0.3,
     he_save_path="stardist/he_colon1.tiff",
