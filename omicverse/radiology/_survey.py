@@ -687,8 +687,23 @@ def draft_principal(study: DicomStudy, ledger: Union[str, Sequence[Dict]], vocab
             meas = {"series": ser, "series_instance_uid": s.uid, "instance": int(mid), "run": r["slices"]}
         if len(evidence) < 2 and s.uid not in [e["series_instance_uid"] for e in evidence]:
             evidence.append({"series_instance_uid": s.uid, "sop_instance_uid": s.instance(int(mid)).sop_uid})
+    cands = []
+    for ser, r in ranked:
+        s = next((x for x in study if x.description == ser), None)
+        if s is None:
+            continue
+        m = s.patient_to_pixel(xyz)
+        i0 = s.instance(m["instance_number"])
+        h = int(round(50.0 / i0.ps[0])); w = int(round(50.0 / i0.ps[1]))
+        r0 = int(np.clip(round(m["row"]) - h, 0, max(0, i0.rows - 2 * h)))
+        c0 = int(np.clip(round(m["col"]) - w, 0, max(0, i0.cols - 2 * w)))
+        cands.append({"series": ser, "plane": s.plane, "weighting": s.weighting,
+                      "run_slices": r["slices"], "instance_at_location": m["instance_number"],
+                      "rowcol_at_location": [round(m["row"], 1), round(m["col"], 1)],
+                      "crop_100mm": [r0, min(i0.rows, r0 + 2 * h), c0, min(i0.cols, c0 + 2 * w)]})
     return {"found": True, "structure": struct, "finding_type": ftype, "acuity": acuity,
-            "location_xyz_mm": xyz.round(1).tolist(), "measurement_slice": meas, "evidence": evidence,
+            "location_xyz_mm": xyz.round(1).tolist(), "measurement_slice": meas,
+            "measurement_candidates": cands, "evidence": evidence,
             "basis": {"structure_names": p["structure_names"], "runs": {k: v["n"] for k, v in runs.items()},
                       "full_reads": n_full, "partial_reads": n_partial, "acute_cues": acute_cues,
                       "chronic_cues": chronic_cues}}
