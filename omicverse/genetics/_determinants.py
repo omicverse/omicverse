@@ -32,6 +32,8 @@ from __future__ import annotations
 
 from typing import Mapping, Optional, Sequence, Union
 
+import warnings
+
 import numpy as np
 import pandas as pd
 
@@ -521,6 +523,24 @@ def trait_determinants(
         cand = [j for j in cand if score[j] > 0][:max_candidates]
         sel, path, mod_det, mod_lr = _stepwise_select(M, yv, cand, m_idx, select, alpha,
                                                       covariates=cov, gamma=ebic_gamma)
+        if sel and direction in ("risk", "protective"):
+            # keep only features whose conditional effect (in the stratum where it
+            # is largest) points in the requested direction
+            mvv = M[:, [m_idx]] if m_idx is not None else None
+            blocks = [np.hstack([M[:, [j]], M[:, [j]] * mvv]) if mvv is not None else M[:, [j]]
+                      for j in sel]
+            pre = [a for a in (mvv, cov) if a is not None]
+            D = np.hstack(pre + blocks)
+            co = _logit(1e4, max_iter).fit(D, yv).coef_[0][sum(a.shape[1] for a in pre):]
+            w = 2 if mvv is not None else 1
+            keep = []
+            for k, j in enumerate(sel):
+                e = co[k * w: (k + 1) * w]
+                strata = [e[0], e[0] + e[1]] if w == 2 else [e[0]]
+                eff = max(strata, key=abs)
+                if (eff > 0) == (direction == "risk"):
+                    keep.append(j)
+            sel = keep
         for k, j in enumerate(sel):
             out.loc[j, ["is_determinant", "selection_step"]] = [True, k + 1]
         for rec in path:
@@ -632,6 +652,7 @@ def transfer_trait_predict(
     threshold: float = 0.5,
     validate: bool = True,
     n_discordant: int = 30,
+    force: bool = False,
 ) -> dict:
     """Transfer to an unlabelled trait from labelled related traits.
 
@@ -657,12 +678,18 @@ def transfer_trait_predict(
         Attribute that defines the group (default: the first column). Sources
         must share it with the target.
     decision
-        ``'pooled'`` — one model on the stacked source labels, call at
+        Leave unset. ``'pooled'`` — one model on the stacked source labels, call at
         ``threshold``. ``'consensus'`` — one model per source; call positive
         only if every source model calls positive; ``proba`` is the minimum
         over sources. ``'auto'`` (default) — ``'pooled'`` if some source
         matches the target on every attribute (or there is a single source),
         otherwise ``'consensus'``.
+        A requested ``'pooled'`` is switched to ``'consensus'`` (with a
+        warning) when the metadata shows the target differs from every
+        source, unless ``force=True``.
+    force
+        Keep a requested ``decision`` against the metadata evidence (warned
+        and recorded in ``warnings``).
     validate
         Leave-one-source-out AUROC / MCC (needs >= 2 sources).
     n_discordant
@@ -672,7 +699,9 @@ def transfer_trait_predict(
     -------
     dict
         ``proba``, ``call`` (Series indexed like ``X``), ``sources``,
-        ``decision`` (the rule used), ``source_match`` (candidate sources with
+        ``decision`` (the rule used), ``decision_requested``, ``warnings``
+        (list of str; also emitted as UserWarning), ``source_call_disagreement``
+        (fraction of samples called positive by some but not all source models), ``source_match`` (candidate sources with
         their attribute agreement), ``per_source_proba`` (DataFrame),
         ``source_agreement`` (fraction of source models calling positive),
         ``discordant_features`` (per-source coefficients, largest spread
@@ -703,6 +732,7 @@ def transfer_trait_predict(
                 f"groups has {sorted(meta.index)}")
         gcol = group_col if group_col is not None else meta.columns[0]
         others = [c for c in meta.columns if c != gcol]
+        n_attr = len(others)
         labelled = [t for t in Yd.columns if t != target and t in meta.index
                     and Yd[t].notna().any()]
         cand = [t for t in labelled if str(meta.at[t, gcol]) == str(meta.at[target, gcol])]
@@ -720,11 +750,35 @@ def transfer_trait_predict(
     else:
         sources = [str(s) for s in sources if str(s) != target]
         exact = True
+        n_attr = None
 
+    notes = []
+
+    def _warn(msg):
+        notes.append(msg)
+        warnings.warn(f"transfer_trait_predict({target!r}): {msg}", UserWarning, stacklevel=3)
+
+    requested = decision
+    if decision not in ("auto", "pooled", "consensus"):
+        raise ValueError("decision must be 'auto', 'pooled' or 'consensus'")
+    metadata_differs = match_tab is not None and not exact and len(sources) >= 2
+    if match_tab is not None and n_attr == 0:
+        _warn("the metadata given has no attribute besides the group, so whether the "
+              "sources are mechanistically equivalent to the target cannot be checked. "
+              "Pass the WHOLE trait metadata table (all columns, e.g. "
+              "pd.read_csv(<drug table>)) as `groups` and leave `decision` unset.")
     if decision == "auto":
         decision = "pooled" if (exact or len(sources) < 2) else "consensus"
-    if decision not in ("pooled", "consensus"):
-        raise ValueError("decision must be 'auto', 'pooled' or 'consensus'")
+    elif decision == "pooled" and metadata_differs:
+        if force:
+            _warn("decision='pooled' was FORCED although the metadata shows the target "
+                  "differs from every source (see source_match); determinants that act "
+                  "in some sources but are neutralised in the target will be trusted.")
+        else:
+            _warn("decision='pooled' was requested but the metadata shows the target "
+                  "differs from every source (see source_match) -> using 'consensus'. "
+                  "Pass force=True only with a stated mechanistic reason.")
+            decision = "consensus"
 
     r, yv = _stack(M, Yd, sources)
     model = _logit(C, max_iter).fit(M[r], yv)
@@ -745,6 +799,15 @@ def transfer_trait_predict(
         p = pooled
     proba = pd.Series(p, index=Xd.index, name=target)
     agreement = ((per_df >= threshold).mean(axis=1) if per_df is not None else None)
+    disagreement = None
+    if agreement is not None:
+        any_pos = agreement > 0
+        split = any_pos & (agreement < 1)
+        disagreement = float(split.sum() / max(int(any_pos.sum()), 1))
+        if decision == "pooled" and disagreement > 0 and (requested == "pooled" or n_attr == 0):
+            _warn(f"the per-source models disagree on {disagreement:.1%} of the samples any "
+                  f"source calls positive (inconsistent determinant effects, see "
+                  f"discordant_features) and the pooled rule is in use.")
 
     disc = None
     if coefs:
@@ -767,6 +830,8 @@ def transfer_trait_predict(
                         "mcc": float(matthews_corrcoef(ys, (ps >= threshold).astype(int)))})
         val = pd.DataFrame(rec)
     return {"proba": proba, "call": (proba >= threshold).astype(int),
-            "sources": list(sources), "decision": decision, "source_match": match_tab,
+            "sources": list(sources), "decision": decision,
+            "decision_requested": requested, "warnings": notes,
+            "source_call_disagreement": disagreement, "source_match": match_tab,
             "per_source_proba": per_df, "source_agreement": agreement,
             "discordant_features": disc, "validation": val, "model": model}

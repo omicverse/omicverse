@@ -53,6 +53,8 @@ def test_stepwise_selection_sizes_the_shortlist():
     assert not path["accepted"].iloc[-1]                  # stopped at a rejected candidate
     res_b = trait_determinants(X, y, shortlist=10, select="bonferroni", n_pcs=0)
     assert {"f0", "f1", "f2", "f3", "f4"} <= set(res_b.loc[res_b.is_determinant, "feature"])
+    risk = trait_determinants(X, y, shortlist=10, direction="risk")
+    assert set(risk.loc[risk.is_determinant, "feature"]) <= {"f0", "f1", "f2", "f3", "f4"}
     res_n = trait_determinants(X, y, shortlist=10, select=None)
     assert res_n.attrs["n_determinants"] is None
 
@@ -131,8 +133,20 @@ def test_transfer_metadata_matching_and_consensus():
     assert r2["call"][carriers].mean() < 0.2                       # f0 alone not trusted
     assert r2["discordant_features"].index[0] == "f0"
     assert r2["per_source_proba"].shape[1] == 2
-    r3 = transfer_trait_predict(X, Y, "t_new", groups=meta, decision="pooled")
-    assert r3["call"][carriers].mean() > r2["call"][carriers].mean()
+    # a requested 'pooled' against the metadata evidence is overridden (and warned)
+    with pytest.warns(UserWarning, match="differs from every source"):
+        r3 = transfer_trait_predict(X, Y, "t_new", groups=meta, decision="pooled")
+    assert r3["decision"] == "consensus" and r3["decision_requested"] == "pooled"
+    assert r3["warnings"]
+    with pytest.warns(UserWarning, match="FORCED"):
+        r4 = transfer_trait_predict(X, Y, "t_new", groups=meta, decision="pooled", force=True)
+    assert r4["decision"] == "pooled"
+    assert r4["call"][carriers].mean() > r2["call"][carriers].mean()
+    assert r4["source_call_disagreement"] > 0
+    # group-only metadata: equivalence cannot be checked -> loud warning
+    with pytest.warns(UserWarning, match="no attribute besides the group"):
+        r5 = transfer_trait_predict(X, Y, "t_new", groups=dict(zip(meta.drug, meta.cls)))
+    assert any("WHOLE trait metadata" in w for w in r5["warnings"])
 
 
 def test_transfer_trait_predict_group_pooling():
