@@ -646,11 +646,41 @@ def draft_principal(study: DicomStudy, ledger: Union[str, Sequence[Dict]], vocab
     if not p.get("found"):
         return {"found": False}
     vs, vf, va = vocabulary.get("structure", []), vocabulary.get("finding_type", []), vocabulary.get("acuity", [])
-    struct = None
-    for nm in p["structure_names"]:
-        struct = _best_term(nm, vs)
-        if struct:
-            break
+    rows = json.load(open(ledger)) if isinstance(ledger, str) else list(ledger)
+    c0 = np.asarray(p["xyz_mm"], float)
+    # count the reader's names AFTER mapping them to vocabulary terms (variant
+    # spellings of one structure must not split its vote)
+    votes: Dict[str, int] = {}
+    term_of_note: Dict[str, Optional[str]] = {}
+    for r in rows:
+        note = (r.get("sheet_note") or "").strip()
+        if not note or r.get("source") != "structure" or r.get("xyz_mm") is None:
+            continue
+        if np.linalg.norm(np.asarray(r["xyz_mm"], float) - c0) > 40.0:
+            continue
+        if note not in term_of_note:
+            key = _re.sub(r"^(central structure|centre structure|structure( at (the )?cent(re|er)[^:]*)?)\s*:?\s*",
+                          "", note, flags=_re.I)
+            term_of_note[note] = _best_term(key, vs)
+        t = term_of_note[note]
+        if t:
+            votes[(r.get("sheet"), t)] = 1          # one vote per sheet
+    tally: Dict[str, int] = {}
+    for (_, t) in votes:
+        tally[t] = tally.get(t, 0) + 1
+    struct = max(tally, key=tally.get) if tally else None
+    if struct is None:
+        for nm in p["structure_names"]:
+            struct = _best_term(nm, vs)
+            if struct:
+                break
+    # location: discontinuity reads on sheets the reader centred on that structure
+    sel = [np.asarray(r["xyz_mm"], float) for r in rows
+           if r.get("xyz_mm") is not None and not r.get("normal") and int(r.get("severity") or 0) >= 3
+           and term_of_note.get((r.get("sheet_note") or "").strip()) == struct
+           and _DISCONT.search(_NOT_IN_PLANE_SPAN.sub("", r.get("text", "")))]
+    if sel:
+        p = dict(p, xyz_mm=np.mean(sel, axis=0).round(1).tolist())
     runs = p["discontinuity_runs"]
     texts = [t for r in runs.values() for t in r["texts"]]
     allt = " ".join(texts).lower()
@@ -704,6 +734,6 @@ def draft_principal(study: DicomStudy, ledger: Union[str, Sequence[Dict]], vocab
     return {"found": True, "structure": struct, "finding_type": ftype, "acuity": acuity,
             "location_xyz_mm": xyz.round(1).tolist(), "measurement_slice": meas,
             "measurement_candidates": cands, "evidence": evidence,
-            "basis": {"structure_names": p["structure_names"], "runs": {k: v["n"] for k, v in runs.items()},
+            "basis": {"structure_votes": tally, "structure_names": p["structure_names"], "runs": {k: v["n"] for k, v in runs.items()},
                       "full_reads": n_full, "partial_reads": n_partial, "acute_cues": acute_cues,
                       "chronic_cues": chronic_cues}}
