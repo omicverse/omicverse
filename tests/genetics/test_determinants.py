@@ -124,7 +124,12 @@ def test_transfer_metadata_matching_and_consensus():
     Y = pd.DataFrame({"a1": draw(base + 6.0 * X["f0"]), "b2": draw(base)}, index=X.index)
     meta = pd.DataFrame({"drug": ["a1", "b2", "t_single", "t_combo", "t_new"],
                          "cls": ["A"] * 5,
+                         "generation": ["1", "2", "3", "1", "2"],      # incidental column
                          "smiles": ["CC", "CC.OO", "CC", "CC.NN", "CC.NN.SS"]})
+    # plain single-molecule target: incidental mismatch must not trigger consensus
+    r0 = transfer_trait_predict(X, Y, "t_single", groups=meta)
+    assert r0["sources"] == ["a1"] and r0["decision"] == "pooled"
+    assert any("incidental" in x for x in r0["decision_reasons"])
     r1 = transfer_trait_predict(X, Y, "t_combo", groups=meta)       # trait names in a column
     assert r1["sources"] == ["b2"] and r1["decision"] == "pooled"
     r2 = transfer_trait_predict(X, Y, "t_new", groups=meta)
@@ -133,6 +138,9 @@ def test_transfer_metadata_matching_and_consensus():
     assert r2["call"][carriers].mean() < 0.2                       # f0 alone not trusted
     assert r2["discordant_features"].index[0] == "f0"
     assert r2["per_source_proba"].shape[1] == 2
+    agree = r2["determinant_agreement"]
+    assert agree.loc[0, "feature"] == "f0" and agree.loc[0, "max_rate_gap"] > 0.3
+    assert any("added component" in x for x in r2["decision_reasons"])
     # a requested 'pooled' against the metadata evidence is overridden (and warned)
     with pytest.warns(UserWarning, match="differs from every source"):
         r3 = transfer_trait_predict(X, Y, "t_new", groups=meta, decision="pooled")
@@ -144,7 +152,7 @@ def test_transfer_metadata_matching_and_consensus():
     assert r4["call"][carriers].mean() > r2["call"][carriers].mean()
     assert r4["source_call_disagreement"] > 0
     # group-only metadata: equivalence cannot be checked -> loud warning
-    with pytest.warns(UserWarning, match="no attribute besides the group"):
+    with pytest.warns(UserWarning, match="no mechanistically relevant attribute"):
         r5 = transfer_trait_predict(X, Y, "t_new", groups=dict(zip(meta.drug, meta.cls)))
     assert any("WHOLE trait metadata" in w for w in r5["warnings"])
 

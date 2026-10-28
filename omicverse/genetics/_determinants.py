@@ -607,6 +607,15 @@ def _trait_attributes(groups, target=None) -> pd.DataFrame:
     return meta
 
 
+import re as _re
+
+# metadata columns treated as mechanistically relevant by default: the number
+# of active components (derived from SMILES) and columns that name an added
+# component (inhibitor / combination partner / adjuvant / protecting agent).
+_RELEVANT = _re.compile(r"(n_components|component|inhibit|combin|partner|adjuvant|"
+                        r"protect|potentiat)", _re.I)
+
+
 def _match_score(meta, a, b, cols):
     return sum(str(meta.at[a, c]) == str(meta.at[b, c]) for c in cols)
 
@@ -621,15 +630,15 @@ def _match_score(meta, a, b, cols):
     description=(
         "Predict a binary trait that has NO labels (e.g. resistance to a "
         "held-out drug) from a samples x features genotype matrix, using "
-        "labelled related traits: sources are the labelled traits of the same "
-        "group that best match the target on all metadata attributes (e.g. "
-        "class, subclass, combination / inhibitor flag, SMILES component "
-        "count). If the target matches some source on every attribute, one "
-        "pooled logistic model is used; if it differs from all sources, a "
-        "sample is called positive only when every source model agrees "
-        "(determinants that act in some sources but not others are not "
-        "trusted). Reports leave-one-trait-out metrics, per-source "
-        "probabilities and the features whose effects disagree across sources."
+        "labelled related traits of the same group (class). Mechanistically "
+        "relevant metadata only (number of active components from SMILES, "
+        "inhibitor / combination columns) decides equivalence; incidental "
+        "columns are ignored. Equivalent sources are pooled; if the target has "
+        "an added component no source shares, a sample is called positive only "
+        "when every group-mate's model agrees. Returns the decision with its "
+        "reasons, per-determinant agreement of the source models on carriers, "
+        "leave-one-source-out metrics, per-source probabilities and the "
+        "features whose effects disagree across sources."
     ),
     examples=[
         "res = ov.genetics.transfer_trait_predict(genomes_df, labels_wide, target='drugX', groups=drug_meta_df)",
@@ -653,6 +662,7 @@ def transfer_trait_predict(
     validate: bool = True,
     n_discordant: int = 30,
     force: bool = False,
+    relevant_cols: Optional[Sequence[str]] = None,
 ) -> dict:
     """Transfer to an unlabelled trait from labelled related traits.
 
@@ -670,10 +680,15 @@ def transfer_trait_predict(
     sources
         Labelled traits to use; overrides the metadata-based choice.
     groups
-        Trait metadata covering labelled AND unlabelled traits: a mapping
-        trait -> group, or a DataFrame indexed by trait with any number of
-        attribute columns (e.g. the whole drug table indexed by drug). A
+        Trait metadata covering labelled AND unlabelled traits: pass the whole
+        table (DataFrame; trait names in the index or a column). A mapping
+        trait -> group also works but cannot show mechanistic differences. A
         ``smiles`` column becomes ``n_components``.
+    relevant_cols
+        Columns that define mechanistic equivalence. Default: ``n_components``
+        and columns whose name mentions a component / inhibitor /
+        combination / partner / adjuvant / protecting agent. Other columns are
+        incidental and ignored.
     group_col
         Attribute that defines the group (default: the first column). Sources
         must share it with the target.
@@ -683,7 +698,9 @@ def transfer_trait_predict(
         only if every source model calls positive; ``proba`` is the minimum
         over sources. ``'auto'`` (default) — ``'pooled'`` if some source
         matches the target on every attribute (or there is a single source),
-        otherwise ``'consensus'``.
+        otherwise ``'consensus'``. (Now: ``'pooled'`` over the group-mates that
+        share the target's relevant attributes; ``'consensus'`` over all
+        group-mates when none does.)
         A requested ``'pooled'`` is switched to ``'consensus'`` (with a
         warning) when the metadata shows the target differs from every
         source, unless ``force=True``.
@@ -719,7 +736,7 @@ def transfer_trait_predict(
     target = str(target)
 
     match_tab = None
-    exact = False
+    reasons = []
     if sources is None:
         if groups is None:
             raise ValueError("give `sources`, or `groups` (trait metadata incl. the target)")
@@ -733,24 +750,47 @@ def transfer_trait_predict(
         gcol = group_col if group_col is not None else meta.columns[0]
         others = [c for c in meta.columns if c != gcol]
         n_attr = len(others)
+        if relevant_cols is None:
+            rel = [c for c in others if _RELEVANT.search(str(c))]
+        else:
+            rel = [c for c in relevant_cols if c in meta.columns and c != gcol]
         labelled = [t for t in Yd.columns if t != target and t in meta.index
                     and Yd[t].notna().any()]
         cand = [t for t in labelled if str(meta.at[t, gcol]) == str(meta.at[target, gcol])]
         if not cand:
             raise ValueError(f"no labelled trait shares {gcol}={meta.at[target, gcol]!r} "
                              f"with {target!r}")
-        scores = {t: _match_score(meta, t, target, others) for t in cand}
-        best = max(scores.values())
-        sources = [t for t in cand if scores[t] == best]
-        exact = best == len(others)
+        same = {t: all(str(meta.at[t, c]) == str(meta.at[target, c]) for c in rel)
+                for t in cand}
+        matched = [t for t in cand if same[t]]
+        if not rel:
+            sources, metadata_differs = cand, False
+            reasons.append(f"no mechanistically relevant attribute (component count / "
+                           f"inhibitor / combination) in the metadata: all {len(cand)} "
+                           f"labelled traits of {gcol}={meta.at[target, gcol]!r} are used")
+        elif matched:
+            sources, metadata_differs = matched, False
+            reasons.append(f"sources share the target's {gcol} and its relevant attributes "
+                           f"{rel} -> treated as mechanistically equivalent")
+        else:
+            sources, metadata_differs = cand, len(cand) >= 2
+            tv = {c: meta.at[target, c] for c in rel}
+            reasons.append(f"the target differs from every labelled {gcol}-mate on relevant "
+                           f"attributes {tv} (e.g. an added component) -> determinants must "
+                           f"act in all sources to be trusted")
+        ignored = [c for c in others if c not in rel]
+        if ignored:
+            reasons.append(f"columns not treated as mechanistic (incidental): {ignored}")
         match_tab = pd.DataFrame({"source": cand,
-                                  "attributes_matched": [scores[t] for t in cand],
-                                  "attributes_total": len(others),
+                                  **{f"{c}": [meta.at[t, c] for t in cand] for c in rel},
+                                  "relevant_match": [same[t] for t in cand],
                                   "used": [t in sources for t in cand]})
     else:
         sources = [str(s) for s in sources if str(s) != target]
-        exact = True
+        metadata_differs = False
         n_attr = None
+        rel = None
+        reasons.append("sources given explicitly")
 
     notes = []
 
@@ -761,14 +801,15 @@ def transfer_trait_predict(
     requested = decision
     if decision not in ("auto", "pooled", "consensus"):
         raise ValueError("decision must be 'auto', 'pooled' or 'consensus'")
-    metadata_differs = match_tab is not None and not exact and len(sources) >= 2
-    if match_tab is not None and n_attr == 0:
-        _warn("the metadata given has no attribute besides the group, so whether the "
+    if match_tab is not None and not rel:
+        _warn("the metadata given has no mechanistically relevant attribute besides the "
+              "group (SMILES / component count / inhibitor / combination), so whether the "
               "sources are mechanistically equivalent to the target cannot be checked. "
               "Pass the WHOLE trait metadata table (all columns, e.g. "
               "pd.read_csv(<drug table>)) as `groups` and leave `decision` unset.")
     if decision == "auto":
-        decision = "pooled" if (exact or len(sources) < 2) else "consensus"
+        decision = "consensus" if metadata_differs else "pooled"
+        reasons.append(f"decision '{decision}'")
     elif decision == "pooled" and metadata_differs:
         if force:
             _warn("decision='pooled' was FORCED although the metadata shows the target "
@@ -804,7 +845,7 @@ def transfer_trait_predict(
         any_pos = agreement > 0
         split = any_pos & (agreement < 1)
         disagreement = float(split.sum() / max(int(any_pos.sum()), 1))
-        if decision == "pooled" and disagreement > 0 and (requested == "pooled" or n_attr == 0):
+        if decision == "pooled" and disagreement > 0 and (requested == "pooled" or not rel):
             _warn(f"the per-source models disagree on {disagreement:.1%} of the samples any "
                   f"source calls positive (inconsistent determinant effects, see "
                   f"discordant_features) and the pooled rule is in use.")
@@ -814,6 +855,30 @@ def transfer_trait_predict(
         cf = pd.DataFrame(coefs, index=Xd.columns.astype(str))
         disc = cf.assign(spread=cf.max(axis=1) - cf.min(axis=1)) \
                  .sort_values("spread", ascending=False).head(n_discordant)
+
+    det_agree = None
+    if coefs:
+        top = disc.index if disc is not None else []
+        cf_all = pd.DataFrame(coefs, index=Xd.columns.astype(str))
+        strongest = cf_all.max(axis=1).sort_values(ascending=False).head(n_discordant).index
+        rows = []
+        for g in strongest:
+            carriers = Xd[g].to_numpy() > 0
+            if carriers.sum() == 0:
+                continue
+            rates = {s_: float((per_df[s_].to_numpy()[carriers] >= threshold).mean())
+                     for s_ in per_df.columns}
+            rows.append({"feature": g, "n_carriers": int(carriers.sum()),
+                         **{f"called_{k}": v for k, v in rates.items()},
+                         "max_rate_gap": max(rates.values()) - min(rates.values())})
+        det_agree = pd.DataFrame(rows).sort_values("max_rate_gap", ascending=False) \
+            .reset_index(drop=True) if rows else None
+        if det_agree is not None and len(det_agree):
+            r0 = det_agree.iloc[0]
+            reasons.append(f"label-free agreement: largest gap between source models on "
+                           f"carriers of one determinant = {r0.max_rate_gap:.2f} "
+                           f"({r0.feature}); overall source_call_disagreement = "
+                           f"{disagreement:.3f}")
 
     val = None
     if validate and len(sources) >= 2:
@@ -831,7 +896,8 @@ def transfer_trait_predict(
         val = pd.DataFrame(rec)
     return {"proba": proba, "call": (proba >= threshold).astype(int),
             "sources": list(sources), "decision": decision,
-            "decision_requested": requested, "warnings": notes,
+            "decision_requested": requested, "decision_reasons": reasons,
+            "warnings": notes, "determinant_agreement": det_agree,
             "source_call_disagreement": disagreement, "source_match": match_tab,
             "per_source_proba": per_df, "source_agreement": agreement,
             "discordant_features": disc, "validation": val, "model": model}
