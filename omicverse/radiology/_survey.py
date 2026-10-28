@@ -42,7 +42,7 @@ from ._dicom import DicomSeries, DicomStudy
 from ._render import montage, region_sheets
 
 __all__ = ["structure_survey", "sheet_cell_to_patient", "ledger_concordance", "ledger_add_read",
-           "ledger_hotspots", "DEFAULT_SEVERITY_TERMS"]
+           "ledger_hotspots", "ledger_principal", "DEFAULT_SEVERITY_TERMS"]
 
 _PLANE_ORDER = {"SAG": 0, "COR": 1, "AX": 2}
 _W_ORDER = {"fluid_sensitive": 0, "T1": 1, "PD": 2, "other": 3}
@@ -405,6 +405,8 @@ def ledger_add_read(ledger_path: str, study: DicomStudy, sheet: Dict, text: str,
     text = text.replace("\\n", "\n")
     cells = int(sheet.get("cells") or 3)
     valid = set(sheet["instances"])
+    first = _re.search(r"\binst(?:ance)?\.?\s*#?\s*\d+", text, _re.I)
+    header = text[:first.start()].strip(" *#:\n\t") if first else ""
     new = []
     for inst, seg in _segments(text):
         if inst not in valid:
@@ -427,7 +429,8 @@ def ledger_add_read(ledger_path: str, study: DicomStudy, sheet: Dict, text: str,
                         "plane": sheet.get("plane"), "weighting": sheet.get("weighting"),
                         "instance": inst, "cell": cell, "xyz_mm": xyz, "text": seg_clean[:400],
                         "severity": int(sev), "confidence": conf, "normal": normal or sev == 0,
-                        "structure": sheet.get("structure"), "abnormality": None, "acute": None,
+                        "structure": sheet.get("structure"), "sheet_note": header[:200],
+                        "abnormality": None, "acute": None,
                         "source": source or sheet.get("kind")})
     led = json.load(open(ledger_path)) if os.path.exists(ledger_path) else []
     led.extend(new)
@@ -508,3 +511,67 @@ def ledger_hotspots(ledger: Union[str, Sequence[Dict]], *, radius_mm: float = 15
     res = pd.DataFrame(out).sort_values(["max_severity", "n_series_max", "n_slices_max", "n_series",
                                          "n_slices"], ascending=False)
     return res.reset_index(drop=True)
+
+
+_DISCONT = _re.compile(r"interrupt|discontinu|absent|\bgap\b|torn|tear|ruptur|retract|stump|not traceable|"
+                       r"difficult to trace|replaced by (?:bright|fluid)", _re.I)
+
+
+@register_function(
+    aliases=["主要发现候选", "ledger principal", "principal finding from ledger", "top lesion from reads"],
+    category="radiology",
+    description="Principal-finding candidate from a findings ledger: the top hotspot, the structure the reader "
+                "named at that location, and per series the runs of consecutive slices read as discontinuous",
+    requires={},
+    produces={},
+    auto_fix="none",
+    examples=["p = ov.radiology.ledger_principal('ledger.json')"],
+)
+def ledger_principal(ledger: Union[str, Sequence[Dict]], *, radius_mm: float = 15.0,
+                     near_mm: float = 40.0) -> Dict:
+    """Summarise the first row of :func:`ledger_hotspots` for reporting.
+
+    Returns the hotspot centre, the structure names the reader gave on sheets
+    centred within ``near_mm`` (most frequent first), and for each series the
+    longest run of consecutive slices whose reads describe a discontinuity
+    (interrupted / absent / gap / torn / replaced by fluid), with the slices and
+    texts. Reads elsewhere (other levels, other locations) are not part of the
+    evidence for this location and cannot overrule it.
+    """
+    rows = json.load(open(ledger)) if isinstance(ledger, str) else list(ledger)
+    hs = ledger_hotspots(rows, radius_mm=radius_mm)
+    if hs.empty:
+        return {"found": False}
+    top = hs.iloc[0]
+    c = np.asarray(top["xyz_mm"], float)
+    near = [r for r in rows if r.get("xyz_mm") is not None
+            and np.linalg.norm(np.asarray(r["xyz_mm"], float) - c) <= near_mm]
+    names: Dict[str, int] = {}
+    for r in near:
+        note = (r.get("sheet_note") or "").strip()
+        if note and r.get("source") == "structure":
+            key = _re.sub(r"^(central structure|structure at (the )?centre[^:]*)\s*:?\s*", "", note,
+                          flags=_re.I).strip(" .*")[:80]
+            names[key] = names.get(key, 0) + 1
+    runs = {}
+    by_series: Dict[str, Dict[int, List[str]]] = {}
+    for r in near:
+        if r.get("normal"):
+            continue
+        if _DISCONT.search(r.get("text", "")) and int(r.get("severity") or 0) >= 3:
+            by_series.setdefault(r["series"], {}).setdefault(int(r["instance"]), []).append(r["text"][:160])
+    for ser, d in by_series.items():
+        ins = sorted(d)
+        best, cur = [], [ins[0]]
+        for a, b in zip(ins[:-1], ins[1:]):
+            if b - a == 1:
+                cur.append(b)
+            else:
+                best, cur = (cur if len(cur) > len(best) else best), [b]
+        best = cur if len(cur) > len(best) else best
+        runs[ser] = {"slices": best, "n": len(best), "texts": [d[i][0] for i in best][:6]}
+    return {"found": True, "xyz_mm": c.round(1).tolist(), "max_severity": int(top["max_severity"]),
+            "n_series": int(top["n_series"]), "n_slices": int(top["n_slices"]),
+            "structure_names": sorted(names, key=names.get, reverse=True)[:5],
+            "discontinuity_runs": dict(sorted(runs.items(), key=lambda kv: -kv[1]["n"])),
+            "discontinuity_on_consecutive_slices": any(v["n"] >= 2 for v in runs.values())}
