@@ -9,6 +9,11 @@ _P = Path(__file__).resolve().parents[2] / "omicverse" / "space" / "_markerdb.py
 
 
 def _load():
+    try:
+        from omicverse.space import _markerdb as m
+        return m
+    except Exception:  # light-weight import when the full package is unavailable
+        pass
     reg = types.ModuleType("omicverse._registry")
     reg.register_function = lambda **k: (lambda f: f)
     sys.modules.setdefault("omicverse", types.ModuleType("omicverse"))
