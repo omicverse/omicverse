@@ -33,11 +33,11 @@ Methods: Cellpose (Stringer et al., Nat. Methods 2021; cyto3: 2025), Trackastra
 (Gallusser & Weigert, ECCV 2024). GPU strongly recommended for long movies.
 """
 from ._movie import read_movie, segment_movie
-from ._track import detections_table, track_cells, close_gaps
-from ._mitosis import mitosis_signal, detect_mitoses, refine_divisions
+from ._track import detections_table, track_cells, close_gaps, close_merge_gaps
+from ._mitosis import mitosis_signal, detect_mitoses, refine_divisions, prune_divisions, insert_mitoses, adopt_orphans
 from ._lineage import lineage_tables, lineage_json, OUTCOMES
 from ._pipeline import reconstruct_lineage
 
-__all__ = ["read_movie", "segment_movie", "detections_table", "track_cells", "close_gaps",
-           "mitosis_signal", "detect_mitoses", "refine_divisions", "lineage_tables",
+__all__ = ["read_movie", "segment_movie", "detections_table", "track_cells", "close_gaps", "close_merge_gaps",
+           "mitosis_signal", "detect_mitoses", "refine_divisions", "prune_divisions", "insert_mitoses", "adopt_orphans", "lineage_tables",
            "reconstruct_lineage", "lineage_json", "OUTCOMES"]

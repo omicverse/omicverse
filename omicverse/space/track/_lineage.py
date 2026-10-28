@@ -35,7 +35,8 @@ def lineage_tables(det: pd.DataFrame, tracklets: pd.DataFrame, *, n_frames: int,
                    frame_shape: Sequence[int], divisions: Optional[pd.DataFrame] = None,
                    windows=4, border: Optional[float] = None,
                    min_frames: int = 3, labels: Optional[np.ndarray] = None,
-                   fuse_overlap: float = 0.5) -> Dict[str, pd.DataFrame]:
+                   fuse_overlap: float = 0.5, edge_margin: Optional[float] = None,
+                   ) -> Dict[str, pd.DataFrame]:
     r"""Lineage summary of a tracked movie.
 
     Parameters
@@ -55,6 +56,10 @@ def lineage_tables(det: pd.DataFrame, tracklets: pd.DataFrame, *, n_frames: int,
     min_frames
         Tracklets shorter than this that neither divide nor touch the first / last
         frame are treated as segmentation debris and dropped from the fate counts.
+    edge_margin
+        A non-dividing track whose centroid never gets farther than this from the
+        frame edge was never fully in view (a cell grazing the border); it gets fate
+        ``edge`` and is not counted. Default one median cell diameter; 0 disables.
     labels
         Label movie; enables ``fused`` (the cell's last mask is mostly covered by
         another tracked cell in the next frame).
@@ -88,7 +93,7 @@ def lineage_tables(det: pd.DataFrame, tracklets: pd.DataFrame, *, n_frames: int,
     last_label = det.sort_values("frame").groupby("track_id").last()["label"]
     fate = {}
     for t, r in tl.iterrows():
-        if r["n_children"] >= 2:
+        if r["n_children"] >= 1:
             fate[t] = "divided"
         elif r["end"] >= T - 1:
             fate[t] = "still_present"
@@ -106,11 +111,21 @@ def lineage_tables(det: pd.DataFrame, tracklets: pd.DataFrame, *, n_frames: int,
         if (fate[t] not in ("divided", "still_present") and r["n_det"] < min_frames
                 and r["start"] > 0):
             fate[t] = "debris"
+    em = diam if edge_margin is None else float(edge_margin)
+    if em > 0:
+        # depth = how far inside the frame the cell ever got
+        dx = np.minimum(det["x"], W - 1 - det["x"])
+        dy = np.minimum(det["y"], H - 1 - det["y"])
+        depth = np.minimum(dx, dy).groupby(det["track_id"]).max()
+        for t in tl.index:
+            if fate[t] in ("left_field", "lost", "still_present") and tl.loc[t, "n_children"] == 0 \
+                    and depth.get(t, np.inf) <= em and int(tl.loc[t, "parent"]) < 0:
+                fate[t] = "edge"
     tl["fate"] = pd.Series(fate)
 
     # divisions
     if divisions is None or len(divisions) == 0:
-        dv = tl[tl["n_children"] >= 2]
+        dv = tl[tl["n_children"] >= 1]
         divisions = pd.DataFrame({"mother": dv.index, "frame": dv["end"].values,
                                   "x": dv["x_end"].values, "y": dv["y_end"].values})
     dv = divisions.copy()

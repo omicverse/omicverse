@@ -91,20 +91,39 @@ def _summarise(det: pd.DataFrame, parent_of: dict) -> pd.DataFrame:
     return tl
 
 
-def _link_trackastra(labels, movie, model, mode, device, model_dir):
+def _link_trackastra(labels, movie, model, mode, device, model_dir, delta_t=1,
+                     threshold=0.5, cache=None):
+    import os
+    import pickle
     import torch  # noqa: F401
     from trackastra.model import Trackastra
-    if device == "auto":
-        device = "automatic"
-    if model_dir is not None:
-        from pathlib import Path
-        tr = Trackastra.from_folder(Path(model_dir), device=device)
-    else:
-        tr = Trackastra.from_pretrained(model, device=device)
-    imgs = np.asarray(movie, dtype=np.float32)
-    masks = np.asarray(labels).astype(np.int32)
-    graph = tr.track(imgs, masks, mode=mode)
-    return graph
+    from trackastra.tracking.tracking import build_graph, track_greedy
+    preds = None
+    if cache is not None and os.path.exists(cache):
+        with open(cache, "rb") as fh:
+            preds = pickle.load(fh)
+    if preds is None:
+        if device == "auto":
+            device = "automatic"
+        if model_dir is not None:
+            from pathlib import Path
+            tr = Trackastra.from_folder(Path(model_dir), device=device)
+        else:
+            tr = Trackastra.from_pretrained(model, device=device)
+        imgs = np.asarray(movie, dtype=np.float32)
+        masks = np.asarray(labels).astype(np.int32)
+        preds = tr._predict(imgs, masks)
+        if cache is not None:
+            with open(cache, "wb") as fh:
+                pickle.dump(preds, fh)
+    if mode == "ilp":
+        from trackastra.tracking.ilp import track_ilp
+        G = build_graph(nodes=preds["nodes"], weights=preds["weights"], max_distance=256,
+                        max_neighbors=10, delta_t=delta_t)
+        return track_ilp(G, ilp_config="gt")
+    G = build_graph(nodes=preds["nodes"], weights=preds["weights"], max_distance=256,
+                    max_neighbors=10, delta_t=delta_t)
+    return track_greedy(G, allow_divisions=(mode != "greedy_nodiv"), threshold=threshold)
 
 
 def _link_overlap(det: pd.DataFrame, gate: float):
@@ -161,7 +180,8 @@ def _link_overlap(det: pd.DataFrame, gate: float):
 def track_cells(labels: np.ndarray, movie: Optional[np.ndarray] = None, *,
                 method: str = "trackastra", model: str = "general_2d", mode: str = "greedy",
                 device: str = "auto", model_dir: Optional[str] = None,
-                gate: Optional[float] = None) -> Tuple[pd.DataFrame, pd.DataFrame]:
+                gate: Optional[float] = None, delta_t: int = 1, threshold: float = 0.5,
+                cache: Optional[str] = None) -> Tuple[pd.DataFrame, pd.DataFrame]:
     r"""Track segmented cells through a movie.
 
     Parameters
@@ -180,6 +200,14 @@ def track_cells(labels: np.ndarray, movie: Optional[np.ndarray] = None, *,
     gate
         ``'overlap'`` only: maximum centroid displacement between frames; default the
         median object diameter.
+    delta_t
+        ``'trackastra'``: candidate links may skip up to ``delta_t - 1`` frames (the
+        model scores pairs inside its temporal window), bridging missed detections.
+    threshold
+        ``'trackastra'``: minimum association probability for a link (greedy).
+    cache
+        ``'trackastra'``: pickle file for the model's association predictions, so the
+        linking can be re-run with other settings without the network.
 
     Returns
     -------
@@ -194,7 +222,8 @@ def track_cells(labels: np.ndarray, movie: Optional[np.ndarray] = None, *,
     if method == "trackastra":
         if movie is None:
             raise ValueError("trackastra needs the raw movie")
-        graph = _link_trackastra(labels, movie, model, mode, device, model_dir)
+        graph = _link_trackastra(labels, movie, model, mode, device, model_dir,
+                                 delta_t=delta_t, threshold=threshold, cache=cache)
         key = {(int(f), int(l)): i for i, (f, l) in enumerate(zip(det["frame"], det["label"]))}
         links = []
         for u, v in graph.edges():
@@ -286,3 +315,87 @@ def close_gaps(det: pd.DataFrame, tracklets: pd.DataFrame, *, frame_shape=None,
     if not merge:
         return det, tl
     return _relabel(det, tl, merge)
+
+
+@register_function(
+    aliases=["合并-分离轨迹连接", "close gaps through merges", "occlusion gap closing",
+             "merge split resolution"],
+    category="space",
+    description="Re-link tracks interrupted by a temporary merge: when a track ends because "
+                "its cell was absorbed into a neighbour's mask and a parent-less track later "
+                "emerges from that same neighbour, join the two (global assignment, shortest "
+                "interruption first). Complements close_gaps, which only bridges short "
+                "missed-detection gaps by distance",
+    examples=["det, tl = ov.space.track.close_merge_gaps(det, tl, frame_shape=movie.shape[1:])"],
+)
+def close_merge_gaps(det: pd.DataFrame, tracklets: pd.DataFrame, *, frame_shape=None,
+                     max_gap: int = 100, gate: Optional[float] = None,
+                     border: Optional[float] = None, n_frames: Optional[int] = None,
+                     ) -> Tuple[pd.DataFrame, pd.DataFrame]:
+    r"""Join a track that disappeared into a neighbour to the track that re-emerges.
+
+    Parameters
+    ----------
+    max_gap
+        Longest merge (frames) that is resolved.
+    gate
+        Distance from the ending cell to the absorbing neighbour (and from the
+        emerging cell to the emitting neighbour); default the median diameter.
+    border
+        Ends / starts this close to the frame edge are left alone (default half the
+        median diameter).
+    """
+    from scipy.optimize import linear_sum_assignment
+    tl = tracklets
+    diam = float(det["diameter"].median())
+    gate = diam if gate is None else float(gate)
+    border = diam / 2 if border is None else float(border)
+    T = int(det["frame"].max()) + 1 if n_frames is None else int(n_frames)
+    byf = {t: g for t, g in det.groupby("frame")}
+
+    def near_border(x, y):
+        if frame_shape is None:
+            return False
+        H, W = frame_shape[:2]
+        return x < border or y < border or x > W - 1 - border or y > H - 1 - border
+
+    def neighbour(t, x, y, exclude):
+        g = byf.get(t)
+        if g is None:
+            return -1
+        dd = np.hypot(g["x"].values - x, g["y"].values - y)
+        ok = g["track_id"].values != exclude
+        if not ok.any():
+            return -1
+        k = np.argmin(np.where(ok, dd, np.inf))
+        return int(g["track_id"].values[k]) if dd[k] <= gate else -1
+
+    ends = tl[(tl["n_children"] == 0) & (tl["end"] < T - 1)]
+    starts = tl[(tl["parent"] < 0) & (tl["start"] > 0)]
+    E, S = [], []
+    for t, r in ends.iterrows():
+        if near_border(r["x_end"], r["y_end"]):
+            continue
+        a = neighbour(int(r["end"]) + 1, r["x_end"], r["y_end"], t)
+        if a >= 0:
+            E.append((t, int(r["end"]), a))
+    for t, r in starts.iterrows():
+        if near_border(r["x_start"], r["y_start"]):
+            continue
+        e = neighbour(int(r["start"]) - 1, r["x_start"], r["y_start"], t)
+        if e >= 0:
+            S.append((t, int(r["start"]), e))
+    if not E or not S:
+        return det, tl
+    # the absorbing track may itself be continued by other tracklets; compare by lineage
+    # identity: the absorber's id at the end frame vs the emitter's id at the start frame
+    C = np.full((len(E), len(S)), 1e9)
+    for i, (te, fe, a) in enumerate(E):
+        for j, (ts, fs, e) in enumerate(S):
+            if a == e and 1 <= fs - fe <= max_gap:
+                C[i, j] = fs - fe
+    if not np.isfinite(C).any() or C.min() >= 1e9:
+        return det, tl
+    r, c = linear_sum_assignment(C)
+    merge = {int(S[j][0]): int(E[i][0]) for i, j in zip(r, c) if C[i, j] < 1e9}
+    return _relabel(det, tl, merge) if merge else (det, tl)
