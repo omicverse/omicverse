@@ -42,7 +42,8 @@ from ._dicom import DicomSeries, DicomStudy
 from ._render import montage, region_sheets
 
 __all__ = ["structure_survey", "sheet_cell_to_patient", "ledger_concordance", "ledger_add_read",
-           "ledger_hotspots", "ledger_principal", "DEFAULT_SEVERITY_TERMS"]
+           "ledger_hotspots", "ledger_principal", "draft_principal",
+           "DEFAULT_SEVERITY_TERMS"]
 
 _PLANE_ORDER = {"SAG": 0, "COR": 1, "AX": 2}
 _W_ORDER = {"fluid_sensitive": 0, "T1": 1, "PD": 2, "other": 3}
@@ -513,6 +514,8 @@ def ledger_hotspots(ledger: Union[str, Sequence[Dict]], *, radius_mm: float = 15
     return res.reset_index(drop=True)
 
 
+_NOT_IN_PLANE = _re.compile(r"not in (?:the )?plane|out of plane|not (?:seen|included|visible) (?:in|on) this", _re.I)
+_NOT_IN_PLANE_SPAN = _re.compile(r"[^.;]*(?:not in (?:the )?plane|out of plane|not (?:seen|included|visible) (?:in|on) this)[^.;]*[.;]?", _re.I)
 _DISCONT = _re.compile(r"interrupt|discontinu|absent|\bgap\b|torn|tear|ruptur|retract|stump|not traceable|"
                        r"difficult to trace|replaced by (?:bright|fluid)", _re.I)
 
@@ -558,7 +561,10 @@ def ledger_principal(ledger: Union[str, Sequence[Dict]], *, radius_mm: float = 1
     for r in near:
         if r.get("normal"):
             continue
-        if _DISCONT.search(r.get("text", "")) and int(r.get("severity") or 0) >= 3:
+        txt = r.get("text", "")
+        if _NOT_IN_PLANE.search(txt):
+            txt = _NOT_IN_PLANE_SPAN.sub("", txt)
+        if _DISCONT.search(txt) and int(r.get("severity") or 0) >= 3:
             by_series.setdefault(r["series"], {}).setdefault(int(r["instance"]), []).append(r["text"][:160])
     for ser, d in by_series.items():
         ins = sorted(d)
@@ -575,3 +581,114 @@ def ledger_principal(ledger: Union[str, Sequence[Dict]], *, radius_mm: float = 1
             "structure_names": sorted(names, key=names.get, reverse=True)[:5],
             "discontinuity_runs": dict(sorted(runs.items(), key=lambda kv: -kv[1]["n"])),
             "discontinuity_on_consecutive_slices": any(v["n"] >= 2 for v in runs.values())}
+
+
+def _best_term(name: str, terms: Sequence[str]) -> Optional[str]:
+    import difflib
+    key = _re.sub(r"\(.*?\)", "", name or "").lower().strip()
+    key = _re.sub(r"[^a-z0-9]+", "_", key).strip("_")
+    if not key:
+        return None
+    toks = set(key.split("_"))
+    scored = []
+    for t in terms:
+        tt = set(t.lower().split("_"))
+        overlap = len(toks & tt) / max(1, len(tt))
+        scored.append((overlap, difflib.SequenceMatcher(None, key, t.lower()).ratio(), t))
+    scored.sort(reverse=True)
+    return scored[0][2] if scored and (scored[0][0] > 0 or scored[0][1] > 0.6) else None
+
+
+def _pick(terms: Sequence[str], *patterns: str) -> Optional[str]:
+    for pat in patterns:
+        for t in terms:
+            if pat in t.lower():
+                return t
+    return None
+
+
+@register_function(
+    aliases=["主要发现草稿", "draft principal finding", "principal finding draft from ledger"],
+    category="radiology",
+    description="Draft the principal finding (structure / finding type / acuity terms from the caller's "
+                "vocabulary, location, measurement slice, image citations) from ledger_principal by fixed rules",
+    requires={},
+    produces={},
+    auto_fix="none",
+    examples=["d = ov.radiology.draft_principal(st, 'ledger.json', json.load(open('vocabularies.json')))"],
+)
+def draft_principal(study: DicomStudy, ledger: Union[str, Sequence[Dict]], vocabulary: Dict, *,
+                    radius_mm: float = 15.0) -> Dict:
+    """Rule-based draft of the principal finding.
+
+    ``vocabulary`` is the task's own controlled vocabulary (keys ``structure``,
+    ``finding_type``, ``acuity``); terms are matched by name, nothing is
+    hard-coded. Rules on the reads at the :func:`ledger_principal` location:
+
+    - structure: the reader's most frequent name there, matched to the
+      closest vocabulary term;
+    - finding type: discontinuity on consecutive slices in >= 2 series, or on
+      >= 3 consecutive slices of one series → the vocabulary's
+      full-thickness / complete tear term, unless 'partial' reads outnumber
+      'absent / gap / interrupted' reads (→ partial-thickness term);
+      no discontinuity run → the tendinosis-type term if reads say
+      thickened / heterogeneous, else the first matching inflammatory term;
+    - acuity: 'acute' if the reads describe fluid / bright / oedema in or
+      around the defect and none describe scar or low-signal fibrous tissue,
+      'chronic' for the reverse, else 'indeterminate';
+    - measurement slice: the middle slice of the longest run in a series
+      whose plane shows the structure lengthwise (most slices in the run);
+    - evidence: the nearest in-plane instance of the two series with the
+      longest runs.
+    Returns the draft plus the counts behind every decision.
+    """
+    p = ledger_principal(ledger, radius_mm=radius_mm)
+    if not p.get("found"):
+        return {"found": False}
+    vs, vf, va = vocabulary.get("structure", []), vocabulary.get("finding_type", []), vocabulary.get("acuity", [])
+    struct = None
+    for nm in p["structure_names"]:
+        struct = _best_term(nm, vs)
+        if struct:
+            break
+    runs = p["discontinuity_runs"]
+    texts = [t for r in runs.values() for t in r["texts"]]
+    allt = " ".join(texts).lower()
+    n_partial = sum("partial" in t.lower() for t in texts)
+    n_full = sum(bool(_re.search(r"absent|\bgap\b|interrupt|discontinu|ruptur|retract", t, _re.I))
+                 and "partial" not in t.lower() for t in texts)
+    multi = sum(1 for r in runs.values() if r["n"] >= 2) >= 2 or any(r["n"] >= 3 for r in runs.values())
+    if multi:
+        if n_partial > n_full:
+            ftype = _pick(vf, "partial")
+        else:
+            ftype = _pick(vf, "full_thickness", "full thickness", "complete", "rupture") or _pick(vf, "tear")
+    else:
+        ftype = _pick(vf, "tendinosis", "tendinopathy") if _re.search(r"thicken|heterogen", allt) else \
+            _pick(vf, "tenosynovitis", "effusion", "bursitis", "edema", "oedema")
+    acute_cues = len(_re.findall(r"fluid|bright|oedema|edema|haemat|hemat", allt))
+    chronic_cues = len(_re.findall(r"scar|fibrous|low[- ]signal (?:tissue|filling)", allt))
+    if acute_cues and not chronic_cues:
+        acuity = _pick(va, "acute")
+    elif chronic_cues and not acute_cues:
+        acuity = _pick(va, "chronic")
+    else:
+        acuity = _pick(va, "indeterminate")
+    xyz = np.asarray(p["xyz_mm"], float)
+    ranked = sorted(runs.items(), key=lambda kv: -kv[1]["n"])
+    meas = None
+    evidence = []
+    for ser, r in ranked:
+        s = study[ser] if ser in [x.description for x in study] else None
+        if s is None:
+            continue
+        mid = r["slices"][len(r["slices"]) // 2]
+        if meas is None:
+            meas = {"series": ser, "series_instance_uid": s.uid, "instance": int(mid), "run": r["slices"]}
+        if len(evidence) < 2 and s.uid not in [e["series_instance_uid"] for e in evidence]:
+            evidence.append({"series_instance_uid": s.uid, "sop_instance_uid": s.instance(int(mid)).sop_uid})
+    return {"found": True, "structure": struct, "finding_type": ftype, "acuity": acuity,
+            "location_xyz_mm": xyz.round(1).tolist(), "measurement_slice": meas, "evidence": evidence,
+            "basis": {"structure_names": p["structure_names"], "runs": {k: v["n"] for k, v in runs.items()},
+                      "full_reads": n_full, "partial_reads": n_partial, "acute_cues": acute_cues,
+                      "chronic_cues": chronic_cues}}

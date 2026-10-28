@@ -36,12 +36,12 @@ from ._dicom import (DicomSeries, DicomStudy, landmark_measurement, plane_of,
 from ._profile import abnormal_segments, path_profile, profile_slices
 from ._render import montage, region_sheets, render_slices
 from ._survey import (DEFAULT_SEVERITY_TERMS, ledger_add_read, ledger_concordance, ledger_hotspots,
-                      ledger_principal,
+                      ledger_principal, draft_principal,
                       sheet_cell_to_patient, structure_survey)
 
 __all__ = [
     "DicomSeries", "DicomStudy", "read_dicom_study", "plane_of", "sequence_weighting",
     "landmark_measurement", "render_slices", "montage", "path_profile", "abnormal_segments", "profile_slices",
     "region_sheets", "structure_survey", "sheet_cell_to_patient", "ledger_concordance",
-    "ledger_add_read", "ledger_hotspots", "ledger_principal", "DEFAULT_SEVERITY_TERMS",
+    "ledger_add_read", "ledger_hotspots", "ledger_principal", "draft_principal", "DEFAULT_SEVERITY_TERMS",
 ]
