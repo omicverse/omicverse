@@ -51,7 +51,7 @@ def test_stepwise_selection_sizes_the_shortlist():
     assert list(res.head(5)["is_determinant"]) == [True] * 5
     path = res.attrs["selection_path"]
     assert not path["accepted"].iloc[-1]                  # stopped at a rejected candidate
-    res_b = trait_determinants(X, y, shortlist=10, select="bonferroni")
+    res_b = trait_determinants(X, y, shortlist=10, select="bonferroni", n_pcs=0)
     assert {"f0", "f1", "f2", "f3", "f4"} <= set(res_b.loc[res_b.is_determinant, "feature"])
     res_n = trait_determinants(X, y, shortlist=10, select=None)
     assert res_n.attrs["n_determinants"] is None
@@ -79,6 +79,37 @@ def test_trait_determinants_without_modifier_and_string_labels():
     assert (res["acts_in"] == "all").all()
     with pytest.raises(ValueError):
         trait_determinants(X, y, modifier=None, direction="up")
+
+
+def _simulate_structured(seed=0, n=6000, p=150, n_lin=8):
+    """Lineages with their own gene frequencies AND their own trait rate
+    (population structure), plus genes partially co-carried with determinants."""
+    rng = np.random.default_rng(seed)
+    lin = rng.integers(0, n_lin, n)
+    freq = rng.beta(0.4, 0.8, (n_lin, p))
+    X = (rng.random((n, p)) < freq[lin]).astype(float)
+    det_rate = rng.uniform(0.05, 0.4, (6, n_lin))
+    for j in range(6):
+        X[:, j] = (rng.random(n) < det_rate[j, lin]).astype(float)
+    for k, j in enumerate(range(6, 12)):
+        X[:, j] = np.where(X[:, k] == 1, rng.random(n) < 0.6 + 0.05 * k,
+                           rng.random(n) < 0.08).astype(float)
+    eta = -2.5 + X[:, :6] @ np.array([3.0, 2.5, 2.5, 2.0, 3.5, 2.0]) \
+        + rng.normal(0, 0.8, n_lin)[lin]
+    y = (rng.random(n) < 1 / (1 + np.exp(-eta))).astype(int)
+    return pd.DataFrame(X, columns=[f"g{j:03d}" for j in range(p)]), y
+
+
+def test_selection_robust_to_population_structure():
+    truth = {f"g{j:03d}" for j in range(6)}
+    for seed in (1, 2):
+        X, y = _simulate_structured(seed)
+        res = trait_determinants(X, y, modifier=None)            # ebic + genotype PCs
+        assert set(res.loc[res.is_determinant, "feature"]) == truth
+    # without the lineage covariates and with plain BIC, lineage markers get in
+    X, y = _simulate_structured(1)
+    loose = trait_determinants(X, y, modifier=None, select="bic", n_pcs=0)
+    assert set(loose.loc[loose.is_determinant, "feature"]) > truth
 
 
 def test_transfer_metadata_matching_and_consensus():

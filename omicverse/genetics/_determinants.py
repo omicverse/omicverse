@@ -223,14 +223,31 @@ def effect_modifier_scan(
 # --------------------------------------------------------------------------- #
 # stepwise conditional selection (data-driven shortlist size)                 #
 # --------------------------------------------------------------------------- #
-def _stepwise_select(M, y, candidates, m_idx, criterion, alpha, max_iter=2000):
+def _structure_covariates(M, n_pcs, seed=0):
+    """Top principal components of the genotype matrix (lineage proxies)."""
+    if not n_pcs:
+        return None
+    from sklearn.decomposition import PCA
+    k = int(min(n_pcs, M.shape[1] - 1, M.shape[0] - 1))
+    Z = PCA(k, random_state=seed).fit_transform(M - M.mean(0))
+    sd = Z.std(0)
+    sd[sd == 0] = 1.0
+    return Z / sd
+
+
+def _stepwise_select(M, y, candidates, m_idx, criterion, alpha, max_iter=2000,
+                     covariates=None, gamma=1.0, n_exact=3):
     """Forward selection by likelihood ratio, each step conditional on the
     features already selected (and on the modifier, if any).
 
     A candidate enters as its main effect (+ its interaction with the
-    modifier). Stops when the best remaining candidate fails the criterion:
-    ``'bic'`` — LR stat <= df * log(n); ``'bonferroni'`` — chi2 p-value x
-    number of remaining candidates >= ``alpha``. Afterwards the modifier's own
+    modifier). ``covariates`` (e.g. genotype PCs = lineage proxies) are in
+    every model, so a gene that only marks a lineage with a different trait
+    rate gains nothing. Stops when the best remaining candidate fails the
+    criterion: ``'ebic'`` — LR stat <= df * log(n) + 2 * gamma * log(p)
+    (extended BIC, Chen & Chen 2008: the penalty grows with the number of
+    genes p the candidate was chosen from); ``'bic'`` — LR stat <= df * log(n);
+    ``'bonferroni'`` — chi2 p-value x number of remaining candidates >= ``alpha``. Afterwards the modifier's own
     main effect is tested the same way (drop-one), so a modifier with an
     effect of its own is still reported as a determinant.
     """
@@ -244,30 +261,63 @@ def _stepwise_select(M, y, candidates, m_idx, criterion, alpha, max_iter=2000):
         x = M[:, [j]]
         return np.hstack([x, x * mv]) if mv is not None else x
 
-    def fit_ll(D):
+    def fit_model(D):
         if D is None or D.shape[1] == 0:
             p0 = np.clip(y.mean(), 1e-12, 1 - 1e-12)
-            return float(y.sum() * np.log(p0) + (n - y.sum()) * np.log(1 - p0))
+            ll0 = float(y.sum() * np.log(p0) + (n - y.sum()) * np.log(1 - p0))
+            return ll0, np.full(n, p0)
         f = _logit(big_c, max_iter).fit(D, y)
-        return _loglik(f, D, y)
+        pr = np.clip(f.predict_proba(D)[:, 1], 1e-12, 1 - 1e-12)
+        return float(y @ np.log(pr) + (1 - y) @ np.log(1 - pr)), pr
+
+    def fit_ll(D):
+        return fit_model(D)[0]
+
+    def score_stats(D, pr, cands):
+        """Rao score statistic for adding each candidate block to the fitted
+        model (one fit per step instead of one per candidate)."""
+        w = pr * (1 - pr)
+        A = np.ones((n, 1)) if D is None else np.hstack([np.ones((n, 1)), D])
+        AtWA_inv = np.linalg.pinv(A.T @ (A * w[:, None]))
+        r = y - pr
+        out = []
+        for j in cands:
+            Z = block(j)
+            U = Z.T @ r
+            ZW = Z * w[:, None]
+            I = Z.T @ ZW - (ZW.T @ A) @ AtWA_inv @ (A.T @ ZW)
+            try:
+                out.append(float(U @ np.linalg.pinv(I) @ U))
+            except np.linalg.LinAlgError:
+                out.append(0.0)
+        return np.asarray(out)
+
+    p_all = M.shape[1]
 
     def passes(lr, dof, n_left):
+        if criterion == "ebic":
+            return lr > dof * np.log(n) + 2.0 * gamma * np.log(p_all)
         if criterion == "bic":
             return lr > dof * np.log(n)
         return chi2.sf(lr, dof) * max(n_left, 1) < alpha
 
-    base = mv
-    L = fit_ll(base)
+    if covariates is not None:
+        base = covariates if mv is None else np.hstack([mv, covariates])
+    else:
+        base = mv
+    L, pr = fit_model(base)
     selected, path = [], []
     remaining = [int(j) for j in candidates if j != m_idx]
     while remaining:
+        sc = score_stats(base, pr, remaining)
+        shortlist = [remaining[k] for k in np.argsort(-sc)[:n_exact]]
         best = None
-        for j in remaining:
+        for j in shortlist:                  # exact LR for the leading candidates
             D = block(j) if base is None else np.hstack([base, block(j)])
-            l = fit_ll(D)
+            l, pj = fit_model(D)
             if best is None or l > best[0]:
-                best = (l, j, D)
-        l, j, D = best
+                best = (l, j, D, pj)
+        l, j, D, pj = best
         dof = D.shape[1] - (0 if base is None else base.shape[1])
         lr = max(0.0, 2.0 * (l - L))
         ok = passes(lr, dof, len(remaining))
@@ -278,16 +328,20 @@ def _stepwise_select(M, y, candidates, m_idx, criterion, alpha, max_iter=2000):
             break
         selected.append(j)
         remaining.remove(j)
-        base, L = D, l
+        base, L, pr = D, l, pj
 
     mod_is_det, mod_lr = False, None
     if m_idx is not None and selected:
         rest = np.hstack([block(j) for j in selected])
+        if covariates is not None:
+            rest = np.hstack([covariates, rest])
         D_full = np.hstack([mv, rest])
         l_full = fit_ll(D_full)
         l_drop = fit_ll(rest)
         mod_lr = max(0.0, 2.0 * (l_full - l_drop))
         mod_is_det = passes(mod_lr, 1, 1)
+        if criterion == "ebic":
+            mod_is_det = mod_lr > np.log(n) + 2.0 * gamma * np.log(p_all)
     return selected, path, mod_is_det, mod_lr
 
 
@@ -333,9 +387,11 @@ def trait_determinants(
     C: float = 1.0,
     max_iter: int = 2000,
     direction: str = "both",
-    select: Optional[str] = "bic",
+    select: Optional[str] = "ebic",
     max_candidates: int = 40,
     alpha: float = 0.05,
+    n_pcs: int = 10,
+    ebic_gamma: float = 1.0,
 ) -> pd.DataFrame:
     """Effect-modification-aware ranking of trait determinants.
 
@@ -357,9 +413,13 @@ def trait_determinants(
        ``max_candidates`` features by score: at each step the candidate (main
        effect + interaction with the modifier) with the largest likelihood
        gain *conditional on the features already selected* is tested, and
-       selection stops at the first candidate that fails — ``'bic'``
-       (default; LR > df x log n, strict at large n) or ``'bonferroni'``
-       (p x candidates left < ``alpha``). A feature that only travels with a
+       selection stops at the first candidate that fails — ``'ebic'``
+       (default; extended BIC: LR > df x log n + 2 x gamma x log p, which
+       scales with both the cohort size and the number of genes screened),
+       ``'bic'`` (LR > df x log n) or ``'bonferroni'`` (p x candidates left <
+       ``alpha``). The top ``n_pcs`` principal components of the genotype
+       matrix are covariates in every selection model, so genes that only
+       mark a lineage (population structure) are not selected. A feature that only travels with a
        selected determinant adds nothing once that determinant is in the
        model, so it is not selected. Selected features are flagged
        ``is_determinant`` and placed first (by score); the modifier is a
@@ -379,9 +439,10 @@ def trait_determinants(
     direction
         ``'both'`` scores |log-odds|; ``'risk'`` scores only positive
         (trait-increasing) effects, ``'protective'`` only negative ones.
-    select, max_candidates, alpha
-        Data-driven determinant set (step 4): ``'bic'``, ``'bonferroni'`` or
-        ``None``.
+    select, max_candidates, alpha, n_pcs, ebic_gamma
+        Data-driven determinant set (step 4): ``'ebic'``, ``'bic'``,
+        ``'bonferroni'`` or ``None``; ``n_pcs=0`` drops the lineage
+        covariates.
 
     Returns
     -------
@@ -453,11 +514,13 @@ def trait_determinants(
     out["selection_lr"] = np.nan
     path_df = None
     if select is not None:
-        if select not in ("bic", "bonferroni"):
-            raise ValueError("select must be 'bic', 'bonferroni' or None")
+        if select not in ("ebic", "bic", "bonferroni"):
+            raise ValueError("select must be 'ebic', 'bic', 'bonferroni' or None")
+        cov = _structure_covariates(M, n_pcs)
         cand = [int(j) for j in np.argsort(-score, kind="mergesort") if j != m_idx]
         cand = [j for j in cand if score[j] > 0][:max_candidates]
-        sel, path, mod_det, mod_lr = _stepwise_select(M, yv, cand, m_idx, select, alpha)
+        sel, path, mod_det, mod_lr = _stepwise_select(M, yv, cand, m_idx, select, alpha,
+                                                      covariates=cov, gamma=ebic_gamma)
         for k, j in enumerate(sel):
             out.loc[j, ["is_determinant", "selection_step"]] = [True, k + 1]
         for rec in path:
