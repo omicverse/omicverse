@@ -140,6 +140,7 @@ from ._scissor import Scissor
 # Usage: met = ov.single.Metabolism(adata, method='scmetabolism'); met.run()
 from ._metabolism import Metabolism, MetaboliteCCC, differential_metabolism
 
+from ._decipher import decipher
 from ._stavia import StaVIA
 from ._lazy_step_by_step import (
     lazy_step_qc, lazy_step_preprocess, lazy_step_scale, lazy_step_pca,

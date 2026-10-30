@@ -185,6 +185,10 @@ web = [
   "omicclaw",
 ]
 
+
+# Optional Decipher backend (roadmap #989).
+decipher = ["scvi-tools>=1.5.2,<1.6"]
+
 # H&E → spatial transcriptomics prediction (``ov.space.histo``). Wraps
 # LazySlide as the WSI / tile / feature-extraction layer and adds STPath,
 # STFlow, HEST-FM and iStar backends for predicting gene expression from
