@@ -861,8 +861,40 @@ def perturb(
     n_propagation : int, default ``3``
         GRN-propagation steps for CellOracle. Ignored by other backends.
     backend_kwargs : dict or None
-        Extra keyword args forwarded to the backend (see individual
-        backend docs).
+        Backend options. The caller's dictionary is not modified. For dynamo,
+        the wrapper handles the following options before native dispatch:
+
+        * ``auto_pipeline=False`` prepares missing model prerequisites when
+          enabled; fitting supports the default PCA model only.
+        * ``group=None`` names an ``adata.obs`` column for native per-group
+          signed and absolute response rankings, restricted to dynamics genes.
+        * ``vf_ko=False`` adds native vector-field KO velocities in KO mode;
+          KD/OE warn and skip this additional step.
+        * ``emb_basis='umap'`` selects the projection embedding.
+        * ``perturb_mode='raw'`` selects raw expression or ``'z_score'`` units.
+          Generated levels use the PCA-reconstructed distribution for z-scores.
+        * ``expression=None`` optionally supplies a finite scalar or one value
+          per unique target in caller order, directly in ``perturb_mode`` units.
+        * ``perturbation_method='j_delta_x'`` selects ``'j_delta_x'``,
+          ``'j_x_prime'``, ``'j_jv'``, ``'f_x_prime'`` or
+          ``'f_x_prime_minus_f_x_0'``. Native ``pertubation_method`` is also
+          accepted and takes precedence if both spellings are supplied.
+
+        Output keys ``add_delta_Y_key``, ``add_transition_key``,
+        ``add_velocity_key`` and ``add_embedding_key`` are resolved and
+        forwarded, then used for result extraction. Their defaults are
+        ``'<method>_perturbation'``, ``'perturbation_transition_matrix'``,
+        ``'velocity_<emb_basis>_perturbation'`` and
+        ``'X_<emb_basis>_perturbation'``, respectively. Active ``vf_ko`` reserves
+        native KO coordinate/velocity keys and ``'pearson_transition_matrix'``;
+        conflicting output keys are rejected.
+
+        Remaining options are forwarded to ``dynamo.pd.perturbation``, including
+        selected PCA keys/arrays and ``projection_method='fp'``. Pass coordinate
+        arrays as ``X_pca``, not ``pca_key``. With dynamo 1.5.3, precomputed
+        ``delta_Y`` and unsafe ``zero_perturb_genes_vel`` indices are rejected.
+        ``projection_method='transform'`` produces no transition matrix and
+        warns that native 1.5.3 may project baseline velocities.
     copy : bool, default ``False``
         If ``True``, do not modify the input ``adata`` in place.
 
@@ -884,8 +916,9 @@ def perturb(
     and ``delta_X = X @ (W_perturbed - W_WT)``. GRN outputs are thresholded
     summaries; their edge-based ``delta_expr`` is not predicted expression.
 
-    See ``Tutorials-single/t_perturb_in_silico.ipynb`` for end-to-end
-    KO / OE workflows on a public dataset.
+    For dynamo workflows, options and compatibility limits, see
+    ``Tutorials-single/perturb/t_perturb_dynamo.ipynb``. Other backend
+    workflows are described in ``Tutorials-single/t_perturb_in_silico.ipynb``.
     """
     if mode not in _VALID_MODES:
         raise ValueError(
@@ -915,10 +948,6 @@ def perturb(
 
     # ---------------- backend dispatch -----------------
     if backend == "auto":
-
-
-
-
         has_vector_field = "VecFld_pca" in adata.uns
         has_base_grn = (grn_base is not None) or (
             "base_grn" in adata.uns or "celloracle_base_grn" in adata.uns
@@ -1382,10 +1411,6 @@ def _try_import_celloracle():
         ) from exc
 
 
-
-
-
-
 def _try_import_dynamo():
     try:
         import dynamo
@@ -1498,61 +1523,19 @@ def _run_dynamo(
     return_delta: bool,
     backend_kwargs: dict,
 ) -> PerturbResult:
-    """dynamo backend — vector-field in-silico perturbation (Qiu 2022).
+    """Run native dynamo perturbation and map its outputs to PerturbResult.
 
-    Wraps :func:`dynamo.pd.perturbation`: the target's expression is set
-    (KO → 0, KD → mean/``fold_change``, OE → mean×``fold_change``) and the
-    default ``j_delta_x`` method propagates the perturbation vector ``δX``
-    through the **analytical Jacobian** of the learned PCA vector field,
+    The default ``j_delta_x`` method propagates the target perturbation
+    through the analytical Jacobian (``δY = J · δX``). Native response layers
+    and transition outputs populate ``delta_X`` and ``trajectory_shift``;
+    downstream methods require their corresponding inputs. In particular,
+    volcano plots require significance statistics, and transition-based
+    methods require a projection that produces a transition matrix.
 
-        ``δY = J · δX``,
-
-    giving per-cell, per-gene response (``adata.layers[perturbation_key]``)
-    and a perturbation transition matrix
-    (``adata.obsp['perturbation_transition_matrix']``) — mapped onto
-    ``PerturbResult.delta_X`` / ``.trajectory_shift`` so every downstream
-    method and ``ov.pl.perturb_*`` helper works unchanged.
-
-    Backend kwargs (parsed here before dispatch):
-        ``emb_basis`` (default ``'umap'``), ``perturb_mode``
-        (``'raw'`` | ``'z_score'``), ``perturbation_method``
-        (``'j_delta_x'`` | ``'j_x_prime'`` | ``'j_jv'`` |
-        ``'f_x_prime'`` | ``'f_x_prime_minus_f_x_0'``),
-        ``auto_pipeline`` (run the dynamo recipe when prerequisites are
-        missing — default ``False``), ``vf_ko`` (additionally knock the
-        genes out of the vector field itself via ``dynamo.pd.KO``),
-        ``group`` (``adata.obs`` column for dynamo's per-group mean signed
-        and mean absolute per-cell response rankings, limited to dynamics
-        genes). ``vf_ko`` adds native KO velocities; shared response and
-        transition outputs follow the selected perturbation method, which
-        uses the Jacobian by default. The method also
-        accepts dynamo's spelling
-        ``pertubation_method``. Projection and perturbation options above
-        are passed explicitly to ``dynamo.pd.perturbation``.
-        ``add_delta_Y_key``, ``add_transition_key``, ``add_velocity_key`` and
-        ``add_embedding_key`` override the response, transition, velocity
-        and embedding output keys; resolved keys are forwarded and used
-        for result extraction and metadata. With ``vf_ko=True`` in KO mode,
-        native KO coordinate/velocity keys and ``pearson_transition_matrix``
-        are reserved; conflicting keys are rejected before data mutation.
-        ``expression`` optionally overrides generated levels with a finite
-        scalar or one value per unique target in caller order, in the units
-        of ``perturb_mode``. Selected PCA keys/arrays are respected;
-        automatic preparation only fits the default PCA model.
-        Remaining kwargs are forwarded unchanged. The caller's dictionary
-        is not modified. The 1.5.3 precomputed ``delta_Y`` path and unsafe
-        target-zeroing indices are rejected before perturbation. Use
-        ``X_pca`` for coordinate arrays, not ``pca_key``.
-        ``projection_method='transform'`` does not produce a transition
-        matrix, so ``trajectory_shift`` is ``None`` for that method.
-        In 1.5.3 it may project baseline velocities instead of the response;
-        a warning recommends ``projection_method='fp'``.
-
-    In ``z_score`` mode, generated expression levels are converted using
-    the PCA-reconstructed gene distribution used by dynamo itself. Targets
-    must all be PCA genes and are aligned to PCA order before dispatch.
-    Automatic preprocessing preserves input gene identifiers. Kinetic data
-    with separate splicing and labeling layers use ``est_method='twostep'``;
+    Wrapper options and native compatibility limits are documented in
+    :func:`perturb`. Targets and expression levels are aligned to PCA gene
+    order. Automatic preprocessing preserves gene identifiers and uses the
+    two-step estimator for kinetic data with separate splicing/labeling;
     the actual estimator is recorded in ``meta['dynamics_est_method']``.
     """
     dyn = _try_import_dynamo()
@@ -1736,13 +1719,11 @@ def _run_dynamo(
         **backend_kwargs,
     )
 
-
     dX = adata.layers[pkey]
     delta_X = dX.toarray() if hasattr(dX, "toarray") else np.asarray(dX)
     delta_X = np.asarray(delta_X, dtype=np.float64)
     cell_names = list(adata.obs_names)
     gene_names = list(adata.var_names)
-
 
     delta_expr = pd.DataFrame()
     if return_delta:
@@ -1764,7 +1745,6 @@ def _run_dynamo(
             / (delta_expr.loc[defined, "mean_base"] + 1e-6)
         )
 
-
     transition_prob = (
         None if backend_kwargs.get("projection_method", "fp") == "transform"
         else adata.obsp.get(transition_key, None)
@@ -1782,14 +1762,12 @@ def _run_dynamo(
         else None
     )
 
-
     rank_key = None
     if rank_group is not None:
         if rank_group not in adata.obs:
             raise ValueError(f"group {rank_group!r} not in adata.obs")
         dyn.pd.rank_perturbation_genes(adata, pkey=pkey, groups=rank_group)
         rank_key = f"rank_{pkey}"
-
 
     vf_ko_keys: dict = {}
     if run_vf_ko:
