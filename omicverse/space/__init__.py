@@ -61,6 +61,7 @@ Examples:
 
 from .._optional import bind_optional_symbols
 
+from .._moscot import moscot_alignment, moscot_mapping
 from ._tangram import Tangram
 from ._spatrio import CellMap,CellLoc
 from ._stt import STT
