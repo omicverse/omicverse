@@ -133,6 +133,7 @@ from ._pseudotime_fate import PseudotimeFate, PseudotimeFateResult
 
 # Single-cell CNV inference — pure-Python CopyKAT / inferCNV wrappers.
 # Usage: cnv = ov.single.CNV(adata, method='copykat'); cnv.run()
+from ._drvi import drvi
 from ._cnv import CNV
 from ._scissor import Scissor
 
