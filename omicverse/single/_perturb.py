@@ -1,31 +1,37 @@
 """
-In-silico gene perturbation with downstream GRN reconstruction.
+In-silico gene perturbation with gene-response and trajectory outputs.
 
 This module exposes :func:`perturb` — a unified entry point that knocks
-out / over-expresses a gene (or list of genes) in an AnnData and returns:
-
-* the predicted post-perturbation AnnData,
-* a downstream GRN (``networkx.DiGraph``) representing how the
-  perturbation propagates through the regulatory network,
-* the per-gene Δ-expression table,
-* a Δ-GRN edge table.
+out / over-expresses a gene (or list of genes) in an AnnData and returns
+backend-specific gene responses, trajectory information and, where
+supported, regulatory networks. Dynamo stores responses in added layers
+without replacing baseline ``X`` and does not reconstruct a GRN.
 
 Backends (selected via ``backend=``):
 
 * ``"sctenifoldknk"`` — purpose-built for **scRNA-only** in-silico KO /
   OE. Reconstructs a PCNet from the scRNA counts, perturbs the gene's
   edges (set to 0 for KO; boosted for OE), and diff-compares the two
-  networks. **Default.**
+  networks. **Default for plain expression AnnData.**
 * ``"cell_oracle"`` — GRN-based simulation. Uses a base GRN (from ATAC
   + motif if available, otherwise the package-bundled mm10/hg38 base
   GRN) and propagates the perturbation through it. Returns the
   simulated post-perturbation GRN + a cell-state shift vector field.
-* ``"auto"`` (default) — picks ``cell_oracle`` if ATAC info is present,
-  otherwise ``sctenifoldknk``.
+* ``"dynamo"`` — vector-field / Jacobian simulation (``dynamo.pd``).
+  By default, perturbs the target's expression and propagates it through the
+  **analytical Jacobian** of the learned PCA vector field
+  (``δY = J · δX``, Qiu 2022) to predict per-cell, per-gene response
+  plus a perturbation transition matrix. Requires a dynamo-processed
+  AnnData (PCA + learned ``VecFld_pca``); with ``auto_pipeline=True``
+  the standard dynamo recipe is run on demand. When the AnnData
+  already carries a dynamo vector field, ``backend='auto'`` picks it.
+* ``"auto"`` (default) — picks ``dynamo`` when a learned dynamo vector
+  field is present (``adata.uns['VecFld_pca']``), ``cell_oracle`` if a
+  base GRN is present, otherwise ``sctenifoldknk``.
 
-The dependencies (``sctenifoldpy``, ``celloracle``) are loaded
-**lazily** so ``omicverse.single`` imports cleanly even when only one
-backend is installed.
+The dependencies (``sctenifoldpy``, ``celloracle``, ``dynamo-release``)
+are loaded **lazily** so ``omicverse.single`` imports cleanly even when
+only one backend is installed.
 
 Example
 -------
@@ -65,7 +71,7 @@ __all__ = ["perturb", "PerturbResult"]
 
 
 _VALID_MODES = ("ko", "kd", "oe")
-_VALID_BACKENDS = ("auto", "sctenifoldknk", "cell_oracle")
+_VALID_BACKENDS = ("auto", "sctenifoldknk", "cell_oracle", "dynamo")
 
 
 # ---------------------------------------------------------------------------
@@ -89,27 +95,40 @@ class PerturbResult:
     adata_perturbed : AnnData or None
         Predicted post-perturbation AnnData (when the backend supports
         it; otherwise ``None`` and the user inspects ``delta_expr``
-        instead).
+        instead). For dynamo, this is the input object or its copy with
+        response layers and projection outputs added. Its ``X`` remains
+        the baseline expression, possibly preprocessed by the automatic
+        pipeline; it is not replaced with predicted expression. Read
+        ``delta_X`` or ``layers[meta['perturbation_key']]`` for responses.
     grn : networkx.DiGraph or None
         Post-perturbation gene regulatory network (TF → target edges
-        with weight). ``None`` when ``grn_output=False`` was requested.
+        with weight). ``None`` when ``grn_output=False`` was requested,
+        and always ``None`` for dynamo, which does not reconstruct a GRN.
     grn_base : networkx.DiGraph or None
-        Pre-perturbation (baseline) GRN.
+        Pre-perturbation (baseline) GRN. Always ``None`` for dynamo.
     delta_grn : pandas.DataFrame
         Per-edge weight change with columns
-        ``[source, target, weight_base, weight_pert, delta]``.
+        ``[source, target, weight_base, weight_pert, delta]``. Empty for
+        dynamo, regardless of ``grn_output``.
     delta_expr : pandas.DataFrame
         Per-gene expression change with columns
-        ``[gene, mean_base, mean_pert, delta, log2_fc]``.
+        ``[gene, mean_base, mean_pert, delta, log2_fc]``. For dynamo,
+        ``delta`` is the mean model response and ``mean_pert`` is the
+        derived sum ``mean_base + delta``, not a fitted count estimate.
+        Signed responses are preserved even when this sum is negative.
+        ``log2_fc`` uses a pseudocount of ``1e-6`` and is ``NaN`` if either
+        mean is negative or non-finite; it is a response-derived summary,
+        not an experimentally measured expression fold change.
     trajectory_shift : Any
         Cell × cell transition probability matrix. Populated automatically
         when an embedding is available (``adata.obsm[embedding_name]``).
         Compute / refresh post-hoc with :meth:`compute_transition_prob`.
     delta_X : numpy.ndarray or None
-        Per-cell, per-gene predicted change (``cells × genes``). Both
+        Per-cell, per-gene predicted change (``cells × genes``). All three
         backends populate this — for CellOracle it's
         ``adata.layers['simulated_count'] - adata.layers['imputed_count']``;
-        for scTenifoldKnk it's ``X @ (KO_pcnet − WT_pcnet)``. It is the
+        for scTenifoldKnk it's ``X @ (KO_pcnet − WT_pcnet)``; for dynamo it
+        is the native perturbation response layer. It is the
         common input that drives every downstream method.
     cell_names : Iterable[str] or None
         Row index for ``delta_X``.
@@ -664,11 +683,12 @@ class PerturbResult:
     category="single",
     description=(
         "Unified in-silico gene perturbation (knockout / knockdown / "
-        "over-expression) with downstream GRN reconstruction. Dispatches "
-        "to either scTenifoldKnk (scRNA-only) or CellOracle (RNA + "
-        "optional ATAC base GRN) backends. Returns a PerturbResult with "
-        "the perturbed AnnData, the post-perturbation GRN, and the "
-        "Δ-edge / Δ-expression tables for diagnostic and downstream plots."
+        "over-expression) with backend-specific response outputs. Dispatches "
+        "to scTenifoldKnk (scRNA-only), CellOracle (RNA + optional ATAC "
+        "base GRN) or dynamo (vector-field Jacobian, δY = J·δX) backends. "
+        "Returns a PerturbResult with model responses and transition outputs; "
+        "GRN outputs are available for network-based backends. Dynamo keeps "
+        "baseline expression in X and stores responses in added layers."
     ),
     examples=[
         "import omicverse as ov",
@@ -683,6 +703,10 @@ class PerturbResult:
         "result = ov.single.perturb(adata, target='Gata1', mode='oe',",
         "                           fold_change=3.0, backend='cell_oracle')",
         "result.adata_perturbed",
+        "",
+        "result = ov.single.perturb(adata, target='Gata1', mode='ko',",
+        "                           backend='dynamo')",
+        "ov.pl.perturb_quiver(adata, result, embedding_name='X_umap')",
         "",
         "# Visualise top affected TFs as a funky heatmap",
         "ov.pl.funky_heatmap(result.summary(20).reset_index(drop=True))",
@@ -787,7 +811,7 @@ def perturb(
     backend_kwargs: dict | None = None,
     copy: bool = False,
 ):
-    """In-silico gene perturbation with downstream GRN reconstruction.
+    """In-silico gene perturbation with gene-response and trajectory outputs.
 
     Parameters
     ----------
@@ -804,9 +828,23 @@ def perturb(
         ``'ko'`` — knockout (expression clamped to 0).
         ``'kd'`` — knockdown (expression multiplied by ``1/fold_change``).
         ``'oe'`` — over-expression (expression multiplied by ``fold_change``).
-    backend : {'auto', 'sctenifoldknk', 'cell_oracle'}, default ``'auto'``
-        ``'auto'`` picks ``cell_oracle`` when ``grn_base`` or
-        ``adata.uns['base_grn']`` is present, else ``sctenifoldknk``.
+        For dynamo, KD/OE set each target to a common level across cells:
+        its mean expression in ``layer`` (or ``X``) divided/multiplied by
+        ``fold_change``. They do not scale each cell independently.
+        ``backend_kwargs['expression']`` overrides these levels using
+        native raw-expression or z-score units, according to ``perturb_mode``.
+    backend : {'auto', 'sctenifoldknk', 'cell_oracle', 'dynamo'}, default ``'auto'``
+        ``'auto'`` picks ``dynamo`` when a learned dynamo vector field is
+        present (``adata.uns['VecFld_pca']``), ``cell_oracle`` when
+        ``grn_base`` or ``adata.uns['base_grn']`` is present, else
+        ``sctenifoldknk``. ``'dynamo'`` propagates the perturbation through
+        the analytical Jacobian of a learned PCA vector field by default (Qiu 2022)
+        and needs a dynamo-processed AnnData; pass ``auto_pipeline=True``
+        via ``backend_kwargs`` to prepare missing steps on demand. Velocity
+        estimation requires spliced/unspliced or metabolic-labeling layers.
+        When both a vector field and base GRN are present, ``'auto'`` uses
+        dynamo and ignores ``grn_base``; select ``'cell_oracle'`` explicitly
+        to use the GRN.
     fold_change : float, default ``2.0``
         Multiplier for OE / KD modes. Ignored for KO.
     grn_base : networkx.DiGraph or DataFrame or None
@@ -814,6 +852,8 @@ def perturb(
         weights). Ignored by scTenifoldKnk (it learns its own PCNet).
     grn_output : bool, default ``True``
         Include the post-perturbation GRN in :class:`PerturbResult.grn`.
+        Dynamo does not reconstruct a GRN: ``grn`` and ``grn_base`` are
+        always ``None`` and ``delta_grn`` is empty for that backend.
     return_delta : bool, default ``True``
         Include the Δ-edge and Δ-expression tables.
     layer : str or None
@@ -831,6 +871,11 @@ def perturb(
     :class:`PerturbResult`
         Dataclass with ``adata_perturbed``, ``grn``, ``grn_base``,
         ``delta_grn``, ``delta_expr``, ``trajectory_shift``, ``meta``.
+        For dynamo, ``adata_perturbed.X`` is baseline expression; responses
+        are in ``delta_X`` and the layer named by
+        ``meta['perturbation_key']``. ``mean_pert`` in ``delta_expr`` is a
+        response-derived summary, not predicted counts. Its ``log2_fc`` is
+        undefined (``NaN``) when either mean is negative or non-finite.
 
     Notes
     -----
@@ -870,13 +915,20 @@ def perturb(
 
     # ---------------- backend dispatch -----------------
     if backend == "auto":
-        # CellOracle requires a base GRN; if the user hasn't supplied
-        # one explicitly and nothing is stashed in adata.uns, fall back
-        # to scTenifoldKnk which is scRNA-only.
+
+
+
+
+        has_vector_field = "VecFld_pca" in adata.uns
         has_base_grn = (grn_base is not None) or (
             "base_grn" in adata.uns or "celloracle_base_grn" in adata.uns
         )
-        backend = "cell_oracle" if has_base_grn else "sctenifoldknk"
+        if has_vector_field:
+            backend = "dynamo"
+        elif has_base_grn:
+            backend = "cell_oracle"
+        else:
+            backend = "sctenifoldknk"
 
     backend_kwargs = dict(backend_kwargs or {})
 
@@ -900,6 +952,17 @@ def perturb(
             grn_base=grn_base,
             layer=layer,
             n_propagation=n_propagation,
+            grn_output=grn_output,
+            return_delta=return_delta,
+            backend_kwargs=backend_kwargs,
+        )
+    if backend == "dynamo":
+        return _run_dynamo(
+            adata,
+            targets=targets,
+            mode=mode,
+            fold_change=fold_change,
+            layer=layer,
             grn_output=grn_output,
             return_delta=return_delta,
             backend_kwargs=backend_kwargs,
@@ -1317,6 +1380,462 @@ def _try_import_celloracle():
             dependencies=("celloracle",),
             install_hint="pip install celloracle",
         ) from exc
+
+
+
+
+
+
+def _try_import_dynamo():
+    try:
+        import dynamo
+        return dynamo
+    except ImportError as exc:
+        raise build_optional_dependency_error(
+            feature="ov.single.perturb (backend='dynamo')",
+            dependencies=("dynamo-release",),
+            install_hint="pip install 'dynamo-release<=1.5.3'",
+        ) from exc
+
+
+def _dynamo_pca_ready(adata, options=None) -> bool:
+    """Whether the selected PCA coordinates and reconstruction metadata exist."""
+    options = options or {}
+    pca_key = options.get("pca_key")
+    pcs_key = options.get("PCs_key")
+    means_key = options.get("pca_mean_key")
+    return (
+        (options.get("X_pca") is not None
+         or (pca_key if pca_key is not None else "X_pca") in adata.obsm)
+        and (isinstance(pcs_key, np.ndarray) or (pcs_key or "PCs") in adata.uns)
+        and (isinstance(means_key, np.ndarray) or (means_key or "pca_mean") in adata.uns)
+        and "use_for_pca" in adata.var.columns
+    )
+
+
+def _dynamo_neighbors_ready(adata) -> bool:
+    """Whether dynamo can retrieve the default neighborhood graph."""
+    return (
+        "indices" in adata.uns.get("neighbors", {})
+        or "distances" in adata.obsp
+    )
+
+
+def _dynamo_ready(adata, emb_basis="umap", options=None, method="j_delta_x") -> bool:
+    """Whether the selected model and its projection prerequisites exist."""
+    options = options or {}
+    field_key = f"VecFld_{options.get('basis', 'pca')}"
+    cached_jacobian = options.get("jac_key", "jacobian_pca") in adata.uns
+    return (
+        _dynamo_pca_ready(adata, options)
+        and (field_key in adata.uns or (method.lower().startswith("j_") and cached_jacobian))
+        and "dynamics" in adata.uns
+        and _dynamo_neighbors_ready(adata)
+        and f"X_{emb_basis}" in adata.obsm
+    )
+
+
+def _run_dynamo_pipeline(adata, dyn, *, emb_basis="umap", targets=()) -> None:
+    """Prepare missing PCA, dynamics, neighbors, embedding and vector field.
+
+    Velocity estimation requires spliced/unspliced or metabolic-labeling
+    layers; an expression matrix alone is insufficient. Existing PCA and
+    vector fields are reused when only the graph or embedding is missing.
+    The Monocle preprocessor preserves input gene identifiers and includes
+    targets among PCA features without fetching annotations. Kinetic data
+    with separate splicing and labeling measurements use dynamo's two-step
+    estimator to avoid the 1.5.3 direct-mixture species mismatch.
+    """
+    needs_pca = not _dynamo_pca_ready(adata)
+    needs_dynamics = needs_pca or "dynamics" not in adata.uns
+    if needs_dynamics:
+        velocity_layers = (
+            {"spliced", "unspliced"}, {"new", "total"}, {"uu", "ul", "su", "sl"},
+            {"X_spliced", "X_unspliced"}, {"X_new", "X_total"},
+            {"X_uu", "X_ul", "X_su", "X_sl"},
+        )
+        if not any(keys.issubset(adata.layers) for keys in velocity_layers):
+            raise RuntimeError(
+                "auto_pipeline=True requires spliced/unspliced or metabolic-labeling "
+                "layers for dynamo velocity estimation; adata.X counts alone are "
+                "insufficient. Supply velocity-compatible data or use backend='sctenifoldknk'."
+            )
+    if needs_pca:
+        preprocessor = dyn.pp.Preprocessor(
+            convert_gene_name_function=lambda data: data,
+            gene_append_list=list(targets),
+        )
+        preprocessor.preprocess_adata(adata, recipe="monocle")
+    if needs_dynamics:
+        preprocessing = adata.uns.get("pp", {})
+        dynamics_kwargs = {}
+        if (preprocessing.get("experiment_type") == "kin"
+                and preprocessing.get("has_splicing")
+                and not preprocessing.get("splicing_labeling")):
+            dynamics_kwargs["est_method"] = "twostep"
+        dyn.tl.dynamics(adata, **dynamics_kwargs)
+    if needs_pca or not _dynamo_neighbors_ready(adata):
+        dyn.tl.neighbors(adata, X_data=adata.obsm["X_pca"], basis="pca")
+    if f"X_{emb_basis}" not in adata.obsm:
+        dyn.tl.reduceDimension(
+            adata, X_data=adata.obsm["X_pca"], basis="pca",
+            n_pca_components=adata.obsm["X_pca"].shape[1], reduction_method=emb_basis,
+        )
+    if needs_dynamics or "VecFld_pca" not in adata.uns:
+        dyn.tl.cell_velocities(adata, basis="pca", enforce=True)
+        dyn.vf.VectorField(adata, basis="pca")
+        adata.uns.pop("jacobian_pca", None)
+
+
+def _run_dynamo(
+    adata,
+    *,
+    targets: Sequence[str],
+    mode: str,
+    fold_change: float,
+    layer: str | None,
+    grn_output: bool,
+    return_delta: bool,
+    backend_kwargs: dict,
+) -> PerturbResult:
+    """dynamo backend — vector-field in-silico perturbation (Qiu 2022).
+
+    Wraps :func:`dynamo.pd.perturbation`: the target's expression is set
+    (KO → 0, KD → mean/``fold_change``, OE → mean×``fold_change``) and the
+    default ``j_delta_x`` method propagates the perturbation vector ``δX``
+    through the **analytical Jacobian** of the learned PCA vector field,
+
+        ``δY = J · δX``,
+
+    giving per-cell, per-gene response (``adata.layers[perturbation_key]``)
+    and a perturbation transition matrix
+    (``adata.obsp['perturbation_transition_matrix']``) — mapped onto
+    ``PerturbResult.delta_X`` / ``.trajectory_shift`` so every downstream
+    method and ``ov.pl.perturb_*`` helper works unchanged.
+
+    Backend kwargs (parsed here before dispatch):
+        ``emb_basis`` (default ``'umap'``), ``perturb_mode``
+        (``'raw'`` | ``'z_score'``), ``perturbation_method``
+        (``'j_delta_x'`` | ``'j_x_prime'`` | ``'j_jv'`` |
+        ``'f_x_prime'`` | ``'f_x_prime_minus_f_x_0'``),
+        ``auto_pipeline`` (run the dynamo recipe when prerequisites are
+        missing — default ``False``), ``vf_ko`` (additionally knock the
+        genes out of the vector field itself via ``dynamo.pd.KO``),
+        ``group`` (``adata.obs`` column for dynamo's per-group mean signed
+        and mean absolute per-cell response rankings, limited to dynamics
+        genes). ``vf_ko`` adds native KO velocities; shared response and
+        transition outputs follow the selected perturbation method, which
+        uses the Jacobian by default. The method also
+        accepts dynamo's spelling
+        ``pertubation_method``. Projection and perturbation options above
+        are passed explicitly to ``dynamo.pd.perturbation``.
+        ``add_delta_Y_key``, ``add_transition_key``, ``add_velocity_key`` and
+        ``add_embedding_key`` override the response, transition, velocity
+        and embedding output keys; resolved keys are forwarded and used
+        for result extraction and metadata. With ``vf_ko=True`` in KO mode,
+        native KO coordinate/velocity keys and ``pearson_transition_matrix``
+        are reserved; conflicting keys are rejected before data mutation.
+        ``expression`` optionally overrides generated levels with a finite
+        scalar or one value per unique target in caller order, in the units
+        of ``perturb_mode``. Selected PCA keys/arrays are respected;
+        automatic preparation only fits the default PCA model.
+        Remaining kwargs are forwarded unchanged. The caller's dictionary
+        is not modified. The 1.5.3 precomputed ``delta_Y`` path and unsafe
+        target-zeroing indices are rejected before perturbation. Use
+        ``X_pca`` for coordinate arrays, not ``pca_key``.
+        ``projection_method='transform'`` does not produce a transition
+        matrix, so ``trajectory_shift`` is ``None`` for that method.
+        In 1.5.3 it may project baseline velocities instead of the response;
+        a warning recommends ``projection_method='fp'``.
+
+    In ``z_score`` mode, generated expression levels are converted using
+    the PCA-reconstructed gene distribution used by dynamo itself. Targets
+    must all be PCA genes and are aligned to PCA order before dispatch.
+    Automatic preprocessing preserves input gene identifiers. Kinetic data
+    with separate splicing and labeling layers use ``est_method='twostep'``;
+    the actual estimator is recorded in ``meta['dynamics_est_method']``.
+    """
+    dyn = _try_import_dynamo()
+
+    if backend_kwargs.get("delta_Y") is not None:
+        raise NotImplementedError(
+            "delta_Y is not supported by dynamo-release 1.5.3 perturbation: "
+            "its precomputed-response path leaves PCA loadings undefined."
+        )
+    if backend_kwargs.get("pca_key") is not None and not isinstance(backend_kwargs["pca_key"], str):
+        raise TypeError("pca_key must be a string; pass coordinate arrays through X_pca instead.")
+    if backend_kwargs.get("projection_method") == "transform":
+        warnings.warn(
+            "dynamo-release 1.5.3 transform projection reloads baseline velocities and "
+            "may ignore the perturbation response. Use projection_method='fp' for "
+            "perturbation-driven transitions and arrows.", RuntimeWarning, stacklevel=2,
+        )
+    emb_basis = backend_kwargs.pop("emb_basis", "umap")
+    perturb_mode = backend_kwargs.pop("perturb_mode", "raw")
+
+    method = backend_kwargs.pop(
+        "pertubation_method",
+        backend_kwargs.pop("perturbation_method", "j_delta_x"),
+    )
+    auto_pipeline = backend_kwargs.pop("auto_pipeline", False)
+    run_vf_ko = backend_kwargs.pop("vf_ko", False)
+    rank_group = backend_kwargs.pop("group", None)
+    requested_expression = backend_kwargs.pop("expression", None)
+    output_defaults = {
+        "add_delta_Y_key": f"{method}_perturbation",
+        "add_transition_key": "perturbation_transition_matrix",
+        "add_velocity_key": f"velocity_{emb_basis}_perturbation",
+        "add_embedding_key": f"X_{emb_basis}_perturbation",
+    }
+    for key, default in output_defaults.items():
+        if backend_kwargs.get(key) is None:
+            backend_kwargs[key] = default
+    if run_vf_ko and mode == "ko":
+        reserved_obsm = {
+            "X_pca_KO", "velocity_pca_KO",
+            f"X_{emb_basis}_KO", f"velocity_{emb_basis}_KO",
+        }
+        collisions = {
+            key: backend_kwargs[key]
+            for key in ("add_delta_Y_key", "add_velocity_key", "add_embedding_key")
+            if backend_kwargs[key] in reserved_obsm
+        }
+        if backend_kwargs["add_transition_key"] == "pearson_transition_matrix":
+            collisions["add_transition_key"] = "pearson_transition_matrix"
+        if collisions:
+            raise ValueError(
+                f"vf_ko=True output keys collide with dynamo KO outputs: {collisions}. "
+                "Choose distinct add_* output keys for the perturbation response."
+            )
+    pkey = backend_kwargs["add_delta_Y_key"]
+    transition_key = backend_kwargs["add_transition_key"]
+    velocity_key = backend_kwargs["add_velocity_key"]
+
+    if backend_kwargs.get("X_pca") is not None:
+        if backend_kwargs.get("PCs_key") is None:
+            backend_kwargs["PCs_key"] = "PCs"
+        if backend_kwargs.get("pca_mean_key") is None:
+            backend_kwargs["pca_mean_key"] = "pca_mean"
+    needs_ko_model = run_vf_ko and mode == "ko" and (
+        not _dynamo_pca_ready(adata) or "VecFld_pca" not in adata.uns
+    )
+    if needs_ko_model and not auto_pipeline:
+        raise RuntimeError(
+            "vf_ko=True requires the default PCA model (X_pca, PCs, pca_mean) "
+            "and VecFld_pca. A cached Jacobian or custom PCA alone is insufficient. "
+            "Prepare the native KO model or set vf_ko=False."
+        )
+    if not _dynamo_ready(adata, emb_basis, backend_kwargs, method) or needs_ko_model:
+        if not auto_pipeline:
+            raise RuntimeError(
+                "backend='dynamo' needs the selected PCA coordinates/loadings/means "
+                "(pca_key or X_pca, PCs_key, pca_mean_key; defaults: X_pca, PCs, "
+                "pca_mean), var['use_for_pca'], a vector field or cached Jacobian, "
+                "uns['dynamics'], a neighbors graph and "
+                f"obsm['X_{emb_basis}']. For unprocessed velocity-compatible "
+                "data use dyn.pp.Preprocessor with gene-name conversion disabled "
+                "and recipe='monocle' → dyn.tl.dynamics (est_method='twostep' "
+                "for kinetic data with separate splicing/labeling) → "
+                "dyn.tl.neighbors(basis='pca') → "
+                f"dyn.tl.reduceDimension(reduction_method='{emb_basis}') → "
+                "dyn.tl.cell_velocities(basis='pca') → "
+                "dyn.vf.VectorField(basis='pca'). On an existing vector field, "
+                "prepare only the missing graph/embedding. Alternatively pass "
+                "backend_kwargs={'auto_pipeline': True} to prepare missing "
+                "steps in place; estimating velocities requires spliced/unspliced "
+                "or metabolic-labeling layers, not adata.X counts alone."
+            )
+        custom_pca = any(
+            isinstance(backend_kwargs.get(key), np.ndarray)
+            or backend_kwargs.get(key) not in (None, default)
+            for key, default in (("pca_key", "X_pca"), ("PCs_key", "PCs"),
+                                 ("pca_mean_key", "pca_mean"), ("basis", "pca"))
+        ) or backend_kwargs.get("X_pca") is not None
+        if custom_pca:
+            raise RuntimeError(
+                "Automatic preparation fits the default PCA model. Prepare the selected "
+                "custom PCA, dynamics, neighbors, embedding and vector field explicitly."
+            )
+        _run_dynamo_pipeline(adata, dyn, emb_basis=emb_basis, targets=targets)
+
+    pca_genes = adata.var_names[adata.var.use_for_pca]
+    missing_pca = [g for g in targets if g not in pca_genes]
+    if missing_pca:
+        raise ValueError(
+            f"dynamo targets must all be PCA genes (var['use_for_pca']): {missing_pca}. "
+            "Recompute PCA and the vector field including these targets."
+        )
+    ordered_targets = list(pca_genes.intersection(targets))
+    if backend_kwargs.get("zero_perturb_genes_vel") and any(
+        pca_genes.get_loc(g) != adata.var_names.get_loc(g) for g in ordered_targets
+    ):
+        raise ValueError(
+            "zero_perturb_genes_vel would zero incorrect full-gene columns in "
+            "dynamo-release 1.5.3 for these PCA indices. Leave it False and "
+            "select target columns explicitly when inspecting responses."
+        )
+    X = _expression_matrix(adata, layer=layer)
+    var_names = list(adata.var_names)
+    requested_levels = None
+    if requested_expression is not None:
+        if np.isscalar(requested_expression):
+            requested_levels = {g: float(requested_expression) for g in ordered_targets}
+        else:
+            levels = np.asarray(requested_expression, dtype=float)
+            if levels.ndim != 1 or len(levels) != len(targets) or len(set(targets)) != len(targets):
+                raise ValueError("expression must be a scalar or one value per unique target, in target order.")
+            requested_levels = dict(zip(targets, levels))
+        if not all(np.isfinite(value) for value in requested_levels.values()):
+            raise ValueError("expression values must be finite.")
+    reconstructed = None
+    if perturb_mode == "z_score" and requested_levels is None:
+        pca_key = backend_kwargs.get("pca_key") or "X_pca"
+        pcs_key = backend_kwargs.get("PCs_key")
+        means_key = backend_kwargs.get("pca_mean_key")
+        pcs = pcs_key if isinstance(pcs_key, np.ndarray) else adata.uns[pcs_key or "PCs"]
+        means = means_key if isinstance(means_key, np.ndarray) else adata.uns[means_key or "pca_mean"]
+        coordinates = backend_kwargs.get("X_pca")
+        if coordinates is None:
+            coordinates = adata.obsm[pca_key]
+        positions = pca_genes.get_indexer(ordered_targets)
+        selected_means = np.asarray(means)
+        if selected_means.ndim:
+            selected_means = selected_means[positions]
+        reconstructed = np.asarray(coordinates @ pcs[positions].T) + selected_means
+
+    expression: list[float] = []
+    for i, g in enumerate(ordered_targets):
+        if requested_levels is not None:
+            expression.append(float(requested_levels[g]))
+            continue
+        base = float(np.asarray(X[:, var_names.index(g)]).mean())
+        if mode == "ko":
+            value = 0.0
+        elif mode == "kd":
+            value = base / fold_change
+        else:
+            value = base * fold_change
+        if perturb_mode == "z_score":
+            x = reconstructed[:, i]
+            m, sd = float(x.mean()), float(x.std())
+            if not np.isfinite(sd) or sd == 0:
+                raise ValueError(
+                    f"PCA-reconstructed target {g!r} has zero or non-finite variance; "
+                    "use perturb_mode='raw' instead."
+                )
+            value = (value - m) / sd
+        expression.append(float(value))
+
+    dyn.pd.perturbation(
+        adata,
+        genes=ordered_targets,
+        expression=expression,
+        perturb_mode=perturb_mode,
+        emb_basis=emb_basis,
+        pertubation_method=method,
+        **backend_kwargs,
+    )
+
+
+    dX = adata.layers[pkey]
+    delta_X = dX.toarray() if hasattr(dX, "toarray") else np.asarray(dX)
+    delta_X = np.asarray(delta_X, dtype=np.float64)
+    cell_names = list(adata.obs_names)
+    gene_names = list(adata.var_names)
+
+
+    delta_expr = pd.DataFrame()
+    if return_delta:
+        mean_base = np.asarray(X.mean(axis=0)).ravel()
+        mean_delta = delta_X.mean(axis=0)
+        delta_expr = pd.DataFrame({
+            "gene": gene_names,
+            "mean_base": mean_base,
+            "mean_pert": mean_base + mean_delta,
+        })
+        delta_expr["delta"] = delta_expr["mean_pert"] - delta_expr["mean_base"]
+        defined = (
+            np.isfinite(mean_base) & np.isfinite(delta_expr["mean_pert"])
+            & (mean_base >= 0) & (delta_expr["mean_pert"] >= 0)
+        )
+        delta_expr["log2_fc"] = np.nan
+        delta_expr.loc[defined, "log2_fc"] = np.log2(
+            (delta_expr.loc[defined, "mean_pert"] + 1e-6)
+            / (delta_expr.loc[defined, "mean_base"] + 1e-6)
+        )
+
+
+    transition_prob = (
+        None if backend_kwargs.get("projection_method", "fp") == "transform"
+        else adata.obsp.get(transition_key, None)
+    )
+    if transition_prob is not None:
+        transition_prob = (
+            transition_prob.toarray()
+            if hasattr(transition_prob, "toarray")
+            else np.asarray(transition_prob)
+        )
+
+    embedding = (
+        np.asarray(adata.obsm[f"X_{emb_basis}"])
+        if f"X_{emb_basis}" in adata.obsm
+        else None
+    )
+
+
+    rank_key = None
+    if rank_group is not None:
+        if rank_group not in adata.obs:
+            raise ValueError(f"group {rank_group!r} not in adata.obs")
+        dyn.pd.rank_perturbation_genes(adata, pkey=pkey, groups=rank_group)
+        rank_key = f"rank_{pkey}"
+
+
+    vf_ko_keys: dict = {}
+    if run_vf_ko:
+        if mode != "ko":
+            warnings.warn(
+                "vf_ko=True only makes sense with mode='ko'; skipping the "
+                "vector-field knockout.", RuntimeWarning,
+            )
+        else:
+            dyn.pd.KO(adata, KO_genes=list(targets), emb_basis=emb_basis)
+            vf_ko_keys = {
+                "pca": "velocity_pca_KO",
+                "emb_basis": f"velocity_{emb_basis}_KO",
+            }
+
+    return PerturbResult(
+        target=targets[0] if len(targets) == 1 else list(targets),
+        mode=mode,
+        backend="dynamo",
+        adata_perturbed=adata,
+        grn=None,
+        grn_base=None,
+        delta_grn=pd.DataFrame(),
+        delta_expr=delta_expr,
+        trajectory_shift=transition_prob,
+        delta_X=delta_X,
+        cell_names=cell_names,
+        gene_names=gene_names,
+        embedding=embedding,
+        meta={
+            "library": "dynamo",
+            "perturbation_key": pkey,
+            "perturbation_method": method,
+            "perturb_mode": perturb_mode,
+            "emb_basis": emb_basis,
+            "expression": dict(zip(ordered_targets, expression)),
+            "expression_source": "native" if requested_levels is not None else "mode",
+            "transition_key": transition_key,
+            "velocity_embedding_key": velocity_key,
+            "embedding_key": backend_kwargs["add_embedding_key"],
+            "rank_key": rank_key,
+            "vf_ko_keys": vf_ko_keys,
+            "n_cells": adata.n_obs,
+            "dynamics_est_method": adata.uns.get("dynamics", {}).get("est_method"),
+        },
+    )
 
 
 # ---------------------------------------------------------------------------
