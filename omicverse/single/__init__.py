@@ -110,6 +110,7 @@ from ._metacell import (
     optimize_granularity,
     compare_metacell_backends,
 )
+from .._moscot import moscot_temporal
 from ._pseudobulk import pseudobulk
 from ._mdic3 import pyMDIC3
 from ._gptcelltype import gptcelltype,gpt4celltype,get_cluster_celltype
