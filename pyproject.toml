@@ -205,6 +205,10 @@ histo = [
   'shapely>=2.0; python_version >= "3.10"',
 ]
 
+
+# Optional pertpy backend (roadmap #989).
+pertpy = ["pertpy>=1.4,<1.5"]
+
 # Cell segmentation backends for ``ov.space.seg`` (methods from the Nat.
 # Methods 2026 spatial segmentation benchmark). The watershed baseline needs
 # none of these. StarDist (TensorFlow), micro-SAM (conda-forge only), CellSAM
