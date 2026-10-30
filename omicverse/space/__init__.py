@@ -63,6 +63,7 @@ from .._optional import bind_optional_symbols
 
 from ._tangram import Tangram
 from ._spatrio import CellMap,CellLoc
+from ._resolvi import resolvi
 from ._stt import STT
 from ._svg import svg,spatial_neighbors,spatial_autocorr,moranI
 from ._niche import molecular as _niche_molecular
