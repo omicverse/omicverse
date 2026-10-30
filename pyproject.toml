@@ -114,6 +114,10 @@ flowsig = [
 rust = [
     "anndataoom>=0.1.0,<1.0",
 ]
+
+# Optional pyLemur backend (roadmap #989).
+lemur = ["pylemur>=0.3.1,<0.4"]
+
 # Flow / spectral / mass cytometry. `flowio` (BSD-3, pure Python, numpy only) is
 # the FCS parser behind ov.io.read_fcs and behind both pytometry and FlowKit; it
 # was previously an UNDECLARED runtime dependency of a public function.
