@@ -567,12 +567,18 @@ def _dynamo_ready_adata(tiny_adata):
     return tiny_adata
 
 
-def test_dynamo_backend_ko(monkeypatch, tiny_adata):
-    from omicverse.single import perturb
-
+@pytest.fixture
+def prepared_dynamo(monkeypatch, tiny_adata):
     hits = {"calls": []}
     _install_fake_dynamo(monkeypatch, hits=hits)
     _dynamo_ready_adata(tiny_adata)
+    return hits
+
+
+def test_dynamo_backend_ko(tiny_adata, prepared_dynamo):
+    from omicverse.single import perturb
+
+    hits = prepared_dynamo
 
     result = perturb(tiny_adata, target="G0", mode="ko", backend="dynamo")
     assert result.backend == "dynamo"
@@ -595,12 +601,10 @@ def test_dynamo_backend_ko(monkeypatch, tiny_adata):
     assert result.meta["perturbation_key"] == "j_delta_x_perturbation"
 
 
-def test_dynamo_backend_oe_expression(monkeypatch, tiny_adata):
+def test_dynamo_backend_oe_expression(tiny_adata, prepared_dynamo):
     from omicverse.single import perturb
 
-    hits = {"calls": []}
-    _install_fake_dynamo(monkeypatch, hits=hits)
-    _dynamo_ready_adata(tiny_adata)
+    hits = prepared_dynamo
 
     perturb(tiny_adata, target="G4", mode="oe", fold_change=5.0,
             backend="dynamo")
@@ -637,12 +641,10 @@ def test_dynamo_backend_missing_raises(monkeypatch, tiny_adata):
         perturb(tiny_adata, target="G0", backend="dynamo")
 
 
-def test_dynamo_vf_ko_and_ranking(monkeypatch, tiny_adata):
+def test_dynamo_vf_ko_and_ranking(tiny_adata, prepared_dynamo):
     from omicverse.single import perturb
 
-    hits = {"calls": []}
-    _install_fake_dynamo(monkeypatch, hits=hits)
-    _dynamo_ready_adata(tiny_adata)
+    hits = prepared_dynamo
     tiny_adata.obs["cluster"] = ["a", "b"] * (tiny_adata.n_obs // 2)
 
     result = perturb(
@@ -657,12 +659,10 @@ def test_dynamo_vf_ko_and_ranking(monkeypatch, tiny_adata):
     assert "velocity_umap_KO" in tiny_adata.obsm
 
 
-def test_dynamo_vf_ko_warns_for_oe(monkeypatch, tiny_adata):
+def test_dynamo_vf_ko_warns_for_oe(tiny_adata, prepared_dynamo):
     from omicverse.single import perturb
 
-    hits = {"calls": []}
-    _install_fake_dynamo(monkeypatch, hits=hits)
-    _dynamo_ready_adata(tiny_adata)
+    hits = prepared_dynamo
 
     with pytest.warns(RuntimeWarning, match="(?i)vf_ko"):
         perturb(tiny_adata, target="G0", mode="oe", backend="dynamo",
@@ -670,20 +670,14 @@ def test_dynamo_vf_ko_warns_for_oe(monkeypatch, tiny_adata):
     assert "ko" not in hits
 
 
-def test_auto_backend_picks_dynamo_with_vector_field(monkeypatch, tiny_adata):
+def test_auto_backend_picks_dynamo_with_vector_field(tiny_adata, prepared_dynamo):
     from omicverse.single import perturb
 
-    hits = {"calls": []}
-    _install_fake_dynamo(monkeypatch, hits=hits)
-    _dynamo_ready_adata(tiny_adata)
+    hits = prepared_dynamo
 
     result = perturb(tiny_adata, target="G0", backend="auto")
     assert result.backend == "dynamo"
     assert hits["calls"]
-
-
-
-
 
 
 _HEMATOPOIESIS = Path(__file__).resolve().parents[2] / "data" / "hematopoiesis.h5ad"
@@ -713,21 +707,40 @@ def _real_dynamo_and_data():
     return path
 
 
-def test_dynamo_real_hematopoiesis_smoke():
+@pytest.fixture
+def real_dynamo_adata():
+    path = _real_dynamo_and_data()
+    if path is None:
+        pytest.skip("dynamo-release or the hematopoiesis dataset is not available")
+    import anndata as ad
+
+    return ad.read_h5ad(path)
+
+
+@pytest.fixture
+def native_dynamo_projection(monkeypatch):
+    import importlib
+    pytest.importorskip("dynamo")
+    native = importlib.import_module("dynamo.prediction.perturbation")
+
+    def project(adata, *, V, add_transition_key, add_velocity_key, **kwargs):
+        adata.obsp[add_transition_key] = np.eye(adata.n_obs)
+        adata.obsm[add_velocity_key] = V[:, :2]
+
+    monkeypatch.setattr(native, "cell_velocities", project)
+    return native
+
+
+def test_dynamo_real_hematopoiesis_smoke(real_dynamo_adata):
     """End-to-end GATA1 KO on dynamo's hematopoiesis tutorial object.
 
     Verifies the mapping dynamo → PerturbResult on a real learned vector
     field: per-cell Δ (delta_X), dynamo's transition matrix, and the
     erythroid biology (GATA1 KO hits HBB/HBD hardest).
     """
-    path = _real_dynamo_and_data()
-    if path is None:
-        pytest.skip("dynamo-release or the hematopoiesis dataset is not available")
-    import anndata as ad
-
     import omicverse as ov
 
-    adata = ad.read_h5ad(path)
+    adata = real_dynamo_adata
     result = ov.single.perturb(adata, target="GATA1", mode="ko",
                                backend="auto")
     assert result.backend == "dynamo"
@@ -738,7 +751,7 @@ def test_dynamo_real_hematopoiesis_smoke():
     top = result.delta_expr.reindex(
         result.delta_expr["delta"].abs().sort_values(ascending=False).index
     )
-    if _is_reference_hematopoiesis(path):
+    if _is_reference_hematopoiesis(_hematopoiesis_path()):
         assert {"HBB", "HBD"} & set(top.head(10)["gene"]), (
             "GATA1 KO should hit erythroid genes hardest on the reference fixture")
     else:
@@ -750,12 +763,10 @@ def test_dynamo_real_hematopoiesis_smoke():
 
 
 @pytest.mark.parametrize("mode,factor", [("ko", 0.0), ("kd", 0.5), ("oe", 2.0)])
-def test_dynamo_zscore_uses_pca_distribution(monkeypatch, tiny_adata, mode, factor):
+def test_dynamo_zscore_uses_pca_distribution(tiny_adata, mode, factor, prepared_dynamo):
     from omicverse.single import perturb
 
-    hits = {"calls": []}
-    _install_fake_dynamo(monkeypatch, hits=hits)
-    _dynamo_ready_adata(tiny_adata)
+    hits = prepared_dynamo
     tiny_adata.uns["pca_mean"] = np.full(tiny_adata.n_vars, 4.0)
     base = tiny_adata.X[:, 0].mean()
     perturb(tiny_adata, target="G0", mode=mode, backend="dynamo",
@@ -766,12 +777,11 @@ def test_dynamo_zscore_uses_pca_distribution(monkeypatch, tiny_adata, mode, fact
 @pytest.mark.parametrize("mode,factor", [("kd", 0.5), ("oe", 2.0)])
 @pytest.mark.parametrize("perturb_mode", ["raw", "z_score"])
 def test_dynamo_multitarget_keeps_gene_values_aligned(
-        monkeypatch, tiny_adata, mode, factor, perturb_mode):
+    tiny_adata, mode, factor, perturb_mode, prepared_dynamo,
+):
     from omicverse.single import perturb
 
-    hits = {"calls": []}
-    _install_fake_dynamo(monkeypatch, hits=hits)
-    _dynamo_ready_adata(tiny_adata)
+    hits = prepared_dynamo
     tiny_adata.X[:, 4] *= 10.0
     result = perturb(tiny_adata, target=["G4", "G0"], mode=mode, backend="dynamo",
                      backend_kwargs={"perturb_mode": perturb_mode})
@@ -786,12 +796,9 @@ def test_dynamo_multitarget_keeps_gene_values_aligned(
     ("add_velocity_key", "custom_velocity"),
     ("add_embedding_key", "custom_embedding"),
 ])
-def test_dynamo_custom_output_keys(monkeypatch, tiny_adata, key, value):
+def test_dynamo_custom_output_keys(tiny_adata, key, value, prepared_dynamo):
     from omicverse.single import perturb
 
-    hits = {"calls": []}
-    _install_fake_dynamo(monkeypatch, hits=hits)
-    _dynamo_ready_adata(tiny_adata)
     tiny_adata.layers["j_delta_x_perturbation"] = np.zeros(tiny_adata.shape)
     tiny_adata.obsp["perturbation_transition_matrix"] = np.eye(tiny_adata.n_obs)
     kwargs = {key: value, "group": "cluster"}
@@ -903,12 +910,10 @@ def test_dynamo_auto_pipeline_preserves_learned_field(monkeypatch, tiny_adata):
 
 
 @pytest.mark.parametrize("missing", ["embedding", "neighbors", "dynamics"])
-def test_dynamo_checks_projection_prerequisites(monkeypatch, tiny_adata, missing):
+def test_dynamo_checks_projection_prerequisites(tiny_adata, missing, prepared_dynamo):
     from omicverse.single import perturb
 
-    hits = {"calls": []}
-    _install_fake_dynamo(monkeypatch, hits=hits)
-    _dynamo_ready_adata(tiny_adata)
+    hits = prepared_dynamo
     if missing == "embedding":
         del tiny_adata.obsm["X_umap"]
     else:
@@ -983,12 +988,11 @@ def test_dynamo_documented_raw_workflow(monkeypatch, tiny_adata, language, workf
 
 @pytest.mark.parametrize("mode,factor", [("ko", 0.0), ("kd", 0.5), ("oe", 2.0)])
 @pytest.mark.parametrize("perturb_mode", ["raw", "z_score"])
-def test_dynamo_native_math_and_output_keys(monkeypatch, tiny_adata, mode, factor, perturb_mode):
-    import importlib
-    pytest.importorskip("dynamo")
+def test_dynamo_native_math_and_output_keys(
+    tiny_adata, mode, factor, perturb_mode, native_dynamo_projection,
+):
     from omicverse.single import perturb
 
-    native = importlib.import_module("dynamo.prediction.perturbation")
     _dynamo_ready_adata(tiny_adata)
     tiny_adata.X[:, 4] *= 10.0
     pcs = np.zeros((tiny_adata.n_vars, 3))
@@ -1001,11 +1005,6 @@ def test_dynamo_native_math_and_output_keys(monkeypatch, tiny_adata, mode, facto
         "jacobian": np.repeat(np.eye(3)[:, :, None], tiny_adata.n_obs, axis=2)}
     reconstructed = tiny_adata.obsm["X_pca"] @ pcs.T + means
 
-    def project(adata, *, V, add_transition_key, add_velocity_key, **kwargs):
-        adata.obsp[add_transition_key] = np.eye(adata.n_obs)
-        adata.obsm[add_velocity_key] = V[:, :2]
-
-    monkeypatch.setattr(native, "cell_velocities", project)
     result = perturb(tiny_adata, target=["G4", "G0"], mode=mode, backend="dynamo",
                      backend_kwargs={"perturb_mode": perturb_mode,
                                      "add_delta_Y_key": "native_response",
@@ -1021,13 +1020,10 @@ def test_dynamo_native_math_and_output_keys(monkeypatch, tiny_adata, mode, facto
     assert "native_embedding" in tiny_adata.obsm
 
 
-
-def test_dynamo_zscore_constant_reconstruction_rejected(monkeypatch, tiny_adata):
+def test_dynamo_zscore_constant_reconstruction_rejected(tiny_adata, prepared_dynamo):
     from omicverse.single import perturb
 
-    hits = {"calls": []}
-    _install_fake_dynamo(monkeypatch, hits=hits)
-    _dynamo_ready_adata(tiny_adata)
+    hits = prepared_dynamo
     tiny_adata.uns["PCs"][0] = 0.0
     with pytest.raises(ValueError, match="perturb_mode='raw'"):
         perturb(tiny_adata, target="G0", backend="dynamo",
@@ -1035,12 +1031,10 @@ def test_dynamo_zscore_constant_reconstruction_rejected(monkeypatch, tiny_adata)
     assert not hits["calls"]
 
 
-def test_dynamo_rejects_targets_outside_pca(monkeypatch, tiny_adata):
+def test_dynamo_rejects_targets_outside_pca(tiny_adata, prepared_dynamo):
     from omicverse.single import perturb
 
-    hits = {"calls": []}
-    _install_fake_dynamo(monkeypatch, hits=hits)
-    _dynamo_ready_adata(tiny_adata)
+    hits = prepared_dynamo
     tiny_adata.var.loc["G4", "use_for_pca"] = False
     with pytest.raises(ValueError, match="G4"):
         perturb(tiny_adata, target=["G0", "G4"], backend="dynamo")
@@ -1069,13 +1063,9 @@ def test_dynamo_native_rejects_unknown_option(tiny_adata):
                 backend_kwargs={"made_up_argument": True})
 
 
-
-def test_dynamo_transform_does_not_reuse_stale_transition(monkeypatch, tiny_adata):
+def test_dynamo_transform_does_not_reuse_stale_transition(tiny_adata, prepared_dynamo):
     from omicverse.single import perturb
 
-    hits = {"calls": []}
-    _install_fake_dynamo(monkeypatch, hits=hits)
-    _dynamo_ready_adata(tiny_adata)
     previous = perturb(tiny_adata, target="G0", backend="dynamo")
     assert previous.trajectory_shift is not None
     current = perturb(tiny_adata, target="G0", backend="dynamo",
@@ -1083,7 +1073,6 @@ def test_dynamo_transform_does_not_reuse_stale_transition(monkeypatch, tiny_adat
     assert current.trajectory_shift is None
     np.testing.assert_allclose(
         tiny_adata.obsp["perturbation_transition_matrix"], previous.trajectory_shift)
-
 
 
 @pytest.mark.parametrize("mode", ["ko", "kd", "oe"])
@@ -1170,7 +1159,6 @@ def test_dynamo_raw_hematopoiesis_full_pipeline(record_property, monkeypatch, mo
     print(f"Full raw pipeline {mode}: {input_shape} -> {raw.shape}, {seconds:.2f}s")
 
 
-
 def test_dynamo_auto_pipeline_preserves_ensembl_identifiers(monkeypatch, tiny_adata):
     from omicverse.single import perturb
 
@@ -1190,7 +1178,6 @@ def test_dynamo_auto_pipeline_preserves_ensembl_identifiers(monkeypatch, tiny_ad
                      backend_kwargs={"auto_pipeline": True})
     assert tiny_adata.var_names.equals(original_names)
     assert result.target == original_names[0]
-
 
 
 @pytest.mark.parametrize("experiment,has_splicing,resolved,expected", [
@@ -1217,7 +1204,6 @@ def test_dynamo_auto_pipeline_selects_supported_kinetics(
     perturb(tiny_adata, target="G0", backend="dynamo",
             backend_kwargs={"auto_pipeline": True})
     assert hits["dynamics_kwargs"] == expected
-
 
 
 def _assert_dynamo_real_group_ranking(adata, result):
@@ -1253,15 +1239,13 @@ def _assert_dynamo_real_vf_ko(adata, result):
 
 @pytest.mark.parametrize("mode,factor", [("ko", 0.0), ("kd", 0.5), ("oe", 2.0)])
 @pytest.mark.parametrize("perturb_mode", ["raw", "z_score"])
-def test_dynamo_real_modes_group_and_output_keys(mode, factor, perturb_mode, record_property):
-    path = _real_dynamo_and_data()
-    if path is None:
-        pytest.skip("dynamo-release or the hematopoiesis dataset is not available")
-    import anndata as ad
+def test_dynamo_real_modes_group_and_output_keys(
+    mode, factor, perturb_mode, record_property, real_dynamo_adata,
+):
     import dynamo as dyn
     from omicverse.single import perturb
 
-    adata = ad.read_h5ad(path)
+    adata = real_dynamo_adata
     reference = adata.copy()
     base = float(adata.X[:, adata.var_names.get_loc("GATA1")].mean())
     prefix = f"{mode}_{perturb_mode}"
@@ -1297,15 +1281,11 @@ def test_dynamo_real_modes_group_and_output_keys(mode, factor, perturb_mode, rec
     record_property("groups", len(adata.uns[result.meta["rank_key"]].columns))
 
 
-def test_dynamo_real_vf_ko_group_and_native_parity(record_property):
-    path = _real_dynamo_and_data()
-    if path is None:
-        pytest.skip("dynamo-release or the hematopoiesis dataset is not available")
-    import anndata as ad
+def test_dynamo_real_vf_ko_group_and_native_parity(record_property, real_dynamo_adata):
     import dynamo as dyn
     from omicverse.single import perturb
 
-    adata = ad.read_h5ad(path)
+    adata = real_dynamo_adata
     reference = adata.copy()
     original_coordinates = adata.obsm["X_pca"].copy()
     original_field = adata.uns["VecFld_pca"]
@@ -1331,15 +1311,10 @@ def test_dynamo_real_vf_ko_group_and_native_parity(record_property):
     record_property("groups", len(adata.uns[result.meta["rank_key"]].columns))
 
 
-
-def test_dynamo_real_sequential_results_keep_custom_keys():
-    path = _real_dynamo_and_data()
-    if path is None:
-        pytest.skip("dynamo-release or the hematopoiesis dataset is not available")
-    import anndata as ad
+def test_dynamo_real_sequential_results_keep_custom_keys(real_dynamo_adata):
     from omicverse.single import perturb
 
-    adata = ad.read_h5ad(path)
+    adata = real_dynamo_adata
     results = {}
     snapshots = {}
     for mode in ("kd", "oe"):
@@ -1363,14 +1338,10 @@ def test_dynamo_real_sequential_results_keep_custom_keys():
         _assert_dynamo_real_group_ranking(adata, result)
 
 
-def test_dynamo_real_copy_keeps_input_clean_with_vf_ko():
-    path = _real_dynamo_and_data()
-    if path is None:
-        pytest.skip("dynamo-release or the hematopoiesis dataset is not available")
-    import anndata as ad
+def test_dynamo_real_copy_keeps_input_clean_with_vf_ko(real_dynamo_adata):
     from omicverse.single import perturb
 
-    adata = ad.read_h5ad(path)
+    adata = real_dynamo_adata
     keys = {name: set(getattr(adata, name)) for name in ("layers", "obsm", "obsp", "uns")}
     original_x = adata.X.copy()
     result = perturb(adata, target="GATA1", mode="ko", backend="dynamo", copy=True,
@@ -1386,14 +1357,10 @@ def test_dynamo_real_copy_keeps_input_clean_with_vf_ko():
 
 
 @pytest.mark.parametrize("mode", ["kd", "oe"])
-def test_dynamo_real_nonko_vf_ko_warns(mode):
-    path = _real_dynamo_and_data()
-    if path is None:
-        pytest.skip("dynamo-release or the hematopoiesis dataset is not available")
-    import anndata as ad
+def test_dynamo_real_nonko_vf_ko_warns(mode, real_dynamo_adata):
     from omicverse.single import perturb
 
-    adata = ad.read_h5ad(path)
+    adata = real_dynamo_adata
     ko_keys = {key for key in adata.obsm if key.endswith("_KO")}
     with pytest.warns(RuntimeWarning, match="vf_ko"):
         result = perturb(adata, target="GATA1", mode=mode, backend="dynamo",
@@ -1404,19 +1371,16 @@ def test_dynamo_real_nonko_vf_ko_warns(mode):
     _assert_dynamo_real_group_ranking(adata, result)
 
 
-
 @pytest.mark.parametrize("option,key", [
     ("add_delta_Y_key", "velocity_pca_KO"),
     ("add_transition_key", "pearson_transition_matrix"),
     ("add_velocity_key", "velocity_umap_KO"),
     ("add_embedding_key", "X_pca_KO"),
 ])
-def test_dynamo_vf_ko_rejects_output_key_collisions(monkeypatch, tiny_adata, option, key):
+def test_dynamo_vf_ko_rejects_output_key_collisions(tiny_adata, option, key, prepared_dynamo):
     from omicverse.single import perturb
 
-    hits = {"calls": []}
-    _install_fake_dynamo(monkeypatch, hits=hits)
-    _dynamo_ready_adata(tiny_adata)
+    hits = prepared_dynamo
     with pytest.raises(ValueError, match="collid"):
         perturb(tiny_adata, target="G0", backend="dynamo",
                 backend_kwargs={"vf_ko": True, option: key})
@@ -1427,14 +1391,10 @@ def test_dynamo_vf_ko_rejects_output_key_collisions(monkeypatch, tiny_adata, opt
     ("add_transition_key", "pearson_transition_matrix"),
     ("add_velocity_key", "velocity_umap_KO"),
 ])
-def test_dynamo_real_vf_ko_rejects_collisions_before_mutation(option, key):
-    path = _real_dynamo_and_data()
-    if path is None:
-        pytest.skip("dynamo-release or the hematopoiesis dataset is not available")
-    import anndata as ad
+def test_dynamo_real_vf_ko_rejects_collisions_before_mutation(option, key, real_dynamo_adata):
     from omicverse.single import perturb
 
-    adata = ad.read_h5ad(path)
+    adata = real_dynamo_adata
     before = {name: set(getattr(adata, name)) for name in ("layers", "obsm", "obsp", "uns")}
     with pytest.raises(ValueError, match="collid"):
         perturb(adata, target="GATA1", backend="dynamo",
@@ -1500,13 +1460,11 @@ def test_dynamo_result_contract_keeps_baseline_without_grn(monkeypatch, tiny_ada
 @pytest.mark.parametrize("mode,level", [("kd", 2.0), ("oe", 8.0)])
 @pytest.mark.parametrize("perturb_mode", ["raw", "z_score"])
 def test_dynamo_kd_oe_request_common_level_across_heterogeneous_cells(
-    monkeypatch, tiny_adata, mode, level, perturb_mode,
+    tiny_adata, mode, level, perturb_mode, prepared_dynamo,
 ):
     from omicverse.single import perturb
 
-    hits = {"calls": []}
-    _install_fake_dynamo(monkeypatch, hits=hits)
-    _dynamo_ready_adata(tiny_adata)
+    hits = prepared_dynamo
     tiny_adata.X[:, 0] = np.tile([0.0, 2.0, 6.0, 8.0], 10)
     baseline = tiny_adata.X.copy()
     perturb(tiny_adata, target="G0", mode=mode, fold_change=2.0, backend="dynamo",
@@ -1594,12 +1552,10 @@ def test_dynamo_tutorial_tables_have_portable_html_outputs(language):
 
 
 @pytest.mark.parametrize("storage", ["keys", "arrays", "coordinates", "cached_jacobian"])
-def test_dynamo_custom_pca_inputs_match_native(monkeypatch, tiny_adata, storage):
-    import importlib
-    pytest.importorskip("dynamo")
+def test_dynamo_custom_pca_inputs_match_native(tiny_adata, storage, native_dynamo_projection):
     from omicverse.single import perturb
 
-    native = importlib.import_module("dynamo.prediction.perturbation")
+    native = native_dynamo_projection
     _dynamo_ready_adata(tiny_adata)
     tiny_adata.uns["jacobian_pca"] = {
         "jacobian": np.repeat(np.eye(3)[:, :, None], tiny_adata.n_obs, axis=2)}
@@ -1620,11 +1576,6 @@ def test_dynamo_custom_pca_inputs_match_native(monkeypatch, tiny_adata, storage)
         tiny_adata.uns.pop("VecFld_pca")
     reference = tiny_adata.copy()
 
-    def project(adata, *, V, add_transition_key, add_velocity_key, **kwargs):
-        adata.obsp[add_transition_key] = np.eye(adata.n_obs)
-        adata.obsm[add_velocity_key] = V[:, :2]
-
-    monkeypatch.setattr(native, "cell_velocities", project)
     reference_options = dict(options)
     if storage in ("coordinates", "cached_jacobian"):
         reference_options.update(PCs_key="PCs", pca_mean_key="pca_mean")
@@ -1635,22 +1586,15 @@ def test_dynamo_custom_pca_inputs_match_native(monkeypatch, tiny_adata, storage)
 
 
 @pytest.mark.parametrize("perturb_mode", ["raw", "z_score"])
-def test_dynamo_explicit_levels_match_native(monkeypatch, tiny_adata, perturb_mode):
-    import importlib
-    pytest.importorskip("dynamo")
+def test_dynamo_explicit_levels_match_native(tiny_adata, perturb_mode, native_dynamo_projection):
     from omicverse.single import perturb
 
-    native = importlib.import_module("dynamo.prediction.perturbation")
+    native = native_dynamo_projection
     _dynamo_ready_adata(tiny_adata)
     tiny_adata.uns["jacobian_pca"] = {
         "jacobian": np.repeat(np.eye(3)[:, :, None], tiny_adata.n_obs, axis=2)}
     reference = tiny_adata.copy()
 
-    def project(adata, *, V, add_transition_key, add_velocity_key, **kwargs):
-        adata.obsp[add_transition_key] = np.eye(adata.n_obs)
-        adata.obsm[add_velocity_key] = V[:, :2]
-
-    monkeypatch.setattr(native, "cell_velocities", project)
     native.perturbation(reference, genes=["G0", "G4"], expression=[-0.5, 1.25],
                         perturb_mode=perturb_mode)
     options = {"expression": [1.25, -0.5], "perturb_mode": perturb_mode}
@@ -1665,12 +1609,12 @@ def test_dynamo_explicit_levels_match_native(monkeypatch, tiny_adata, perturb_mo
     ("pca_key", TypeError, "pca_key must be a string"),
     ("zero_perturb_genes_vel", ValueError, "zero_perturb_genes_vel"),
 ])
-def test_dynamo_rejects_native_faults_before_writing(monkeypatch, tiny_adata, option, error, match):
+def test_dynamo_rejects_native_faults_before_writing(
+    tiny_adata, option, error, match, prepared_dynamo,
+):
     from omicverse.single import perturb
 
-    hits = {"calls": []}
-    _install_fake_dynamo(monkeypatch, hits=hits)
-    _dynamo_ready_adata(tiny_adata)
+    hits = prepared_dynamo
     value = True if option == "zero_perturb_genes_vel" else tiny_adata.obsm["X_pca"].copy()
     if option == "zero_perturb_genes_vel":
         mask = tiny_adata.var_names.isin(["G0", "G4", "G7"])
@@ -1688,15 +1632,13 @@ def test_dynamo_rejects_native_faults_before_writing(monkeypatch, tiny_adata, op
     "j_delta_x", "j_x_prime", "j_jv", "f_x_prime", "f_x_prime_minus_f_x_0",
 ])
 @pytest.mark.parametrize("custom_model", [False, True])
-def test_dynamo_real_native_methods_and_parameters(method, custom_model, record_property):
-    path = _real_dynamo_and_data()
-    if path is None:
-        pytest.skip("dynamo-release or the hematopoiesis dataset is not available")
-    import anndata as ad
+def test_dynamo_real_native_methods_and_parameters(
+    method, custom_model, record_property, real_dynamo_adata,
+):
     import dynamo as dyn
     from omicverse.single import perturb
 
-    adata = ad.read_h5ad(path)
+    adata = real_dynamo_adata
     base = float(adata.X[:, adata.var_names.get_loc("GATA1")].mean())
     adata.uns["custom_jacobian"] = adata.uns.pop("jacobian_pca")
     options = {"perturbation_method": method, "cells": np.arange(0, adata.n_obs, 3),
@@ -1740,15 +1682,11 @@ def test_dynamo_real_native_methods_and_parameters(method, custom_model, record_
 
 
 @pytest.mark.parametrize("projection", ["fp", "pearson", "cosine", "kmc"])
-def test_dynamo_real_native_projection_methods(projection, record_property):
-    path = _real_dynamo_and_data()
-    if path is None:
-        pytest.skip("dynamo-release or the hematopoiesis dataset is not available")
-    import anndata as ad
+def test_dynamo_real_native_projection_methods(projection, record_property, real_dynamo_adata):
     import dynamo as dyn
     from omicverse.single import perturb
 
-    adata = ad.read_h5ad(path)
+    adata = real_dynamo_adata
     reference = adata.copy()
     dyn.pd.perturbation(reference, genes=["GATA1"], expression=[0.0], projection_method=projection)
     result = perturb(adata, target="GATA1", backend="dynamo",
@@ -1763,12 +1701,10 @@ def test_dynamo_real_native_projection_methods(projection, record_property):
 
 
 @pytest.mark.parametrize("levels", [[1.0], [np.nan, 1.0]])
-def test_dynamo_rejects_invalid_explicit_levels(monkeypatch, tiny_adata, levels):
+def test_dynamo_rejects_invalid_explicit_levels(tiny_adata, levels, prepared_dynamo):
     from omicverse.single import perturb
 
-    hits = {"calls": []}
-    _install_fake_dynamo(monkeypatch, hits=hits)
-    _dynamo_ready_adata(tiny_adata)
+    hits = prepared_dynamo
     with pytest.raises(ValueError, match="expression"):
         perturb(tiny_adata, target=["G0", "G4"], backend="dynamo",
                 backend_kwargs={"expression": levels})
@@ -1776,12 +1712,10 @@ def test_dynamo_rejects_invalid_explicit_levels(monkeypatch, tiny_adata, levels)
 
 
 @pytest.mark.parametrize("model", ["cached_jacobian", "custom_pca"])
-def test_dynamo_vf_ko_requires_default_model_before_response(monkeypatch, tiny_adata, model):
+def test_dynamo_vf_ko_requires_default_model_before_response(tiny_adata, model, prepared_dynamo):
     from omicverse.single import perturb
 
-    hits = {"calls": []}
-    _install_fake_dynamo(monkeypatch, hits=hits)
-    _dynamo_ready_adata(tiny_adata)
+    hits = prepared_dynamo
     tiny_adata.uns["jacobian_pca"] = {
         "jacobian": np.repeat(np.eye(3)[:, :, None], tiny_adata.n_obs, axis=2)}
     options = {"vf_ko": True}
