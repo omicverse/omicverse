@@ -40,9 +40,11 @@ Method
 4. **Rigid refinement.** The best seeds are improved by a shrinking random
    rotation / translation hill-climb on the full objective (overlap minus a
    soft excluded-volume penalty), with re-anchoring on the largest residuals.
-5. **Selection.** Among poses within a tolerance of the best overlap, the one
-   with the lowest conformer energy is returned — overlap first, strain as the
-   tie-break.
+5. **Selection.** Overlap first, inside a strain budget calibrated on the
+   ligand's own relaxed ensemble: among poses within a tolerance of the best
+   overlap, the least strained is returned.  Strain is measured the way a
+   stored pose is read back — hydrogens rebuilt from the heavy atoms — because
+   that is what a plausibility check on a submitted pose sees.
 
 Nothing here is specific to a target class or a ligand series: the model is
 data, the scoring tolerance and every search budget are parameters.
@@ -974,9 +976,6 @@ def pharmacophore_align(molecule, volumes: Sequence[Mapping[str, Any]], *,
     index = _build_feature_index(mol, factory, list(FEATURE_FAMILIES), hydrophobe_fallback)
     obj = _Objective(index, vols, sphere_xyz, sphere_r, sigma, clash_tolerance,
                      clash_weight, soft_shell)
-    finite = [e for e in energies.values() if np.isfinite(e)]
-    e_min = min(finite) if finite else float("nan")
-
     conformers = list(mol.GetConformers())
     conf_coords = [np.asarray(c.GetPositions(), dtype=float) for c in conformers]
     conf_energy = [energies.get(c.GetId(), float("nan")) for c in conformers]
