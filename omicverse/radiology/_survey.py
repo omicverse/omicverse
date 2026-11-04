@@ -625,8 +625,11 @@ def draft_principal(study: DicomStudy, ledger: Union[str, Sequence[Dict]], vocab
     ``finding_type``, ``acuity``); terms are matched by name, nothing is
     hard-coded. Rules on the reads at the :func:`ledger_principal` location:
 
-    - structure: the reader's most frequent name there, matched to the
-      closest vocabulary term;
+    - structure: over the whole ledger, the structure (reader's name on the
+      sheets centred on it, matched to the closest vocabulary term) with the
+      most slices read as discontinuous (ties: most series); reads that report
+      no discontinuity do not vote. Location and discontinuity runs are then
+      taken from that structure's reads;
     - finding type: discontinuity on consecutive slices in >= 2 series, or on
       >= 3 consecutive slices of one series → the vocabulary's
       full-thickness / complete tear term, unless 'partial' reads outnumber
@@ -647,42 +650,57 @@ def draft_principal(study: DicomStudy, ledger: Union[str, Sequence[Dict]], vocab
         return {"found": False}
     vs, vf, va = vocabulary.get("structure", []), vocabulary.get("finding_type", []), vocabulary.get("acuity", [])
     rows = json.load(open(ledger)) if isinstance(ledger, str) else list(ledger)
-    c0 = np.asarray(p["xyz_mm"], float)
-    # count the reader's names AFTER mapping them to vocabulary terms (variant
-    # spellings of one structure must not split its vote)
-    votes: Dict[str, int] = {}
+    # Structure = the one with the most slices read as DISCONTINUOUS on the
+    # sheets the reader centred on it (whole ledger; one vote per slice;
+    # ties by number of series). Reads that do not report a discontinuity,
+    # and structures merely visible near a lesion, do not vote.
     term_of_note: Dict[str, Optional[str]] = {}
+    agg: Dict[str, Dict] = {}
     for r in rows:
         note = (r.get("sheet_note") or "").strip()
         if not note or r.get("source") != "structure" or r.get("xyz_mm") is None:
-            continue
-        if np.linalg.norm(np.asarray(r["xyz_mm"], float) - c0) > 40.0:
             continue
         if note not in term_of_note:
             key = _re.sub(r"^(central structure|centre structure|structure( at (the )?cent(re|er)[^:]*)?)\s*:?\s*",
                           "", note, flags=_re.I)
             term_of_note[note] = _best_term(key, vs)
         t = term_of_note[note]
-        if t:
-            votes[(r.get("sheet"), t)] = 1          # one vote per sheet
-    tally: Dict[str, int] = {}
-    for (_, t) in votes:
-        tally[t] = tally.get(t, 0) + 1
-    struct = max(tally, key=tally.get) if tally else None
+        if not t or r.get("normal") or int(r.get("severity") or 0) < 3:
+            continue
+        txt = _NOT_IN_PLANE_SPAN.sub("", r.get("text", ""))
+        if not _DISCONT.search(txt):
+            continue
+        a_ = agg.setdefault(t, {"slices": {}, "series": set()})
+        a_["slices"].setdefault((r["series"], int(r["instance"])), []).append(r)
+        a_["series"].add(r["series"])
+    tally = {t: len(v["slices"]) for t, v in agg.items()}
+    struct = max(agg, key=lambda t: (len(agg[t]["slices"]), len(agg[t]["series"]))) if agg else None
     if struct is None:
         for nm in p["structure_names"]:
             struct = _best_term(nm, vs)
             if struct:
                 break
-    # location: discontinuity reads on sheets the reader centred on that structure
-    sel = [np.asarray(r["xyz_mm"], float) for r in rows
-           if r.get("xyz_mm") is not None and not r.get("normal") and int(r.get("severity") or 0) >= 3
-           and term_of_note.get((r.get("sheet_note") or "").strip()) == struct
-           and _DISCONT.search(_NOT_IN_PLANE_SPAN.sub("", r.get("text", "")))]
-    if sel:
-        p = dict(p, xyz_mm=np.mean(sel, axis=0).round(1).tolist())
+    if struct in agg:
+        sel = [np.asarray(rr["xyz_mm"], float) for v in agg[struct]["slices"].values() for rr in v]
+        by_series: Dict[str, Dict[int, str]] = {}
+        for (ser, ins), v in agg[struct]["slices"].items():
+            by_series.setdefault(ser, {})[ins] = v[0]["text"][:160]
+        runs_s = {}
+        for ser, d in by_series.items():
+            ins = sorted(d)
+            best, cur = [], [ins[0]]
+            for x, y in zip(ins[:-1], ins[1:]):
+                if y - x == 1:
+                    cur.append(y)
+                else:
+                    best, cur = (cur if len(cur) > len(best) else best), [y]
+            best = cur if len(cur) > len(best) else best
+            runs_s[ser] = {"slices": best, "n": len(best), "texts": [d[x] for x in best][:6]}
+        p = dict(p, xyz_mm=np.mean(sel, axis=0).round(1).tolist(),
+                 discontinuity_runs=dict(sorted(runs_s.items(), key=lambda kv: -kv[1]["n"])))
     runs = p["discontinuity_runs"]
-    texts = [t for r in runs.values() for t in r["texts"]]
+    texts = ([rr["text"] for v in agg[struct]["slices"].values() for rr in v[:1]] if struct in agg
+             else [t for r in runs.values() for t in r["texts"]])   # one read per slice
     allt = " ".join(texts).lower()
     n_partial = sum("partial" in t.lower() for t in texts)
     n_full = sum(bool(_re.search(r"absent|\bgap\b|interrupt|discontinu|ruptur|retract", t, _re.I))
