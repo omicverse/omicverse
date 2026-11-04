@@ -259,3 +259,12 @@ def test_measure_band_gap(study):
     a, b = np.array(c["landmarks_xyz_mm"])
     mid = (a + b) / 2
     assert c["reference_distance_mm"] == pytest.approx(np.linalg.norm(mid - np.array(c["reference_xyz_mm"])), abs=0.1)
+
+
+def test_measure_band_gap_extends_trace_started_inside_defect(study):
+    t1, stir = study["Sag T1"], study["Sag STIR"]
+    inst = t1.instance_numbers[2]
+    # first waypoint inside the defect (rows 20-35): the trace must be extended
+    g = rad.measure_band_gap(t1, stir, inst, [(26, 30), (62, 30)], neighbours=0, anat_factor=0.0, factor=3.0)
+    c = g["chosen"]
+    assert c["trace_extended"] >= 1 and c["measurement_mm"] == pytest.approx(8.0, abs=2.5)
