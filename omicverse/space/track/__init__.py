@@ -34,10 +34,10 @@ Methods: Cellpose (Stringer et al., Nat. Methods 2021; cyto3: 2025), Trackastra
 """
 from ._movie import read_movie, segment_movie
 from ._track import detections_table, track_cells, close_gaps, close_merge_gaps
-from ._mitosis import mitosis_signal, detect_mitoses, refine_divisions, prune_divisions, insert_mitoses, adopt_orphans
+from ._mitosis import mitosis_signal, detect_mitoses, refine_divisions, prune_divisions, insert_mitoses, adopt_orphans, consensus_divisions
 from ._lineage import lineage_tables, lineage_json, OUTCOMES
-from ._pipeline import reconstruct_lineage
+from ._pipeline import reconstruct_lineage, repair_tree
 
 __all__ = ["read_movie", "segment_movie", "detections_table", "track_cells", "close_gaps", "close_merge_gaps",
-           "mitosis_signal", "detect_mitoses", "refine_divisions", "prune_divisions", "insert_mitoses", "adopt_orphans", "lineage_tables",
-           "reconstruct_lineage", "lineage_json", "OUTCOMES"]
+           "mitosis_signal", "detect_mitoses", "refine_divisions", "prune_divisions", "insert_mitoses", "adopt_orphans", "consensus_divisions", "lineage_tables",
+           "reconstruct_lineage", "repair_tree", "lineage_json", "OUTCOMES"]
