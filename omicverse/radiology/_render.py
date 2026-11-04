@@ -263,12 +263,17 @@ def montage(series: DicomSeries, instances: Optional[Iterable[int]] = None, *,
         if cells and cells > 1:
             h, w = px.shape
             for k in range(1, cells):
-                ax.axhline(k * h / cells - 0.5, color="cyan", lw=0.4, alpha=0.5)
-                ax.axvline(k * w / cells - 0.5, color="cyan", lw=0.4, alpha=0.5)
+                ax.axhline(k * h / cells - 0.5, color="cyan", lw=0.8, alpha=0.7)
+                ax.axvline(k * w / cells - 0.5, color="cyan", lw=0.8, alpha=0.7)
+            # column letters along the top edge and row numbers along the left
+            # edge, large enough to read: readers that cannot read the labels
+            # assume their own grid and the cell -> position mapping drifts
+            for b in range(cells):
+                ax.text((b + 0.5) * w / cells, 0.02 * h, chr(65 + b), color="cyan", fontsize=9,
+                        fontweight="bold", ha="center", va="top")
             for a in range(cells):
-                for b in range(cells):
-                    ax.text((b + 0.97) * w / cells, (a + 0.97) * h / cells, f"{chr(65 + b)}{a + 1}",
-                            color="cyan", fontsize=6, ha="right", va="bottom", alpha=0.8)
+                ax.text(0.98 * w, (a + 0.5) * h / cells, str(a + 1), color="cyan", fontsize=9,
+                        fontweight="bold", ha="right", va="center")
     fig.suptitle(f"{series.description} ({series.plane}); image right = {d['right']}, "
                  f"down = {d['down']}" + (f"; crop rows {crop[0]}-{crop[1]}, cols {crop[2]}-{crop[3]}"
                                           if crop else ""), fontsize=9)

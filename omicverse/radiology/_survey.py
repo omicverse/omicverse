@@ -126,7 +126,7 @@ def _locate(study: DicomStudy, spec: Dict, manifest: Sequence[Dict]) -> Optional
 def structure_survey(study: DicomStudy, out_dir: str = "survey", *,
                      structures: Optional[Sequence[Union[str, Dict]]] = None,
                      region_mm: float = 90.0, crop_mm: float = 80.0, depth_mm: float = 25.0,
-                     cells: int = 4, max_sheets: int = 24, tile_px: int = 320,
+                     cells: int = 3, max_sheets: int = 24, tile_px: int = 320,
                      max_tiles: int = 24, max_px: int = 1800) -> List[Dict]:
     """Write reading sheets + ``manifest.json`` and return the sheets in order.
 
@@ -696,7 +696,7 @@ def draft_principal(study: DicomStudy, ledger: Union[str, Sequence[Dict]], vocab
                     best, cur = (cur if len(cur) > len(best) else best), [y]
             best = cur if len(cur) > len(best) else best
             runs_s[ser] = {"slices": best, "n": len(best), "texts": [d[x] for x in best][:6]}
-        p = dict(p, xyz_mm=np.mean(sel, axis=0).round(1).tolist(),
+        p = dict(p, xyz_mm=np.median(sel, axis=0).round(1).tolist(),
                  discontinuity_runs=dict(sorted(runs_s.items(), key=lambda kv: -kv[1]["n"])))
     runs = p["discontinuity_runs"]
     texts = ([rr["text"] for v in agg[struct]["slices"].values() for rr in v[:1]] if struct in agg
