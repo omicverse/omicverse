@@ -45,6 +45,7 @@ from ._chm13 import get_chm13_gene,find_chm13_gene
 from ._Deseq2 import pyDEG,deseq2_normalize,estimateSizeFactors,estimateDispersions,Matrix_ID_mapping,data_drop_duplicates_index,temporal_clusters
 from ._tcga import pyTCGA
 from ._combat import batch_correction
+from ._multisite import multisite_harmonize, apply_multisite_harmonization, predict_device_offsets
 
 bind_optional_symbols(
     globals(),
@@ -105,6 +106,9 @@ __all__ = [
     
     # Batch correction
     'batch_correction',
+    'multisite_harmonize',
+    'apply_multisite_harmonization',
+    'predict_device_offsets',
 
     # Deconvolution
     'Deconvolution',
