@@ -804,26 +804,17 @@ def glm_fit(
     weight_df = None if weights is None else _as_weight_matrix(weights, counts.shape, counts_df.index, counts_df.columns)
     weight_mat = None if weight_df is None else weight_df.to_numpy(dtype=float)
 
-    beta = np.zeros((n_tags, X.shape[1]), dtype=float)
-    fitted = np.zeros_like(counts, dtype=float)
+    beta, fitted = _fit_nb_glm_rows(counts, X, offset_mat, disp_vec, weight_mat)
     dev = np.zeros(n_tags, dtype=float)
     for i in range(n_tags):
         wi = None if weight_mat is None else weight_mat[i]
-        b, mu = _fit_nb_glm_row(counts[i], X, offset_mat[i], disp_vec[i], weights=wi)
-        beta[i] = b
-        fitted[i] = mu
-        dev[i] = _nbinom_deviance_row(counts[i], mu, disp_vec[i], weights=wi)
+        dev[i] = _nbinom_deviance_row(counts[i], fitted[i], disp_vec[i], weights=wi)
 
     unshrunk_beta = None
     if prior_count > 0:
         unshrunk_beta = beta.copy()
         aug_counts, aug_offset = _add_prior_count(counts, offset_mat, prior_count)
-        shrunk_beta = np.zeros_like(beta)
-        for i in range(n_tags):
-            wi = None if weight_mat is None else weight_mat[i]
-            b, _ = _fit_nb_glm_row(aug_counts[i], X, aug_offset[i], disp_vec[i], weights=wi)
-            shrunk_beta[i] = b
-        beta = shrunk_beta
+        beta, _ = _fit_nb_glm_rows(aug_counts, X, aug_offset, disp_vec, weight_mat)
 
     return DGEGLM(
         coefficients=beta,
@@ -840,6 +831,78 @@ def glm_fit(
         unshrunk_coefficients=unshrunk_beta,
         weights=weight_mat,
     )
+
+
+def glm_residuals(glmfit: DGEGLM, type: str = "pearson") -> np.ndarray:
+    """Observation residuals of a fitted NB GLM (``pearson`` / ``deviance`` / ``anscombe``)."""
+    y = glmfit.counts.to_numpy(dtype=float)
+    mu = np.asarray(glmfit.fitted_values, dtype=float)
+    disp = np.asarray(glmfit.dispersion, dtype=float)
+    phi = np.broadcast_to(disp.reshape(-1, 1) if disp.ndim else disp, y.shape)
+    type = type.lower()
+    if type == "pearson":
+        return (y - mu) / np.sqrt(np.maximum(mu + phi * mu * mu, 1e-300))
+    if type == "deviance":
+        unit = _nbinom_unit_deviance(y, mu, phi)
+        return np.sign(y - mu) * np.sqrt(unit)
+    if type == "anscombe":
+        # Anscombe residual for the NB family (Hilbe 2011), integral evaluated numerically.
+        def a(t, ph):
+            grid = np.linspace(0.0, 1.0, 65)[None, :]
+            s_ = np.maximum(t[:, None] * grid, 1e-12)
+            f = (s_ + ph[:, None] * s_ * s_) ** (-1.0 / 3.0)
+            trap = getattr(np, "trapezoid", None) or np.trapz
+            return trap(f, grid[0], axis=1) * t
+        yf, mf, pf = y.ravel(), mu.ravel(), phi.ravel()
+        res = (a(yf, pf) - a(mf, pf)) / ((mf + pf * mf * mf) ** (1.0 / 6.0) + 1e-300)
+        return res.reshape(y.shape)
+    raise ValueError("type must be 'pearson', 'deviance' or 'anscombe'.")
+
+
+def estimate_glm_robust_disp(
+    y: DGEList,
+    design=None,
+    prior_df: float = 10.0,
+    update_trend: bool = True,
+    trend_method: str = "bin.loess",
+    maxit: int = 6,
+    k: float = 1.345,
+    residual_type: str = "pearson",
+    record: bool = False,
+) -> DGEList:
+    """Observation-weighted robust dispersion, mirroring ``edgeR::estimateGLMRobustDisp``.
+
+    Alternates GLM fits with Huber observation weights ``min(1, k / |r|)`` on
+    the fitted residuals ``r`` and re-estimates the trended and tagwise
+    dispersions with those weights (Zhou, Lindsay & Robinson 2014, NAR). The
+    final weights are kept in ``y.weights`` so a following :func:`glm_fit` /
+    :func:`glm_lrt` down-weights isolated aberrant observations.
+    """
+    if not isinstance(y, DGEList):
+        y = DGEList(y)
+    if design is None:
+        design = _default_design_from_group(y)
+    y.weights = pd.DataFrame(np.ones(y.counts.shape), index=y.counts.index, columns=y.counts.columns)
+    if y.trended_dispersion is None:
+        estimate_glm_trended_disp(y, design=design, method=trend_method)
+    if y.tagwise_dispersion is None:
+        estimate_glm_tagwise_disp(y, design=design, prior_df=prior_df)
+    history = []
+    for _ in range(int(maxit)):
+        fit = glm_fit(y, design=design, dispersion=y.tagwise_dispersion, prior_count=0)
+        res = glm_residuals(fit, type=residual_type)
+        res = np.where(np.isfinite(res), res, 0.0)
+        ares = np.abs(res)
+        wts = np.where(ares <= k, 1.0, k / np.maximum(ares, 1e-300))
+        y.weights = pd.DataFrame(wts, index=y.counts.index, columns=y.counts.columns)
+        if update_trend:
+            estimate_glm_trended_disp(y, design=design, method=trend_method)
+        estimate_glm_tagwise_disp(y, design=design, prior_df=prior_df)
+        if record:
+            history.append({"weights": wts.copy(), "tagwise_dispersion": np.asarray(y.tagwise_dispersion).copy()})
+    if record:
+        y.record = history
+    return y
 
 
 def pred_fc(y, design, prior_count: float = 0.125, offset=None, dispersion=None, weights=None) -> pd.DataFrame:
@@ -1198,9 +1261,6 @@ def glm_ql_fit(
     designs.
     """
 
-    if robust:
-        raise NotImplementedError("Robust QL moderation is not implemented yet.")
-
     if not legacy and dispersion is None and isinstance(y, DGEList):
         if design is None:
             design = _default_design_from_group(y)
@@ -1261,7 +1321,7 @@ def glm_ql_fit(
         s2[ok] = fit.deviance_adj[ok] / fit.df_residual_adj[ok]
         df = fit.df_residual_adj
     covariate = fit.AveLogCPM if abundance_trend else None
-    df_prior, var_prior, var_post = _squeeze_var(s2, df, covariate=covariate)
+    df_prior, var_prior, var_post = _squeeze_var(s2, df, covariate=covariate, robust=robust)
     fit.df_prior = df_prior
     fit.s2_prior = var_prior
     fit.s2_post = var_post
@@ -1403,6 +1463,114 @@ def _default_design_from_group(x: DGEList) -> pd.DataFrame:
     for lev in group.categories[1:]:
         data[str(lev)] = (group == lev).astype(float)
     return pd.DataFrame(data, index=x.counts.columns)
+
+
+def _nbinom_loglik_rows(y: np.ndarray, mu: np.ndarray, dispersion: np.ndarray, weights: np.ndarray) -> np.ndarray:
+    """Row sums of (weighted) NB log-likelihoods; ``dispersion`` is per row."""
+    mu = np.maximum(mu, 1e-300)
+    phi = np.asarray(dispersion, dtype=float)[:, None]
+    out = np.empty(y.shape, dtype=float)
+    pois = np.broadcast_to(phi <= 0, y.shape)
+    if np.any(pois):
+        out[pois] = stats.poisson.logpmf(y[pois], mu[pois])
+    nb = ~pois
+    if np.any(nb):
+        r = np.broadcast_to(1.0 / np.where(phi > 0, phi, 1.0), y.shape)[nb]
+        yy, mm = y[nb], mu[nb]
+        out[nb] = (
+            special.gammaln(yy + r) - special.gammaln(r) - special.gammaln(yy + 1.0)
+            + r * (np.log(r) - np.log(r + mm)) + yy * (np.log(mm) - np.log(r + mm))
+        )
+    return np.sum(weights * out, axis=1)
+
+
+def _fit_nb_glm_rows(counts: np.ndarray, X: np.ndarray, offset: np.ndarray, disp_vec: np.ndarray, weight_mat=None,
+                     maxit: int = 50, tol: float = 1e-10):
+    """Row-wise NB GLM MLEs, vectorised over rows.
+
+    Damped Fisher scoring (Levenberg-style ridge on the information matrix,
+    step accepted only when the row log-likelihood does not decrease), the
+    same objective as :func:`_fit_nb_glm_row`. Rows that do not converge are
+    refitted with the scalar BFGS path and the better of the two solutions is
+    kept, so results never get worse than the per-row optimiser.
+    """
+    y = np.asarray(counts, dtype=float)
+    n, m = y.shape
+    p = X.shape[1]
+    w = np.ones_like(y) if weight_mat is None else np.asarray(weight_mat, dtype=float)
+    phi = np.asarray(disp_vec, dtype=float).reshape(-1)
+    beta = np.zeros((n, p), dtype=float)
+    with np.errstate(divide="ignore"):
+        beta[:, 0] = np.log(np.maximum(y.sum(axis=1), 1e-8) / np.exp(offset).sum(axis=1))
+    if not np.allclose(X[:, 0], 1.0):
+        # first column is not an intercept: start from least squares on log(y + 0.5)
+        beta = np.linalg.lstsq(X, (np.log(y + 0.5) - offset).T, rcond=None)[0].T
+
+    def _mu(b):
+        return np.exp(np.clip(offset + b @ X.T, -745, 700))
+
+    mu = _mu(beta)
+    ll = _nbinom_loglik_rows(y, mu, phi, w)
+    lam = np.full(n, 1e-6)
+    converged = np.zeros(n, dtype=bool)
+    eye = np.eye(p)
+    for _ in range(maxit):
+        act = ~converged
+        if not np.any(act):
+            break
+        mu_a = mu[act]
+        denom = 1.0 + phi[act, None] * mu_a
+        work = w[act] * mu_a / denom
+        score = ((w[act] * (y[act] - mu_a) / denom) @ X)
+        info = np.einsum("ij,jk,jl->ikl", work, X, X)
+        scale = np.maximum(np.einsum("ikk->ik", info).max(axis=1), 1e-12)
+        idx = np.flatnonzero(act)
+        accepted = np.zeros(idx.size, dtype=bool)
+        lam_a = lam[act].copy()
+        best_beta = beta[act].copy()
+        best_ll = ll[act].copy()
+        for _try in range(20):
+            todo = ~accepted
+            if not np.any(todo):
+                break
+            A = info[todo] + (lam_a[todo] * scale[todo])[:, None, None] * eye
+            try:
+                step = np.linalg.solve(A, score[todo][..., None])[..., 0]
+            except np.linalg.LinAlgError:
+                step = np.einsum("ikl,il->ik", np.linalg.pinv(A), score[todo])
+            cand = beta[act][todo] + step
+            cand_ll = _nbinom_loglik_rows(y[idx[todo]], _mu_rows(offset[idx[todo]], cand, X), phi[idx[todo]], w[idx[todo]])
+            ok = np.isfinite(cand_ll) & (cand_ll >= best_ll[todo] - 1e-12 * np.abs(best_ll[todo]))
+            sub = np.flatnonzero(todo)
+            good = sub[ok]
+            best_beta[good] = cand[ok]
+            best_ll[good] = cand_ll[ok]
+            accepted[good] = True
+            lam_a[good] = np.maximum(lam_a[good] / 10.0, 1e-12)
+            bad = sub[~ok]
+            lam_a[bad] = lam_a[bad] * 10.0
+        gain = best_ll - ll[act]
+        stepsize = np.max(np.abs(best_beta - beta[act]), axis=1)
+        beta[act] = best_beta
+        ll[act] = best_ll
+        lam[act] = lam_a
+        mu[act] = _mu_rows(offset[act], best_beta, X)
+        grad_norm = np.max(np.abs(score), axis=1)
+        done = (np.abs(gain) <= tol * (np.abs(best_ll) + 1.0)) & ((stepsize < 1e-6) | (grad_norm < 1e-8) | ~accepted)
+        converged[idx[done]] = True
+    # rows driven towards an infinite coefficient (all-zero groups) are fine;
+    # refit rows that never converged with the scalar optimiser
+    for i in np.flatnonzero(~converged):
+        b, mu_i = _fit_nb_glm_row(y[i], X, offset[i], phi[i], weights=None if weight_mat is None else w[i])
+        ll_i = _nbinom_loglik_rows(y[i:i + 1], mu_i[None, :], phi[i:i + 1], w[i:i + 1])[0]
+        if np.isfinite(ll_i) and ll_i > ll[i]:
+            beta[i] = b
+            mu[i] = mu_i
+    return beta, mu
+
+
+def _mu_rows(offset: np.ndarray, beta: np.ndarray, X: np.ndarray) -> np.ndarray:
+    return np.exp(np.clip(offset + beta @ X.T, -745, 700))
 
 
 def _fit_nb_glm_row(y: np.ndarray, design: np.ndarray, offset: np.ndarray, dispersion: float, weights=None):
