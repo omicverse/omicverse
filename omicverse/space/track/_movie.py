@@ -141,8 +141,8 @@ def _resolve_gpu(gpu) -> bool:
     related=["space.track.track_cells", "space.seg.segment"],
 )
 def segment_movie(movie: np.ndarray, *, method: str = "cellpose", model: str = "cyto3",
-                  diameter: Optional[float] = None, gpu="auto", scale: float = 1.0,
-                  n_diameter_frames: int = 7, batch_size: int = 8,
+                  diameter=None, gpu="auto", scale: float = 1.0,
+                  n_diameter_frames: int = 7, diameter_every: int = 50, batch_size: int = 8,
                   flow_threshold: float = 0.4, cellprob_threshold: float = 0.0,
                   min_area: Optional[int] = None, out: Optional[str] = None,
                   verbose: bool = True) -> np.ndarray:
@@ -161,7 +161,9 @@ def segment_movie(movie: np.ndarray, *, method: str = "cellpose", model: str = "
     diameter
         Cell diameter in pixels of the *input* movie. ``None`` estimates it with the
         model's size network on ``n_diameter_frames`` frames spread over the movie and
-        uses the median for every frame.
+        uses the median for every frame. ``'adaptive'`` estimates it every
+        ``diameter_every`` frames and follows it (median-smoothed, interpolated), for
+        movies in which cells change size (spreading, crowding).
     gpu
         ``'auto'`` uses CUDA when torch sees a GPU.
     scale
@@ -195,29 +197,42 @@ def segment_movie(movie: np.ndarray, *, method: str = "cellpose", model: str = "
             fr = cv2.resize(fr, (w, h), interpolation=cv2.INTER_AREA)
         return fr
 
-    if diameter is None:
-        idx = np.unique(np.linspace(0, T - 1, max(1, n_diameter_frames)).round().astype(int))
-        ests = []
-        for t in idx:
-            if size_model is not None:
-                try:
-                    d, _ = size_model.eval(_frame(t), channels=[0, 0])
-                    ests.append(float(np.atleast_1d(d)[0]))
-                    continue
-                except Exception:
-                    pass
-            # fall back to Cellpose's own estimate from a first pass with the default size
-            m, _, _ = net.eval(_frame(t), diameter=30.0 * scale, channels=[0, 0])[:3]
-            from cellpose.utils import diameters
-            ests.append(float(diameters(m)[0]))
-        diam_w = float(np.median([e for e in ests if e > 0])) if ests else 30.0 * scale
+    def _estimate(t):
+        if size_model is not None:
+            try:
+                d, _ = size_model.eval(_frame(t), channels=[0, 0])
+                return float(np.atleast_1d(d)[0])
+            except Exception:
+                pass
+        m = net.eval(_frame(t), diameter=30.0 * scale, channels=[0, 0])[0]
+        from cellpose.utils import diameters
+        return float(diameters(m)[0])
+
+    per_frame = None
+    if diameter is None or diameter == "adaptive":
+        n = max(1, n_diameter_frames if diameter is None else int(np.ceil(T / diameter_every)) + 1)
+        idx = np.unique(np.linspace(0, T - 1, n).round().astype(int))
+        ests = np.array([_estimate(t) for t in idx])
+        ok = ests > 0
+        if not ok.any():
+            ests, ok = np.array([30.0 * scale]), np.array([True])
+            idx = np.array([0])
+        diam_w = float(np.median(ests[ok]))
+        if diameter == "adaptive":
+            # cells change size over a movie (spreading, crowding): follow it, smoothed
+            from scipy.ndimage import median_filter
+            e = median_filter(ests[ok], size=min(5, int(ok.sum())), mode="nearest")
+            per_frame = np.interp(np.arange(T), idx[ok], e)
     else:
         diam_w = float(diameter) * scale
     if verbose:
         print(f"[segment_movie] {T} frames {H}x{W}, working diameter {diam_w:.1f}px "
               f"(scale {scale}), gpu={use_gpu}")
+    if verbose and per_frame is not None:
+        print(f"[segment_movie] adaptive diameter {per_frame.min():.1f}-{per_frame.max():.1f}px")
     if min_area is None:
-        min_area = int(np.pi * (diam_w / scale / 2) ** 2 / 8)
+        dmin = diam_w if per_frame is None else float(per_frame.min())
+        min_area = int(np.pi * (dmin / scale / 2) ** 2 / 8)
 
     if out is not None:
         mode = "r+" if os.path.exists(out) else "w+"
@@ -232,9 +247,15 @@ def segment_movie(movie: np.ndarray, *, method: str = "cellpose", model: str = "
     while t < T:
         ts = list(range(t, min(T, t + batch_size)))
         imgs = [_frame(k) for k in ts]
-        res = net.eval(imgs, diameter=diam_w, channels=[0, 0], flow_threshold=flow_threshold,
-                       cellprob_threshold=cellprob_threshold)
-        masks = res[0]
+        if per_frame is None:
+            res = net.eval(imgs, diameter=diam_w, channels=[0, 0], flow_threshold=flow_threshold,
+                           cellprob_threshold=cellprob_threshold)
+            masks = res[0]
+        else:
+            masks = [net.eval(im, diameter=float(per_frame[k]), channels=[0, 0],
+                              flow_threshold=flow_threshold,
+                              cellprob_threshold=cellprob_threshold)[0]
+                     for k, im in zip(ts, imgs)]
         for k, m in zip(ts, masks):
             m = np.asarray(m)
             if scale != 1.0:

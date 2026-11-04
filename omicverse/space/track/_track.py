@@ -201,8 +201,9 @@ def track_cells(labels: np.ndarray, movie: Optional[np.ndarray] = None, *,
         ``'overlap'`` only: maximum centroid displacement between frames; default the
         median object diameter.
     delta_t
-        ``'trackastra'``: candidate links may skip up to ``delta_t - 1`` frames (the
-        model scores pairs inside its temporal window), bridging missed detections.
+        ``'trackastra'``: frame distance of candidate links. The pretrained models
+        (v0.3) only score consecutive frames, so values > 1 add nothing; missed
+        detections are bridged by :func:`close_gaps` instead.
     threshold
         ``'trackastra'``: minimum association probability for a link (greedy).
     cache
