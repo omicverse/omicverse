@@ -79,6 +79,12 @@ Single-cell relevance     ``disease_relevance_score``, ``score_downstream``
 Heritability / LDSC       ``heritability``, ``genetic_correlation``,
                           ``partitioned_heritability``, ``ldsc_cell_type``,
                           ``munge_sumstats``
+Sequencing sample QC      ``snp_allele_counts``, ``bam_read_summary``,
+                          ``sample_genotype_concordance``,
+                          ``resolve_sample_relationships``,
+                          ``estimate_cross_sample_contamination``,
+                          ``tumor_normal_allelic_imbalance``,
+                          ``tumor_normal_batch_qc``
 TWAS                      ``twas`` (spredixcan / smultixcan / predixcan),
                           ``load_twas_model``, ``make_twas_covariance``
 Plotting                  ``manhattan``, ``qqplot``, ``regional_plot``,
@@ -154,6 +160,14 @@ _LAZY_ATTRS: dict[str, tuple[str, str]] = {
     "twas":                      ("._twas", "twas"),
     "load_twas_model":           ("._twas", "load_twas_model"),
     "make_twas_covariance":      ("._twas", "make_twas_covariance"),
+    # Sample-level genetic QC from aligned reads (identity / contamination / tumour-normal)
+    "snp_allele_counts":       ("._sample_qc", "snp_allele_counts"),
+    "bam_read_summary":        ("._sample_qc", "bam_read_summary"),
+    "sample_genotype_concordance": ("._sample_qc", "sample_genotype_concordance"),
+    "resolve_sample_relationships": ("._sample_qc", "resolve_sample_relationships"),
+    "estimate_cross_sample_contamination": ("._sample_qc", "estimate_cross_sample_contamination"),
+    "tumor_normal_allelic_imbalance": ("._sample_qc", "tumor_normal_allelic_imbalance"),
+    "tumor_normal_batch_qc":   ("._sample_qc", "tumor_normal_batch_qc"),
     # gsMap — spatial GWAS mapping
     "gsmap":                     ("._gsmap", "gsmap"),
     # Plotting
@@ -188,6 +202,7 @@ _REGISTRY_SUBMODULES = (
     "._ldsc",
     "._twas",
     "._gsmap",
+    "._sample_qc",
     ".plotting",
 )
 
