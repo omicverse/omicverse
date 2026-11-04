@@ -12,7 +12,11 @@ from ._channel_qc import (bandpass_filter, channel_qc_table, bridged_channel_pai
                           erp_channel_outliers)
 from ._erp import repair_reject_epochs, channel_erps
 from ._trigger import trigger_onsets
+from ._choice_model import (fit_choice_model, choice_model_loglik,
+                            choice_model_forward_validation, export_choice_predictor)
 
 __all__ = ["cross_species_align", "bonsai", "bandpass_filter", "channel_qc_table",
            "bridged_channel_pairs", "erp_channel_outliers",
-           "repair_reject_epochs", "channel_erps", "trigger_onsets"]
+           "repair_reject_epochs", "channel_erps", "trigger_onsets",
+           "fit_choice_model", "choice_model_loglik",
+           "choice_model_forward_validation", "export_choice_predictor"]
