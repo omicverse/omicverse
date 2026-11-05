@@ -580,13 +580,13 @@ class pyDEG(object):
             group2: The second group to be compared.
             method: The method to be used for differential expression analysis.
                 - `DEseq2`: PyDESeq2 negative-binomial Wald test (raw counts).
-                - `edger`: edgeR quasi-likelihood F-test via the vendored
-                  pure-Python `pyedger` port (R-parity tested; no R needed).
+                - `edger`: edgeR quasi-likelihood F-test via the
+                  pure-Python `pyedger` package (R-parity tested; no R needed).
                 - `limma`: limma-voom pipeline via the vendored pure-Python
                   `pylimma` port (TMM library sizes + voom mean-variance
                   modelling + eBayes; R-parity tested; no R needed).
                 - `edgepy`: edgeR classic GLM likelihood-ratio test (glmFit +
-                  glmLRT) via the vendored pure-Python `pyedger` port
+                  glmLRT) via the pure-Python `pyedger` package
                   (no R / inmoose needed).
                 - `ttest`: independent two-sample t-test.
                 - `wilcox`: Wilcoxon rank-sum test (not implemented).
@@ -798,11 +798,11 @@ class pyDEG(object):
         
         elif method == 'edgepy':
             # edgeR **classic GLM likelihood-ratio test** (glmFit + glmLRT) via
-            # the vendored pure-Python pyedger port — no inmoose / R needed.
+            # the pure-Python pyedger package — no inmoose / R needed.
             # (For the quasi-likelihood F-test, use method='edger'.) This
             # replaces the old inmoose.edgepy path and now reports the GLM's
             # own logFC instead of a raw pseudo-count mean ratio.
-            from ..external import pyedger as _edger
+            import pyedger as _edger
             print("⏰ Start edgeR GLM likelihood-ratio test (pyedger)...")
             counts = self.data[group1 + group2]
             groups = ['treatment'] * len(group1) + ['control'] * len(group2)
@@ -844,9 +844,9 @@ class pyDEG(object):
 
         elif method == 'edger':
             # edgeR quasi-likelihood pipeline via the vendored pure-Python
-            # port `pyedger` (omicverse.external.pyedger), R-parity tested
+            # package `pyedger` (PyPI, omicverse/py-edgeR), R-parity tested
             # against Bioconductor edgeR. No R / inmoose needed.
-            from ..external import pyedger as _edger
+            import pyedger as _edger
             print("⏰ Start edgeR quasi-likelihood (QL) pipeline (pyedger)...")
             counts = self.data[group1 + group2]
             groups = ['treatment'] * len(group1) + ['control'] * len(group2)
