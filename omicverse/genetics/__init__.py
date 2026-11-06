@@ -84,6 +84,7 @@ Sequencing sample QC      ``snp_allele_counts``, ``bam_read_summary``,
                           ``resolve_sample_relationships``,
                           ``estimate_cross_sample_contamination``,
                           ``tumor_normal_allelic_imbalance``,
+                          ``tumor_in_normal_shift``,
                           ``tumor_normal_batch_qc``
 TWAS                      ``twas`` (spredixcan / smultixcan / predixcan),
                           ``load_twas_model``, ``make_twas_covariance``
@@ -167,6 +168,7 @@ _LAZY_ATTRS: dict[str, tuple[str, str]] = {
     "resolve_sample_relationships": ("._sample_qc", "resolve_sample_relationships"),
     "estimate_cross_sample_contamination": ("._sample_qc", "estimate_cross_sample_contamination"),
     "tumor_normal_allelic_imbalance": ("._sample_qc", "tumor_normal_allelic_imbalance"),
+    "tumor_in_normal_shift":   ("._sample_qc", "tumor_in_normal_shift"),
     "tumor_normal_batch_qc":   ("._sample_qc", "tumor_normal_batch_qc"),
     # gsMap — spatial GWAS mapping
     "gsmap":                     ("._gsmap", "gsmap"),

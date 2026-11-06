@@ -26,6 +26,10 @@ for four things that a genotype panel can settle without variant calling:
     per-region folded-allele-fraction comparison of a tumour against its
     matched normal at normal-heterozygous sites (LOH / imbalance, tumour
     content implied by the deepest region).
+``tumor_in_normal_shift``
+    tumour-in-normal from germline SNPs: the normal's heterozygous allele
+    fraction shifted toward the tumour's retained allele inside the tumour's
+    LOH regions (direction-balanced, no somatic markers needed).
 ``tumor_normal_batch_qc``
     runs the steps above and returns one row per supported finding
     (identity mismatch, cross-sample contamination, tumour-in-normal,
@@ -54,6 +58,7 @@ __all__ = [
     "resolve_sample_relationships",
     "estimate_cross_sample_contamination",
     "tumor_normal_allelic_imbalance",
+    "tumor_in_normal_shift",
     "tumor_normal_batch_qc",
 ]
 
@@ -601,6 +606,10 @@ def estimate_cross_sample_contamination(
     min_fraction: float = 0.005,
     overdispersion: bool = True,
     private_outlier_p: float = 1e-3,
+    genotype_reference: Optional[Mapping[str, Union[str, Sequence[str]]]] = None,
+    groups: Optional[Mapping[str, Iterable[str]]] = None,
+    min_informative_sites: int = 5,
+    min_hit_sites: int = 3,
 ) -> pd.DataFrame:
     """Joint mixture estimate of contamination fractions and sources.
 
@@ -619,6 +628,28 @@ def estimate_cross_sample_contamination(
     they hold no source information and are left out of the fit
     (``affected_private_minor_sites``).
 
+    ``genotype_reference`` maps an affected sample to other samples of the
+    same individual (e.g. a tumour to its matched normal). Its sites are then
+    restricted to loci homozygous in the *individual* (affected and every
+    reference sample), and the minor allele is oriented by the individual's
+    genotype. This removes loci where the affected sample is homozygous only
+    through somatic loss of heterozygosity, whose residual minority reads are
+    the sample's own normal admixture and otherwise dilute / confound a
+    foreign source.
+
+    ``groups`` maps each sample to its same-individual set (e.g. the
+    ``groups`` of :func:`tumor_normal_batch_qc`). Samples of one individual
+    are genetically collinear as sources, so the evidence for a *foreign*
+    individual is the likelihood ratio of dropping all its samples at once
+    (``lr`` / ``p_adj`` of that individual), and the source is attributed to
+    the member whose own single-source fit has the highest likelihood
+    (``best_in_individual``; the others are reported as alternates and are
+    never ``called``). ``fraction`` of a foreign source is then its
+    single-source mixture fraction (``joint_fraction`` keeps the joint fit).
+    A call additionally needs ``min_informative_sites`` loci at which the
+    source carries the affected sample's minor allele and ``min_hit_sites``
+    of them with minority reads, so single noisy loci never make a call.
+
     Returns
     -------
     One row per ordered pair: ``affected, source, fraction, lr, p_value,
@@ -627,8 +658,10 @@ def estimate_cross_sample_contamination(
     minority read), ``mean_minor_af_at_hits``, ``private_markers`` (source
     allele absent, <= ``private_max_other_af``, from every other sample),
     ``private_hits``, ``private_reads``, ``dominant_region``, ``dispersion``,
-    ``background_error``. ``called`` = ``p_adj < alpha`` and ``fraction >=
-    min_fraction``.
+    ``background_error``, ``source_individual``, ``best_in_individual``,
+    ``single_source_loglik``, ``joint_fraction``. ``called`` = ``p_adj <
+    alpha``, ``fraction >= min_fraction``, the support minima and (with
+    ``groups``) ``best_in_individual``.
     """
     from scipy.stats import binom, chi2
 
@@ -640,11 +673,23 @@ def estimate_cross_sample_contamination(
     AF, DP, AC = af.values.astype(float), dp.values.astype(float), ac.values.astype(float)
     n_tests = len(samples) * (len(samples) - 1)
     rows = []
+    gref = {}
+    for k_, v_ in (genotype_reference or {}).items():
+        v_ = [v_] if isinstance(v_, str) else list(v_)
+        gref[k_] = [samples.index(x) for x in v_ if x in samples and x != k_]
+    grp = {s_: frozenset(groups.get(s_, [s_])) | {s_} for s_ in samples} if groups else \
+        {s_: frozenset([s_]) for s_ in samples}
     for ia, A in enumerate(samples):
         a = AF[:, ia]
-        minor_alt = a < 0.5
+        refs = gref.get(A, [])
+        # minor allele oriented by the individual's genotype (affected + references)
+        g_af = np.nanmean(AF[:, [ia] + refs], axis=1) if refs else a
+        minor_alt = g_af < 0.5
+        sel = np.ones(len(a), dtype=bool)
+        for j in [ia] + refs:
+            mj = np.where(minor_alt, AF[:, j], 1 - AF[:, j])
+            sel &= (DP[:, j] >= min_depth) & np.isfinite(mj) & (mj < max_minor_af)
         minor_af = np.where(minor_alt, a, 1 - a)
-        sel = (DP[:, ia] >= min_depth) & np.isfinite(a) & (minor_af < max_minor_af)
         if sel.sum() < 5:
             continue
         k = np.where(minor_alt, AC[:, ia], DP[:, ia] - AC[:, ia])[sel]
@@ -659,6 +704,7 @@ def estimate_cross_sample_contamination(
         # artefacts) and would inflate the error term and the dispersion.
         no_src = X.max(axis=1) < private_max_other_af
         bg_rate = max(k[no_src].sum() / max(n[no_src].sum(), 1), 1e-4) if no_src.any() else 1e-3
+        outl = np.zeros(len(k), dtype=bool)
         for _ in range(5):
             outl = no_src & (binom.sf(k - 1, n, bg_rate) < private_outlier_p)
             keep_bg = no_src & ~outl
@@ -682,13 +728,41 @@ def estimate_cross_sample_contamination(
         Sfull[~(DP >= source_min_depth)] = np.nan
         minor_sel = minor_af[sel]
         reg_sel = reg.values[sel]
+        # single-source fits (background + one source) for attribution
+        single = {}
+        for jj in range(len(others)):
+            Ls, ths = _fit_mixture(k, n, X[:, [jj]])
+            single[jj] = (-Ls, float(ths[1]))
+        group_lr: Dict[frozenset, float] = {}
+        best_member: Dict[frozenset, int] = {}
+        own = grp[A]
+        for jj, js in enumerate(others):
+            G = grp[samples[js]]
+            if samples[js] in own or G in group_lr:
+                continue
+            cols = [c for c, jx in enumerate(others) if samples[jx] in G and samples[jx] not in own]
+            if th[1 + np.array(cols)].sum() > 0:
+                L0, _ = _fit_mixture(k, n, np.delete(X, cols, axis=1))
+                group_lr[G] = max(2 * (L0 - L_full), 0.0)
+            else:
+                group_lr[G] = 0.0
+            best_member[G] = max(cols, key=lambda c: single[c][0])
         for jj, js in enumerate(others):
             src = samples[js]
-            if th[1 + jj] > 0:
-                L0, _ = _fit_mixture(k, n, np.delete(X, jj, axis=1))
-                lr = max(2 * (L0 - L_full), 0.0)
+            foreign = src not in own and groups is not None
+            if foreign:
+                G = grp[src]
+                lr = group_lr[G]
+                is_best = best_member[G] == jj
+                frac = single[jj][1]
             else:
-                lr = 0.0
+                if th[1 + jj] > 0:
+                    L0, _ = _fit_mixture(k, n, np.delete(X, jj, axis=1))
+                    lr = max(2 * (L0 - L_full), 0.0)
+                else:
+                    lr = 0.0
+                is_best = True
+                frac = float(th[1 + jj])
             stat = lr / phi
             pval = 0.5 * chi2.sf(stat, 1) if stat > 0 else 1.0
             padj = min(pval * n_tests, 1.0)
@@ -703,11 +777,11 @@ def estimate_cross_sample_contamination(
                 dom = rc.index[0] if (len(rc) == 1 or rc.iloc[0] >= 0.7 * rc.sum()) else "MULTIPLE"
             else:
                 dom = "NA"
-            frac = float(th[1 + jj])
             rows.append({
                 "affected": A, "source": src, "fraction": frac, "lr": lr / phi if overdispersion else lr,
                 "lr_raw": lr, "p_value": pval, "p_adj": padj,
-                "called": bool(padj < alpha and frac >= min_fraction),
+                "called": bool(padj < alpha and frac >= min_fraction and is_best
+                               and inf.sum() >= min_informative_sites and hits.sum() >= min_hit_sites),
                 "n_sites": int(sel.sum()), "informative_sites": int(inf.sum()),
                 "hit_sites": int(hits.sum()),
                 "mean_minor_af_at_hits": float(minor_sel[hits].mean()) if hits.any() else np.nan,
@@ -715,6 +789,11 @@ def estimate_cross_sample_contamination(
                 "private_reads": int(k[priv].sum()), "dominant_region": dom,
                 "dispersion": phi, "background_error": float(th[0]),
                 "affected_private_minor_sites": n_private_minor,
+                "source_individual": ",".join(sorted(grp[src])),
+                "best_in_individual": bool(is_best),
+                "single_source_loglik": single[jj][0],
+                "joint_fraction": float(th[1 + jj]),
+                "genotype_reference": ",".join(samples[r] for r in refs) or "NA",
             })
     df = pd.DataFrame(rows)
     if len(df):
@@ -809,6 +888,88 @@ def tumor_normal_allelic_imbalance(
     return regions, summ
 
 
+@register_function(
+    aliases=["tumor_in_normal_shift", "tumor_in_normal_loh", "tin_estimate", "normal_contamination_by_tumor",
+             "肿瘤污染正常", "正常样本肿瘤污染"],
+    category="genetics",
+    description=(
+        "Tumour-in-normal (tumour-derived reads in the matched normal / "
+        "baseline) from germline SNPs alone: inside the tumour's LOH regions the "
+        "normal's heterozygous allele fraction is shifted toward the allele the "
+        "tumour retained. Direction-balanced signed shift (ALT-retained and "
+        "REF-retained loci averaged, cancelling reference / mapping bias), "
+        "z-score, p-value and the implied tumour-derived fraction. Needs no "
+        "tumour-private / somatic markers, so it works on any SNP panel."
+    ),
+    examples=["tin = ov.genetics.tumor_in_normal_shift(counts, 'T1', 'N1')"],
+    related=["ov.genetics.tumor_normal_allelic_imbalance", "ov.genetics.tumor_normal_batch_qc"],
+)
+def tumor_in_normal_shift(
+    counts: pd.DataFrame,
+    tumor: str,
+    normal: str,
+    *,
+    loh_regions: Optional[Sequence[str]] = None,
+    min_depth: int = 15,
+    het_band: float = 0.25,
+    retained_min_shift: float = 0.25,
+    min_loci_per_direction: int = 5,
+    imbalance_kwargs: Optional[dict] = None,
+) -> Dict[str, object]:
+    """Signed allelic shift of ``normal`` toward ``tumor``'s retained alleles.
+
+    Loci: ``normal`` heterozygous (``|AF_N - 0.5| <= het_band``), both depths
+    >= ``min_depth``, inside ``loh_regions`` (default: the LOH regions of
+    :func:`tumor_normal_allelic_imbalance` of the pair), and the tumour
+    clearly retaining one allele (``|AF_T - 0.5| >= retained_min_shift``).
+    With ``d = (AF_N - 0.5) * sign(AF_T - 0.5)`` the statistic is the mean of
+    ``d`` over ALT-retained loci and over REF-retained loci, averaged (a
+    reference bias in the normal moves the two means in opposite directions
+    and cancels); ``z`` uses the two-sample standard error. A tumour-derived
+    fraction ``f`` in the normal gives ``AF_N = 0.5 + f (AF_T - 0.5)``, so
+    ``fraction = shift / mean |AF_T - 0.5|``. Restricting to LOH regions keeps
+    isolated artefactual loci from driving the test; a tumour without LOH
+    regions gives ``tested = False`` (no power, not evidence of absence).
+
+    Returns a dict ``tumor, normal, tested, loh_regions, loci_alt_retained,
+    loci_ref_retained, shift, se, z, p_value, fraction, dominant_region``.
+    """
+    from scipy.stats import norm
+
+    if loh_regions is None:
+        _, summ = tumor_normal_allelic_imbalance(counts, tumor, normal, **(imbalance_kwargs or {}))
+        loh_regions = summ["loh_regions"]
+    loh_regions = list(loh_regions)
+    out: Dict[str, object] = {"tumor": tumor, "normal": normal, "tested": False, "loh_regions": loh_regions,
+                              "loci_alt_retained": 0, "loci_ref_retained": 0, "shift": np.nan, "se": np.nan,
+                              "z": np.nan, "p_value": 1.0, "fraction": np.nan, "dominant_region": "NA"}
+    if not loh_regions:
+        return out
+    af = _wide(counts, "alt_fraction")
+    dp = _wide(counts, "depth").reindex_like(af)
+    if tumor not in af.columns or normal not in af.columns:
+        return out
+    reg = counts.drop_duplicates(["chrom", "pos"]).set_index(["chrom", "pos"])["region_id"].reindex(af.index).values
+    aN, aT = af[normal].values.astype(float), af[tumor].values.astype(float)
+    ok = (np.isin(reg, loh_regions) & (dp[normal].values >= min_depth) & (dp[tumor].values >= min_depth)
+          & np.isfinite(aN) & np.isfinite(aT) & (np.abs(aN - 0.5) <= het_band))
+    hi = ok & (aT - 0.5 >= retained_min_shift)
+    lo = ok & (0.5 - aT >= retained_min_shift)
+    out.update(loci_alt_retained=int(hi.sum()), loci_ref_retained=int(lo.sum()))
+    if hi.sum() < min_loci_per_direction or lo.sum() < min_loci_per_direction:
+        return out
+    d_hi, d_lo = aN[hi] - 0.5, 0.5 - aN[lo]
+    shift = float((d_hi.mean() + d_lo.mean()) / 2)
+    se = float(np.sqrt(d_hi.var(ddof=1) / len(d_hi) + d_lo.var(ddof=1) / len(d_lo)) / 2)
+    amp = float((np.abs(aT[hi] - 0.5).mean() + np.abs(aT[lo] - 0.5).mean()) / 2)
+    z = shift / se if se > 0 else 0.0
+    rc = pd.Series(reg[hi | lo]).value_counts()
+    out.update(tested=True, shift=shift, se=se, z=float(z), p_value=float(norm.sf(z)),
+               fraction=shift / amp if amp > 0 else np.nan,
+               dominant_region=rc.index[0] if (len(rc) == 1 or rc.iloc[0] >= 0.7 * rc.sum()) else "MULTIPLE")
+    return out
+
+
 # --------------------------------------------------------------------------
 # batch review
 # --------------------------------------------------------------------------
@@ -846,6 +1007,9 @@ def tumor_normal_batch_qc(
     imbalance_kwargs: Optional[dict] = None,
     report_regional_imbalance: bool = False,
     max_findings_per_case: int = 4,
+    tin_alpha: float = 1e-4,
+    tin_min_fraction: float = 0.02,
+    tin_kwargs: Optional[dict] = None,
 ) -> Dict[str, object]:
     """Run identity, contamination and tumour-content checks for a batch.
 
@@ -859,8 +1023,12 @@ def tumor_normal_batch_qc(
         *different* individual; ``comparison`` = source (+ samples of the
         source's individual, genetically indistinguishable as sources).
     ``tumor_in_normal``
-        a normal / baseline contains reads of its own individual's tumour
-        (tumour-private alleles at low fraction).
+        a normal / baseline contains reads of its own individual's tumour:
+        tumour-private alleles at low fraction (mixture model) and / or the
+        normal's heterozygous allele fraction shifted toward the tumour's
+        retained alleles inside the tumour's LOH regions
+        (:func:`tumor_in_normal_shift`, one-sided p < ``tin_alpha`` /
+        number of tested pairs and fraction >= ``tin_min_fraction``).
     ``low_tumor_content``
         a tumour shows no clonal allelic imbalance anywhere against its
         (repaired) matched normal: broad attenuation toward the baseline.
@@ -869,6 +1037,12 @@ def tumor_normal_batch_qc(
         ``report_regional_imbalance``; usually tumour biology, ancillary).
     ``library_outlier``
         read-level batch outlier from ``read_summary`` (ancillary).
+
+    Contamination of a tumour is tested at loci homozygous in its individual
+    (tumour and repaired matched normal), and a foreign individual's samples
+    are tested jointly with the source attributed to the best-fitting member
+    (see :func:`estimate_cross_sample_contamination` ``genotype_reference`` /
+    ``groups``).
 
     Normal-in-tumour admixture (a tumour's minority alleles explained by its
     own normal) is tumour content and is never reported as contamination.
@@ -883,7 +1057,6 @@ def tumor_normal_batch_qc(
     conc = sample_genotype_concordance(counts)
     groups = _same_individual_groups(conc)
     rel = resolve_sample_relationships(conc, manifest, case_col=case_col, a_col=tumor_col, b_col=normal_col)
-    cont = estimate_cross_sample_contamination(counts, **contamination_kwargs)
     tumors = set(manifest[tumor_col])
     normals = set(manifest[normal_col])
     case_of: Dict[str, str] = {}
@@ -916,6 +1089,11 @@ def tumor_normal_batch_qc(
         cc = conc[(conc["sample"] == t) & conc["comparator"].isin(cand_n)].sort_values("discordance")
         return cc["comparator"].iloc[0] if len(cc) else cand_n[0]
 
+    gref = {t: [matched_normal(t)] for t in tumors if matched_normal(t)}
+    ckw = dict(genotype_reference=gref, groups=groups)
+    ckw.update(contamination_kwargs)
+    cont = estimate_cross_sample_contamination(counts, **ckw)
+
     called = cont[cont["called"]] if len(cont) else cont
     admixture = []
     for c in called.itertuples(index=False):
@@ -928,7 +1106,8 @@ def tumor_normal_batch_qc(
             comp = c.source
         else:
             ftype = "cross_sample_contamination"
-            alts = sorted(s for s in groups.get(c.source, {c.source}) if s not in (c.source, c.affected))
+            own = groups.get(c.affected, {c.affected})
+            alts = sorted(s for s in groups.get(c.source, {c.source}) if s != c.source and s not in own)
             comp = ",".join([c.source] + alts)
         conf = "HIGH" if c.p_adj < 1e-6 and c.hit_sites >= 10 else "MEDIUM"
         findings.append({
@@ -943,7 +1122,8 @@ def tumor_normal_batch_qc(
                          f"{c.private_reads} reads"),
         })
 
-    imb_rows = []
+    imb_rows: List[dict] = []
+    tin_rows: List[dict] = []
     for rec in manifest.itertuples(index=False):
         t = getattr(rec, tumor_col)
         n = matched_normal(t)
@@ -953,7 +1133,10 @@ def tumor_normal_batch_qc(
         summ["case_id"] = getattr(rec, case_col)
         mix = [a for a in admixture if a.affected == t and a.source == n]
         summ["normal_admixture_fraction"] = mix[0].fraction if mix else 0.0
+        tin = tumor_in_normal_shift(counts, t, n, loh_regions=summ["loh_regions"], **(tin_kwargs or {}))
+        summ.update({f"tin_{k}": v for k, v in tin.items() if k not in ("tumor", "normal", "loh_regions")})
         imb_rows.append(summ)
+        tin_rows.append(tin)
         if summ.get("low_tumor_content"):
             findings.append({
                 "case_id": getattr(rec, case_col), "finding_type": "low_tumor_content", "priority": 3,
@@ -974,6 +1157,27 @@ def tumor_normal_batch_qc(
                 "confidence": "MEDIUM",
                 "evidence": f"{t} loses the {n} minor allele in {','.join(regs)} (max imbalance {summ['max_imbalance']:.2f})",
             })
+
+    # tumour-in-normal from the LOH-region allelic shift (germline SNPs only)
+    n_tested = max(sum(1 for r in tin_rows if r["tested"]), 1)
+    have_tin = {(f["affected"], f["comparison"]) for f in findings if f["finding_type"] == "tumor_in_normal"}
+    for r in tin_rows:
+        if not r["tested"] or r["p_value"] * n_tested >= tin_alpha or not (r["fraction"] >= tin_min_fraction):
+            continue
+        t, n = r["tumor"], r["normal"]
+        if (n, t) in have_tin:
+            continue
+        findings.append({
+            "case_id": case_of.get(n, "NA"), "finding_type": "tumor_in_normal", "priority": 2,
+            "affected": n, "comparison": t, "region_id": r["dominant_region"],
+            "support_loci": r["loci_alt_retained"] + r["loci_ref_retained"],
+            "effect_size": round(float(r["fraction"]), 4),
+            "confidence": "HIGH" if r["z"] >= 5 else "MEDIUM",
+            "evidence": (f"{n} heterozygous allele fraction shifted toward {t}'s retained alleles inside {t}'s LOH "
+                         f"regions ({','.join(r['loh_regions'])}): direction-balanced shift {r['shift']:.3f} over "
+                         f"{r['loci_alt_retained']} ALT- and {r['loci_ref_retained']} REF-retained loci, z {r['z']:.1f}; "
+                         f"estimated {t}-derived fraction {r['fraction']:.3f}"),
+        })
 
     if read_summary is not None and "outliers" in read_summary:
         for r in read_summary.itertuples(index=False):
