@@ -99,6 +99,10 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
+
+# Optional moscot backend (roadmap #989).
+moscot = ["moscot>=0.5.2,<0.6"]
+
 # Spatial flow network learning; GEMs are supplied separately.
 commot = [
     "torch>=2.0,<3",
