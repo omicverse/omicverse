@@ -1,0 +1,24 @@
+# Decipher integration
+
+Adds Decipher training on raw counts and stores its top-level v representation. Returns the native model; an embedding is not presented as developmental direction or pseudotime.
+
+Part of [roadmap #989](https://github.com/omicverse/omicverse/issues/989).
+
+## Usage
+
+Install the optional backend with `pip install "omicverse[decipher]"` in an environment supported by the backend. Importing OmicVerse does not import the backend.
+
+```python
+import omicverse as ov
+
+model = ov.single.decipher(adata, layer="counts",
+                           train_kwargs={"max_epochs": 100, "accelerator": "cpu"})
+```
+
+## Contract and validation
+
+Setup, constructor and training/solver options are passed separately. Inputs and outputs are checked; existing output embeddings require explicit overwrite. Native model/problem objects are returned rather than stored in `AnnData.uns`. Backend failures propagate.
+
+Run `python -m pytest tests/test_backend_validation.py tests/test_roadmap989_decipher.py -q`. Integration tests require the real backend; skipped tests do not establish real execution. Small synthetic training runs check execution and output contracts, not convergence on arbitrary biological data.
+
+The generic validation helper is byte-identical across the independent roadmap PRs. This PR introduces only the Decipher public API and its optional dependency.
