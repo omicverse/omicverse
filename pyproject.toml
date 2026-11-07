@@ -165,6 +165,10 @@ full = [
   'pymclustR>=0.2.1',
 ]
 
+# Optional sysVI backend (roadmap #989).
+sysvi = ["scvi-tools>=1.5.2,<1.6"]
+
+
 easy=[
   'pydeseq2>=0.4.1',
   'mofax>=0.3',

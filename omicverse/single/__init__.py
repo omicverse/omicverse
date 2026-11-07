@@ -101,6 +101,7 @@ from ._cross_species import (
     cross_species_integrate,
     CrossSpecies,
 )
+from ._sysvi import sysvi
 from ._diffusionmap import diffmap
 from ._aucell import aucell
 from ._metacell import (
