@@ -121,6 +121,10 @@ rust = [
 cytometry = [
     "flowio>=1.3",
 ]
+
+# Optional ResolVI backend (roadmap #989).
+resolvi = ["scvi-tools>=1.5.2,<1.6"]
+
 # Adds the scverse cytometry stack: compensation, logicle/biexponential
 # transforms and FlowSOM on top of the reader. Kept separate because flowutils
 # and flowkit require numpy>=2, which is a heavier constraint than the reader
