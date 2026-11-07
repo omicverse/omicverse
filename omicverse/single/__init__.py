@@ -93,6 +93,7 @@ from ._scgsea import (
 from ._via import pyVIA, hematopoiesis
 scRNA_hematopoiesis = hematopoiesis
 from ._atac import atac_concat_get_index,atac_concat_inner,atac_concat_outer
+from ._mrvi import mrvi
 from ._batch import batch_correction
 from ._rpca import rpca_integrate
 from ._cross_species import (

@@ -108,6 +108,10 @@ flowsig = [
     "causaldag==0.1a163",
     "torch>=2.0,<3",
 ]
+
+# Optional MrVI backend (roadmap #989).
+mrvi = ["scvi-tools>=1.5.2,<1.6"]
+
 # Out-of-memory backend (Rust-powered AnnData). Install via:
 #   pip install omicverse[rust]
 # Enables ov.read(path, backend='rust') with chunked preprocessing.
