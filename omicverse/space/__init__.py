@@ -79,6 +79,7 @@ from ._neighborhood import (
     var_by_distance,
 )
 from ._cast import CAST
+from ._novae import novae
 from ._cellcharter import cellcharter
 from ._tools import *
 from ._commot import create_communication_anndata,update_classification_from_database

@@ -130,6 +130,10 @@ cytometry-full = [
     "flowio>=1.3",
     "pytometry>=0.1.4",
 ]
+# Optional Novae backend (roadmap #989).
+novae = ["novae>=1.1.2,<1.2"]
+
+
 full = [
   "dynamo-release<=1.5.3",
   "squidpy",
