@@ -181,6 +181,10 @@ easy=[
   'numpy>=1.23',
 ]
 
+# Optional DRVI backend (roadmap #989).
+drvi = ["scvi-tools>=1.5.2,<1.6"]
+
+
 web = [
   "omicclaw",
 ]
