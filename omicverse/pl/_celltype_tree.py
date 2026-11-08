@@ -5,6 +5,7 @@ from collections.abc import Mapping, Sequence
 import matplotlib.pyplot as plt
 import numpy as np
 import pandas as pd
+from anndata import AnnData
 from matplotlib.axes import Axes
 from matplotlib.colors import Normalize, to_rgba
 from matplotlib.cm import ScalarMappable
@@ -12,6 +13,7 @@ from matplotlib.patches import PathPatch, Wedge
 from matplotlib.path import Path
 
 from .._registry import register_function
+from ._plotdata import get_values
 
 
 def _polar(radius, angle):
@@ -19,21 +21,57 @@ def _polar(radius, angle):
     return radius * np.cos(theta), radius * np.sin(theta)
 
 
+def _summarize_anndata(adata, columns, rings, markers, use_raw, layer):
+    obs = adata.obs
+    if adata.n_obs == 0 or not obs.columns.is_unique:
+        raise ValueError("adata must contain at least one cell and unique obs column names.")
+    missing = set(columns).union(markers.values()).difference(obs.columns)
+    if missing:
+        raise KeyError(f"Missing adata.obs columns: {sorted(missing)}")
+    if obs[columns].isna().any().any():
+        raise ValueError("Leaf paths in adata.obs must contain no missing values.")
+    groups = [obs[column].astype(object) for column in columns]
+    tracks = pd.DataFrame({
+        ring: pd.to_numeric(get_values(adata, ring, use_raw=use_raw,
+                                       layer=None if ring in obs.columns else layer))
+        for ring in rings
+    }, index=obs.index)
+    if np.isinf(tracks.to_numpy(dtype=float, na_value=np.nan)).any():
+        raise ValueError("Track values must be finite or missing.")
+    grouped = tracks.groupby(groups, sort=False)
+    counts = grouped.size()
+    data = counts.index.to_frame(index=False)
+    for ring, values in grouped.mean().items():
+        if ring not in columns:
+            data[ring] = values.to_numpy()
+    for key in dict.fromkeys(markers.values()):
+        if key in columns:
+            continue
+        grouped_markers = obs[key].groupby(groups, sort=False)
+        if (grouped_markers.nunique(dropna=False) > 1).any():
+            raise ValueError(f"Track marker column {key!r} must be constant within each leaf.")
+        data[key] = grouped_markers.first().reindex(counts.index).to_numpy()
+    return data, 100 * counts.to_numpy() / adata.n_obs
+
+
 @register_function(
     aliases=["celltype_tree", "radial cell annotation tree", "环形细胞注释树"],
     category="pl",
     description="Draw a radial cell annotation tree with optional numeric tracks.",
-    examples=["ov.pl.celltype_tree(celltypes, hierarchy=['lineage', 'family'], label='cell_type')"],
+    examples=["ov.pl.celltype_tree(adata, hierarchy=['lineage'], label='cell_type', tracks=['CD3D'])"],
     related=["pl.plot1cell", "pl.cellproportion"],
 )
 def celltype_tree(
-    data: pd.DataFrame,
-    hierarchy: Sequence[str],
-    label: str,
+    data: AnnData | pd.DataFrame,
+    hierarchy: Sequence[str] | str | None = None,
+    label: str = "cell_type",
     *,
-    proportion: str | None = None,
-    tracks: Sequence[str] | None = None,
+    proportion: str | bool | None = None,
+    tracks: Sequence[str] | str | None = None,
     track_markers: Mapping[str, str] | None = None,
+    use_raw: bool = False,
+    layer: str | None = None,
+    standardize: bool = False,
     palette: Mapping | None = None,
     cmap: str = "RdBu_r",
     vmax: float | None = None,
@@ -41,30 +79,45 @@ def celltype_tree(
     ax: Axes | None = None,
     show: bool = True,
 ) -> Axes:
-    """Plot a radial annotation tree with one leaf per row.
+    """Plot a radial cell annotation tree with optional numeric tracks.
 
     Parameters
     ----------
-    data : pandas.DataFrame
-        One row per leaf. The full path through ``hierarchy`` and ``label``
-        must be unique and contain no missing values.
-    hierarchy : sequence of str
-        Classification columns, from the broadest level to the finest.
-        Sibling order follows first appearance in ``data``. Descendants of
-        each node occupy consecutive leaf positions.
-    label : str
-        Column used for leaf labels. The same label can occur in different
-        branches.
-    proportion : str, optional
-        Column of percentages in [0, 100] to append to leaf labels.
-    tracks : sequence of str, optional
-        Numeric columns to draw as rings, from inside to outside. Each ring
-        uses its own column. Missing values are shown in gray.
+    data : anndata.AnnData or pandas.DataFrame
+        For AnnData, group cells by the full path through ``hierarchy`` and
+        ``label`` in ``adata.obs``. For a DataFrame, supply one row per unique
+        leaf path. Path columns must not contain missing values.
+    hierarchy : str or sequence of str, optional
+        Classification columns, ordered from broad to fine. Omit for a flat
+        tree. Siblings follow first appearance in the input, and descendants
+        of each node occupy consecutive leaf positions.
+    label : str, default 'cell_type'
+        Column used for leaf labels. A label can occur in different branches.
+    proportion : str or bool, optional
+        For AnnData, append the percentage of all input cells in each leaf
+        by default, or set to False to omit it. For a DataFrame, supply the
+        name of a column containing percentages in [0, 100].
+    tracks : str or sequence of str, optional
+        Names of numeric tracks from inside to outside. For AnnData, take the
+        mean of each requested numeric ``obs`` column or gene within each leaf.
+        An ``obs`` column takes precedence over a gene of the same name. For a
+        DataFrame, use the supplied column values directly. Missing values
+        are shown in gray.
     track_markers : mapping of str to str, optional
         Map a track name to a column of text markers, such as significance
-        stars computed upstream. Missing and empty markers are omitted.
+        stars computed upstream. AnnData marker columns must be constant
+        within each leaf. Missing and empty markers are omitted.
+    use_raw : bool, default False
+        Read genes from ``adata.raw.X`` instead of ``adata.X``.
+    layer : str, optional
+        Read genes from this AnnData layer. Cannot be combined with
+        ``use_raw=True``.
+    standardize : bool, default False
+        Z-score each track independently across leaves. Constant tracks
+        become zero, and missing values remain missing.
     palette : mapping, optional
-        Colors keyed by values in the first hierarchy column.
+        Colors keyed by values in the first hierarchy column, or by leaf
+        label when there is no hierarchy.
     cmap : str, default 'RdBu_r'
         Matplotlib colormap shared by the tracks.
     vmax : float, optional
@@ -92,14 +145,32 @@ def celltype_tree(
     and the visualization walkthrough at
     https://mp.weixin.qq.com/s/F7cgHFmpEAhwhrzAN0NvUA.
     """
-    levels = [hierarchy] if isinstance(hierarchy, str) else list(hierarchy)
+    levels = [hierarchy] if isinstance(hierarchy, str) else list(() if hierarchy is None else hierarchy)
     columns = [*levels, label]
-    rings = [tracks] if isinstance(tracks, str) else list(tracks or ())
+    rings = [tracks] if isinstance(tracks, str) else list(() if tracks is None else tracks)
     markers = dict(track_markers or {})
-    if not levels or len(set(columns)) != len(columns):
+    if len(set(columns)) != len(columns):
         raise ValueError("Specify distinct hierarchy columns and a separate leaf label column.")
     if len(set(rings)) != len(rings) or not markers.keys() <= set(rings):
         raise ValueError("Tracks must be distinct and marker keys must name tracks.")
+    percentages = None
+    if isinstance(data, AnnData):
+        if proportion is not None and not isinstance(proportion, bool):
+            raise ValueError("For AnnData, proportion must be True, False, or None.")
+        if use_raw and layer is not None:
+            raise ValueError("use_raw=True and layer cannot be combined.")
+        data, percentages = _summarize_anndata(data, columns, rings, markers, use_raw, layer)
+        if proportion is False:
+            percentages = None
+        proportion = None
+    elif not isinstance(data, pd.DataFrame):
+        raise TypeError("data must be an AnnData or a DataFrame.")
+    elif use_raw or layer is not None:
+        raise ValueError("use_raw and layer require AnnData input.")
+    elif proportion is False:
+        proportion = None
+    elif proportion is not None and not isinstance(proportion, str):
+        raise ValueError("For a DataFrame, proportion must name a column.")
     if data.empty or not data.columns.is_unique:
         raise ValueError("data must contain at least one row and unique column names.")
     required = {*columns, *rings, *markers.values()}
@@ -122,11 +193,17 @@ def celltype_tree(
     ))
     data = data.iloc[order]
     paths = [paths[i] for i in order]
-    values = data[rings].apply(pd.to_numeric).to_numpy(dtype=float, na_value=np.nan)
+    scores = data[rings].apply(pd.to_numeric).astype(float)
+    values = scores.to_numpy()
     if np.isinf(values).any():
         raise ValueError("Track values must be finite or missing.")
-    percentages = None
-    if proportion is not None:
+    if standardize:
+        scores = scores.mask(scores.eq(scores.min()) & scores.eq(scores.max()), 0)
+        scores = (scores - scores.mean()) / scores.std(ddof=0).replace(0, 1)
+        values = scores.to_numpy()
+    if percentages is not None:
+        percentages = percentages[order]
+    elif proportion is not None:
         percentages = pd.to_numeric(data[proportion]).to_numpy(dtype=float, na_value=np.nan)
         if not np.all((percentages >= 0) & (percentages <= 100)):
             raise ValueError("Proportions must be percentages in [0, 100].")
@@ -170,7 +247,7 @@ def celltype_tree(
         ax.add_patch(PathPatch(Path(vertices, [Path.MOVETO, Path.CURVE4, Path.CURVE4, Path.CURVE4]),
                                facecolor="none", edgecolor=color, lw=max(0.7, 3.4 / depth),
                                capstyle="round", zorder=2))
-        if depth == 1:
+        if depth == 1 and len(columns) > 1:
             ax.text(*_polar(radius * 0.84, angle), str(path[0]), color=color, weight="semibold",
                     ha="center", va="center", fontsize=9, zorder=3,
                     bbox={"facecolor": "white", "edgecolor": "none", "pad": 1.3})
@@ -212,7 +289,7 @@ def celltype_tree(
         bar = ax.figure.colorbar(ScalarMappable(norm=norm, cmap=color_map), cax=bar_ax,
                                  orientation="horizontal", ticks=[-vmax, 0, vmax])
         bar.ax.tick_params(labelsize=7, length=2)
-        bar.ax.set_title("Track score", fontsize=7, pad=3)
+        bar.ax.set_title("Z-score" if standardize else "Track score", fontsize=7, pad=3)
         bar.outline.set_visible(False)
     if show:
         plt.show()

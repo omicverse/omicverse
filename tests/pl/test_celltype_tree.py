@@ -6,8 +6,10 @@ import matplotlib.pyplot as plt
 import numpy as np
 import pandas as pd
 import pytest
+from anndata import AnnData
 from matplotlib.colors import to_rgba
 from matplotlib.patches import Wedge
+from scipy.sparse import csr_matrix
 
 import omicverse as ov
 
@@ -78,3 +80,85 @@ def test_celltype_tree_rejects_invalid_inputs(columns, options, error, message):
     with pytest.raises(error, match=message):
         ov.pl.celltype_tree(pd.DataFrame(columns), hierarchy=["lineage"], label="cell_type",
                             show=False, **options)
+
+
+def _track_colors(ax):
+    wedges = (p for p in ax.patches if isinstance(p, Wedge) and p.r > 1)
+    return [p.get_facecolor() for p in sorted(wedges, key=lambda p: (p.r, -p.theta1))]
+
+
+def test_celltype_tree_keeps_nullable_track_values_missing_after_standardization():
+    cells = pd.DataFrame({
+        "cell_type": ["A", "B", "C"],
+        "score": pd.array([1, None, 3], dtype="Int64"),
+        "constant": pd.array([True, None, True], dtype="boolean"),
+    })
+    ax = ov.pl.celltype_tree(cells, tracks=["score", "constant"], standardize=True, vmax=1, show=False)
+    try:
+        cmap = plt.get_cmap("RdBu_r")
+        gray = to_rgba("#e0e0e0")
+        np.testing.assert_allclose(_track_colors(ax), [cmap(0.0), gray, cmap(1.0), cmap(0.5), gray, cmap(0.5)])
+    finally:
+        plt.close(ax.figure)
+
+
+def test_celltype_tree_summarizes_anndata_by_leaf():
+    adata = AnnData(
+        csr_matrix([[1.0], [3.0], [3.0], [1.0], [1.0]]),
+        obs=pd.DataFrame({
+            "lineage": pd.Categorical(["T", "B", "T", "T", "T"], categories=["B", "T", "NK"]),
+            "cell_type": ["Shared", "Shared", "Shared", "Memory", "Memory"],
+            "score": [1.0, -1.0, 1.0, 0.0, 0.0],
+            "constant": [0.1, 0.1, 0.1, 0.1, 0.1],
+            "marker": ["*", None, "*", "", ""],
+        }, index=list("abcde")),
+        var=pd.DataFrame(index=["gene"]),
+    )
+    original = adata.copy()
+    ax = ov.pl.celltype_tree(
+        adata, hierarchy="lineage", tracks=["gene", "score", "constant"],
+        track_markers={"gene": "marker"}, standardize=True, vmax=2, show=False,
+    )
+    try:
+        expected = plt.get_cmap("RdBu_r")
+        extreme = np.sqrt(1.5)
+        colors = expected((np.array([0, -extreme, extreme, extreme, 0, -extreme, 0, 0, 0]) + 2) / 4)
+        np.testing.assert_allclose(_track_colors(ax), colors)
+        assert [t.get_text() for t in ax.texts if "%" in t.get_text()] == [
+            "Shared (40%)", "Memory (40%)", "Shared (20%)",
+        ]
+        assert [t.get_text() for t in ax.texts].count("*") == 1
+        pd.testing.assert_frame_equal(adata.obs, original.obs)
+        np.testing.assert_array_equal(adata.X.toarray(), original.X.toarray())
+    finally:
+        plt.close(ax.figure)
+
+
+@pytest.mark.parametrize("track, options, expected", [
+    ("gene", {"layer": "counts"}, [1.0, 0.0]),
+    ("raw_gene", {"use_raw": True}, [0.0, 1.0]),
+])
+def test_celltype_tree_reads_anndata_expression_source(track, options, expected):
+    adata = AnnData(
+        np.array([[-1.0, -2.0], [1.0, 2.0]]),
+        obs=pd.DataFrame({"cell_type": ["A", "B"], "score": [5.0, 5.0]}, index=["a", "b"]),
+        var=pd.DataFrame(index=["gene", "raw_gene"]),
+    )
+    adata.raw = adata.copy()
+    adata = adata[:, ["gene"]].copy()
+    adata.layers["counts"] = csr_matrix([[2.0], [-2.0]])
+    ax = ov.pl.celltype_tree(
+        adata, tracks=[track, "score"], proportion=False,
+        standardize=True, vmax=1, show=False, **options,
+    )
+    try:
+        np.testing.assert_allclose(_track_colors(ax), plt.get_cmap("RdBu_r")([*expected, 0.5, 0.5]))
+        assert [t.get_text() for t in ax.texts] == ["A", "B", track.replace("_", " "), "score"]
+    finally:
+        plt.close(ax.figure)
+
+
+def test_celltype_tree_rejects_missing_anndata_leaf_labels():
+    adata = AnnData(obs=pd.DataFrame({"cell_type": ["A", None]}, index=["a", "b"]))
+    with pytest.raises(ValueError, match="missing"):
+        ov.pl.celltype_tree(adata, show=False)
