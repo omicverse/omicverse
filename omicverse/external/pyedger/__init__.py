@@ -16,12 +16,14 @@ from .core import (
     estimate_common_disp,
     estimate_disp,
     estimate_glm_common_disp,
+    estimate_glm_robust_disp,
     estimate_glm_tagwise_disp,
     estimate_glm_trended_disp,
     estimate_tagwise_disp,
     exact_test,
     filter_by_expr,
     glm_fit,
+    glm_residuals,
     glm_lrt,
     glm_ql_fit,
     glm_qlf_test,
@@ -38,6 +40,7 @@ estimateTagwiseDisp = estimate_tagwise_disp
 estimateDisp = estimate_disp
 estimateGLMCommonDisp = estimate_glm_common_disp
 estimateGLMTagwiseDisp = estimate_glm_tagwise_disp
+estimateGLMRobustDisp = estimate_glm_robust_disp
 estimateGLMTrendedDisp = estimate_glm_trended_disp
 exactTest = exact_test
 filterByExpr = filter_by_expr
@@ -77,6 +80,9 @@ __all__ = [
     "estimateDisp",
     "estimate_glm_common_disp",
     "estimateGLMCommonDisp",
+    "estimate_glm_robust_disp",
+    "estimateGLMRobustDisp",
+    "glm_residuals",
     "estimate_glm_tagwise_disp",
     "estimateGLMTagwiseDisp",
     "estimate_glm_trended_disp",
