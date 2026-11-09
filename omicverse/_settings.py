@@ -9,6 +9,11 @@ class omicverseConfig:
         # Preferred torch device (e.g. ``'cuda:1'``) when the user pins one via
         # ``cpu_gpu_mixed_init(devices=...)``; ``None`` means auto-detect.
         self.device = None
+        # Compute backend for the CPU workflow (qc, preprocess, scale, pca,
+        # neighbors, leiden, umap, find_markers): 'cpp' uses the multithreaded
+        # anndataoom-fast kernels when installed, 'python' the reference code.
+        # Each of those functions also accepts ``backend=`` to override this.
+        self.backend = 'cpp'
         from .utils._analytics_sender import send_analytics_full_silent
         import datetime
         test_id_full = f"FULL-{datetime.datetime.now().strftime('%Y%m%d-%H%M%S')}"
