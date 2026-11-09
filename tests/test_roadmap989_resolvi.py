@@ -27,18 +27,27 @@ def data():
 @pytest.mark.integration
 def test_real_resolvi_training():
     pytest.importorskip("scvi", minversion="1.5.2")
-    from omicverse.space._resolvi import resolvi
+    from scvi.external import RESOLVI
+    from omicverse.space import resolvi
     rng = np.random.default_rng(51)
     a = ad.AnnData(rng.poisson(4, (80, 60)).astype(np.float32))
     a.layers["counts"] = a.X.copy()
     a.obsm["spatial"] = rng.normal(size=(80, 2))
     counts = a.layers["counts"].copy()
+    fresh = a.copy()
+    prepare = {"spatial_rep": "spatial", "n_neighbors": 10}
+    RESOLVI.setup_anndata(a, layer="counts", prepare_data=True, prepare_data_kwargs=prepare)
+    a.obsm["spatial"] = rng.normal(size=(80, 2))
+    fresh.obsm["spatial"] = a.obsm["spatial"].copy()
+    RESOLVI.setup_anndata(fresh, layer="counts", prepare_data=True, prepare_data_kwargs=prepare)
     model = resolvi(a, model_kwargs={"n_latent": 3, "n_hidden": 16, "mixture_k": 4},
                     train_kwargs={"max_epochs": 1, "batch_size": 40, "accelerator": "cpu",
                                   "enable_progress_bar": False})
     assert model.is_trained
     assert a.obsm["X_resolvi"].shape == (80, 3)
     np.testing.assert_array_equal(counts, a.layers["counts"])
+    np.testing.assert_array_equal(a.obsm["index_neighbor"], fresh.obsm["index_neighbor"])
+    np.testing.assert_allclose(a.obsm["distance_neighbor"], fresh.obsm["distance_neighbor"])
 
 
 def test_resolvi_validates_before_import(data):

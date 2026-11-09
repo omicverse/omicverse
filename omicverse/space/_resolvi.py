@@ -20,8 +20,9 @@ def resolvi(adata, *, layer="counts", spatial_key="spatial", batch_key=None,
     The embedding is stored in ``obsm[key_added]``. Corrected expression can be
     computed explicitly with ``model.get_normalized_expression()``; it is not
     raw counts and never replaces the input count layer. ``batch_key`` separates
-    physical slides when building spatial neighbors. scvi-tools 1.5.x is the
-    tested backend; its future migration to scviva-tools is not silently applied.
+    physical slides when building spatial neighbors. Each fit rebuilds the
+    neighbors and updates backend fields in ``obs``, ``obsm``, and ``uns``. Pass a
+    copy to preserve the input AnnData. The tested backend is scvi-tools 1.5.x.
     """
     matrix = expression(adata, layer, counts=True)
     coordinates(adata, spatial_key)
@@ -42,6 +43,7 @@ def resolvi(adata, *, layer="counts", spatial_key="spatial", batch_key=None,
     train = kwargs_copy(train_kwargs)
     backend = import_optional_module("scvi.external", feature="ResolVI", dependencies=("scvi",),
                                      install_hint="Install scvi-tools with ResolVI support.")
+    adata.uns.pop("_resolvi_prepare_data_config", None)
     backend.RESOLVI.setup_anndata(adata, layer=layer, batch_key=batch_key,
                                  prepare_data=True, prepare_data_kwargs={
                                      "spatial_rep": spatial_key, "n_neighbors": n_neighbors}, **setup)
