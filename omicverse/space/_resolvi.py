@@ -44,7 +44,7 @@ def resolvi(adata, *, layer="counts", spatial_key="spatial", batch_key=None,
     model_args = kwargs_copy(model_kwargs, reserved=("adata",))
     train = kwargs_copy(train_kwargs)
     backend = import_optional_module("scvi.external", feature="ResolVI", dependencies=("scvi",),
-                                     install_hint="Install scvi-tools with ResolVI support.")
+                                     install_hint='Use Python 3.12 or later. Run `pip install "omicverse[resolvi]"`.')
     adata.uns.pop("_resolvi_prepare_data_config", None)
     backend.RESOLVI.setup_anndata(adata, layer=layer, batch_key=batch_key,
                                  prepare_data=True, prepare_data_kwargs={
