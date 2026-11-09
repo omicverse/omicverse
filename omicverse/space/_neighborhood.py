@@ -383,8 +383,6 @@ def co_occurrence(
     codes, cats = _cluster_codes(adata, cluster_key)
     n_cats = len(cats)
 
-    dist = distance_matrix(coords, coords)
-
     if np.isscalar(interval):
         # squidpy's bracket: shortest edge between the two lowest-sum corners,
         # to half the diagonal of the tissue
@@ -404,13 +402,24 @@ def co_occurrence(
     n_steps = len(edges) - 1
     occurrence = np.zeros((n_cats, n_cats, n_steps), dtype=np.float64)
 
+    # unlabelled spots never form a pair, so drop them before measuring; the
+    # distances are then built a block of rows at a time and only the
+    # cluster-pair counts per radius are kept, never the full n x n matrix
+    labelled = codes >= 0
+    coords, codes = coords[labelled], codes[labelled]
+    n_obs = len(codes)
+    counts = np.zeros((n_steps, n_cats * n_cats), dtype=np.int64)
+    block = max(1, 2**16 // max(n_obs, 1))
+    for start in range(0, n_obs, block):
+        dist = distance_matrix(coords[start:start + block], coords)
+        nonzero = dist > 0
+        pair = (codes[start:start + block, None] * n_cats + codes)[nonzero]
+        dist = dist[nonzero]
+        for s in range(n_steps):
+            counts[s] += np.bincount(pair[dist <= edges[s + 1]], minlength=n_cats * n_cats)
+
     for s in range(n_steps):
-        radius = edges[s + 1]
-        within = (dist <= radius) & (dist > 0)
-        co = np.zeros((n_cats, n_cats), dtype=np.float64)
-        rows, cols = np.nonzero(within)
-        valid = (codes[rows] >= 0) & (codes[cols] >= 0)
-        np.add.at(co, (codes[rows[valid]], codes[cols[valid]]), 1.0)
+        co = counts[s].reshape(n_cats, n_cats).astype(np.float64)
 
         total = co.sum()
         # the marginal comes from the pairs inside this radius, not from the
