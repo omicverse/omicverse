@@ -7,6 +7,7 @@ import pandas as pd
 
 
 _DEFAULT_RESULT_UNS_KEYS = (
+    "ccc",
     "liana_res",
     "cpdb_results",
     "cellphonedb_results",
@@ -78,6 +79,7 @@ def to_comm_adata(
     result_uns_key
         Preferred ``adata.uns`` key to inspect when ``data`` is omitted.
     """
+    from ._ccc import _looks_like_ccc_results, get_ccc
     from ._cellchat import _looks_like_cellchat_results, format_cellchat_results
     from ._cpdb import format_cpdb_results
     from ._liana import format_liana_results
@@ -121,6 +123,9 @@ def to_comm_adata(
     value = adata.uns[resolved_key]
     if isinstance(value, anndata.AnnData) and _is_comm_adata(value):
         return value
+    if _looks_like_ccc_results(value):
+        method = "consensus" if "consensus" in value else str(list(value["long"])[0])
+        return get_ccc(adata, method=method, key=resolved_key, separator=separator)
     if _looks_like_liana_results(value):
         return format_liana_results(
             adata=adata,
@@ -140,7 +145,7 @@ def to_comm_adata(
 
     raise ValueError(
         f"`adata.uns['{resolved_key}']` is not a supported communication result. "
-        "Expected LIANA, CellPhoneDB or CellChat results, or a communication AnnData."
+        "Expected run_ccc, LIANA, CellPhoneDB or CellChat results, or a communication AnnData."
     )
 
 

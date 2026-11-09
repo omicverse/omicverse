@@ -220,8 +220,10 @@ from ._perturbation import (
 )
 from ._density import add_density_contour, calculate_gene_density
 from ._plot1cell import plot1cell
+from ._celltype_tree import celltype_tree
 from ._cpdbviz import CellChatViz
 from ._ccc import ccc_heatmap, ccc_network_plot, ccc_stat_plot
+from ._ccc_compare import ccc_compare
 from ._dotplot import dotplot, rank_genes_groups_dotplot, rank_genes_groups_df, markers_dotplot
 from ._spatial import spatial, spatial_segment, spatial_segment_overlay
 from ._spatialseg import (
@@ -390,6 +392,7 @@ __all__ = [
     "add_arrow",
     "bardotplot",
     "cellproportion",
+    "celltype_tree",
     "cellstackarea",
     "contour",
     "dotplot_doublegroup",
@@ -470,6 +473,7 @@ __all__ = [
     "ccc_heatmap",
     "ccc_network_plot",
     "ccc_stat_plot",
+    "ccc_compare",
     # @ _dotplot
     "dotplot",
     "rank_genes_groups_dotplot",

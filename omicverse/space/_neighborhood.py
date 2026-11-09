@@ -601,7 +601,7 @@ def ripley(
     produces={'uns': ['sepal_score']},
     auto_fix='none',
     examples=[
-        "ov.space.spatial_neighbors(adata, n_neighs=6)",
+        "ov.space.spatial_neighbors(adata, n_neighs=6, coord_type='grid')",
         "ov.space.sepal(adata, max_neighs=6, genes=adata.var_names[:200])",
     ],
 )
@@ -684,13 +684,18 @@ def sepal(
     # from acting as a sink and draining the tissue.
     graph = graph.tocsr()
     degree = np.diff(graph.indptr)
+    if np.any(degree > max_neighs):
+        raise ValueError(
+            f"The graph has spots with more than {max_neighs} neighbours; "
+            "sepal requires a square or hexagonal lattice."
+        )
     sat = np.flatnonzero(degree == max_neighs)
     unsat = np.flatnonzero(degree < max_neighs)
     if sat.size == 0:
         raise ValueError(
             f"No spot has exactly {max_neighs} neighbours — the graph is not the "
             f"lattice this score assumes. Rebuild with "
-            f"`ov.space.spatial_neighbors(adata, n_neighs={max_neighs})`."
+            f"`ov.space.spatial_neighbors(adata, n_neighs={max_neighs}, coord_type='grid')`."
         )
 
     sat_idx = np.vstack([graph.indices[graph.indptr[i]:graph.indptr[i + 1]] for i in sat])

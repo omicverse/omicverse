@@ -77,6 +77,13 @@ from ._cellchat import (
     cellchat_communication_patterns, cellchat_subset_communication,
 )
 from ._comm import to_comm_adata, extract_comm_adata
+from ._ccc import (
+    run_ccc, get_ccc, compare_ccc, available_ccc_methods, register_ccc_method,
+    long_to_comm_adata, ccc_consensus_table,
+)
+from ._ccc_fastccc import run_fastccc
+from ._ccc_cytosignal import run_cytosignal
+from ._ccc_secact import run_secact, secact_activity
 
 from ._scgsea import (
     geneset_aucell,pathway_aucell,pathway_aucell_enrichment,
@@ -127,6 +134,7 @@ from ._pseudotime_fate import PseudotimeFate, PseudotimeFateResult
 # Single-cell CNV inference — pure-Python CopyKAT / inferCNV wrappers.
 # Usage: cnv = ov.single.CNV(adata, method='copykat'); cnv.run()
 from ._cnv import CNV
+from ._scissor import Scissor
 
 # Single-cell metabolism — scMetabolism / Compass / scFEA + MEBOCOST.
 # Usage: met = ov.single.Metabolism(adata, method='scmetabolism'); met.run()
@@ -373,6 +381,17 @@ __all__ = [
     'cellchat_communication_patterns',
     'cellchat_subset_communication',
     'to_comm_adata',
+    'run_ccc',
+    'get_ccc',
+    'compare_ccc',
+    'available_ccc_methods',
+    'register_ccc_method',
+    'long_to_comm_adata',
+    'ccc_consensus_table',
+    'run_fastccc',
+    'run_cytosignal',
+    'run_secact',
+    'secact_activity',
     'extract_comm_adata',
     # Pathway and functional analysis
     'geneset_aucell',
@@ -422,6 +441,7 @@ __all__ = [
 
     # Single-cell CNV
     'CNV',
+    'Scissor',
 
     # Single-cell metabolism
     'Metabolism',

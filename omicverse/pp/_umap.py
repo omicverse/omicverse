@@ -1,6 +1,9 @@
 from __future__ import annotations
 
+import functools
+import inspect
 import warnings
+from contextlib import contextmanager
 from typing import TYPE_CHECKING
 from datetime import datetime
 
@@ -20,6 +23,51 @@ if TYPE_CHECKING:
     from ._neighbors import _LegacyRandom
 
     _InitPos = Literal["paga", "spectral", "random"]
+
+
+# scipy >= 1.17 ships a C port of ARPACK that offsets into the n x ncv
+# Lanczos basis as `v[ldv * j]` with 32-bit ints. umap-learn picks eigsh with
+# ncv = sqrt(n) for graphs below 2M nodes, so from ~1.66M cells the offset
+# overflows and OpenBLAS segfaults during spectral initialisation (#990,
+# scipy/scipy#26395).
+# lobpcg (umap's own choice >= 2M) has no such limit.
+_ARPACK_INT32_MAX = 2**31 - 1
+
+
+def _arpack_overflows(n_nodes, dim):
+    ncv = max(2 * (dim + 1) + 1, int(np.sqrt(n_nodes)))
+    return n_nodes * ncv > _ARPACK_INT32_MAX
+
+
+@contextmanager
+def _lobpcg_for_large_spectral_init():
+    """Route umap-learn's spectral init to lobpcg where eigsh would overflow."""
+    try:
+        import umap.spectral as umap_spectral
+        original = umap_spectral._spectral_layout
+        signature = inspect.signature(original)
+    except (ImportError, AttributeError):
+        yield
+        return
+    if "method" not in signature.parameters:
+        yield
+        return
+
+    @functools.wraps(original)
+    def _spectral_layout(*args, **kwargs):
+        bound = signature.bind(*args, **kwargs)
+        graph, dim = bound.arguments["graph"], bound.arguments["dim"]
+        if not bound.arguments.get("method") and _arpack_overflows(graph.shape[0], dim):
+            bound.arguments["method"] = "lobpcg"
+            print(f"   {Colors.CYAN}💡 {graph.shape[0]:,} cells: spectral init via lobpcg "
+                  f"(ARPACK would overflow int32){Colors.ENDC}")
+        return original(*bound.args, **bound.kwargs)
+
+    umap_spectral._spectral_layout = _spectral_layout
+    try:
+        yield
+    finally:
+        umap_spectral._spectral_layout = original
 
 
 @old_positionals(
@@ -148,25 +196,26 @@ def umap(  # noqa: PLR0913, PLR0915
         # for the init condition in the UMAP embedding
         default_epochs = 10 if neighbors["connectivities"].shape[0] <= 10000 else 20
         n_epochs = default_epochs if maxiter is None else maxiter
-        X_umap, _ = simplicial_set_embedding(
-            data=X,
-            graph=neighbors["connectivities"].tocoo(),
-            n_components=n_components,
-            initial_alpha=alpha,
-            a=a,
-            b=b,
-            gamma=gamma,
-            negative_sample_rate=negative_sample_rate,
-            n_epochs=n_epochs,
-            init=init_coords,
-            random_state=random_state_processed,
-            metric=neigh_params.get("metric", "euclidean"),
-            metric_kwds=neigh_params.get("metric_kwds", {}),
-            densmap=False,
-            densmap_kwds={},
-            output_dens=False,
-            verbose=settings.verbosity > 3,
-        )
+        with _lobpcg_for_large_spectral_init():
+            X_umap, _ = simplicial_set_embedding(
+                data=X,
+                graph=neighbors["connectivities"].tocoo(),
+                n_components=n_components,
+                initial_alpha=alpha,
+                a=a,
+                b=b,
+                gamma=gamma,
+                negative_sample_rate=negative_sample_rate,
+                n_epochs=n_epochs,
+                init=init_coords,
+                random_state=random_state_processed,
+                metric=neigh_params.get("metric", "euclidean"),
+                metric_kwds=neigh_params.get("metric_kwds", {}),
+                densmap=False,
+                densmap_kwds={},
+                output_dens=False,
+                verbose=settings.verbosity > 3,
+            )
     elif method == "umap-gpu":
         # Non-parametric UMAP on the GPU (omicverse.utils.gpuex.umap). Same
         # fuzzy graph, spectral init (torch.lobpcg), a/b curve and edge-SGD

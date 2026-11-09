@@ -260,86 +260,42 @@ def summarize_cluster_optimized(X, clusterid, clusternames, n_permutations=500):
         P-values from permutation test
     """
     n = len(clusternames)
-    
-    # Pre-compute cluster indices (major optimization)
-    cluster_indices = {}
-    for i, name in enumerate(clusternames):
-        cluster_indices[name] = np.where(clusterid == name)[0]
-    
-    # Convert to array if sparse for faster indexing in this context
-    if sparse.issparse(X):
-        X_dense = X.toarray()
-    else:
-        X_dense = X
-    
-    # Vectorized computation of cluster-cluster signaling
-    X_cluster = np.zeros((n, n), dtype=float)
-    
-    for i, name_i in enumerate(clusternames):
-        idx_i = cluster_indices[name_i]
-        if len(idx_i) == 0:
-            continue
-            
-        # Extract submatrix for sender cluster i (vectorized)
-        X_i = X_dense[idx_i, :]
-        
-        for j, name_j in enumerate(clusternames):
-            idx_j = cluster_indices[name_j] 
-            if len(idx_j) == 0:
-                continue
-                
-            # Vectorized mean computation
-            X_cluster[i, j] = X_i[:, idx_j].mean()
-    
-    # Optimized permutation test
-    p_cluster = np.zeros((n, n), dtype=float)
-    
-    # Pre-allocate arrays for permutation
-    cluster_sizes = np.array([len(cluster_indices[name]) for name in clusternames])
+    clusterid = np.asarray(clusterid)
     total_cells = len(clusterid)
-    
+    Xs = sparse.csr_matrix(X, dtype=float)
+    codes = np.full(total_cells, -1, dtype=np.int64)
+    for i, name in enumerate(clusternames):
+        codes[clusterid == name] = i
+    cluster_sizes = np.bincount(codes[codes >= 0], minlength=n)
+    denom = np.outer(cluster_sizes, cluster_sizes).astype(float)
+
+    def block_means(cell_codes):
+        # Mean of every sender x receiver block at once: P^T X P / (n_i n_j), P one-hot cells x clusters.
+        member = np.flatnonzero(cell_codes >= 0)
+        P = sparse.csr_matrix((np.ones(member.size), (member, cell_codes[member])), shape=(total_cells, n))
+        sums = (P.T @ (Xs @ P)).toarray()
+        return np.divide(sums, denom, out=np.zeros((n, n)), where=denom > 0)
+
+    X_cluster = block_means(codes)
+
+    # Permutation test: same RNG stream as before (one permutation of all cells per round;
+    # clusters take consecutive slices of it in ``clusternames`` order).
+    p_cluster = np.zeros((n, n), dtype=float)
+    bounds = np.concatenate([[0], np.cumsum(cluster_sizes)])
     for perm in range(n_permutations):
-        # Generate permuted cluster assignments
         perm_indices = np.random.permutation(total_cells)
-        
-        # Create permuted cluster indices more efficiently
-        start_idx = 0
-        perm_cluster_indices = {}
-        for i, name in enumerate(clusternames):
-            size = cluster_sizes[i]
-            if size > 0:
-                perm_cluster_indices[name] = perm_indices[start_idx:start_idx + size]
-                start_idx += size
-            else:
-                perm_cluster_indices[name] = np.array([], dtype=int)
-        
-        # Compute permuted cluster-cluster matrix (vectorized)
-        X_cluster_perm = np.zeros((n, n), dtype=float)
-        
-        for i, name_i in enumerate(clusternames):
-            perm_idx_i = perm_cluster_indices[name_i]
-            if len(perm_idx_i) == 0:
-                continue
-                
-            X_perm_i = X_dense[perm_idx_i, :]
-            
-            for j, name_j in enumerate(clusternames):
-                perm_idx_j = perm_cluster_indices[name_j]
-                if len(perm_idx_j) == 0:
-                    continue
-                    
-                X_cluster_perm[i, j] = X_perm_i[:, perm_idx_j].mean()
-        
-        # Update p-values (vectorized comparison)
-        p_cluster += (X_cluster_perm >= X_cluster).astype(float)
-    
+        perm_codes = np.full(total_cells, -1, dtype=np.int64)
+        for i in range(n):
+            perm_codes[perm_indices[bounds[i]:bounds[i + 1]]] = i
+        p_cluster += (block_means(perm_codes) >= X_cluster).astype(float)
+
     # Normalize p-values
     p_cluster = p_cluster / n_permutations
-    
+
     # Create output DataFrames
     df_cluster = pd.DataFrame(data=X_cluster, index=clusternames, columns=clusternames)
     df_p_value = pd.DataFrame(data=p_cluster, index=clusternames, columns=clusternames)
-    
+
     return df_cluster, df_p_value
 
 def _apply_scaling(X_cluster, cluster_indices, clusternames, scale_factor):
@@ -430,7 +386,8 @@ def summarize_cluster_gpu(X, clusterid, clusternames, n_permutations=500, use_gp
         else:
             raise ImportError("GPU disabled by user")
     except ImportError:
-        print("⚠️  CuPy not available, falling back to CPU computation")
+        if use_gpu:  # only warn when the GPU was requested; CPU is the default
+            print("⚠️  CuPy not available, falling back to CPU computation")
         df_cluster, df_p_value = summarize_cluster_optimized(
             X, clusterid, clusternames, n_permutations
         )
@@ -581,7 +538,8 @@ def summarize_cluster_gpu_optimized(X, clusterid, clusternames, n_permutations=5
         else:
             raise ImportError("GPU disabled by user")
     except ImportError:
-        print("⚠️  CuPy not available, falling back to optimized CPU computation")
+        if use_gpu:
+            print("⚠️  CuPy not available, falling back to optimized CPU computation")
         return summarize_cluster_optimized(X, clusterid, clusternames, n_permutations)
     
     n = len(clusternames)

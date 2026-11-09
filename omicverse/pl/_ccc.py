@@ -104,12 +104,17 @@ def _validate_support_semantics(
 # expression levels (~0.1-5); CellChat ``means`` are communication probabilities
 # (~1e-4-1e-1) whose significance comes from the permutation p-value, as in R.
 _SCALE_DEFAULTS = {"default": (0.1, 0.5), "cellchat": (np.finfo(float).tiny, 0.0)}
+# Non-expression score scales (``comm.uns['comm_score_scale']`` from ``ov.single.run_ccc``).
+_SCALE_BY_KIND = {"probability": (np.finfo(float).tiny, 0.0), "rank": (np.finfo(float).tiny, 0.0),
+                  "activity": (np.finfo(float).tiny, 0.0)}
 
 
 def _scale_thresholds(adata: anndata.AnnData, min_expression, strength_threshold):
     """Fill ``None`` thresholds with defaults matching the score scale of ``adata``."""
     source = str(adata.uns.get("comm_source", "")) if isinstance(adata, anndata.AnnData) else ""
-    default_expr, default_strength = _SCALE_DEFAULTS.get(source, _SCALE_DEFAULTS["default"])
+    kind = str(adata.uns.get("comm_score_scale", "")) if isinstance(adata, anndata.AnnData) else ""
+    default_expr, default_strength = _SCALE_DEFAULTS.get(
+        source, _SCALE_BY_KIND.get(kind, _SCALE_DEFAULTS["default"]))
     return (default_expr if min_expression is None else min_expression,
             default_strength if strength_threshold is None else strength_threshold)
 

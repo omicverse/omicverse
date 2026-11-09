@@ -1,0 +1,14 @@
+omicverse.external.secact re-implements, in NumPy, the methods of
+
+  SecAct  - R package, https://github.com/data2intelligence/SecAct (GPL-3.0)
+  SecActpy - Python port, https://github.com/data2intelligence/SecActpy (MIT)
+
+  Ru B, Gong L, Yang E, Park S, Zaki G, Aldape K, Wakefield L, Jiang P.
+  Inference of secreted protein signaling activities in intercellular
+  communication. Nat Methods 23, 1553-1563 (2026). doi:10.1038/s41592-026-03172-0
+
+No source file of either package is copied. The SecAct/CytoSig signature
+matrices and the auxiliary gene tables are not bundled: they are downloaded on
+first use from the repositories above at pinned commits
+(SecAct 8d9ce8355b3c7c05fff28f4dc3d393747a9f93cc,
+ SecActpy 13bb6d2a6ff6ceffcb1c52f8dabccb3b3ebea6f3) and verified by SHA-256.

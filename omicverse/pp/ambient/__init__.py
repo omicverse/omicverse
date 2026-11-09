@@ -6,8 +6,9 @@ inflates marker genes in cell types that never expressed them and biases
 downstream DE, annotation and trajectory inference. ``ov.pp.ambient`` is
 the QC step that strips that contamination back out.
 
-The sub-package threads four native, pure-Python R-parity backends and
-two optional deep-learning wrappers behind one ``method=`` dispatcher:
+The sub-package threads four native, pure-Python R-parity backends, one
+dependency-free native estimator, and two optional deep-learning wrappers
+behind one ``method=`` dispatcher:
 
 ============  ==============  ==========================================
 method        backend         input requirement
@@ -16,9 +17,15 @@ method        backend         input requirement
 ``fastcar``   ``pyfastcar``    raw unfiltered matrix + empty droplets
 ``decontx``   ``pydecontx``    filtered, *clustered* matrix
 ``sccdc``     ``pysccdc``      filtered, *clustered* matrix
+``envelope``  (none)           raw unfiltered matrix + empty droplets
 ``cellbender`` (CellBender)    optional heavyweight DL — not bundled
 ``scar``       (scAR)          optional heavyweight DL — not bundled
 ============  ==============  ==========================================
+
+``envelope`` needs no backend at all -- it is NumPy/SciPy/scikit-learn only,
+and is the method for multi-preparation data where no gene is
+population-private, which is the case ``soupx`` reports as
+``No plausible marker genes found``.
 
 Install the native backends with::
 

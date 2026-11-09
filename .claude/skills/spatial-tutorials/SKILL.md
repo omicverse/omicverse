@@ -56,8 +56,9 @@ adata = ov.space.read_visium_10x(path="binned_outputs/square_002um/",
 ov.pp.filter_genes(adata, min_cells=3)
 ov.pp.filter_cells(adata, min_counts=1)
 
-# H&E-based segmentation
-adata = ov.space.visium_10x_hd_cellpose_he(adata, mpp=0.3, gpu=True, buffer=150)
+# H&E-based segmentation (in place, returns None: do not reassign adata);
+# method="stardist" runs bin2cell's StarDist path instead of Cellpose
+ov.space.visium_10x_hd_cellpose_he(adata, mpp=0.3, gpu=True, buffer=150)
 # Expand labels to neighboring bins
 ov.space.visium_10x_hd_cellpose_expand(adata, labels_key='labels_he',
                                         expanded_labels_key='labels_he_expanded', max_bin_distance=4)
@@ -68,6 +69,37 @@ ov.space.salvage_secondary_labels(adata, primary_label='labels_he_expanded',
                                    secondary_label='labels_gex', labels_key='labels_joint')
 cdata = ov.space.bin2cell(adata, labels_key='labels_joint')
 ```
+
+### Image and transcript segmentation (`ov.space.seg`)
+
+For a raw microscopy image (DAPI / H&E / IF) or an imaging-platform
+transcript table (Xenium, CosMx, MERSCOPE), use `ov.space.seg`. Check that it
+exists first (`hasattr(ov.space, "seg")`); older omicverse releases lack it.
+
+```python
+ov.space.seg.methods()                      # backends, installed?, GPU?, input type
+labels = ov.space.seg.segment("dapi.tif", method="cellpose", gpu=True)   # tiled, seam-free
+# method: "watershed" (no deps) | "cellpose" (v3/v4) | "stardist" | "sam" | "sam2"
+#         | "micro_sam" | "cellsam"; image_type="he" for H&E, diameter= in pixels
+tx["cell"] = ov.space.seg.assign_transcripts(tx, labels, pixel_size=0.2125)
+cdata = ov.space.seg.aggregate(tx, cell="cell", gene="feature_name", labels=labels,
+                               pixel_size=0.2125)       # cells x genes AnnData + polygons
+# Transcript-only (Baysor CLI must be on PATH), optionally with the image labels as a prior
+tx2 = ov.space.seg.segment_transcripts(tx, method="baysor", scale=8, prior="cell")
+# Reference-free CellSPA metrics and a ranked comparison of several segmentations
+res = {m: ov.space.seg.evaluate(lab, transcripts=tx.assign(
+          cell=ov.space.seg.assign_transcripts(tx, lab))) for m, lab in labels_by_method.items()}
+ov.space.seg.compare(res)
+```
+
+- Coordinates: `pixel_size` (µm per pixel), `offset`, or a 3x3 `transform`
+  map transcript units to image pixels; get them from the platform's metadata.
+- Picking a method: in the Nat. Methods 2026 benchmark no method won
+  everywhere. SAM / SAM 2 led the unadjusted overall score and transcript QC,
+  Baysor ranked near the top once segmentation yield was accounted for, and
+  Cellpose and watershed ranked lower. Run 2-3 candidates and pick with
+  `ov.space.seg.compare` on your own data.
+- `sam` / `sam2` fall back to CPU on Apple MPS; run them on a CUDA GPU.
 
 ## Stage 2: Deconvolution
 
@@ -202,7 +234,7 @@ best, index, distance = spatial_match(embeddings, adatas=[adata1, adata2])
 
 ## Dependencies
 - Core: `omicverse`, `scanpy`, `anndata`, `squidpy`, `numpy`, `matplotlib`
-- Segmentation: `cellpose`, `opencv-python`/`tifffile`, optional GPU PyTorch
+- Segmentation: `cellpose`, `opencv-python`/`tifffile`, optional GPU PyTorch; `pip install 'omicverse[seg]'` for the `ov.space.seg` backends (Cellpose, SAM, SAM 2)
 - Deconvolution: `tangram-sc`, `cell2location`, `pytorch-lightning`; Starfysh needs `torch`, `scikit-learn`
 - Downstream: `scikit-learn`, `commot`, `flowsig`, `gseapy`, torch-backed modules (STAligner, SpaceFlow, GASTON, SLAT)
 

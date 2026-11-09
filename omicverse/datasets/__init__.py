@@ -167,5 +167,9 @@ from ._spatial import (
     # SPATA2's own example Visium slide, for the ov.space utility tutorial
     spata2_example,
 )
+from ._ccc import (
+    # Slide-tags mouse brain for the run_ccc spatial communication tutorial
+    slidetags_mouse_brain,
+)
 from ._signatures import load_signatures_from_file, predefined_signatures
 from ._crossspecies import saturn_frog_zebrafish

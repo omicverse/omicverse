@@ -1237,34 +1237,67 @@ def read_visium_10x(
 @register_function(
     aliases=["Visium细胞分割HE", "visium_10x_hd_cellpose_he", "cellpose_he", "HE图像分割", "细胞核分割"],
     category="space",
-    description="Cell segmentation on H&E images for high-resolution Visium data using CellPose",
+    description="Cell segmentation on H&E images for high-resolution Visium data (Cellpose by default; method='stardist'/'sam'/'sam2'/'micro_sam'/'watershed'/'cellsam' via ov.space.seg)",
     examples=[
-        "# Basic H&E segmentation",
-        "adata = ov.space.visium_10x_hd_cellpose_he(adata, mpp=0.3)",
+        "# Basic H&E segmentation (modifies adata in place, returns None)",
+        "ov.space.visium_10x_hd_cellpose_he(adata, mpp=0.3)",
         "# Custom parameters",
-        "adata = ov.space.visium_10x_hd_cellpose_he(adata, mpp=0.5,",
-        "                                           prob_thresh=0.1,",
-        "                                           flow_threshold=0.3)",
+        "ov.space.visium_10x_hd_cellpose_he(adata, mpp=0.5,",
+        "                                   prob_thresh=0.1,",
+        "                                   flow_threshold=0.3)",
+        "# Another backend: StarDist 2D_versatile_he (bin2cell's original model)",
+        "ov.space.visium_10x_hd_cellpose_he(adata, method='stardist')",
         "# GPU acceleration",
-        "adata = ov.space.visium_10x_hd_cellpose_he(adata, gpu=True,",
-        "                                           buffer=200)"
+        "ov.space.visium_10x_hd_cellpose_he(adata, gpu=True, buffer=200)"
     ],
-    related=["space.visium_10x_hd_cellpose_gex", "space.bin2cell"]
+    related=["space.visium_10x_hd_cellpose_gex", "space.bin2cell", "space.seg.segment"]
 )
 def visium_10x_hd_cellpose_he(
         adata,
         mpp=0.3,
         he_save_path="stardist/he_colon.tiff",
-        prob_thresh=0,
+        prob_thresh=None,
         flow_threshold=0.2,
         gpu=True,
         buffer=150,
         backend='tifffile',
+        method="cellpose",
         **kwargs,
 ):
-    """
-    Convert Visium 10x data to cell-level data.
-    
+    """Segment nuclei on the Visium HD H&E image and write ``obs['labels_he']``.
+
+    Parameters
+    ----------
+    adata : AnnData
+        Visium HD 2 µm bin AnnData with the full-resolution H&E image path.
+    mpp : float, default=0.3
+        Microns per pixel of the image that is segmented.
+    he_save_path : str
+        Where the cropped, rescaled H&E TIFF is written (reused if present);
+        labels go next to it as ``.npz``.
+    prob_thresh : float, optional
+        Detection threshold: Cellpose ``cellprob_threshold`` (default 0) or
+        StarDist ``prob_thresh`` (default 0.01, bin2cell's recommendation).
+    flow_threshold : float, default=0.2
+        Cellpose flow-error threshold.
+    gpu : bool, default=True
+        Use the GPU when the backend supports it.
+    buffer : int, default=150
+        Pixels kept around the tissue when cropping.
+    backend : str, default='tifffile'
+        Image reader for the source H&E.
+    method : str, default='cellpose'
+        Segmentation backend from :mod:`ov.space.seg`: ``'cellpose'``,
+        ``'stardist'``, ``'sam'``, ``'sam2'``, ``'micro_sam'``,
+        ``'watershed'`` or ``'cellsam'``.
+    **kwargs
+        Forwarded to the backend (e.g. ``diameter``, ``model``,
+        ``block_size``).
+
+    Returns
+    -------
+    None
+        Adds ``obs['labels_he']`` to ``adata`` in place.
     """
     from ..external.bin2cell import destripe, scaled_he_image, cellseg, insert_labels
 
@@ -1280,13 +1313,18 @@ def visium_10x_hd_cellpose_he(
             destripe(adata)
             scaled_he_image(adata, mpp=mpp, buffer=buffer, save_path=None,
                             backend=backend)
-    cellseg(image_path=he_save_path    , 
-             labels_npz_path=he_save_path.replace(".tiff", ".npz"), 
-             stardist_model="2D_versatile_he", 
-             prob_thresh=prob_thresh,
-             flow_threshold=flow_threshold,
-             gpu=gpu,
-             **kwargs,
+    if prob_thresh is None:
+        prob_thresh = {"cellpose": 0, "stardist": 0.01}.get(method)
+    if prob_thresh is not None:
+        kwargs["prob_thresh"] = prob_thresh
+    if method == "cellpose":
+        kwargs["flow_threshold"] = flow_threshold
+    cellseg(image_path=he_save_path,
+            labels_npz_path=he_save_path.replace(".tiff", ".npz"),
+            stardist_model="2D_versatile_he",
+            gpu=gpu,
+            backend=method,
+            **kwargs,
             )
     insert_labels(adata, 
                   labels_npz_path=he_save_path.replace(".tiff", ".npz"), 
@@ -1301,16 +1339,15 @@ def visium_10x_hd_cellpose_he(
     category="space",
     description="Expand cell segmentation labels to nearby bins for improved coverage",
     examples=[
-        "# Basic label expansion",
-        "adata = ov.space.visium_10x_hd_cellpose_expand(adata,",
-        "                                               max_bin_distance=4)",
+        "# Basic label expansion (modifies adata in place, returns None)",
+        "ov.space.visium_10x_hd_cellpose_expand(adata, max_bin_distance=4)",
         "# Custom parameters",
-        "adata = ov.space.visium_10x_hd_cellpose_expand(adata,",
-        "                                               max_bin_distance=6,",
-        "                                               labels_key='cellpose_labels')",
+        "ov.space.visium_10x_hd_cellpose_expand(adata,",
+        "                                       max_bin_distance=6,",
+        "                                       labels_key='cellpose_labels')",
         "# Different expansion keys",
-        "adata = ov.space.visium_10x_hd_cellpose_expand(adata,",
-        "                                               expanded_labels_key='expanded_cells')"
+        "ov.space.visium_10x_hd_cellpose_expand(adata,",
+        "                                       expanded_labels_key='expanded_cells')"
     ],
     related=["space.visium_10x_hd_cellpose_he", "space.visium_10x_hd_cellpose_gex"]
 )
@@ -1352,19 +1389,21 @@ def visium_10x_hd_cellpose_expand(
 @register_function(
     aliases=["Visium细胞基因表达", "visium_10x_hd_cellpose_gex", "cellpose_gex", "细胞基因表达映射", "细胞水平表达"],
     category="space",
-    description="Map gene expression to cell level using CellPose segmentation",
+    description="Segment cells on a Visium HD total-counts image (Cellpose by default; method='stardist' etc. via ov.space.seg) and write obs['labels_gex']",
     examples=[
-        "# Basic gene expression mapping",
-        "adata = ov.space.visium_10x_hd_cellpose_gex(adata)",
+        "# Basic expression-image segmentation (modifies adata in place, returns None)",
+        "ov.space.visium_10x_hd_cellpose_gex(adata)",
         "# Custom parameters",
-        "adata = ov.space.visium_10x_hd_cellpose_gex(adata,",
-        "                                            obs_key='total_counts',",
-        "                                            mpp=0.5, sigma=3)",
+        "ov.space.visium_10x_hd_cellpose_gex(adata,",
+        "                                    obs_key='total_counts',",
+        "                                    mpp=0.5, sigma=3)",
         "# With log transformation",
-        "adata = ov.space.visium_10x_hd_cellpose_gex(adata, log1p=True,",
-        "                                            prob_thresh=0.1)"
+        "ov.space.visium_10x_hd_cellpose_gex(adata, log1p=True,",
+        "                                    prob_thresh=0.1)",
+        "# StarDist 2D_versatile_fluo, as in bin2cell",
+        "ov.space.visium_10x_hd_cellpose_gex(adata, method='stardist')"
     ],
-    related=["space.visium_10x_hd_cellpose_he", "space.bin2cell"]
+    related=["space.visium_10x_hd_cellpose_he", "space.bin2cell", "space.seg.segment"]
 )
 def visium_10x_hd_cellpose_gex(
         adata,
@@ -1373,10 +1412,11 @@ def visium_10x_hd_cellpose_gex(
         mpp=0.3,
         sigma=5,
         gex_save_path="stardist/gex_colon.tiff",
-        prob_thresh=0.01,
-        nms_thresh=0.1,
+        prob_thresh=None,
+        nms_thresh=None,
         gpu=True,
         buffer=150,
+        method="cellpose",
         **kwargs,
 ):
     """Run expression-image segmentation and map labels back to spatial bins.
@@ -1395,16 +1435,22 @@ def visium_10x_hd_cellpose_gex(
         Gaussian smoothing parameter for grid image generation.
     gex_save_path : str, default='stardist/gex_colon.tiff'
         Output path of generated expression image.
-    prob_thresh : float, default=0.01
-        StarDist probability threshold.
-    nms_thresh : float, default=0.1
-        StarDist non-max-suppression threshold.
+    prob_thresh : float, optional
+        Detection threshold: Cellpose ``cellprob_threshold`` (default 0.01)
+        or StarDist ``prob_thresh`` (default 0.05, bin2cell's recommendation).
+    nms_thresh : float, optional
+        StarDist non-max-suppression threshold (default 0.5); unused by
+        other methods.
     gpu : bool, default=True
-        Whether to use GPU in StarDist inference.
+        Whether to use the GPU.
     buffer : int, default=150
         Crop buffer used for spatial coordinate key.
+    method : str, default='cellpose'
+        Segmentation backend from :mod:`ov.space.seg` (``'cellpose'``,
+        ``'stardist'``, ``'watershed'``, ``'sam'``, ``'sam2'``,
+        ``'micro_sam'``, ``'cellsam'``).
     **kwargs
-        Additional StarDist arguments.
+        Forwarded to the backend.
 
     Returns
     -------
@@ -1420,12 +1466,21 @@ def visium_10x_hd_cellpose_gex(
                 mpp=mpp, sigma=sigma, save_path=gex_save_path)
     else:
         print(f"gex_save_path {gex_save_path} already exists, skipping grid_image")
-    cellseg(image_path=gex_save_path, 
-             labels_npz_path=gex_save_path.replace(".tiff", ".npz"), 
-             stardist_model="2D_versatile_fluo", 
-             prob_thresh=prob_thresh, 
-             nms_thresh=nms_thresh,gpu=gpu,
-             **kwargs,
+    method = kwargs.pop("backend", method)  # pre-`method` spelling
+    if prob_thresh is None:
+        prob_thresh = {"cellpose": 0.01, "stardist": 0.05}.get(method)
+    if nms_thresh is None and method == "stardist":
+        nms_thresh = 0.5
+    if prob_thresh is not None:
+        kwargs["prob_thresh"] = prob_thresh
+    if nms_thresh is not None and method == "stardist":
+        kwargs["nms_thresh"] = nms_thresh
+    cellseg(image_path=gex_save_path,
+            labels_npz_path=gex_save_path.replace(".tiff", ".npz"),
+            stardist_model="2D_versatile_fluo",
+            gpu=gpu,
+            backend=method,
+            **kwargs,
             )
     insert_labels(adata, 
                   labels_npz_path=gex_save_path.replace(".tiff", ".npz"), 

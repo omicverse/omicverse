@@ -216,6 +216,19 @@ def data_drop_duplicates_index(data:pd.DataFrame)->pd.DataFrame:
     data = data.loc[~data.index.duplicated(keep='first')]
     return data
 
+
+def _tmm_lib_sizes(counts):
+    """TMM effective library sizes (lib.size × norm.factors) for ``voom``.
+
+    The limma-voom workflow is ``DGEList → calcNormFactors → voom``. voom on
+    raw column sums is biased whenever library composition differs between
+    samples: a block of strongly up-regulated genes inflates that group's
+    library size and every other gene's logCPM drops with it.
+    """
+    from ..external import pyedger as _edger
+    y = _edger.calcNormFactors(_edger.DGEList(counts))
+    return _edger.effective_lib_sizes(y)
+
 @register_function(
     aliases=["差异表达分析", "DEG", "differential_expression", "差异基因分析", "pyDEG"],
     category="bulk", 
@@ -570,8 +583,8 @@ class pyDEG(object):
                 - `edger`: edgeR quasi-likelihood F-test via the
                   pure-Python `pyedger` package (R-parity tested; no R needed).
                 - `limma`: limma-voom pipeline via the vendored pure-Python
-                  `pylimma` port (voom mean-variance modelling + eBayes;
-                  R-parity tested; no R needed).
+                  `pylimma` port (TMM library sizes + voom mean-variance
+                  modelling + eBayes; R-parity tested; no R needed).
                 - `edgepy`: edgeR classic GLM likelihood-ratio test (glmFit +
                   glmLRT) via the pure-Python `pyedger` package
                   (no R / inmoose needed).
@@ -628,8 +641,6 @@ class pyDEG(object):
                 f"Input columns {missing!r} were not found in the pyDEG count matrix."
             )
 
-        from pydeseq2.dds import DeseqDataSet
-        from pydeseq2.ds import DeseqStats
         from scipy.stats import ttest_ind
         from statsmodels.stats.multitest import multipletests
         print(f"⚙️ You are using {method} method for differential expression analysis.")
@@ -673,7 +684,17 @@ class pyDEG(object):
             raise ValueError('The method is not supported.')
             print(f"⚙️ You are using {method} method for differential expression analysis.")
         elif method=='DEseq2':
-            import pydeseq2
+            # pydeseq2 is optional (extras full / easy / tests); only this
+            # branch needs it, so the other methods work without it.
+            try:
+                import pydeseq2
+                from pydeseq2.dds import DeseqDataSet
+                from pydeseq2.ds import DeseqStats
+            except ImportError as exc:
+                raise ImportError(
+                    "method='DEseq2' requires pydeseq2 (pip install pydeseq2). "
+                    "method='edger', 'edgepy', 'limma' and 'ttest' do not need it."
+                ) from exc
             counts_df = self.data[group1+group2].T
             clinical_df = pd.DataFrame(index=group1+group2)
 
@@ -870,6 +891,7 @@ class pyDEG(object):
             # (omicverse.external.pylimma), R-parity tested against
             # Bioconductor limma. voom() models the count mean-variance trend
             # — the statistically correct way to run limma on RNA-seq counts.
+            # Library sizes are TMM-normalized first, as in edgeR/limma.
             from ..external import pylimma as _limma
             print("⏰ Start limma-voom pipeline (pylimma)...")
             counts = self.data[group1 + group2]
@@ -880,7 +902,7 @@ class pyDEG(object):
                  'treatment': [1] * n1 + [0] * n2},
                 index=group1 + group2,
             )
-            v = _limma.voom(counts, design.values)
+            v = _limma.voom(counts, design.values, lib_size=_tmm_lib_sizes(counts))
             fit = _limma.lmFit(v.E, design.values, weights=v.weights)
             fit = _limma.contrasts_fit(fit, np.array([-1.0, 1.0]))
             print(f"⏰ Start to adjust pvalue...")
@@ -948,8 +970,9 @@ class pyDEG(object):
             multipletests_method: ``statsmodels`` multiple-testing
                 method for the q-value (default ``'fdr_bh'``).
             data_type: Nature of the expression matrix —
-                ``'counts'`` (RNA-seq raw counts: ``voom`` removes the
-                mean-variance trend, then weighted ``lmFit``);
+                ``'counts'`` (RNA-seq raw counts: ``voom`` on TMM library
+                sizes removes the mean-variance trend, then weighted
+                ``lmFit``);
                 ``'continuous'`` (TPM / log-CPM / microarray or any
                 already-normalized, log-scaled matrix: ``lmFit`` is run
                 directly, no ``voom``, no weights); ``'auto'`` (default
@@ -1036,9 +1059,10 @@ class pyDEG(object):
 
         # --- lmFit + eBayes -------------------------------------------
         if dt == 'counts':
-            # RNA-seq counts: voom removes the mean-variance trend.
+            # RNA-seq counts: voom (on TMM library sizes) removes the
+            # mean-variance trend.
             print("⏰ Start continuous-trait limma-voom pipeline (pylimma)...")
-            v = _limma.voom(counts, design.values)
+            v = _limma.voom(counts, design.values, lib_size=_tmm_lib_sizes(counts))
             fit = _limma.lmFit(v.E, design.values, weights=v.weights)
         else:
             # Already-normalized / log-scaled (TPM, log-CPM, microarray):
@@ -1207,9 +1231,9 @@ class pyDEG(object):
             spline_df: Degrees of freedom of the natural cubic spline
                 when ``time_basis`` resolves to ``'spline'`` (default 3).
             data_type: Nature of the expression matrix —
-                ``'counts'`` (RNA-seq raw counts: ``voom`` removes the
-                mean-variance trend, then ``lmFit`` with precision
-                weights); ``'continuous'`` (microarray log-ratios,
+                ``'counts'`` (RNA-seq raw counts: ``voom`` on TMM library
+                sizes removes the mean-variance trend, then ``lmFit`` with
+                precision weights); ``'continuous'`` (microarray log-ratios,
                 log-CPM, or any already-normalized / log-scaled matrix:
                 ``lmFit`` is run directly, no ``voom``, no weights);
                 ``'auto'`` (default — inspect the matrix: an all
@@ -1416,24 +1440,25 @@ class pyDEG(object):
         test_idx = [list(design.columns).index(c) for c in test_cols]
 
         # --- fit the linear model -------------------------------------
-        # 'counts'     : voom removes the mean-variance trend, then lmFit
-        #                runs with the voom precision weights.
+        # 'counts'     : voom (TMM library sizes) removes the mean-variance
+        #                trend, then lmFit runs with the voom precision weights.
         # 'continuous' : the matrix is already log-scaled / normalized —
         #                lmFit runs directly on it, no voom, no weights.
         if dt == 'counts':
+            lib_size = _tmm_lib_sizes(counts)
             if block_s is not None:
                 block_arr = block_s.values
                 print("⏰ Repeated-measures design — estimating "
                       "within-subject correlation (duplicateCorrelation)...")
                 # Round 1: voom without weights-aware corr, estimate corr.
-                v = _limma.voom(counts, design.values)
+                v = _limma.voom(counts, design.values, lib_size=lib_size)
                 dc = _limma.duplicateCorrelation(v.E, design.values,
                                                  block=block_arr,
                                                  weights=v.weights)
                 corr = float(dc.consensus_correlation)
                 # Round 2: voom with the block correlation, re-estimate.
                 try:
-                    v = _limma.voom(counts, design.values,
+                    v = _limma.voom(counts, design.values, lib_size=lib_size,
                                     block=block_arr, correlation=corr)
                     dc = _limma.duplicateCorrelation(v.E, design.values,
                                                      block=block_arr,
@@ -1447,7 +1472,7 @@ class pyDEG(object):
                                    block=block_arr, correlation=corr)
                 self.timecourse_correlation = corr
             else:
-                v = _limma.voom(counts, design.values)
+                v = _limma.voom(counts, design.values, lib_size=lib_size)
                 fit = _limma.lmFit(v.E, design.values, weights=v.weights)
         else:
             # continuous expression — lmFit directly on the matrix.

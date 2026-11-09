@@ -65,6 +65,18 @@ Use the `ccc_*` functions by default when the goal is to quickly generate public
      centr = ov.single.cellchat_centrality(adata)                             # sender/receiver/mediator/influencer
      ```
      CellChat scores are probabilities (~1e-3), not expression; pathway summaries pick scale-aware thresholds automatically. Groups with `<= min_cells` (default 10) cells are removed, as in R `filterCommunication`.
+   - **Unified entry point / several methods at once**: `ov.single.run_ccc` runs any registered method (`ov.single.available_ccc_methods()`: `cellchat`, `cellphonedb`, `liana`, `fastccc`, `secact`, and the spatial `cytosignal` / `commot`) and always returns the same communication AnnData:
+     ```python
+     comm = ov.single.run_ccc(adata, "cell_labels", method="cellchat")
+     comm = ov.single.run_ccc(adata, "cell_labels", method=["cellchat", "cellphonedb", "liana"],
+                              consensus="rra",                     # or "vote" (min_methods=...)
+                              method_kwargs={"cellphonedb": {"cpdb_file_path": "./cellphonedb.zip"}})
+     res = ov.single.compare_ccc(adata)                          # Jaccard / recall / rank correlations on shared-DB LR pairs
+     ov.pl.ccc_compare(res, plot_type="upset")                   # also "jaccard", "recall", "score_corr", "top_lr", "cellpair"
+     cp = ov.single.get_ccc(adata, method="cellphonedb")          # any single method's comm AnnData
+     comm = ov.space.run_ccc(adata, "cell_type", method="cytosignal")  # spatial (needs obsm['spatial'])
+     ```
+     Interactions are matched across databases on (sender, receiver, ligand subunit genes, receptor subunit genes); CellPhoneDB receptor-first records are re-oriented ligand -> receptor. `resource="shared"` keeps only LR pairs present in every selected database. Per-method long tables live in `adata.uns['ccc']['long'][method]`; native results stay at `cellchat_res` / `cpdb_results` / `liana_res`.
 4. **Prefer the new public plotting APIs for standard visualization requests**
    - Use `ov.pl.ccc_heatmap(...)` for matrix-like plots:
      - `plot_type="heatmap"` for aggregated pathway-level communication.

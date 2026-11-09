@@ -7,6 +7,8 @@ wiring produces the standard pyDEG result schema and recovers planted
 differential genes.
 """
 
+import sys
+
 import numpy as np
 import pandas as pd
 import pytest
@@ -84,6 +86,29 @@ def test_limma_specific_columns(deg_counts):
     assert "AveExpr" in res.columns
 
 
+@pytest.fixture
+def no_pydeseq2(monkeypatch):
+    """Make ``import pydeseq2`` fail, as on an install without the extras."""
+    monkeypatch.setitem(sys.modules, "pydeseq2", None)
+
+
+# edger is left out only for speed (~1 min on 400 genes); it goes through the
+# same code path before the method branch.
+@pytest.mark.parametrize("method", ["limma", "edgepy", "ttest"])
+def test_methods_run_without_pydeseq2(deg_counts, no_pydeseq2, method):
+    dds = ov.bulk.pyDEG(deg_counts.copy())
+    dds.drop_duplicates_index()
+    res = dds.deg_analysis(["s0", "s1", "s2"], ["s3", "s4", "s5"], method=method)
+    assert res.shape[0] == N_GENES
+
+
+def test_deseq2_without_pydeseq2_raises_install_hint(deg_counts, no_pydeseq2):
+    dds = ov.bulk.pyDEG(deg_counts.copy())
+    dds.drop_duplicates_index()
+    with pytest.raises(ImportError, match=r"pip install pydeseq2"):
+        dds.deg_analysis(["s0", "s1", "s2"], ["s3", "s4", "s5"], method="DEseq2")
+
+
 def test_unknown_method_raises(deg_counts):
     dds = ov.bulk.pyDEG(deg_counts.copy())
     dds.drop_duplicates_index()
@@ -128,3 +153,43 @@ def test_duplicate_count_matrix_columns_raise_clear_error(deg_counts):
     dds.drop_duplicates_index()
     with pytest.raises(ValueError, match="count matrix columns must be unique"):
         dds.deg_analysis(["s0", "s2"], ["s3", "s4"], method="ttest")
+
+
+# ---------------------------------------------------------------------------
+# limma-voom library composition (TMM)
+# ---------------------------------------------------------------------------
+N_COMP, N_COMP_UP = 1000, 50
+
+
+def _composition_counts(seed, scale):
+    """Poisson counts (genes × 8 samples); genes 0..49 are multiplied by
+    ``scale`` (per sample), the rest are unchanged. The planted genes make
+    some libraries ~15% larger, which shifts every unchanged gene's logCPM
+    unless voom gets TMM-normalized library sizes."""
+    rng = np.random.default_rng(seed)
+    mu = np.tile(rng.lognormal(np.log(200), 1.0, N_COMP)[:, None], (1, 8))
+    mu[:N_COMP_UP] *= scale
+    return pd.DataFrame(
+        rng.poisson(mu).astype(float),
+        index=[f"g{i:04d}" for i in range(N_COMP)],
+        columns=[f"s{i}" for i in range(8)],
+    )
+
+
+def test_limma_unchanged_genes_not_shifted_by_composition():
+    counts = _composition_counts(0, np.array([4.0] * 4 + [1.0] * 4))
+    res = ov.bulk.pyDEG(counts).deg_analysis(
+        list(counts.columns[:4]), list(counts.columns[4:]), method="limma")
+    null = res.loc[counts.index[N_COMP_UP:]]
+    assert abs(null["log2FC"].median()) < 0.05
+    assert (null["qvalue"] < 0.05).mean() < 0.02
+    assert (res.loc[counts.index[:N_COMP_UP], "sig"] == "up").all()
+
+
+def test_continuous_deg_unchanged_genes_not_shifted_by_composition():
+    trait = np.repeat([0.0, 1.0, 2.0, 3.0], 2)
+    counts = _composition_counts(1, 1.0 + trait)     # genes 0..49 rise with trait
+    res = ov.bulk.pyDEG(counts).continuous_deg(pd.Series(trait, index=counts.columns))
+    null = res.loc[counts.index[N_COMP_UP:]]
+    assert abs(null["log2FC"].median()) < 0.02       # slope per trait unit
+    assert (null["qvalue"] < 0.05).mean() < 0.02

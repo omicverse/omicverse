@@ -27,8 +27,9 @@ import omicverse as ov
 # synthetic data
 # ---------------------------------------------------------------------------
 # Enough total genes that the planted (inflated) genes do not dominate the
-# library size — otherwise voom's per-sample normalization would induce a
-# spurious compositional time trend in the null genes.
+# library size. voom gets TMM library sizes, which also removes the spurious
+# compositional time trend the planted genes would otherwise induce in the
+# null genes.
 N_GENES = 600
 N_TRUE = 40          # genes 0..39 carry the planted temporal / interaction signal
 

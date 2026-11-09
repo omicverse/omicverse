@@ -1,0 +1,9 @@
+CytoSignal ligand-receptor database exported from the R package cytosignal
+0.5.1 (https://github.com/welch-lab/CytoSignal, commit b2c1a3c, GPL (>= 3))
+data objects g_to_u, db.diff, db.cont and inter.index (curated from
+CellPhoneDB). cytosignal_interactions.csv.gz is the long form of the
+db.diff / db.cont factors (db = diffusion | contact; slot = combined |
+ligands | receptors; uniprot; interaction id), in the original factor order.
+Cite: Liu J. et al. CytoSignal detects locations and dynamics of
+ligand-receptor signaling at cellular resolution from spatial transcriptomic
+data. Nat Genet (2026), doi:10.1038/s41588-026-02624-9.

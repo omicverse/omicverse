@@ -35,6 +35,17 @@ except ImportError:
             pass
 
 
+def _solver_dtype(device) -> torch.dtype:
+    """float64 like the original NumPy COMMOT; MPS has no float64.
+
+    In float32 the Sinkhorn error never reaches ``stopthr=1e-8`` (float32
+    epsilon is 1.2e-7), so every problem ran the full ``nitermax`` iterations
+    and stopped ~1e-5 away from COMMOT's solution. In float64 it converges in
+    tens to a few thousand iterations and matches COMMOT to ~1e-14.
+    """
+    return torch.float32 if str(device).startswith("mps") else torch.float64
+
+
 def unot_torch(a,
                b,
                C,
@@ -92,20 +103,23 @@ def unot_torch(a,
     if eps_nu is None: eps_nu = eps_p
     
     # Convert numpy arrays to torch tensors
+    dtype = _solver_dtype(device)
     if isinstance(a, np.ndarray):
-        a = torch.from_numpy(a).float().to(device)
+        a = torch.from_numpy(a).to(device=device, dtype=dtype)
     else:
-        a = a.float().to(device)
+        a = a.to(device=device, dtype=dtype)
     
     if isinstance(b, np.ndarray):
-        b = torch.from_numpy(b).float().to(device)
+        b = torch.from_numpy(b).to(device=device, dtype=dtype)
     else:
-        b = b.float().to(device)
+        b = b.to(device=device, dtype=dtype)
     
     if isinstance(C, np.ndarray):
-        C = torch.from_numpy(C).float().to(device)
-    elif not isinstance(C, torch.Tensor) and not sparse_mtx:
-        C = torch.tensor(C).float().to(device)
+        C = torch.from_numpy(C).to(device=device, dtype=dtype)
+    elif isinstance(C, torch.Tensor):
+        C = C.to(device=device, dtype=dtype)
+    elif not sparse_mtx:
+        C = torch.tensor(C).to(device=device, dtype=dtype)
     
     # Return a zero matrix if either a or b is all zero
     nzind_a = torch.where(a > 0)[0]
@@ -115,7 +129,7 @@ def unot_torch(a,
             # Convert back to scipy sparse for consistency
             P = sparse.coo_matrix(([], ([], [])), shape=(len(a), len(b)))
         else:
-            P = torch.zeros([len(a), len(b)], dtype=torch.float32, device=device)
+            P = torch.zeros([len(a), len(b)], dtype=dtype, device=device)
         return P
         
     if solver == "sinkhorn" and max(abs(eps_p-eps_mu), abs(eps_p-eps_nu)) > 1e-8:
@@ -151,7 +165,7 @@ def wrightomega_torch(z, device='cpu'):
         z_np = z
     
     result_np = wrightomega(z_np).real
-    return torch.from_numpy(result_np).float().to(device)
+    return torch.from_numpy(result_np).to(device=device, dtype=_solver_dtype(device))
 
 
 def unot_sinkhorn_l1_dense_torch(a, b, C, eps, m, nitermax=10000, stopthr=1e-8, 
@@ -280,10 +294,18 @@ def unot_sinkhorn_l1_sparse_torch(a, b, C, eps, m, nitermax=10000, stopthr=1e-8,
     scipy.sparse.coo_matrix
         The optimal transport matrix.
     """
+    if str(device) == 'cpu':
+        from . import _sinkhorn_numba
+        if _sinkhorn_numba.NUMBA:
+            # Fused, row/column-parallel CPU kernel; same updates in float64.
+            return _sinkhorn_numba.sinkhorn_l1_sparse(
+                a.detach().cpu().numpy(), b.detach().cpu().numpy(), C, eps, m,
+                nitermax=nitermax, stopthr=stopthr, verbose=verbose)
+
     # Convert sparse matrix indices and data to torch tensors
     row_idx = torch.from_numpy(C.row).long().to(device)
     col_idx = torch.from_numpy(C.col).long().to(device)
-    C_data = torch.from_numpy(C.data).float().to(device)
+    C_data = torch.from_numpy(C.data).to(device=device, dtype=a.dtype)
     
     f = torch.zeros_like(a)
     g = torch.zeros_like(b)
@@ -573,9 +595,10 @@ def to_numpy(tensor):
 
 def to_torch(array, device='cpu'):
     """Convert numpy array to torch tensor"""
+    dtype = _solver_dtype(device)
     if isinstance(array, np.ndarray):
-        return torch.from_numpy(array).float().to(device)
+        return torch.from_numpy(array).to(device=device, dtype=dtype)
     elif isinstance(array, torch.Tensor):
-        return array.float().to(device)
+        return array.to(device=device, dtype=dtype)
     else:
-        return torch.tensor(array).float().to(device) 
+        return torch.tensor(array).to(device=device, dtype=dtype) 

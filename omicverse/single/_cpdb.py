@@ -856,6 +856,9 @@ def format_cpdb_results(cpdb_results, separator='|'):
     
     # Add variable (L-R pair) information
     adata_cpdb.var = means_df[info_cols].copy()
+    # Complex partners have no gene_a/gene_b; NaN in object columns breaks write_h5ad.
+    for column in adata_cpdb.var.select_dtypes(include=['object', 'string']).columns:
+        adata_cpdb.var[column] = adata_cpdb.var[column].astype('string').fillna('').astype(str)
     adata_cpdb.var['interaction_name'] = adata_cpdb.var['interacting_pair']
     
     # Add observation (cell pair) information

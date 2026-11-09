@@ -121,7 +121,10 @@ def test_ripley_runs_and_is_monotone_in_the_cumulative_modes(mode):
 
 def test_sepal_refuses_a_graph_that_is_not_a_lattice():
     adata = _lattice()
-    space.spatial_neighbors(adata, n_neighs=3)          # degree no longer 6
+    # The graph is symmetrized: requesting k=3 can still create degree-6
+    # nodes through incoming edges. Use an actually undersaturated graph.
+    space.spatial_neighbors(adata, n_neighs=1)
+    assert np.diff(adata.obsp["spatial_connectivities"].indptr).max() < 6
     with pytest.raises(ValueError, match="lattice"):
         space.sepal(adata, max_neighs=6, genes=list(adata.var_names[:2]))
 
