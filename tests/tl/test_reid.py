@@ -186,3 +186,56 @@ def test_embed_with_workers_and_cache(tmp_path):
     ef, per = reid_embed(paths, Net(), tf, image_root=str(tmp_path), views=("full", "hflip"),
                          return_views=True, log=None)
     assert set(per) == {"full", "hflip"} and np.allclose(np.linalg.norm(ef, axis=1), 1, atol=1e-5)
+
+
+def test_pipeline_end_to_end_with_dummy_backbone(tmp_path, monkeypatch):
+    torch = pytest.importorskip("torch")
+    cv2 = pytest.importorskip("cv2")
+    from PIL import Image
+    import omicverse.tl._reid as R
+
+    rng = np.random.default_rng(3)
+    patterns = []
+    for i in range(12):
+        base = np.full((120, 160), 128, np.uint8)
+        for _ in range(60):
+            c = (int(rng.integers(5, 155)), int(rng.integers(5, 115)))
+            cv2.circle(base, c, int(rng.integers(2, 5)), int(rng.integers(0, 255)), -1)
+        patterns.append(base)
+
+    def shot(i, name):
+        M = cv2.getRotationMatrix2D((80, 60), float(rng.uniform(-8, 8)), float(rng.uniform(0.95, 1.05)))
+        im = cv2.warpAffine(patterns[i], M, (160, 120), borderValue=128)
+        Image.fromarray(np.stack([im] * 3, -1)).save(tmp_path / name)
+        return name
+
+    ref = pd.DataFrame([(shot(i, f"r{i}_{k}.png"), f"ind{i}") for i in range(8) for k in range(3)],
+                       columns=["path", "identity"])
+    qy = [(shot(i, f"q{i}_{k}.png"), f"ind{i}") for i in range(4, 12) for k in range(2)]
+    q = pd.DataFrame(qy, columns=["path", "truth"])
+
+    class Net(torch.nn.Module):
+        def forward(self, x):            # coarse intensity layout as a toy descriptor
+            return torch.nn.functional.adaptive_avg_pool2d(x[:, :1], (6, 8)).flatten(1)
+
+    def tf(im):
+        a = np.asarray(im.convert("RGB").resize((80, 60)), dtype=np.float32) / 255.0
+        return torch.tensor(a).permute(2, 0, 1)
+
+    monkeypatch.setattr(R, "load_reid_backbone", lambda name, **k: (Net(), tf))
+    res = R.reid_pipeline(q.path, reference_paths=ref.path, reference_labels=ref.identity,
+                          image_root=str(tmp_path), backbones=("toy", "toy2"), screen_images=12,
+                          cache_dir=str(tmp_path / "cache"), n_workers=2, prefix="sp", log=None,
+                          open_set_kwargs={"n_rep": 2})
+    labs = res["labels"]
+    assert len(labs) == len(q) and all(str(x).startswith("sp_") for x in labs)
+    rep = res["report"]
+    for key in ("n_reference_used", "projection", "verified_accepted", "mode", "n_clusters"):
+        assert key in rep
+    assert rep["mode"] == "reference-simulation"
+    assert adjusted_rand_score(q.truth, labs) > 0.5
+    # no reference: verified-pairs / hdbscan path, and the cache is reused
+    res2 = R.reid_pipeline(q.path, image_root=str(tmp_path), backbones=("toy",),
+                           cache_dir=str(tmp_path / "cache"), n_workers=2, log=None)
+    assert len(res2["labels"]) == len(q)
+    assert res2["report"]["mode"] in ("verified-pairs", "hdbscan")

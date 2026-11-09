@@ -18,7 +18,8 @@ from ._choice_model import (fit_choice_model, choice_model_loglik,
                             choice_model_forward_validation, export_choice_predictor)
 from ._reid import (load_reid_backbone, reid_embed, reid_view_center, reid_candidate_pairs,
                     reid_local_verify, reid_fuse_similarity, reid_pair_auc,
-                    reid_fit_projection, reid_select_threshold, reid_open_set_cluster)
+                    reid_fit_projection, reid_select_threshold, reid_open_set_cluster,
+                    reid_pipeline)
 
 __all__ = ["cross_species_align", "bonsai", "bandpass_filter", "channel_qc_table",
            "bridged_channel_pairs", "erp_channel_outliers",
@@ -27,4 +28,5 @@ __all__ = ["cross_species_align", "bonsai", "bandpass_filter", "channel_qc_table
            "choice_model_forward_validation", "export_choice_predictor",
            "load_reid_backbone", "reid_embed", "reid_view_center", "reid_candidate_pairs",
            "reid_local_verify", "reid_fuse_similarity", "reid_pair_auc",
-           "reid_fit_projection", "reid_select_threshold", "reid_open_set_cluster"]
+           "reid_fit_projection", "reid_select_threshold", "reid_open_set_cluster",
+           "reid_pipeline"]
