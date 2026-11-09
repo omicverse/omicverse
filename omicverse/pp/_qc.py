@@ -1830,10 +1830,11 @@ def qc_gpu(adata, mode='seurat',
     # UMIs exceed n_cells (S100A8, LYZ, FCGR3B, ...) was removed. rapids-singlecell
     # exposes min_genes/max_genes/min_cells/max_cells separately, matching the CPU
     # path's _filter_cells_impl / _filter_genes_impl.
-    rsc.pp.filter_cells(adata, min_genes=min_genes)
-    rsc.pp.filter_cells(adata, max_genes=int(max_genes_ratio*adata.shape[1]))
-    rsc.pp.filter_genes(adata, min_cells=min_cells)
-    rsc.pp.filter_genes(adata, max_cells=int(max_cells_ratio*adata.shape[0]))
+    from . import _rsc_compat as _rscc  # any rapids-singlecell release
+    _rscc.filter_cells(adata, min_genes=min_genes)
+    _rscc.filter_cells(adata, max_genes=int(max_genes_ratio*adata.shape[1]))
+    _rscc.filter_genes(adata, min_cells=min_cells)
+    _rscc.filter_genes(adata, max_cells=int(max_cells_ratio*adata.shape[0]))
     
     cells_final_filtered = cells_before_final - adata.shape[0]
     genes_final_filtered = genes_before_final - adata.shape[1]
