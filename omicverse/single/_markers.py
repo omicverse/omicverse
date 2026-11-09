@@ -14,6 +14,26 @@ import numpy as np
 import pandas as pd
 from anndata import AnnData
 from .._oom_compat import oom_guard as _oom_guard
+from .._oom_compat import is_oom as _is_oom
+
+
+def _oom_guard_unless_cpp_cosg(func):
+    """Materialise an AnnDataOOM before find_markers, except for COSG with
+    backend='cpp', whose group sums stream the on-disk matrix directly."""
+    import functools
+    guarded = _oom_guard(materialize=True, result_keys_uns=['*'])(func)
+
+    @functools.wraps(func)
+    def wrapper(*args, **kwargs):
+        adata = kwargs.get("adata", args[0] if args else None)
+        method = kwargs.get("method", args[2] if len(args) > 2 else "cosg")
+        if adata is not None and _is_oom(adata) and method == "cosg":
+            from .._backend import resolve_backend
+            if resolve_backend(kwargs.get("backend")) == "cpp":
+                return func(*args, **kwargs)
+        return guarded(*args, **kwargs)
+
+    return wrapper
 from scipy import sparse, stats
 
 from .._registry import register_function
@@ -614,7 +634,7 @@ def _cosg_add_pts(
     ],
     related=["single.get_markers", "pl.markers_dotplot", "single.cosg"],
 )
-@_oom_guard(materialize=True, result_keys_uns=['*'])
+@_oom_guard_unless_cpp_cosg
 @tracked("find_markers", "ov.single.find_markers")
 def find_markers(
     adata: AnnData,
