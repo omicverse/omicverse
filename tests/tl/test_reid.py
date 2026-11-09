@@ -139,3 +139,50 @@ def test_local_verify_separates_same_pattern(tmp_path):
     same = ident[ver["first"]] == ident[ver["second"]]
     assert ver.loc[same, "inliers"].min() > ver.loc[~same, "inliers"].max()
     assert (ver["accepted"] == same).all()
+
+
+def test_fit_projection_improves_heldout_and_crossfits():
+    from omicverse.tl._reid import reid_fit_projection
+    rng = np.random.default_rng(7)
+    # identity signal lives in 8 dims, 120 nuisance dims of larger variance
+    n_ids, per = 60, 6
+    y = np.repeat(np.arange(n_ids), per)
+    sig = rng.normal(size=(n_ids, 8))[y] + 0.3 * rng.normal(size=(len(y), 8))
+    x = np.hstack([sig, 1.0 * rng.normal(size=(len(y), 120))])
+    pj = reid_fit_projection(x, y, n_pca=128)
+    assert pj["heldout_auc_proj"] > pj["heldout_auc_raw"] + 0.05
+    oof = pj["reference_oof"]
+    assert oof.shape[0] == len(y)
+    # cross-fitted coordinates must not be (near-)perfectly separable in-sample
+    from omicverse.tl._reid import reid_pair_auc
+    p_in = pj["transform"](x)
+    assert reid_pair_auc(oof @ oof.T, y) < reid_pair_auc(p_in @ p_in.T, y)
+
+
+def test_embed_with_workers_and_cache(tmp_path):
+    torch = pytest.importorskip("torch")
+    from PIL import Image
+    from omicverse.tl._reid import reid_embed
+    paths = []
+    rng = np.random.default_rng(0)
+    for i in range(10):
+        p = tmp_path / f"{i}.png"
+        Image.fromarray(rng.integers(0, 255, (20, 30, 3), dtype=np.uint8)).save(p)
+        paths.append(p.name)
+
+    class Net(torch.nn.Module):
+        def forward(self, x):
+            return x.mean(dim=(2,)).flatten(1)
+
+    def tf(im):
+        return torch.tensor(np.asarray(im.resize((8, 8)), dtype=np.float32)).permute(2, 0, 1)
+
+    e1 = reid_embed(paths, Net(), tf, image_root=str(tmp_path), n_workers=1, batch_size=3, log=None)
+    e3 = reid_embed(paths, Net(), tf, image_root=str(tmp_path), n_workers=3, batch_size=3,
+                    views=("full",), cache=str(tmp_path / "c.npy"), log=None)
+    assert np.allclose(e1, e3, atol=1e-6)
+    e4 = reid_embed(paths, None, tf, image_root=str(tmp_path), cache=str(tmp_path / "c.npy"), log=None)
+    assert np.allclose(e3, e4)
+    ef, per = reid_embed(paths, Net(), tf, image_root=str(tmp_path), views=("full", "hflip"),
+                         return_views=True, log=None)
+    assert set(per) == {"full", "hflip"} and np.allclose(np.linalg.norm(ef, axis=1), 1, atol=1e-5)

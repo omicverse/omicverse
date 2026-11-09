@@ -21,6 +21,8 @@ The pieces that are easy to get wrong by hand, and that this module provides:
                              plus a random-pair null so acceptance is data-driven.
 ``reid_fuse_similarity``     put several similarity matrices on one scale and
                              average them.
+``reid_fit_projection``      reference-supervised linear metric (PCA + LDA),
+                             validated on held-out identities.
 ``reid_select_threshold``    pick the clustering cut by simulating open-set
                              clustering on the labelled reference images.
 ``reid_open_set_cluster``    attach confident queries to gallery identities and
@@ -165,19 +167,20 @@ def _central_crop(img, frac):
     aliases=["图像嵌入", "重识别嵌入", "reid embedding", "image embedding re-identification",
              "flip test-time augmentation"],
     category="tl",
-    description="Batched (CPU) embedding of image files with a re-ID backbone; optional "
-                "central crop and test-time views (full, horizontal flip) averaged; "
-                "returns L2-normalised (n, d) array",
+    description="Batched CPU embedding of image files with a re-ID backbone, parallel "
+                "single-threaded workers, checkpoint / cache file, optional central crop and "
+                "test-time views (full, horizontal flip) averaged; returns L2-normalised (n, d)",
     requires={},
     produces={},
     auto_fix="none",
     examples=["model, tf = ov.tl.load_reid_backbone('miewid')",
-              "E = ov.tl.reid_embed(df.path, model, tf, image_root='/data', views=('full','hflip'))"],
+              "E = ov.tl.reid_embed(df.path, model, tf, image_root='/data', views=('full','hflip'), n_workers=4, cache='emb_query.npy')"],
     related=["tl.load_reid_backbone", "tl.reid_view_center"],
 )
 def reid_embed(paths: Iterable, model, transform, *, image_root: Optional[str] = None,
-               views: Sequence[str] = ("full",), crop=None, batch_size: int = 16,
-               num_threads: Optional[int] = None, log_every: int = 200,
+               views: Sequence[str] = ("full",), crop=None, batch_size: int = 8,
+               n_workers: Optional[int] = None, num_threads: Optional[int] = None,
+               cache: Optional[str] = None, log_every: int = 200,
                log: Optional[Callable[[str], None]] = print,
                return_views: bool = False):
     """Embed image files.
@@ -195,48 +198,98 @@ def reid_embed(paths: Iterable, model, transform, *, image_root: Optional[str] =
         Central crop fraction (scalar or ``(fx, fy)``) applied before the
         transform, e.g. to cut background around a centred animal.  ``None``
         keeps the full frame.  Choose it by inspecting images, not by habit.
+    n_workers
+        Batches run in this many parallel worker threads, each with ONE torch
+        thread (default: the number of CPUs available to the process, max 8).
+        On shared / container CPUs this is several times faster than one
+        multi-threaded forward pass.  ``num_threads`` instead sets torch's
+        intra-op threads for a single worker (``n_workers=1``).
+    cache
+        Optional ``.npy`` path: per-view embeddings are saved there (and
+        ``<cache>.part.npz`` checkpoints while running); an existing complete
+        cache with the same number of images is loaded instead of recomputing.
     return_views
         Also return the per-view normalised embeddings ``{view: array}``.
 
-    Embedding cost on CPU is ~0.3-1 s per image for 384-512 px backbones, so
-    embed only what is used (queries, and a few images per reference identity).
+    Cost on CPU: ~0.3-1.5 s per image per worker for 384-512 px backbones;
+    log lines report throughput.  Embed queries, plus only as many reference
+    images per identity as the time budget allows.
     """
     import os
     import torch
     from PIL import Image
 
-    if num_threads:
-        torch.set_num_threads(int(num_threads))
     paths = [str(p) for p in paths]
     views = tuple(views)
     for v in views:
         if v not in ("full", "hflip"):
             raise ValueError(f"unknown view {v!r}; use 'full' and/or 'hflip'")
-    out = {v: [] for v in views}
-    batch = {v: [] for v in views}
+    if cache and os.path.exists(cache):
+        arr = np.load(cache)
+        if arr.shape[0] == len(views) and arr.shape[1] == len(paths):
+            per_view = {v: _l2(arr[i]) for i, v in enumerate(views)}
+            emb = _l2(sum(per_view[v].astype(np.float64) for v in views))
+            if log:
+                log(f"reid_embed: loaded {cache}")
+            return (emb, per_view) if return_views else emb
+    if n_workers is None:
+        try:
+            n_cpu = len(os.sched_getaffinity(0))
+        except AttributeError:
+            n_cpu = os.cpu_count() or 1
+        n_workers = int(max(1, min(8, n_cpu)))
+    n_workers = int(max(1, n_workers))
+    if n_workers > 1:
+        torch.set_num_threads(1)
+    elif num_threads:
+        torch.set_num_threads(int(num_threads))
+
+    batches = [list(range(i, min(i + batch_size, len(paths))))
+               for i in range(0, len(paths), batch_size)]
+    results: Dict[int, Dict[str, np.ndarray]] = {}
+    part = f"{cache}.part.npz" if cache else None
+    if part and os.path.exists(part):
+        z = np.load(part)
+        done = z["done"]
+        for b in done:
+            results[int(b)] = {v: z[f"{v}_{int(b)}"] for v in views}
     t0 = time.time()
+    n_done = [sum(len(batches[b]) for b in results)]
 
-    def flush():
+    def run(bi):
+        tensors = {v: [] for v in views}
+        for j in batches[bi]:
+            full = os.path.join(image_root, paths[j]) if image_root else paths[j]
+            with Image.open(full) as im:
+                im = _central_crop(im.convert("RGB"), crop)
+                for v in views:
+                    tensors[v].append(transform(im.transpose(Image.Transpose.FLIP_LEFT_RIGHT)
+                                                if v == "hflip" else im))
         with torch.inference_mode():
-            for v in views:
-                if batch[v]:
-                    out[v].append(model(torch.stack(batch[v])).flatten(1).float().cpu().numpy())
-                    batch[v].clear()
+            return bi, {v: model(torch.stack(tensors[v])).flatten(1).float().cpu().numpy()
+                        for v in views}
 
-    for i, p in enumerate(paths, 1):
-        full = os.path.join(image_root, p) if image_root else p
-        with Image.open(full) as im:
-            im = _central_crop(im.convert("RGB"), crop)
-            for v in views:
-                batch[v].append(transform(im.transpose(Image.Transpose.FLIP_LEFT_RIGHT)
-                                          if v == "hflip" else im))
-        if len(batch[views[0]]) >= batch_size:
-            flush()
-        if log and log_every and (i % log_every == 0 or i == len(paths)):
-            log(f"reid_embed: {i}/{len(paths)} images, {time.time() - t0:.0f}s")
-    flush()
-    per_view = {v: _l2(np.concatenate(out[v])) if out[v] else np.zeros((0, 0), np.float32)
-                for v in views}
+    todo = [b for b in range(len(batches)) if b not in results]
+    last_log, last_ckpt = 0, time.time()
+    with ThreadPoolExecutor(max_workers=n_workers) as ex:
+        for bi, res in ex.map(run, todo):
+            results[bi] = res
+            n_done[0] += len(batches[bi])
+            if log and log_every and (n_done[0] - last_log >= log_every or n_done[0] == len(paths)):
+                last_log = n_done[0]
+                el = time.time() - t0
+                log(f"reid_embed: {n_done[0]}/{len(paths)} images, {el:.0f}s, "
+                    f"{el / max(n_done[0], 1):.2f} s/img ({n_workers} workers)")
+            if part and time.time() - last_ckpt > 120:
+                last_ckpt = time.time()
+                np.savez(part, done=np.array(sorted(results)),
+                         **{f"{v}_{b}": r[v] for b, r in results.items() for v in views})
+    per_view = {v: _l2(np.concatenate([results[b][v] for b in range(len(batches))]))
+                if batches else np.zeros((0, 0), np.float32) for v in views}
+    if cache:
+        np.save(cache, np.stack([per_view[v] for v in views]))
+        if part and os.path.exists(part):
+            os.remove(part)
     emb = _l2(sum(per_view[v].astype(np.float64) for v in views))
     return (emb, per_view) if return_views else emb
 
@@ -546,6 +599,115 @@ def reid_pair_auc(sim: np.ndarray, labels) -> float:
     return float(roc_auc_score(same, sim[iu]))
 
 
+@register_function(
+    aliases=["度量学习投影", "LDA 投影", "reference-supervised projection", "metric adaptation",
+             "linear discriminant re-identification"],
+    category="tl",
+    description="Fit a supervised linear projection (PCA + shrinkage LDA) on labelled "
+                "reference embeddings so cosine similarity separates individuals better; "
+                "reports held-out-identity pair AUC before / after so it is only used when it "
+                "generalises to unseen individuals",
+    requires={},
+    produces={},
+    auto_fix="none",
+    examples=["pj = ov.tl.reid_fit_projection(Eg, g.identity)",
+              "Pq, Pg, Po = pj['transform'](Eq), pj['transform'](Eg), pj['reference_oof']",
+              "res = ov.tl.reid_open_set_cluster(Pq @ Pq.T, sim_qg=Pq @ Pg.T, gallery_labels=g.identity, sim_gg=Po @ Po.T)"],
+    related=["tl.reid_open_set_cluster", "tl.reid_pair_auc"],
+)
+def reid_fit_projection(emb: np.ndarray, labels, *, n_pca: int = 256,
+                        n_components: Optional[int] = None, shrinkage: float = 0.5,
+                        heldout_fraction: float = 0.3, n_folds: int = 5,
+                        weighted: bool = False,
+                        seed: int = 0) -> Dict:
+    """Reference-supervised linear metric for re-ID embeddings.
+
+    Frozen re-ID backbones are trained on other populations; a linear
+    discriminant fitted on the labelled reference of *this* population
+    re-weights the embedding toward the features that distinguish its
+    individuals (no backbone training, seconds on CPU).
+
+    Validation: identities are split; the projection fitted on
+    ``1 - heldout_fraction`` of them is scored by same-vs-different pair AUC on
+    the held-out identities (unseen individuals, like new animals among the
+    queries).  Use the projection only if ``heldout_auc_proj`` beats
+    ``heldout_auc_raw``.  The returned ``transform`` is refitted on all
+    reference identities and maps any (n, d) embedding to L2-normalised
+    projected coordinates.  ``reference_oof`` holds cross-fitted coordinates
+    of the reference images (``n_folds`` folds by identity): pass
+    ``sim_gg = oof @ oof.T`` to :func:`reid_open_set_cluster` so its
+    simulation is not fooled by in-sample separation, and
+    ``sim_qg = transform(Eq) @ transform(Eg).T`` for the real queries.
+    ``weighted=True`` scales each discriminant axis by the square root of its
+    explained-variance share (down-weights weak axes).
+
+    Needs identities with >= 2 images; the within-identity scatter is poorly
+    estimated when most identities have only one or two images
+    (``median_images_per_identity``), and then the projection tends to
+    over-merge -- compare the open-set result with and without it.
+    """
+    from sklearn.decomposition import PCA
+    from sklearn.discriminant_analysis import LinearDiscriminantAnalysis
+
+    x = _l2(emb)
+    y = np.asarray(labels).astype(str)
+    counts = pd.Series(y).value_counts()
+    multi = counts.index[counts >= 2]
+    if len(multi) < 3:
+        raise ValueError("need >= 3 reference identities with >= 2 images")
+
+    n_f = int(max(2, min(n_folds, len(multi))))
+    nc_all = int(min(n_components or 10 ** 9, n_pca, x.shape[1],
+                     len(multi) - int(np.ceil(max(len(multi) / n_f, heldout_fraction * len(multi)))) - 1))
+    if nc_all < 1:
+        raise ValueError("too few reference identities for a projection")
+
+    def fit(xx, yy):
+        p = PCA(n_components=int(min(n_pca, len(xx) - 1, xx.shape[1])), random_state=seed).fit(xx)
+        nc = int(min(nc_all, len(np.unique(yy)) - 1, p.n_components_))
+        lda = LinearDiscriminantAnalysis(solver="eigen", shrinkage=shrinkage,
+                                         n_components=nc).fit(p.transform(xx), yy)
+        # weight discriminant axes by their between/within variance share so
+        # weak axes (noise) do not count as much as strong ones in the cosine
+        w = np.sqrt(np.maximum(lda.explained_variance_ratio_[:nc], 0.0)) if weighted else 1.0
+        return lambda z: _l2(lda.transform(p.transform(_l2(z)))[:, :nc] * w)
+
+    rng = np.random.default_rng(seed)
+    ids = rng.permutation(np.asarray(multi))
+    n_ho = max(2, int(round(heldout_fraction * len(ids))))
+    ho, tr = set(ids[:n_ho]), set(ids[n_ho:])
+    mtr = np.isin(y, list(tr)) & np.isin(y, multi)
+    mho = np.isin(y, list(ho))
+    auc_raw = auc_proj = float("nan")
+    if mtr.sum() > 3 and len(tr) >= 2 and mho.sum() > 3:
+        f = fit(x[mtr], y[mtr])
+        xh = x[mho]
+        auc_raw = reid_pair_auc(xh @ xh.T, y[mho])
+        ph = f(xh)
+        auc_proj = reid_pair_auc(ph @ ph.T, y[mho])
+    keep = np.isin(y, multi)
+    # cross-fitted reference coordinates: every image projected by a model that
+    # never saw its identity -> honest gallery x gallery similarities for the
+    # open-set simulation (in-sample LDA coordinates make identities trivially
+    # separable and the simulated cuts meaningless).
+    all_ids = rng.permutation(np.unique(y))
+    folds = np.array_split(all_ids, n_f)
+    oof = None
+    for fold in folds:
+        m_out = np.isin(y, fold)
+        m_in = keep & ~m_out
+        if m_in.sum() < 3 or len(np.unique(y[m_in])) < 2:
+            continue
+        z = fit(x[m_in], y[m_in])(x[m_out])
+        if oof is None:
+            oof = np.zeros((len(x), z.shape[1]), dtype=np.float32)
+        oof[m_out] = z
+    return {"transform": fit(x[keep], y[keep]), "reference_oof": oof,
+            "heldout_auc_raw": auc_raw, "heldout_auc_proj": auc_proj,
+            "n_identities": int(len(multi)),
+            "median_images_per_identity": float(np.median(counts))}
+
+
 # ── clustering with a chosen cut ─────────────────────────────────────────────
 
 def _cluster_at(sim, threshold, method, linkage, Z=None):
@@ -688,58 +850,84 @@ def reid_select_threshold(sim: np.ndarray, labels, *, method: str = "agglomerati
             "abundance_error": float(best.abundance_error), "table": tab}
 
 
-def _identity_scores(sim_qg, g_labels, top_k):
+def _identity_score_matrix(sim_qg, g_labels, top_k):
+    """(n_query, n_identities) score = mean of the top_k gallery similarities."""
     names = np.unique(g_labels)
     sc = np.empty((sim_qg.shape[0], len(names)))
     for c, nm in enumerate(names):
         v = sim_qg[:, g_labels == nm]
         k = min(top_k, v.shape[1])
-        sc[:, c] = np.sort(v, axis=1)[:, -k:].mean(axis=1)
-    order = np.argsort(-sc, axis=1)
-    r = np.arange(len(sc))
-    second = sc[r, order[:, 1]] if len(names) > 1 else np.full(len(sc), -np.inf)
-    return names[order[:, 0]], sc[r, order[:, 0]], sc[r, order[:, 0]] - second
+        sc[:, c] = np.partition(v, v.shape[1] - k, axis=1)[:, -k:].mean(axis=1) if k else -np.inf
+    return names, sc
 
 
-def _attach(sim_qg, g_labels, t_attach, top_k, n):
-    lab = np.full(n, "", dtype=object)
-    if sim_qg is not None and t_attach is not None and np.isfinite(t_attach):
-        nm, sc, _ = _identity_scores(sim_qg, g_labels, top_k)
-        att = sc >= t_attach
-        lab[att] = ["g:" + str(x) for x in nm[att]]
-    return lab
+def _cluster_queries(s, method, linkage, t_clusters):
+    """One clustering per cut (HDBSCAN: one clustering, reused)."""
+    n = len(s)
+    if n == 1:
+        return [np.zeros(1, dtype=int)] * len(t_clusters)
+    if method == "hdbscan":
+        cl = _hdbscan(s) if n > 2 else np.arange(n)
+        return [cl] * len(t_clusters)
+    Z = _linkage(s, linkage) if method == "agglomerative" else None
+    return [_cluster_at(s, t, method, linkage, Z) for t in t_clusters]
 
 
-def _open_set_labels_multi(sim_qq, sim_qg, g_labels, t_attach, t_clusters, method, linkage,
-                           top_k, must_link=None):
-    """Labels for one attach cut and several clustering cuts (one linkage)."""
-    n = len(sim_qq)
-    base = _attach(sim_qg, g_labels, t_attach, top_k, n)
+def _labels_cluster_attach(cl, sc, names, a):
+    """Attach whole clusters: a cluster takes the identity with the best mean
+    member score if that score >= a; clusters given the same identity merge."""
+    lab = np.array(["n:%d" % c for c in cl], dtype=object)
+    if sc is None or a is None or not np.isfinite(a):
+        return lab.astype(str)
+    uc, inv = np.unique(cl, return_inverse=True)
+    sums = np.zeros((len(uc), sc.shape[1]))
+    np.add.at(sums, inv, sc)
+    means = sums / np.bincount(inv)[:, None]
+    best = means.argmax(axis=1)
+    ok = means[np.arange(len(uc)), best] >= a
+    for j in np.flatnonzero(ok):
+        lab[inv == j] = "g:" + str(names[best[j]])
+    return lab.astype(str)
+
+
+def _labels_image_attach(s, sc, names, a, method, linkage, t_clusters, must_link):
+    n = len(s)
+    base = np.full(n, "", dtype=object)
+    if sc is not None and a is not None and np.isfinite(a):
+        b = sc.argmax(axis=1)
+        att = sc[np.arange(n), b] >= a
+        base[att] = ["g:" + str(x) for x in names[b[att]]]
     rest = np.flatnonzero(base == "")
     if len(rest) == 0:
         return [base.astype(str)] * len(t_clusters)
-    s = sim_qq[np.ix_(rest, rest)]
+    sr = s[np.ix_(rest, rest)]
     if must_link is not None:
-        s = _apply_must_link(s, must_link, rest)
+        sr = _apply_must_link(sr, must_link, rest)
     outs = []
-    if method == "hdbscan":
-        cl = _hdbscan(s) if len(rest) > 2 else np.arange(len(rest))
+    for cl in _cluster_queries(sr, method, linkage, t_clusters):
         lab = base.copy()
-        lab[rest] = ["n:" + str(c) for c in cl]
-        return [lab.astype(str)] * len(t_clusters)
-    Z = _linkage(s, linkage) if (method == "agglomerative" and len(rest) > 1) else None
-    for t in t_clusters:
-        cl = _cluster_at(s, t, method, linkage, Z)
-        lab = base.copy()
-        lab[rest] = ["n:" + str(c) for c in cl]
+        lab[rest] = ["n:%d" % c for c in cl]
         outs.append(lab.astype(str))
     return outs
 
 
-def _open_set_labels(sim_qq, sim_qg, g_labels, t_attach, t_cluster, method, linkage, top_k,
-                     must_link=None):
-    return _open_set_labels_multi(sim_qq, sim_qg, g_labels, t_attach, [t_cluster], method,
-                                  linkage, top_k, must_link)[0]
+def _open_set_grid(s, sc, names, t_grid, a_grid, method, linkage, attach_mode, must_link=None):
+    """Yield (a, t, labels) over the grid."""
+    if attach_mode == "cluster":
+        ss = _apply_must_link(s, must_link, np.arange(len(s))) if must_link else s
+        cls = _cluster_queries(ss, method, linkage, t_grid)
+        for t, cl in zip(t_grid, cls):
+            for a in a_grid:
+                yield a, t, _labels_cluster_attach(cl, sc, names, a)
+            if method == "hdbscan":
+                break
+    else:
+        for a in a_grid:
+            labs = _labels_image_attach(s, sc, names, a, method, linkage, t_grid, must_link)
+            for t, lab in zip(t_grid, labs):
+                yield a, t, lab
+                if method == "hdbscan":
+                    break
 
 
 def _apply_must_link(s, must_link, idx):
@@ -753,17 +941,52 @@ def _apply_must_link(s, must_link, idx):
     return s
 
 
+def _simulate_split(g_lab, rng, n_query, per_id, unknown_fraction):
+    """Pseudo-query / pseudo-gallery split of the labelled reference that mimics
+    the real query set: about ``n_query`` images, about ``per_id`` images per
+    individual, a share ``unknown_fraction`` of the individuals absent from the
+    gallery.  Known individuals keep at least half of their images in the gallery."""
+    ids = rng.permutation(np.unique(g_lab))
+    by_id = {i: rng.permutation(np.flatnonzero(g_lab == i)) for i in ids}
+    q, unknown = [], set()
+    n_target = n_query if n_query else len(g_lab) // 2
+    total, n_unk_seen, n_seen = 0, 0, 0
+    for i in ids:
+        idx = by_id[i]
+        want_unknown = (n_unk_seen < unknown_fraction * (n_seen + 1))
+        if want_unknown:
+            take = idx[:max(1, int(round(per_id)))] if per_id else idx
+            unknown.add(i)
+            n_unk_seen += 1
+        else:
+            if len(idx) < 2:
+                continue
+            # known individuals keep at least half of their images in the gallery
+            k = min(int(round(per_id)) if per_id else len(idx), len(idx) // 2)
+            take = idx[:max(1, k)]
+        q.extend(take)
+        n_seen += 1
+        total += len(take)
+        if total >= n_target:
+            break
+    q = np.array(q, dtype=int)
+    qset = set(q.tolist())
+    g = np.array([j for j in range(len(g_lab)) if j not in qset and g_lab[j] not in unknown],
+                 dtype=int)
+    return q, g
+
+
 @register_function(
     aliases=["开集个体识别聚类", "个体发现", "种群数量估计", "open-set re-identification",
              "individual discovery clustering", "photo-ID clustering", "abundance from images",
              "animal re-identification clustering"],
     category="tl",
-    description="Open-set individual re-identification: attach queries to labelled gallery "
-                "identities when their identity score clears an attach cut, cluster the "
-                "remaining queries on the (fused) similarity graph (agglomerative / DBSCAN / "
-                "components / HDBSCAN-leaf), optional must-link pairs from geometric "
-                "verification; both cuts chosen from data (simulation on the labelled "
-                "reference, or verified pairs as pseudo-labels when there is no reference)",
+    description="Open-set individual re-identification: cluster query images on the (fused) "
+                "similarity graph and attach clusters (or single images) to labelled gallery "
+                "identities; cuts, method and attach rule chosen from data -- simulation on "
+                "the labelled reference matched to the real query set (size, images per "
+                "individual, share of new individuals; iterated to a fixed point), verified "
+                "pairs as pseudo-labels without a reference, or HDBSCAN-leaf",
     requires={},
     produces={},
     auto_fix="none",
@@ -772,191 +995,253 @@ def _apply_must_link(s, must_link, idx):
         "res = ov.tl.reid_open_set_cluster(S, verified=ver)   # no reference: verified pairs calibrate the cut",
         "pd.DataFrame({'image_id': q.image_id, 'identity': res['labels']})",
     ],
-    related=["tl.reid_select_threshold", "tl.reid_local_verify", "tl.reid_fuse_similarity"],
+    related=["tl.reid_fit_projection", "tl.reid_local_verify", "tl.reid_fuse_similarity"],
 )
 def reid_open_set_cluster(sim_qq: np.ndarray, *, sim_qg: Optional[np.ndarray] = None,
                           gallery_labels=None, sim_gg: Optional[np.ndarray] = None,
                           threshold: Union[str, float] = "auto",
                           attach_threshold: Union[str, float, None] = "auto",
                           method: str = "auto", linkage: str = "average",
-                          top_k: int = 2, abundance_weight: float = 0.0, verified: Optional[pd.DataFrame] = None,
-                          must_link_verified: bool = True, unknown_fraction: float = 0.5,
-                          n_rep: int = 5, grid: Optional[Sequence[float]] = None,
+                          attach_mode: str = "auto", top_k: int = 2,
+                          abundance_weight: float = 0.25,
+                          unknown_fraction: Union[str, float] = "auto",
+                          images_per_identity: Union[str, float, None] = "auto",
+                          n_iter: int = 1, n_rep: int = 4,
+                          verified: Optional[pd.DataFrame] = None,
+                          must_link_verified: bool = True,
+                          grid: Optional[Sequence[float]] = None,
                           seed: int = 0, prefix: str = "id",
                           log: Optional[Callable[[str], None]] = print) -> Dict:
-    """Partition query images into individuals.
+    """Partition query images into individuals (labels; #labels = abundance).
 
     Parameters
     ----------
     sim_qq
-        Query x query similarity (cosine or fused).
-    sim_qg, gallery_labels
-        Query x gallery similarity and gallery identities (optional).  A query
-        whose best identity score (mean of its ``top_k`` most similar gallery
-        images of that identity) is >= ``attach_threshold`` gets that identity;
-        queries attached to the same identity share a label.
-    sim_gg
-        Gallery x gallery similarity, needed for ``"auto"`` cuts with a
-        gallery.  It must be computed with the same descriptor / fusion as
-        ``sim_qq`` so the cuts transfer.
+        Query x query similarity (cosine of L2-normalised embeddings, or fused).
+    sim_qg, gallery_labels, sim_gg
+        Query x gallery similarity, gallery identities and gallery x gallery
+        similarity, all from the same descriptor / projection as ``sim_qq``.
+        With them every cut is calibrated on the labelled gallery.
     threshold, attach_threshold
-        Floats on the similarity scale, or ``"auto"``.  ``attach_threshold=None``
-        disables gallery attachment.
-        With a labelled gallery, ``"auto"`` simulates the open-set problem on
-        it: a share ``unknown_fraction`` of identities is hidden (their images
-        become pseudo-queries that must form new clusters); of the remaining
-        identities half the images are pseudo-queries and half stay in the
-        gallery; the pair of cuts with the best mean ARI over ``n_rep``
-        repetitions is used.  Without a gallery but with ``verified`` pairs
-        (from :func:`reid_local_verify`), accepted pairs are positives and
-        rejected candidates negatives, and the cut that best reproduces them
-        (pairwise F1 of "same cluster") is used.  Without either, the cut is
-        the valley between the two modes of nearest-neighbour similarities
-        (2-component Gaussian mixture).
+        Floats on the similarity scale or ``"auto"``.  ``attach_threshold=None``
+        disables attachment to known identities.
     method
-        ``"auto"`` (default), ``"agglomerative"`` (``linkage`` average /
-        complete / single), ``"dbscan"``, ``"components"`` or ``"hdbscan"``
-        (leaf selection, min_cluster_size 2; no threshold, suited to many
-        identities with one or two images each).  ``"auto"``: with a labelled
-        gallery, agglomerative and HDBSCAN are both simulated and the better
-        one is used; with verified pairs, agglomerative; otherwise HDBSCAN.
+        ``"auto"`` (simulate agglomerative and HDBSCAN-leaf, keep the better),
+        ``"agglomerative"`` (``linkage`` average / complete / single),
+        ``"hdbscan"`` (no cut; many individuals with one or two images),
+        ``"dbscan"`` or ``"components"``.
+    attach_mode
+        ``"cluster"``: cluster all queries first, then a whole cluster takes a
+        gallery identity when its members' mean identity score clears the attach
+        cut (robust when individuals have many query images); ``"image"``:
+        attach single images first and cluster the rest; ``"auto"``: simulate
+        both.
+    top_k
+        Identity score = mean of the ``top_k`` most similar gallery images of
+        that identity.
     abundance_weight
         Simulation objective = ARI - ``abundance_weight`` x relative error of
-        the number of clusters (0 = ARI only).
+        the number of individuals; > 0 penalises over-splitting into
+        singletons, which barely moves ARI but inflates abundance.
+    unknown_fraction, images_per_identity, n_iter
+        Shape of the simulated query set, which always has as many images as
+        the real query set.  ``"auto"``: half of the simulated individuals are
+        new, and each contributes up to the gallery's mean images per
+        identity (at least 2, so merges are tested).  Pass numbers when you know better (e.g. survey design).
+        ``n_iter > 1`` re-simulates with the share of unattached individuals
+        and the images per individual of the previous real result (at least
+        2 images per individual are kept so the simulation stays informative).
     verified, must_link_verified
-        Accepted verified pairs are forced together before clustering.
+        Pairs from :func:`reid_local_verify`.  Accepted pairs are forced into
+        the same cluster.  Without a gallery, the method (agglomerative /
+        HDBSCAN with ``method="auto"``) and cut are chosen by cross-validation
+        on the verified pairs: half of the accepted pairs are forced together,
+        the partition is scored by pairwise F1 on the other half (positives)
+        and on the rejected candidates (negatives) (``mode='verified-pairs'``).
+    grid
+        Candidate cuts (default: 41 quantiles of the similarities).
 
     Returns
     -------
-    dict: ``labels`` (str per query, ``prefix``-numbered), ``threshold``,
-    ``attach_threshold``, ``n_attached``, ``n_clusters``, ``calibration``
-    (table or None) and ``mode`` (how the cuts were chosen).
+    dict: ``labels``, ``threshold``, ``attach_threshold``, ``method``,
+    ``attach_mode``, ``n_attached``, ``n_clusters``, ``mode``,
+    ``calibration`` (simulated ARI / abundance error per setting, last
+    iteration) and ``history`` (one row per fixed-point iteration).
     """
     sim_qq = _check_square(sim_qq, "sim_qq")
     n = len(sim_qq)
     have_g = sim_qg is not None and gallery_labels is not None
     g_lab = np.asarray(gallery_labels).astype(str) if have_g else None
+    names = sc_q = None
     if have_g:
         sim_qg = np.asarray(sim_qg, dtype=np.float64)
         if sim_qg.shape != (n, len(g_lab)):
             raise ValueError("sim_qg must be (n_query, n_gallery)")
+        names, sc_q = _identity_score_matrix(sim_qg, g_lab, top_k)
     else:
         attach_threshold = None
     must = None
     if verified is not None and must_link_verified and "accepted" in verified:
-        acc = verified[verified["accepted"]]
+        acc = verified[verified["accepted"].astype(bool)]
         must = list(zip(acc["first"].astype(int), acc["second"].astype(int)))
-    calib, mode = None, "given"
+    calib, history, mode = None, [], "given"
     rng = np.random.default_rng(seed)
-
     auto_t = isinstance(threshold, str)
     auto_a = isinstance(attach_threshold, str)
+    methods = ["agglomerative", "hdbscan"] if method == "auto" else [method]
+    modes = ["cluster", "image"] if attach_mode == "auto" else [attach_mode]
+    if not have_g:
+        modes = ["image"]
+
+    def _finish(lab, t, a, meth, amode):
+        codes = _relabel(lab)
+        labels = np.array([f"{prefix}_{c}" for c in codes], dtype=object)
+        return labels, int(sum(str(x).startswith("g:") for x in lab)), int(len(np.unique(codes)))
+
     if (auto_t or auto_a) and have_g and sim_gg is not None:
         mode = "reference-simulation"
         sim_gg = _check_square(sim_gg, "sim_gg")
         tgrid = _default_grid(sim_gg) if grid is None else np.asarray(grid, float)
-        agrid = np.append(tgrid, np.inf) if auto_a else \
-            np.array([attach_threshold if attach_threshold is not None else np.inf])
         if not auto_t:
             tgrid = np.array([float(threshold)])
-        methods = ["agglomerative", "hdbscan"] if method == "auto" else [method]
-        ids = np.unique(g_lab)
-        rows = []
-        for rep in range(max(1, int(n_rep))):
-            perm = rng.permutation(ids)
-            n_unk = int(round(unknown_fraction * len(ids)))
-            unknown = set(perm[:n_unk])
-            q_idx, g_idx = [], []
-            for i in ids:
-                idx = rng.permutation(np.flatnonzero(g_lab == i))
-                if i in unknown:
-                    q_idx.extend(idx)
-                elif len(idx) == 1:
-                    g_idx.extend(idx)
-                else:
-                    h = len(idx) // 2
-                    q_idx.extend(idx[:h])
-                    g_idx.extend(idx[h:])
-            q_idx, g_idx = np.array(q_idx), np.array(g_idx)
-            if len(q_idx) < 2 or len(g_idx) < 1:
-                continue
-            sq = sim_gg[np.ix_(q_idx, q_idx)]
-            sg = sim_gg[np.ix_(q_idx, g_idx)]
-            yq = g_lab[q_idx]
-            k_true = len(np.unique(yq))
-            for meth in methods:
-                tg = tgrid[:1] if meth == "hdbscan" else tgrid
-                for a in agrid:
-                    labs = _open_set_labels_multi(sq, sg, g_lab[g_idx], a, tg, meth, linkage, top_k)
-                    for t, lab in zip(tg, labs):
-                        rows.append((rep, meth, float(a), float(t) if meth != "hdbscan" else np.nan,
-                                     _ari(yq, lab), abs(len(np.unique(lab)) - k_true) / k_true))
-        calib = pd.DataFrame(rows, columns=["rep", "method", "attach_threshold", "threshold",
-                                            "ari", "abundance_error"])
-        calib = calib.groupby(["method", "attach_threshold", "threshold"], as_index=False,
-                              dropna=False)[["ari", "abundance_error"]].mean()
-        calib["objective"] = calib["ari"] - abundance_weight * calib["abundance_error"]
-        best = calib.loc[calib["objective"].idxmax()]
-        method = str(best.method)
-        if auto_a:
-            attach_threshold = float(best.attach_threshold)
-        if auto_t and method != "hdbscan":
-            threshold = float(best.threshold)
-    elif auto_t and method in ("auto", "agglomerative", "components", "dbscan") \
-            and verified is not None and len(verified):
-        mode = "verified-pairs"
-        method = "agglomerative" if method == "auto" else method
-        threshold, calib = _threshold_from_verified(sim_qq, verified, method, linkage,
-                                                    must if must_link_verified else None, grid)
-    elif auto_t and method == "auto":
-        mode = "hdbscan"
-        method = "hdbscan"
-    elif auto_t and method != "hdbscan":
-        mode = "nn-mixture"
-        threshold = _threshold_from_nn_mixture(sim_qq)
-    if isinstance(attach_threshold, str):
-        attach_threshold = None
-    if isinstance(threshold, str):
-        threshold = float("nan")
-    if method == "auto":
-        method = "agglomerative" if np.isfinite(threshold) else "hdbscan"
+        agrid = np.append(tgrid, np.inf) if auto_a else \
+            np.array([attach_threshold if attach_threshold is not None else np.inf])
+        counts = pd.Series(g_lab).value_counts()
+        u = 0.5 if isinstance(unknown_fraction, str) else float(unknown_fraction)
+        m_img = max(2.0, float(np.mean(counts))) if isinstance(images_per_identity, str) or \
+            images_per_identity is None else float(images_per_identity)
+        iters = max(1, int(n_iter)) if (isinstance(unknown_fraction, str)
+                                        or isinstance(images_per_identity, str)) else 1
+        for it in range(iters):
+            rows = []
+            for rep in range(max(1, int(n_rep))):
+                q_idx, g_idx = _simulate_split(g_lab, rng, n, m_img, u)
+                if len(q_idx) < 2 or len(g_idx) < 1:
+                    continue
+                sq = sim_gg[np.ix_(q_idx, q_idx)]
+                yq = g_lab[q_idx]
+                nm_s, sc_s = _identity_score_matrix(sim_gg[np.ix_(q_idx, g_idx)], g_lab[g_idx], top_k)
+                k_true = len(np.unique(yq))
+                for meth in methods:
+                    for amode in modes:
+                        for a, t, lab in _open_set_grid(sq, sc_s, nm_s, tgrid, agrid, meth,
+                                                        linkage, amode):
+                            rows.append((rep, meth, amode, float(a),
+                                         float(t) if meth != "hdbscan" else np.nan,
+                                         _ari(yq, lab),
+                                         abs(len(np.unique(lab)) - k_true) / k_true))
+            calib = pd.DataFrame(rows, columns=["rep", "method", "attach_mode", "attach_threshold",
+                                                "threshold", "ari", "abundance_error"])
+            calib = calib.groupby(["method", "attach_mode", "attach_threshold", "threshold"],
+                                  as_index=False, dropna=False)[["ari", "abundance_error"]].mean()
+            calib["objective"] = calib["ari"] - abundance_weight * calib["abundance_error"]
+            best = calib.loc[calib["objective"].idxmax()]
+            b_meth, b_mode = str(best.method), str(best.attach_mode)
+            b_a = float(best.attach_threshold) if auto_a else attach_threshold
+            b_t = float(best.threshold) if (auto_t and b_meth != "hdbscan") else \
+                (float(threshold) if not auto_t else float("nan"))
+            lab = next(iter(_open_set_grid(sim_qq, sc_q, names, [b_t], [b_a if b_a is not None
+                                                                       else np.inf],
+                                           b_meth, linkage, b_mode, must)))[2]
+            k_pred = len(np.unique(lab))
+            k_known = len({x for x in lab if x.startswith("g:")})
+            history.append({"iter": it, "unknown_fraction": u, "images_per_identity": m_img,
+                            "method": b_meth, "attach_mode": b_mode, "threshold": b_t,
+                            "attach_threshold": b_a, "sim_ari": float(best.ari),
+                            "sim_abundance_error": float(best.abundance_error),
+                            "n_clusters": k_pred, "n_known": k_known})
+            if log:
+                log(f"reid_open_set_cluster: iter {it} sim(u={u:.2f}, m={m_img:.1f}) -> "
+                    f"{b_meth}/{b_mode} t={b_t:.3f} a={b_a} simARI={best.ari:.3f} "
+                    f"simAbErr={best.abundance_error:.2f}; real: {k_pred} individuals, "
+                    f"{k_known} known")
+            new_u = u if not isinstance(unknown_fraction, str) else \
+                float(np.clip(1.0 - k_known / max(k_pred, 1), 0.05, 0.95))
+            new_m = m_img if not isinstance(images_per_identity, str) else \
+                float(max(2.0, n / max(k_pred, 1)))
+            if abs(new_m - m_img) <= 0.1 * m_img and abs(new_u - u) <= 0.05:
+                break
+            u, m_img = new_u, new_m
+        method, attach_mode = b_meth, b_mode
+        threshold, attach_threshold = b_t, b_a
+        labels, n_att, n_cl = _finish(lab, b_t, b_a, b_meth, b_mode)
+    else:
+        if auto_t and verified is not None and len(verified) \
+                and verified["accepted"].astype(bool).sum() >= 4:
+            mode = "verified-pairs"
+            meths = ["agglomerative", "hdbscan"] if method == "auto" else [method]
+            method, threshold, calib = _threshold_from_verified(sim_qq, verified, meths,
+                                                                linkage, grid)
+        elif auto_t and method in ("auto", "hdbscan"):
+            mode, method = "hdbscan", "hdbscan"
+            threshold = float("nan")
+        elif auto_t:
+            mode = "nn-mixture"
+            threshold = _threshold_from_nn_mixture(sim_qq)
+        if method == "auto":
+            method = "agglomerative"
+        if isinstance(attach_threshold, str):
+            attach_threshold = None
+        attach_mode = "cluster" if attach_mode == "auto" and have_g else \
+            ("image" if attach_mode == "auto" else attach_mode)
+        lab = next(iter(_open_set_grid(sim_qq, sc_q, names, [threshold],
+                                       [attach_threshold if attach_threshold is not None else np.inf],
+                                       method, linkage, attach_mode, must)))[2]
+        labels, n_att, n_cl = _finish(lab, threshold, attach_threshold, method, attach_mode)
+
     if attach_threshold is not None and not np.isfinite(attach_threshold):
         attach_threshold = None
-
-    lab = _open_set_labels(sim_qq, sim_qg if have_g else None, g_lab, attach_threshold,
-                           threshold, method, linkage, top_k, must_link=must)
-    codes = _relabel(lab)
-    labels = np.array([f"{prefix}_{c}" for c in codes], dtype=object)
-    n_att = int(sum(str(x).startswith("g:") for x in lab))
     out = {"labels": labels, "threshold": threshold, "attach_threshold": attach_threshold,
-           "n_attached": n_att, "n_clusters": int(len(np.unique(codes))),
-           "calibration": calib, "mode": mode}
+           "method": method, "attach_mode": attach_mode, "n_attached": n_att,
+           "n_clusters": n_cl, "calibration": calib, "mode": mode,
+           "history": pd.DataFrame(history) if history else None}
     if log:
-        log(f"reid_open_set_cluster: mode={mode} threshold={threshold} "
-            f"attach_threshold={attach_threshold} attached={n_att}/{n} clusters={out['n_clusters']}")
+        log(f"reid_open_set_cluster: mode={mode} method={method}/{attach_mode} "
+            f"threshold={threshold} attach_threshold={attach_threshold} "
+            f"attached={n_att}/{n} individuals={n_cl}")
     return out
 
 
-def _threshold_from_verified(sim, verified, method, linkage, must, grid):
-    """Cut that best reproduces verified-accepted (positive) and rejected
-    (negative) candidate pairs as same / different cluster (pairwise F1)."""
+def _threshold_from_verified(sim, verified, methods, linkage, grid, n_folds=2, seed=0):
+    """Choose method / cut by cross-validated agreement with verified pairs.
+
+    Accepted pairs are split into folds; one fold is forced together
+    (must-link), the clustering is scored by pairwise F1 against the held-out
+    accepted pairs (positives) and the rejected candidate pairs (negatives).
+    Returns (method, threshold, table)."""
     a = verified["first"].astype(int).to_numpy()
     b = verified["second"].astype(int).to_numpy()
     y = verified["accepted"].to_numpy(bool)
     grid = _default_grid(sim) if grid is None else np.asarray(grid, float)
-    s = _apply_must_link(sim, must, np.arange(len(sim))) if must else sim
-    Z = _linkage(s, linkage) if method == "agglomerative" else None
+    rng = np.random.default_rng(seed)
+    pos = np.flatnonzero(y)
+    fold = rng.integers(0, n_folds, size=len(pos)) if len(pos) else np.zeros(0, int)
     rows = []
-    for t in grid:
-        lab = _cluster_at(s, t, method, linkage, Z)
-        same = lab[a] == lab[b]
-        tp = np.sum(same & y)
-        fp = np.sum(same & ~y)
-        fn = np.sum(~same & y)
-        f1 = 2 * tp / max(2 * tp + fp + fn, 1)
-        rows.append((float(t), f1, int(tp), int(fp), int(fn), len(np.unique(lab))))
-    tab = pd.DataFrame(rows, columns=["threshold", "f1", "tp", "fp", "fn", "n_clusters"])
-    return float(tab.loc[tab["f1"].idxmax(), "threshold"]), tab
+    for f in range(n_folds):
+        train = pos[fold != f]
+        test_pos = np.zeros(len(y), bool)
+        test_pos[pos[fold == f]] = True
+        evalm = test_pos | ~y
+        s = _apply_must_link(sim, list(zip(a[train], b[train])), np.arange(len(sim))) \
+            if len(train) else sim
+        for meth in methods:
+            labs = _cluster_queries(s, meth, linkage, grid)
+            for t, lab in zip(grid, labs):
+                same = lab[a] == lab[b]
+                tp = np.sum(same & test_pos)
+                fp = np.sum(same & ~y)
+                fn = np.sum(~same & test_pos)
+                rows.append((f, meth, float(t) if meth != "hdbscan" else np.nan,
+                             2 * tp / max(2 * tp + fp + fn, 1), int(tp), int(fp), int(fn),
+                             len(np.unique(lab))))
+                if meth == "hdbscan":
+                    break
+    tab = pd.DataFrame(rows, columns=["fold", "method", "threshold", "f1", "tp", "fp", "fn",
+                                      "n_clusters"])
+    tab = tab.groupby(["method", "threshold"], as_index=False, dropna=False)[
+        ["f1", "tp", "fp", "fn", "n_clusters"]].mean()
+    best = tab.loc[tab["f1"].idxmax()]
+    return str(best.method), float(best.threshold), tab
 
 
 def _threshold_from_nn_mixture(sim):
