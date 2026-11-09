@@ -82,3 +82,17 @@ def test_pca_kwargs_translation():
         assert out["use_highly_variable"] is True
     else:
         assert out == {"mask_var": "highly_variable", "svd_solver": "auto"}
+
+
+def test_neighbors_kwargs_translation():
+    from omicverse.pp import _rsc_compat as rc
+    has_method = "method" in rc._params("pp.neighbors")
+    out = rc.neighbors_kwargs("umap", {"foo": 1})
+    assert "algorithm" not in out and out["foo"] == 1
+    assert out.get("method") == ("umap" if has_method else None)
+    assert rc.neighbors_kwargs("brute", {}) == {"algorithm": "brute"}
+    if has_method:
+        assert rc.neighbors_kwargs("gauss", {}) == {"method": "gauss"}
+    else:
+        with pytest.raises(ValueError):
+            rc.neighbors_kwargs("gauss", {})

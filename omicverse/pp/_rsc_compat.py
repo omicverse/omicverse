@@ -170,3 +170,28 @@ def pca_kwargs(kwargs: dict) -> dict:
         elif use_hv is False and "mask_var" not in kwargs:
             kwargs["mask_var"] = None
     return kwargs
+
+
+_CONNECTIVITY_METHODS = ("umap", "gauss", "jaccard")
+
+
+def neighbors_kwargs(method, kwargs: dict) -> dict:
+    """Map omicverse's ``neighbors(method=...)`` onto ``rsc.pp.neighbors``.
+
+    omicverse's ``method`` names the connectivity kernel ('umap' / 'gauss'),
+    which rsc calls ``method`` (from 0.14 on); rsc's ``algorithm`` is the kNN
+    search ('brute', 'cagra', 'ivfflat', ...).  A kNN algorithm name passed
+    as ``method`` is forwarded as ``algorithm``.
+    """
+    kwargs = dict(kwargs)
+    params = _params("pp.neighbors")
+    if method in _CONNECTIVITY_METHODS:
+        if "method" in params:
+            kwargs["method"] = method
+        elif method != "umap":
+            raise ValueError(
+                f"rapids-singlecell {_rsc().__version__} only computes UMAP connectivities; "
+                f"method={method!r} needs rapids-singlecell >= 0.14")
+    elif method is not None:
+        kwargs.setdefault("algorithm", method)
+    return kwargs

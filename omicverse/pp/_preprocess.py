@@ -1774,10 +1774,11 @@ def neighbors(
     else:
         print(f"{EMOJI['gpu']} Using RAPIDS GPU to calculate neighbors...")
         import rapids_singlecell as rsc
+        from . import _rsc_compat as _rscc  # any rapids-singlecell release
         rsc.pp.neighbors(adata,use_rep=use_rep,n_neighbors=n_neighbors, n_pcs=n_pcs,
-                         random_state=random_state,algorithm=method,metric=metric,
+                         random_state=random_state,metric=metric,
                          metric_kwds=metric_kwds,
-                         key_added=key_added,copy=copy,**kwargs)
+                         key_added=key_added,copy=copy,**_rscc.neighbors_kwargs(method, kwargs))
     add_reference(adata,'scanpy','neighbors with scanpy')
     note(backend=f"omicverse({settings.mode}) · method={method}",
          viz=[{"function": "ov.pl.neighbor_degree_histogram", "kwargs": {}}])
