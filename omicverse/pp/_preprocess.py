@@ -2114,28 +2114,46 @@ def leiden(
     key_added='leiden', local_iterations=100, max_levels=10, device=None, symmetrize=None,
     backend=None, **kwargs):
     '''
-    leiden clustering
+    Leiden clustering.
+
+    ``resolution`` is a number or a list of numbers.  With a list, the
+    clustering runs once per resolution in every mode: labels are written to
+    ``adata.obs[f"{key_added}_{r}"]`` and the first resolution also to
+    ``adata.obs[key_added]``.  On the CPU with ``backend='cpp'`` the
+    resolutions are clustered in parallel; the GPU modes run them one after
+    another.
     '''
     random_state = resolve_random_state(random_state)
     # A length-1 list/tuple resolution (seen from agent-generated code) would
     # otherwise crash the torch GPU path with an opaque index TypeError
     # (issue #877) and confuse scanpy / RAPIDS too. Normalise to a scalar.
-    if isinstance(resolution, (list, tuple)) and len(resolution) > 1 and settings.mode == 'cpu':
-        # Several resolutions at once: labels go to obs[f"{key_added}_{r}"];
-        # backend='cpp' clusters them in parallel.
-        from ._leiden import leiden as _leiden
-        _leiden(adata, resolution=list(resolution), random_state=random_state,
-                key_added=key_added, backend=backend, **kwargs)
-        add_reference(adata, 'leiden', 'Leiden clustering with scanpy')
-        note(backend=f"omicverse({settings.mode}) · multi-resolution")
+    if isinstance(resolution, np.ndarray):
+        resolution = resolution.tolist()
+    if isinstance(resolution, (list, tuple)) and len(resolution) > 1:
+        # Several resolutions, in every mode: labels go to obs[f"{key_added}_{r}"]
+        # and the first resolution also to obs[key_added].  On the CPU,
+        # backend='cpp' clusters them in parallel; the GPU modes run one
+        # resolution after another.
+        resolutions = [float(r) for r in resolution]
+        if settings.mode == 'cpu':
+            from ._leiden import leiden as _leiden
+            _leiden(adata, resolution=resolutions, random_state=random_state,
+                    key_added=key_added, backend=backend, **kwargs)
+            add_reference(adata, 'leiden', 'Leiden clustering with scanpy')
+            note(backend=f"omicverse({settings.mode}) · multi-resolution")
+        else:
+            for r in resolutions:
+                leiden(adata, resolution=r, random_state=random_state,
+                       key_added=f"{key_added}_{r}", local_iterations=local_iterations,
+                       max_levels=max_levels, device=device, symmetrize=symmetrize,
+                       backend=backend, **kwargs)
+        first = adata.obs[f"{key_added}_{resolutions[0]}"]
+        if key_added not in adata.obs.columns:
+            adata.obs[key_added] = first
         return
     if isinstance(resolution, (list, tuple)):
-        if len(resolution) != 1:
-            raise ValueError(
-                "ov.pp.leiden expects a single resolution value, got a "
-                f"{type(resolution).__name__} of length {len(resolution)}: "
-                f"{resolution!r}"
-            )
+        # A length-1 list/tuple (seen from agent-generated code, issue #877)
+        # would crash the torch GPU path; use the scalar.
         resolution = resolution[0]
     if settings.mode == 'cpu':
         print(f"{EMOJI['cpu']} Using Scanpy CPU Leiden...")
