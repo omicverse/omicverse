@@ -69,6 +69,11 @@ def test_scale_and_pca_match(pair):
 
 
 def test_leiden_identical_on_same_graph(pair):
+    # The exact C++ port reproduces leidenalg 0.12 (older releases differ in
+    # a few labels).
+    leidenalg = pytest.importorskip("leidenalg")
+    if tuple(int(x) for x in leidenalg.version.split(".")[:2]) < (0, 12):
+        pytest.skip(f"exact port matches leidenalg >= 0.12, found {leidenalg.version}")
     import omicverse as ov
 
     a = pair[0].copy()
