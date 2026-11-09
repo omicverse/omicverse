@@ -33,11 +33,13 @@ def resolvi(adata, *, layer="counts", spatial_key="spatial", batch_key=None,
     sizes = [adata.n_obs]
     if batch_key is not None:
         sizes = obs_column(adata, batch_key).value_counts().loc[lambda x: x > 0].to_numpy()
-    if min(sizes) <= n_neighbors + 5:
-        raise ValueError("Each spatial batch must have more than n_neighbors + 5 cells.")
+    if min(sizes) < n_neighbors + 5:
+        raise ValueError("Each spatial batch must have at least n_neighbors + 5 cells.")
     if adata.n_vars < 50:
         raise ValueError("ResolVI's empirical background prior requires at least 50 genes.")
     output_key(adata, key_added, overwrite=overwrite)
+    if key_added in (spatial_key, "X_spatial", "index_neighbor", "distance_neighbor"):
+        raise ValueError("The output key must not replace spatial coordinates or neighbors.")
     setup = kwargs_copy(setup_kwargs, reserved=("adata", "layer", "batch_key", "prepare_data", "prepare_data_kwargs"))
     model_args = kwargs_copy(model_kwargs, reserved=("adata",))
     train = kwargs_copy(train_kwargs)

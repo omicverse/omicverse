@@ -1,14 +1,10 @@
 """Boundary tests and separately selected real-backend integration checks."""
 import importlib
-from types import SimpleNamespace
 
 import anndata as ad
 import numpy as np
 import pandas as pd
 import pytest
-from scipy import sparse
-
-from omicverse import _backend_validation as validation
 
 
 @pytest.fixture
@@ -30,21 +26,22 @@ def test_real_resolvi_training():
     from scvi.external import RESOLVI
     from omicverse.space import resolvi
     rng = np.random.default_rng(51)
-    a = ad.AnnData(rng.poisson(4, (80, 60)).astype(np.float32))
+    a = ad.AnnData(rng.poisson(4, (30, 60)).astype(np.float32))
     a.layers["counts"] = a.X.copy()
-    a.obsm["spatial"] = rng.normal(size=(80, 2))
+    a.obsm["spatial"] = rng.normal(size=(a.n_obs, 2))
+    a.obs["slide"] = pd.Categorical(np.repeat(["a", "b"], 15))
     counts = a.layers["counts"].copy()
     fresh = a.copy()
     prepare = {"spatial_rep": "spatial", "n_neighbors": 10}
-    RESOLVI.setup_anndata(a, layer="counts", prepare_data=True, prepare_data_kwargs=prepare)
-    a.obsm["spatial"] = rng.normal(size=(80, 2))
+    RESOLVI.setup_anndata(a, layer="counts", batch_key="slide", prepare_data=True, prepare_data_kwargs=prepare)
+    a.obsm["spatial"] = rng.normal(size=(a.n_obs, 2))
     fresh.obsm["spatial"] = a.obsm["spatial"].copy()
-    RESOLVI.setup_anndata(fresh, layer="counts", prepare_data=True, prepare_data_kwargs=prepare)
-    model = resolvi(a, model_kwargs={"n_latent": 3, "n_hidden": 16, "mixture_k": 4},
-                    train_kwargs={"max_epochs": 1, "batch_size": 40, "accelerator": "cpu",
+    RESOLVI.setup_anndata(fresh, layer="counts", batch_key="slide", prepare_data=True, prepare_data_kwargs=prepare)
+    model = resolvi(a, batch_key="slide", model_kwargs={"n_latent": 3, "n_hidden": 16, "mixture_k": 4},
+                    train_kwargs={"max_epochs": 1, "batch_size": 15, "accelerator": "cpu",
                                   "enable_progress_bar": False})
     assert model.is_trained
-    assert a.obsm["X_resolvi"].shape == (80, 3)
+    assert a.obsm["X_resolvi"].shape == (30, 3)
     np.testing.assert_array_equal(counts, a.layers["counts"])
     np.testing.assert_array_equal(a.obsm["index_neighbor"], fresh.obsm["index_neighbor"])
     np.testing.assert_allclose(a.obsm["distance_neighbor"], fresh.obsm["distance_neighbor"])
@@ -56,3 +53,14 @@ def test_resolvi_validates_before_import(data):
         resolvi(data)
     with pytest.raises(ValueError, match="n_neighbors"):
         resolvi(data, n_neighbors=2)
+
+
+@pytest.mark.parametrize("key", ["spatial", "X_spatial", "index_neighbor", "distance_neighbor"])
+def test_resolvi_rejects_output_key_that_overwrites_spatial_data(key, monkeypatch):
+    module = importlib.import_module("omicverse.space._resolvi")
+    monkeypatch.setattr(module, "import_optional_module", lambda *a, **k: pytest.fail("Backend loaded"))
+    a = ad.AnnData(np.ones((20, 60)))
+    a.layers["counts"] = a.X.copy()
+    a.obsm["spatial"] = np.zeros((20, 2))
+    with pytest.raises(ValueError, match="spatial"):
+        module.resolvi(a, key_added=key, overwrite=True)

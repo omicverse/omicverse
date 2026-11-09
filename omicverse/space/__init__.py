@@ -144,6 +144,7 @@ from . import histo  # noqa: E402,F401
 
 __all__ = [
     'histo',
+    'resolvi',
 
     # Spatial clustering and domains
     'pySTAGATE',
