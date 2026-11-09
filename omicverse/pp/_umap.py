@@ -199,14 +199,15 @@ def umap(  # noqa: PLR0913, PLR0915
         n_epochs = default_epochs if maxiter is None else maxiter
         from .._backend import resolve_backend
         if resolve_backend(backend) == "cpp" and neigh_params.get("metric", "euclidean") == "euclidean":
-            # C++ port of umap-learn's layout SGD (same schedule and RNG streams)
-            # with a fast, deterministic spectral initialisation.
+            # UMAP layout in C++: same objective, edge schedule and negative
+            # sampling as umap-learn, optimised on all threads; deterministic
+            # (same embedding for any thread count, controlled by random_state).
             from anndataoom_fast._umap import simplicial_set_embedding as _sse_cpp
             X_umap = _sse_cpp(
                 neighbors["connectivities"], n_components, a=a, b=b, n_epochs=n_epochs,
                 init=init_coords if init_coords is not None else "spectral",
                 random_state=random_state_processed, gamma=gamma, initial_alpha=alpha,
-                negative_sample_rate=negative_sample_rate, data=X,
+                negative_sample_rate=negative_sample_rate, data=X, sgd="parallel",
             )
         else:
             with _lobpcg_for_large_spectral_init():

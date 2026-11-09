@@ -223,12 +223,12 @@ def leiden(  # noqa: PLR0912, PLR0913, PLR0915
     adjacency: "CSBase" | None = None,
     directed: bool | None = None,
     use_weights: bool = True,
-    n_iterations: int = -1,
+    n_iterations: int | None = None,
     partition_type: type[MutableVertexPartition] | None = None,
     neighbors_key: str | None = None,
     obsp: str | None = None,
     copy: bool = False,
-    flavor: Literal["leidenalg", "igraph", None] = None,
+    flavor: Literal["brisc", "leidenalg", "leidenalg_exact", "igraph", None] = None,
     backend: str | None = None,
     **clustering_args,
 ) -> AnnData | None:
@@ -268,7 +268,9 @@ def leiden(  # noqa: PLR0912, PLR0913, PLR0915
         How many iterations of the Leiden clustering algorithm to perform.
         Positive values above 2 define the total number of iterations to perform,
         -1 has the algorithm run until it reaches its optimal clustering.
-        2 is faster and the default for underlying packages.
+        Defaults to 2 with ``backend='cpp'`` and to -1 with ``backend='python'``.
+        Not used by ``flavor='brisc'``, which runs one full Leiden pass
+        (local moving, refinement and aggregation until no further merges).
     partition_type
         Type of partition to use.
         Defaults to :class:`~leidenalg.RBConfigurationVertexPartition`.
@@ -286,7 +288,15 @@ def leiden(  # noqa: PLR0912, PLR0913, PLR0915
     copy
         Whether to copy `adata` or modify it inplace.
     flavor
-        Which package's implementation to use.
+        Which implementation to use. With ``backend='cpp'`` the default is
+        ``'brisc'``: a C++ port of brisc's Leiden (same RB-configuration
+        objective, ~4x faster than leidenalg, but different partitions);
+        ``'leidenalg'``/``'leidenalg_exact'`` run an exact C++ port of
+        leidenalg (identical partitions to the Python backend). With
+        ``backend='python'`` the default is ``'leidenalg'``.
+    backend
+        ``'cpp'`` (default, :mod:`anndataoom_fast`) or ``'python'``; see
+        ``ov.settings.backend``.
     **clustering_args
         Any further arguments to pass to :func:`~leidenalg.find_partition` (which in turn passes arguments to the `partition_type`)
         or :meth:`igraph.Graph.community_leiden` from `igraph`.
@@ -304,6 +314,23 @@ def leiden(  # noqa: PLR0912, PLR0913, PLR0915
         and `n_iterations`.
 
     """
+    from .._backend import resolve_backend
+    _backend = resolve_backend(backend)
+    if flavor is None and _backend == "cpp":
+        flavor = "brisc"
+    if n_iterations is None:
+        n_iterations = 2 if _backend == "cpp" else -1
+    if flavor == "brisc":
+        if _backend != "cpp":
+            raise ValueError("flavor='brisc' needs backend='cpp' (anndataoom-fast).")
+        if partition_type is not None or clustering_args:
+            raise ValueError("flavor='brisc' only supports the RB-configuration objective; "
+                             "do not pass partition_type or extra clustering arguments.")
+    exact = flavor == "leidenalg_exact"
+    if exact:
+        if _backend != "cpp":
+            raise ValueError("flavor='leidenalg_exact' needs backend='cpp' (anndataoom-fast).")
+        flavor = "leidenalg"
     if flavor is None:
         flavor = "leidenalg"
         msg = (
@@ -312,13 +339,17 @@ def leiden(  # noqa: PLR0912, PLR0913, PLR0915
             "`directed` must also be `False` to work with igraph's implementation."
         )
         warn_once(msg, FutureWarning, stacklevel=2)
-    if flavor not in {"igraph", "leidenalg"}:
+    if flavor not in {"igraph", "leidenalg", "brisc"}:
         msg = (
-            f"flavor must be either 'igraph' or 'leidenalg', but {flavor!r} was passed"
+            "flavor must be 'brisc', 'leidenalg', 'leidenalg_exact' or 'igraph', "
+            f"but {flavor!r} was passed"
         )
         raise ValueError(msg)
-    ensure_igraph()
-    if flavor == "igraph":
+    if flavor != "brisc":
+        ensure_igraph()
+    if flavor == "brisc":
+        pass
+    elif flavor == "igraph":
         if directed:
             msg = "Cannot use igraph's leiden implementation with a directed graph."
             raise ValueError(msg)
@@ -353,16 +384,22 @@ def leiden(  # noqa: PLR0912, PLR0913, PLR0915
     clustering_args["n_iterations"] = n_iterations
     multi = isinstance(resolution, (list, tuple, np.ndarray))
     resolutions = [float(r) for r in resolution] if multi else [resolution]
-    from .._backend import resolve_backend
     use_cpp = (
-        resolve_backend(backend) == "cpp"
+        _backend == "cpp"
         and flavor == "leidenalg"
         and (partition_type is None or partition_type is leidenalg.RBConfigurationVertexPartition)
         and set(clustering_args) <= {"n_iterations"}
         and isinstance(random_state, (int, np.integer))
         and all(r is not None for r in resolutions)
     )
-    if use_cpp:
+    if flavor == "brisc":
+        # C++ port of brisc's Leiden; resolutions run in parallel, labels do not
+        # depend on the number of threads.
+        import anndataoom_fast as _aof
+        memberships = _aof.leiden_brisc_multi(
+            adjacency, resolutions,
+            random_state=int(random_state) if isinstance(random_state, (int, np.integer)) else 0)
+    elif use_cpp:
         # Exact C++ port of leidenalg (same partition), several resolutions in parallel.
         import anndataoom_fast as _aof
         _directed = True if directed is None else directed
