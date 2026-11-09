@@ -34,7 +34,7 @@ def scdblfinder(
     adata: anndata.AnnData,
     *,
     dbr: Optional[float] = None,
-    dbr_per1k: float = 0.008,
+    dbr_per1k: float = 0.01,
     dims: int = 20,
     n_features: int = 1352,
     n_artificial: Optional[int] = None,
@@ -51,10 +51,10 @@ def scdblfinder(
 
     Parameters
     ----------
-    dbr : expected doublet rate. When ``None``, inferred from the 10x
-        Chromium default: ``dbr_per1k * n_cells / 1000``.
+    dbr : expected doublet rate. When ``None``, ``dbr_per1k * n_cells / 1000``
+        per batch (1% per 1000 cells, the R scDblFinder default).
     dims : number of principal components for the kNN graph.
-    n_features : number of top-variance genes to keep for PCA.
+    n_features : number of most-expressed genes to keep for PCA.
     n_artificial : number of artificial doublets to synthesize. When
         ``None`` it's chosen per the R defaults
         (``min(25000, max(1500, ceil(n_cells*0.8), 10*n_clusters^2))``).
