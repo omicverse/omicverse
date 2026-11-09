@@ -1,7 +1,7 @@
 """Tests for the edgeR / limma backends of ov.bulk.pyDEG.deg_analysis.
 
 Both backends use pure-Python ports (the ``pyedger`` package from PyPI
-and the vendored omicverse.external.pylimma) — no R / inmoose required. They are
+and the ``pylimma`` package, PyPI ``python-limma``) — no R / inmoose required. They are
 R-parity tested in their own repos; here we only check that the omicverse
 wiring produces the standard pyDEG result schema and recovers planted
 differential genes.
