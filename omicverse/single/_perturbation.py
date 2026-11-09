@@ -2,15 +2,18 @@
 from __future__ import annotations
 
 import numpy as np
+from anndata import AnnData
+from scipy import sparse
 
 from .._optional import import_optional_module
 from .._registry import register_function
-from .._backend_validation import expression, obs_column, validate_matrix, kwargs_copy
+from .._backend_validation import expression, obs_column, validate_adata, validate_matrix, kwargs_copy
 
 
 def _pertpy():
     return import_optional_module("pertpy", feature="Perturbation analysis",
-                                  dependencies=("pertpy",), install_hint="Install pertpy.")
+                                  dependencies=("pertpy",),
+                                  install_hint='Use Python 3.12 or later. Run `pip install "omicverse[pertpy]"`.')
 
 
 @register_function(aliases=["pertpy guide assignment"], category="single",
@@ -24,7 +27,7 @@ def assign_guides(guide_adata, *, assignment_threshold, layer=None,
     infer target genes, multiplexed perturbations, or perturbation efficacy.
     RNA metadata can be joined by cell ID explicitly after this step.
     """
-    expression(guide_adata, layer, counts=True)
+    matrix = expression(guide_adata, layer, counts=True)
     if not np.isfinite(assignment_threshold) or assignment_threshold <= 0:
         raise ValueError("assignment_threshold must be positive and finite.")
     if not isinstance(key_added, str) or not key_added:
@@ -33,6 +36,11 @@ def assign_guides(guide_adata, *, assignment_threshold, layer=None,
         raise ValueError(f"obs[{key_added!r}] already exists; use overwrite=True.")
     backend = _pertpy()
     work = guide_adata.copy()
+    if sparse.issparse(matrix) and matrix.format != "csr":
+        if layer is None:
+            work.X = matrix.tocsr()
+        else:
+            work.layers[layer] = matrix.tocsr()
     backend.pp.GuideAssignment().assign_to_max_guide(
         work, assignment_threshold=assignment_threshold, layer=layer, obs_key=key_added)
     if key_added not in work.obs or not work.obs_names.equals(guide_adata.obs_names):
@@ -83,19 +91,21 @@ def perturbation_distance(adata, *, groupby, use_rep="X_pca", metric="edistance"
 
     ``use_rep`` is an explicit obsm key. Distances quantify distributional
     differences; they are not p-values. With pooled cells they do not account
-    for biological replication. The backend may cache pairwise distances in
-    ``adata.obsp``; computation can require quadratic memory in cell count.
+    for biological replication. The calculation uses the current representation
+    without changing the input AnnData. It can require quadratic memory in cell
+    count.
     """
-    from .._backend_validation import validate_adata
     validate_adata(adata)
     obs_column(adata, groupby, minimum_categories=2)
     if use_rep not in adata.obsm:
         raise KeyError(f"obsm[{use_rep!r}] is missing.")
-    validate_matrix(adata.obsm[use_rep], "Representation")
+    representation = adata.obsm[use_rep]
+    validate_matrix(representation, "Representation")
     init = kwargs_copy(distance_kwargs, reserved=("metric", "obsm_key", "layer_key"))
     pairwise = kwargs_copy(pairwise_kwargs, reserved=("adata", "groupby"))
     model = _pertpy().tl.Distance(metric=metric, obsm_key=use_rep, **init)
-    result = model.pairwise(adata, groupby=groupby, **pairwise)
+    work = AnnData(obs=adata.obs[[groupby]].copy(), obsm={use_rep: representation})
+    result = model.pairwise(work, groupby=groupby, **pairwise)
     for table in result if isinstance(result, tuple) else (result,):
         validate_matrix(table.to_numpy(), "Group distances")
     return result

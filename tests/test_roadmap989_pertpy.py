@@ -1,18 +1,13 @@
 """Boundary tests and separately selected real-backend integration checks."""
-import importlib
-from types import SimpleNamespace
+from importlib.metadata import version
 
 import anndata as ad
 import numpy as np
 import pandas as pd
 import pytest
+from packaging.version import Version
 from scipy import sparse
 
-from omicverse import _backend_validation as validation
-
-
-from importlib.metadata import version
-from packaging.version import Version
 
 def _require_pertpy():
     pytest.importorskip("pertpy")
@@ -33,13 +28,20 @@ def data():
 
 
 @pytest.mark.integration
-def test_real_pertpy_guide_assignment():
+@pytest.mark.parametrize("layer", [None, "counts"])
+def test_real_pertpy_guide_assignment(layer):
     _require_pertpy()
     from omicverse.single import assign_guides
-    a = ad.AnnData(np.array([[0, 0], [8, 1], [1, 9], [2, 3]], dtype=float))
+    counts = np.array([[0, 0], [8, 1], [1, 9], [2, 3]], dtype=float)
+    a = ad.AnnData(counts.copy() if layer is None else np.zeros_like(counts))
     a.var_names = ["guide_a", "guide_b"]
-    result = assign_guides(a, assignment_threshold=5)
+    if layer is not None:
+        a.layers[layer] = sparse.csc_matrix(counts)
+    result = assign_guides(a, assignment_threshold=5, layer=layer)
     assert result.tolist() == ["Negative", "guide_a", "guide_b", "Negative"]
+    if layer is not None:
+        assert sparse.isspmatrix_csc(a.layers[layer])
+        np.testing.assert_array_equal(a.layers[layer].toarray(), counts)
 
 
 @pytest.mark.integration
@@ -54,6 +56,28 @@ def test_real_pertpy_distance_matches_definition(data):
     assert result.loc["ctrl", "stim"] == pytest.approx(expected, abs=1e-6)
     np.testing.assert_allclose(result, result.T)
     np.testing.assert_allclose(np.diag(result), 0, atol=1e-6)
+
+
+@pytest.mark.integration
+def test_real_pertpy_bootstrap_uses_current_representation(data):
+    _require_pertpy()
+    import pertpy as pt
+    from omicverse.single import perturbation_distance
+
+    options = {"bootstrap": True, "n_bootstrap": 10, "show_progressbar": False, "n_jobs": 1}
+    native = pt.tl.Distance(metric="edistance", obsm_key="X_pca")
+    clean_mean, _ = native.pairwise(data, groupby="condition", **options)
+    cache = {key: value.copy() for key, value in data.obsp.items()}
+    data.obsm["X_pca"] *= 10
+    fresh = ad.AnnData(obs=data.obs.copy(), obsm={"X_pca": data.obsm["X_pca"]})
+    expected = native.pairwise(fresh, groupby="condition", **options)
+    actual_mean, actual_variance = perturbation_distance(data, groupby="condition", pairwise_kwargs=options)
+    assert expected[0].loc["ctrl", "stim"] == pytest.approx(10 * clean_mean.loc["ctrl", "stim"])
+    pd.testing.assert_frame_equal(actual_mean, expected[0])
+    pd.testing.assert_frame_equal(actual_variance, expected[1])
+    assert data.obsp.keys() == cache.keys()
+    for key, value in cache.items():
+        np.testing.assert_array_equal(data.obsp[key], value)
 
 
 @pytest.mark.integration
