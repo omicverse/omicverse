@@ -480,11 +480,15 @@ def qsm_unwrap_phase(phase, mask=None, method: str = "quality", voxel_size=(1.0,
 )
 def qsm_multi_echo_field(phase, magnitude, echo_times, mask, unwrap: str = "quality",
                          offset_sigma_mm: float = 2.0, max_residual: float = 0.5,
-                         voxel_size=(1.0, 1.0, 1.0), remove_offset: bool = True) -> Dict:
+                         voxel_size=(1.0, 1.0, 1.0), remove_offset: bool = True,
+                         echo_unwrap: str = "auto") -> Dict:
     """Estimate the total field in Hz.
 
     phase, magnitude : (n_echo, x, y, z); phase in radians.
     echo_times : seconds (ms are detected and converted).
+    echo_unwrap : 'spatial' (3D-unwrap every echo, align by whole cycles),
+        'temporal' (cycle counts from the unwrapped echo-difference frequency)
+        or 'auto' (per voxel, whichever fits phase = 2*pi*f*TE better).
     max_residual : voxels whose magnitude-weighted RMS residual of the linear
         phase-vs-TE fit exceeds this (radians) are unreliable (noise, signal
         voids, unwrapping failures) and are left out of ``reliable_mask``.
@@ -518,6 +522,16 @@ def qsm_multi_echo_field(phase, magnitude, echo_times, mask, unwrap: str = "qual
     elif remove_offset:
         warnings.warn("single echo: the phase offset cannot be separated from the field")
     pc = np.angle(z)
+    w = mg ** 2
+    T = te[:, None, None, None].astype(np.float32)
+
+    def _fit(U):
+        om = np.where(den > 0, (w * T * U).sum(0) / np.where(den > 0, den, 1), 0.0)
+        r = np.sqrt((w * (U - om[None] * T) ** 2).sum(0) / np.maximum(w.sum(0), 1e-12))
+        return om.astype(np.float32), r.astype(np.float32)
+
+    den = (w * T ** 2).sum(0)
+    # spatial: every echo unwrapped in 3D, echoes aligned by whole cycles
     U = np.empty(ph.shape, np.float32)
     for e in range(n):
         u = qsm_unwrap_phase(pc[e], m, unwrap, voxel_size)
@@ -526,16 +540,20 @@ def qsm_multi_echo_field(phase, magnitude, echo_times, mask, unwrap: str = "qual
             k = np.round(np.median((u - ref)[m]) / (2 * np.pi))
             u = u - np.float32(2 * np.pi * k)
         U[e] = u
-    w = mg ** 2
-    T = te[:, None, None, None].astype(np.float32)
-    num = (w * T * U).sum(0)
-    den = (w * T ** 2).sum(0)
-    omega = np.where(den > 0, num / np.where(den > 0, den, 1), 0.0)
+    omega, res = _fit(U)
+    if guide is not None and echo_unwrap in ("auto", "temporal"):
+        # temporal: each echo's cycle count from the unwrapped echo-difference
+        # frequency (fewer wraps over the short spacing); keeps thin structures
+        # whose phase jump at late echoes exceeds pi (veins, calcifications)
+        Ut = (pc + 2 * np.pi * np.round((guide[None] * T - pc) / (2 * np.pi))).astype(np.float32)
+        om_t, res_t = _fit(Ut)
+        pick = (res_t < res) if echo_unwrap == "auto" else np.ones(m.shape, bool)
+        omega = np.where(pick, om_t, omega)
+        res = np.where(pick, res_t, res)
+        U = np.where(pick[None], Ut, U)
     field = (omega / (2 * np.pi)).astype(np.float32)
     field[~m] = 0
-    if n >= 2:
-        res = np.sqrt((w * (U - omega[None] * T) ** 2).sum(0) / np.maximum(w.sum(0), 1e-12)).astype(np.float32)
-    else:
+    if n < 2:
         res = np.zeros(m.shape, np.float32)
     res[~m] = 0
     rel = m & (res < max_residual)
@@ -866,7 +884,12 @@ def qsm_numerical_phantom(shape=(80, 80, 64), voxel_size=(1.0, 1.0, 1.0), b0_tes
     field_hz[~head] = 0
     te = _echo_times_seconds(echo_times)
     offset = (0.8 * np.sin(g[0] / ext[0] * 2) + 0.5 * np.cos(g[1] / ext[1] * 1.5)).astype(np.float32)
-    rho = np.where(brain, 1.0, np.where(head, 0.25, 0.0)).astype(np.float32)
+    # brain, a thin CSF layer, dark skull (separates brain from scalp), scalp
+    inner = ell((0, 0, 0), (0.72, 0.72, 0.72))
+    skull = ell((0, 0, 0), (0.78, 0.78, 0.78)) & ~inner
+    rho = np.where(inner, 0.9, np.where(head, 0.3, 0.0)).astype(np.float32)
+    rho[brain] = 1.0
+    rho[skull] = 0.03
     rho[vessel] = 0.6
     r2s = np.where(brain, 30.0, 60.0).astype(np.float32)
     ph, mg = [], []
