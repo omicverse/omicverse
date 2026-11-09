@@ -104,6 +104,7 @@ def umap(  # noqa: PLR0913, PLR0915
     key_added: str | None = None,
     neighbors_key: str = "neighbors",
     copy: bool = False,
+    backend: str | None = None,
 ) -> AnnData | None:
     r"""Embed the neighborhood graph using UMAP with multiple backend options.
 
@@ -196,26 +197,38 @@ def umap(  # noqa: PLR0913, PLR0915
         # for the init condition in the UMAP embedding
         default_epochs = 10 if neighbors["connectivities"].shape[0] <= 10000 else 20
         n_epochs = default_epochs if maxiter is None else maxiter
-        with _lobpcg_for_large_spectral_init():
-            X_umap, _ = simplicial_set_embedding(
-                data=X,
-                graph=neighbors["connectivities"].tocoo(),
-                n_components=n_components,
-                initial_alpha=alpha,
-                a=a,
-                b=b,
-                gamma=gamma,
-                negative_sample_rate=negative_sample_rate,
-                n_epochs=n_epochs,
-                init=init_coords,
-                random_state=random_state_processed,
-                metric=neigh_params.get("metric", "euclidean"),
-                metric_kwds=neigh_params.get("metric_kwds", {}),
-                densmap=False,
-                densmap_kwds={},
-                output_dens=False,
-                verbose=settings.verbosity > 3,
+        from .._backend import resolve_backend
+        if resolve_backend(backend) == "cpp" and neigh_params.get("metric", "euclidean") == "euclidean":
+            # C++ port of umap-learn's layout SGD (same schedule and RNG streams)
+            # with a fast, deterministic spectral initialisation.
+            from anndataoom_fast._umap import simplicial_set_embedding as _sse_cpp
+            X_umap = _sse_cpp(
+                neighbors["connectivities"], n_components, a=a, b=b, n_epochs=n_epochs,
+                init=init_coords if init_coords is not None else "spectral",
+                random_state=random_state_processed, gamma=gamma, initial_alpha=alpha,
+                negative_sample_rate=negative_sample_rate, data=X,
             )
+        else:
+            with _lobpcg_for_large_spectral_init():
+                X_umap, _ = simplicial_set_embedding(
+                    data=X,
+                    graph=neighbors["connectivities"].tocoo(),
+                    n_components=n_components,
+                    initial_alpha=alpha,
+                    a=a,
+                    b=b,
+                    gamma=gamma,
+                    negative_sample_rate=negative_sample_rate,
+                    n_epochs=n_epochs,
+                    init=init_coords,
+                    random_state=random_state_processed,
+                    metric=neigh_params.get("metric", "euclidean"),
+                    metric_kwds=neigh_params.get("metric_kwds", {}),
+                    densmap=False,
+                    densmap_kwds={},
+                    output_dens=False,
+                    verbose=settings.verbosity > 3,
+                )
     elif method == "umap-gpu":
         # Non-parametric UMAP on the GPU (omicverse.utils.gpuex.umap). Same
         # fuzzy graph, spectral init (torch.lobpcg), a/b curve and edge-SGD

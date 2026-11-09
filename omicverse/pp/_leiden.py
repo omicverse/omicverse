@@ -229,6 +229,7 @@ def leiden(  # noqa: PLR0912, PLR0913, PLR0915
     obsp: str | None = None,
     copy: bool = False,
     flavor: Literal["leidenalg", "igraph", None] = None,
+    backend: str | None = None,
     **clustering_args,
 ) -> AnnData | None:
     """Cluster cells into subgroups :cite:p:`Traag2019`.
@@ -350,61 +351,83 @@ def leiden(  # noqa: PLR0912, PLR0913, PLR0915
     # as this allows for the accounting of a None resolution
     # (in the case of a partition variant that doesn't take it on input)
     clustering_args["n_iterations"] = n_iterations
-    if flavor == "leidenalg":
-        if resolution is not None:
-            clustering_args["resolution_parameter"] = resolution
-        directed = True if directed is None else directed
-        g = get_igraph_from_adjacency(adjacency, directed=directed)
-        if partition_type is None:
-            partition_type = leidenalg.RBConfigurationVertexPartition
-        if use_weights:
-            clustering_args["weights"] = np.array(g.es["weight"]).astype(np.float64)
-        clustering_args["seed"] = random_state
-        part = leidenalg.find_partition(g, partition_type, **clustering_args)
-    else:
-        g = get_igraph_from_adjacency(adjacency, directed=False)
-        if use_weights:
-            clustering_args["weights"] = "weight"
-        if resolution is not None:
-            clustering_args["resolution"] = resolution
-        clustering_args.setdefault("objective_function", "modularity")
-        with set_igraph_random_state(random_state):
-            part = g.community_leiden(**clustering_args)
-    # store output into adata.obs
-    groups = np.array(part.membership)
-    if restrict_to is not None:
-        if key_added == "leiden":
-            key_added += "_R"
-        groups = rename_groups(
-            adata,
-            key_added=key_added,
-            restrict_key=restrict_key,
-            restrict_categories=restrict_categories,
-            restrict_indices=restrict_indices,
-            groups=groups,
-        )
-    labels = groups.astype("U")
-    lab_np = np.asarray(labels)
-    cats = natsorted(map(str, np.unique(lab_np)))
-    try:
-        adata.obs[key_added] = pd.Categorical(values=lab_np.astype("U"), categories=cats)
-    except Exception:
-        adata.obs[key_added] = labels
-    # Ensure a canonical 'leiden' column exists for downstream tools that expect it
-    if key_added != "leiden" and "leiden" not in adata.obs.columns:
-        try:
-            adata.obs["leiden"] = adata.obs[key_added]
-        except Exception:
-            # Fall back to a plain array if categorical copy fails
-            adata.obs["leiden"] = pd.Categorical(values=lab_np.astype("U"), categories=cats)
-
-    # store information on the clustering parameters
-    adata.uns[key_added] = {}
-    adata.uns[key_added]["params"] = dict(
-        resolution=resolution,
-        random_state=random_state,
-        n_iterations=n_iterations,
+    multi = isinstance(resolution, (list, tuple, np.ndarray))
+    resolutions = [float(r) for r in resolution] if multi else [resolution]
+    from .._backend import resolve_backend
+    use_cpp = (
+        resolve_backend(backend) == "cpp"
+        and flavor == "leidenalg"
+        and (partition_type is None or partition_type is leidenalg.RBConfigurationVertexPartition)
+        and set(clustering_args) <= {"n_iterations"}
+        and isinstance(random_state, (int, np.integer))
+        and all(r is not None for r in resolutions)
     )
+    if use_cpp:
+        # Exact C++ port of leidenalg (same partition), several resolutions in parallel.
+        import anndataoom_fast as _aof
+        _directed = True if directed is None else directed
+        memberships = _aof.leiden_multi(
+            adjacency, resolutions, random_state=int(random_state), directed=_directed,
+            n_iterations=n_iterations, use_weights=use_weights)
+    else:
+        memberships = []
+        for _res in resolutions:
+            _args = dict(clustering_args)
+            if flavor == "leidenalg":
+                if _res is not None:
+                    _args["resolution_parameter"] = _res
+                directed = True if directed is None else directed
+                g = get_igraph_from_adjacency(adjacency, directed=directed)
+                if partition_type is None:
+                    partition_type = leidenalg.RBConfigurationVertexPartition
+                if use_weights:
+                    _args["weights"] = np.array(g.es["weight"]).astype(np.float64)
+                _args["seed"] = random_state
+                part = leidenalg.find_partition(g, partition_type, **_args)
+            else:
+                g = get_igraph_from_adjacency(adjacency, directed=False)
+                if use_weights:
+                    _args["weights"] = "weight"
+                if _res is not None:
+                    _args["resolution"] = _res
+                _args.setdefault("objective_function", "modularity")
+                with set_igraph_random_state(random_state):
+                    part = g.community_leiden(**_args)
+            memberships.append(np.array(part.membership))
+
+    base_key = key_added
+    for _res, groups in zip(resolutions, memberships):
+        key_added = f"{base_key}_{_res}" if multi else base_key
+        groups = np.asarray(groups)
+        if restrict_to is not None:
+            if key_added == "leiden":
+                key_added += "_R"
+            groups = rename_groups(
+                adata,
+                key_added=key_added,
+                restrict_key=restrict_key,
+                restrict_categories=restrict_categories,
+                restrict_indices=restrict_indices,
+                groups=groups,
+            )
+        labels = groups.astype("U")
+        lab_np = np.asarray(labels)
+        cats = natsorted(map(str, np.unique(lab_np)))
+        try:
+            adata.obs[key_added] = pd.Categorical(values=lab_np.astype("U"), categories=cats)
+        except Exception:
+            adata.obs[key_added] = labels
+        if key_added != "leiden" and "leiden" not in adata.obs.columns:
+            try:
+                adata.obs["leiden"] = adata.obs[key_added]
+            except Exception:
+                adata.obs["leiden"] = pd.Categorical(values=lab_np.astype("U"), categories=cats)
+        adata.uns[key_added] = {}
+        adata.uns[key_added]["params"] = dict(
+            resolution=_res,
+            random_state=random_state,
+            n_iterations=n_iterations,
+        )
     info(
         "    finished",
         time=start,

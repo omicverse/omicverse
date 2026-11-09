@@ -657,7 +657,7 @@ def preprocess(
     adata, mode='shiftlog|pearson', 
     target_sum=50*1e4, n_HVGs=2000,
     organism='human', no_cc=False,batch_key=None,
-    identify_robust=True, exclude_highly_expressed=None):
+    identify_robust=True, exclude_highly_expressed=None, backend=None):
     """
     Preprocesses the AnnData object adata using either a scanpy or 
     a pearson residuals workflow for size normalization
@@ -734,8 +734,8 @@ def preprocess(
     print(f"{Colors.CYAN}Begin robust gene identification{Colors.ENDC}")
     if identify_robust:
         if is_oom:
-            from anndataoom import chunked_identify_robust_genes
-            chunked_identify_robust_genes(adata, percent_cells=0.05)
+            from .._backend import oom_ops
+            oom_ops(backend).chunked_identify_robust_genes(adata, percent_cells=0.05)
         else:
             identify_robust_genes(adata, percent_cells=0.05)
         if is_oom:
@@ -753,9 +753,9 @@ def preprocess(
         normalize_exclude_highly_expressed = exclude_highly_expressed
     if is_oom:
         # Out-of-memory path — lazy transforms, no full materialisation
-        from anndataoom import (
-            chunked_normalize_total, chunked_log1p,
-        )
+        from .._backend import oom_ops
+        _ops = oom_ops(backend)
+        chunked_normalize_total, chunked_log1p = _ops.chunked_normalize_total, _ops.chunked_log1p
         data_load_start = time.time()
         # Only 'shiftlog' normalisation is supported for OOM; 'pearson' is
         # pre-rejected at the top of this function.
@@ -768,7 +768,7 @@ def preprocess(
         chunked_log1p(adata)
 
         if method_list[1] == 'pearson':
-            from anndataoom import chunked_highly_variable_genes_pearson
+            chunked_highly_variable_genes_pearson = _ops.chunked_highly_variable_genes_pearson
             chunked_highly_variable_genes_pearson(
                 adata,
                 n_top_genes=n_HVGs,
@@ -795,6 +795,7 @@ def preprocess(
                 target_sum=target_sum,
                 exclude_highly_expressed=normalize_exclude_highly_expressed,
                 max_fraction=0.2,
+                backend=backend,
             )
             log1p(adata)
 
@@ -811,6 +812,7 @@ def preprocess(
                 layer='counts',
                 n_top_genes=n_HVGs,
                 batch_key=batch_key,
+                backend=backend,
             )
             if no_cc:
                 remove_cc_genes(adata, organism=organism, corr_threshold=0.1)
@@ -1117,7 +1119,7 @@ def highly_variable_genes(
 )
 @tracked("scale", "ov.pp.scale")
 def scale(adata, max_value=10, layers_add='scaled', to_sparse=False,
-          use_implicit_centering=False, **kwargs):
+          use_implicit_centering=False, backend=None, **kwargs):
     """
     Scale the input AnnData object.
 
@@ -1168,8 +1170,8 @@ def scale(adata, max_value=10, layers_add='scaled', to_sparse=False,
                 "OOM scale only stores to adata.layers['scaled']; "
                 f"layers_add={layers_add!r} is not supported."
             )
-        from anndataoom import chunked_scale
-        chunked_scale(adata, max_value=max_value)
+        from .._backend import oom_ops
+        oom_ops(backend).chunked_scale(adata, max_value=max_value)
         if "status" not in adata.uns.keys():
             adata.uns["status"] = {}
         add_reference(adata, "scanpy", "scaling with scanpy")
@@ -1215,7 +1217,17 @@ def scale(adata, max_value=10, layers_add='scaled', to_sparse=False,
         note(backend=f"omicverse({settings.mode}) · implicit")
         return
 
-    if settings.mode == 'cpu' or settings.mode == 'cpu-gpu-mixed':
+    from .._backend import resolve_backend
+    if ((settings.mode == 'cpu' or settings.mode == 'cpu-gpu-mixed')
+            and resolve_backend(backend) == 'cpp' and issparse(adata.X)
+            and adata.X.format == 'csr' and not (set(kwargs) - {'zero_center'})
+            and kwargs.get('zero_center', True)):
+        # One multithreaded pass for mean/var and one writing the dense
+        # z-scored, clipped float64 matrix (same layout as the Python path,
+        # without copying the AnnData or densifying twice).
+        from .._backend import cpp_memory
+        scaled_data = cpp_memory().scale(adata.X, max_value=max_value)[0]
+    elif settings.mode == 'cpu' or settings.mode == 'cpu-gpu-mixed':
         from ._scale import scale_anndata as scale
         adata_mock = scale(adata, copy=True, max_value=max_value, **kwargs)
         scaled_data = adata_mock.X.copy()
@@ -1451,7 +1463,7 @@ class my_PCA:
     related=["umap", "tsne", "mde"]
 )
 @tracked("pca", "ov.pp.pca")
-def pca(adata, n_pcs=50, layer='scaled',inplace=True,random_state=SEED_DEFAULT,**kwargs):
+def pca(adata, n_pcs=50, layer='scaled',inplace=True,random_state=SEED_DEFAULT,backend=None,**kwargs):
     """
     Performs Principal Component Analysis (PCA) on the data stored in a scanpy AnnData object.
 
@@ -1503,7 +1515,7 @@ def pca(adata, n_pcs=50, layer='scaled',inplace=True,random_state=SEED_DEFAULT,*
             adata.uns[key + '|cum_sum_eigenvalues'] = adata_mock.uns['pca']['variance']
         else:
             from ._pca import pca as _pca
-            _pca(adata, layer=layer,n_comps=n_pcs,use_gpu=False,**kwargs)
+            _pca(adata, layer=layer,n_comps=n_pcs,use_gpu=False,backend=backend,**kwargs)
             #print(res)
             adata.obsm[key + '|X_pca'] = adata.obsm['X_pca']
             adata.varm[key + '|pca_loadings'] = adata.varm['PCs']
@@ -1672,6 +1684,7 @@ def neighbors(
     metric_kwds: Mapping[str, Any] = MappingProxyType({}),
     key_added: Optional[str] = None,
     copy: bool = False,
+    backend: Optional[str] = None,
     **kwargs,
 ) -> Optional[anndata.AnnData]:
     """
@@ -1743,7 +1756,7 @@ def neighbors(
         _neighbors(adata,use_rep=use_rep,n_neighbors=n_neighbors, n_pcs=n_pcs,
                          random_state=random_state,n_jobs=n_jobs,method=method,transformer=transformer,
                          metric=metric,metric_kwds=metric_kwds,
-                         key_added=key_added,copy=copy,**kwargs)
+                         key_added=key_added,copy=copy,backend=backend,**kwargs)
     elif settings.mode == 'cpu-gpu-mixed':
         print(f"{EMOJI['gpu']} Using torch CPU/GPU mixed mode to calculate neighbors...")
         print_gpu_usage_color()
@@ -1806,6 +1819,7 @@ def umap(
     key_added: str | None = None,
     neighbors_key: str = "neighbors",
     copy: bool = False,
+    backend: str | None = None,
     **kwargs,
 ):
     """Compute UMAP embedding, dispatching to the best backend for
@@ -1901,7 +1915,7 @@ def umap(
         elif settings.mode == 'cpu':
             print(f"{EMOJI['cpu']} Using Scanpy CPU UMAP...")
             from ._umap import umap as _umap
-            _umap(adata, **kwargs)
+            _umap(adata, backend=backend, **kwargs)
             add_reference(adata, 'umap', 'UMAP with scanpy')
             note(backend=f"omicverse({settings.mode}) · scanpy")
         elif settings.mode == 'cpu-gpu-mixed':
@@ -2097,7 +2111,8 @@ def louvain(
 @tracked("leiden", "ov.pp.leiden")
 def leiden(
     adata, resolution=1.0, random_state=SEED_DEFAULT,
-    key_added='leiden', local_iterations=100, max_levels=10, device=None, symmetrize=None, **kwargs):
+    key_added='leiden', local_iterations=100, max_levels=10, device=None, symmetrize=None,
+    backend=None, **kwargs):
     '''
     leiden clustering
     '''
@@ -2105,6 +2120,15 @@ def leiden(
     # A length-1 list/tuple resolution (seen from agent-generated code) would
     # otherwise crash the torch GPU path with an opaque index TypeError
     # (issue #877) and confuse scanpy / RAPIDS too. Normalise to a scalar.
+    if isinstance(resolution, (list, tuple)) and len(resolution) > 1 and settings.mode == 'cpu':
+        # Several resolutions at once: labels go to obs[f"{key_added}_{r}"];
+        # backend='cpp' clusters them in parallel.
+        from ._leiden import leiden as _leiden
+        _leiden(adata, resolution=list(resolution), random_state=random_state,
+                key_added=key_added, backend=backend, **kwargs)
+        add_reference(adata, 'leiden', 'Leiden clustering with scanpy')
+        note(backend=f"omicverse({settings.mode}) · multi-resolution")
+        return
     if isinstance(resolution, (list, tuple)):
         if len(resolution) != 1:
             raise ValueError(
@@ -2117,7 +2141,7 @@ def leiden(
         print(f"{EMOJI['cpu']} Using Scanpy CPU Leiden...")
         from ._leiden import leiden as _leiden
         _leiden(adata, resolution=resolution, random_state=random_state,
-            key_added=key_added, **kwargs)
+            key_added=key_added, backend=backend, **kwargs)
         add_reference(adata, 'leiden', 'Leiden clustering with scanpy')
         note(backend=f"omicverse({settings.mode}) · scanpy")
     elif settings.mode == 'cpu-gpu-mixed':

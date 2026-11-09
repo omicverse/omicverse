@@ -630,6 +630,7 @@ def find_markers(
     rankby_abs: bool = False,
     tie_correct: bool = False,
     pts: bool = True,
+    backend: Optional[str] = None,
     **kwargs,
 ) -> None:
     r"""Find marker genes for each cluster / group in single-cell data.
@@ -724,12 +725,18 @@ def find_markers(
             use_raw=_use_raw_cosg,
             layer=layer,
             reference=reference,
+            backend=backend,
             **kwargs,
         )
 
         # ── Compute pct (pts / pts_rest) for cosg results ─────────────────
         if pts:
-            _cosg_add_pts(adata, key_added, groupby, use_raw=_use_raw_cosg, layer=layer)
+            from .._backend import resolve_backend
+            if resolve_backend(backend) == 'cpp':
+                from anndataoom_fast._omicverse import ov_cosg_add_pts
+                ov_cosg_add_pts(adata, key_added, groupby, use_raw=_use_raw_cosg, layer=layer)
+            else:
+                _cosg_add_pts(adata, key_added, groupby, use_raw=_use_raw_cosg, layer=layer)
 
         print(
             f"{Colors.GREEN}{EMOJI['done']} Done{Colors.ENDC} | "
