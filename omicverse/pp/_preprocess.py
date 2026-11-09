@@ -838,7 +838,8 @@ def preprocess(
         import rapids_singlecell as rsc
         data_load_start = time.time()
         if method_list[0] == 'shiftlog': # Size normalization + scanpy batch aware HVGs selection
-            rsc.pp.normalize_total(
+            from . import _rsc_compat as _rscc  # any rapids-singlecell release
+            _rscc.normalize_total(
                 adata,
                 target_sum=target_sum,
                 exclude_highly_expressed=normalize_exclude_highly_expressed,
@@ -1534,7 +1535,8 @@ def pca(adata, n_pcs=50, layer='scaled',inplace=True,random_state=SEED_DEFAULT,b
         adata.uns[key + '|cum_sum_eigenvalues'] = adata.uns['pca']['variance']
     else:
         import rapids_singlecell as rsc
-        rsc.pp.pca(adata, layer=layer,n_comps=n_pcs,**kwargs)
+        from . import _rsc_compat as _rscc  # any rapids-singlecell release
+        rsc.pp.pca(adata, layer=layer,n_comps=n_pcs,**_rscc.pca_kwargs(kwargs))
         adata.obsm[key + '|X_pca'] = adata.obsm['X_pca']
         adata.varm[key + '|pca_loadings'] = adata.varm['PCs']
         adata.uns[key + '|pca_var_ratios'] = adata.uns['pca']['variance_ratio']
