@@ -582,8 +582,8 @@ class pyDEG(object):
                 - `DEseq2`: PyDESeq2 negative-binomial Wald test (raw counts).
                 - `edger`: edgeR quasi-likelihood F-test via the
                   pure-Python `pyedger` package (R-parity tested; no R needed).
-                - `limma`: limma-voom pipeline via the vendored pure-Python
-                  `pylimma` port (TMM library sizes + voom mean-variance
+                - `limma`: limma-voom pipeline via the pure-Python
+                  `pylimma` package (TMM library sizes + voom mean-variance
                   modelling + eBayes; R-parity tested; no R needed).
                 - `edgepy`: edgeR classic GLM likelihood-ratio test (glmFit +
                   glmLRT) via the pure-Python `pyedger` package
@@ -843,7 +843,7 @@ class pyDEG(object):
             return result
 
         elif method == 'edger':
-            # edgeR quasi-likelihood pipeline via the vendored pure-Python
+            # edgeR quasi-likelihood pipeline via the pure-Python
             # package `pyedger` (PyPI, omicverse/py-edgeR), R-parity tested
             # against Bioconductor edgeR. No R / inmoose needed.
             import pyedger as _edger
@@ -887,8 +887,8 @@ class pyDEG(object):
             return result
 
         elif method == 'limma':
-            # limma-voom pipeline via the vendored pure-Python port `pylimma`
-            # (omicverse.external.pylimma), R-parity tested against
+            # limma-voom pipeline via the pure-Python port `pylimma`
+            # (PyPI python-limma, omicverse/py-limma), R-parity tested against
             # Bioconductor limma. voom() models the count mean-variance trend
             # — the statistically correct way to run limma on RNA-seq counts.
             # Library sizes are TMM-normalized first, as in edgeR/limma.
@@ -949,8 +949,8 @@ class pyDEG(object):
         Where :meth:`deg_analysis` compares two groups, this models each
         gene's expression as a linear function of a **continuous**
         predictor — disease duration, age, dose, a severity score — via
-        limma-voom + eBayes (the vendored pure-Python
-        ``omicverse.external.pylimma``). It is the first-class tool for
+        limma-voom + eBayes (the pure-Python ``pylimma`` package,
+        PyPI ``python-limma``). It is the first-class tool for
         "which genes are associated with / track / correlate with a
         continuous variable": ``eBayes`` moderation borrows variance
         across genes (a per-gene Spearman/Pearson scan has none, and is
@@ -1118,7 +1118,7 @@ class pyDEG(object):
         is non-zero", which is exactly the time-course question (a block
         of spline / factor columns, or a block of interaction columns).
 
-        It mirrors :func:`omicverse.external.pylimma.fit._classify_tests_f_stat`
+        It mirrors :func:`pylimma.fit._classify_tests_f_stat`
         but slices ``fit.t`` and ``fit.cov_coefficients`` to ``cols``.
 
         Arguments:
@@ -1171,7 +1171,7 @@ class pyDEG(object):
         a *moderated F-test over a whole block of design columns* — the
         statistically correct way to ask "does expression change over
         time" without committing to a single shape. It is built on the
-        vendored pure-Python limma (``omicverse.external.pylimma``)
+        pure-Python limma (``pylimma``, PyPI ``python-limma``)
         and is isomorphic to :meth:`continuous_deg`: same design-matrix
         construction, same ``lmFit → eBayes`` core, same
         ``deg_analysis``-shaped return so ``foldchange_set`` /
