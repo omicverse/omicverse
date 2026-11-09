@@ -87,14 +87,6 @@ def _unit(b0_dir) -> np.ndarray:
     return b / n
 
 
-def _fftn(x):
-    return sfft.fftn(x, workers=_WORKERS)
-
-
-def _ifftn_real(x):
-    return sfft.ifftn(x, workers=_WORKERS).real
-
-
 def _ball(radius_mm: float, voxel_size) -> np.ndarray:
     vs = _vox3(voxel_size)
     r = [max(int(np.floor(radius_mm / v)), 0) for v in vs]
@@ -150,6 +142,52 @@ def _unpad(x, pad):
     return x[tuple(slice(p, x.shape[i] - p) for i, p in enumerate(pad))]
 
 
+def _rshape(shape):
+    return tuple(shape[:-1]) + (shape[-1] // 2 + 1,)
+
+
+def _rfft(x):
+    """Real-input FFT (half spectrum); float32 in -> complex64 out."""
+    return sfft.rfftn(x, workers=_WORKERS)
+
+
+def _irfft(X, shape):
+    return sfft.irfftn(X, s=shape, workers=_WORKERS)
+
+
+def _rkgrid(shape, voxel_size):
+    vs = _vox3(voxel_size)
+    ks = [sfft.fftfreq(shape[0], d=vs[0]), sfft.fftfreq(shape[1], d=vs[1]),
+          sfft.rfftfreq(shape[2], d=vs[2])]
+    return np.meshgrid(*ks, indexing="ij", sparse=True)
+
+
+def _dipole_from_grid(kx, ky, kz, b0_dir):
+    b = _unit(b0_dir)
+    k2 = kx ** 2 + ky ** 2 + kz ** 2
+    kb = kx * b[0] + ky * b[1] + kz * b[2]
+    with np.errstate(divide="ignore", invalid="ignore"):
+        d = 1.0 / 3.0 - kb ** 2 / k2
+    d[k2 == 0] = 0.0
+    return d.astype(np.float32)
+
+
+def _dipole_r(shape, voxel_size, b0_dir):
+    """Dipole kernel on the half (rfft) spectrum; D(k) = D(-k), so this is exact."""
+    return _dipole_from_grid(*_rkgrid(shape, voxel_size), b0_dir)
+
+
+def _bbox(mask, margin=0):
+    """Slices of the mask's bounding box grown by ``margin`` voxels (clipped)."""
+    sl = []
+    for ax in range(mask.ndim):
+        idx = np.flatnonzero(mask.any(axis=tuple(a for a in range(mask.ndim) if a != ax)))
+        lo = max(int(idx[0]) - margin, 0) if idx.size else 0
+        hi = min(int(idx[-1]) + 1 + margin, mask.shape[ax]) if idx.size else mask.shape[ax]
+        sl.append(slice(lo, hi))
+    return tuple(sl)
+
+
 def _pad_width(shape, voxel_size, pad_mm):
     if not pad_mm:
         return None
@@ -169,14 +207,7 @@ def _pad_width(shape, voxel_size, pad_mm):
 )
 def qsm_dipole_kernel(shape, voxel_size=(1.0, 1.0, 1.0), b0_dir=(0.0, 0.0, 1.0)) -> np.ndarray:
     """Unit dipole kernel on the unshifted FFT grid (float32)."""
-    kx, ky, kz = _kgrid(shape, voxel_size)
-    b = _unit(b0_dir)
-    k2 = kx ** 2 + ky ** 2 + kz ** 2
-    kb = kx * b[0] + ky * b[1] + kz * b[2]
-    with np.errstate(divide="ignore", invalid="ignore"):
-        d = 1.0 / 3.0 - kb ** 2 / k2
-    d[k2 == 0] = 0.0
-    return d.astype(np.float32)
+    return _dipole_from_grid(*_kgrid(shape, voxel_size), b0_dir)
 
 
 @register_function(
@@ -192,8 +223,11 @@ def qsm_forward_field(chi, voxel_size=(1.0, 1.0, 1.0), b0_dir=(0.0, 0.0, 1.0),
     """Field (ppm) = IFFT(D * FFT(chi)); ``pad_mm`` zero-pads to limit wrap-around."""
     pad = _pad_width(np.shape(chi), voxel_size, pad_mm)
     x = _pad(np.asarray(chi, dtype=np.float32), pad)
-    d = qsm_dipole_kernel(x.shape, voxel_size, b0_dir)
-    return _unpad(_ifftn_real(_fftn(x) * d), pad).astype(np.float32)
+    shape = x.shape
+    X = _rfft(x)
+    del x
+    X *= _dipole_r(shape, voxel_size, b0_dir)
+    return np.ascontiguousarray(_unpad(_irfft(X, shape), pad), dtype=np.float32)
 
 
 # ── I/O ─────────────────────────────────────────────────────────────────────
@@ -336,11 +370,14 @@ def qsm_load_multi_echo(directory: Optional[str] = None, phase_files: Optional[S
         magnitude_files = sorted([f for f in files if re.search(r"part-mag|_mag|magnitude", os.path.basename(f), re.I)], key=_echo)
         if not phase_files:
             raise FileNotFoundError(f"no phase NIfTI files in {directory}")
-    phase, mag, tes, meta = [], [], [], {}
+    phase, mag, tes, meta = None, None, [], {}
     affine = zooms = None
     for i, pf in enumerate(phase_files):
         p, affine, zooms = _read_nifti(pf)
-        phase.append(_scale_phase(p).astype(np.float32))
+        if phase is None:
+            phase = np.empty((len(phase_files),) + p.shape, np.float32)
+        phase[i] = _scale_phase(p)
+        del p
         side = re.sub(r"\.nii(\.gz)?$", ".json", pf)
         if os.path.exists(side):
             with open(side) as fh:
@@ -348,11 +385,12 @@ def qsm_load_multi_echo(directory: Optional[str] = None, phase_files: Optional[S
             if echo_times is None and "EchoTime" in meta:
                 tes.append(float(meta["EchoTime"]))
     if magnitude_files:
-        for mf in magnitude_files:
-            mag.append(np.abs(_read_nifti(mf)[0]).astype(np.float32))
+        mag = np.empty((len(magnitude_files),) + phase.shape[1:], np.float32)
+        for i, mf in enumerate(magnitude_files):
+            mag[i] = np.abs(_read_nifti(mf)[0])
     else:
         warnings.warn("no magnitude images: using uniform weights")
-        mag = [np.ones_like(phase[0]) for _ in phase]
+        mag = np.ones_like(phase)
     if echo_times is None:
         if len(tes) != len(phase):
             raise ValueError("echo times not found in sidecars; pass echo_times")
@@ -366,7 +404,7 @@ def qsm_load_multi_echo(directory: Optional[str] = None, phase_files: Optional[S
         # scanner z expressed in voxel axes: column directions of the affine
         r = affine[:3, :3] / np.linalg.norm(affine[:3, :3], axis=0)
         b0_dir = tuple(np.linalg.solve(r, [0.0, 0.0, 1.0]))
-    return dict(phase=np.stack(phase), magnitude=np.stack(mag), echo_times=te,
+    return dict(phase=phase, magnitude=mag, echo_times=te,
                 b0_tesla=None if b0_tesla is None else float(b0_tesla),
                 b0_dir=tuple(_unit(b0_dir)), voxel_size=_vox3(zooms), affine=affine,
                 phase_files=list(phase_files), magnitude_files=list(magnitude_files or []),
@@ -412,27 +450,30 @@ def qsm_brain_mask(magnitude, voxel_size=(1.0, 1.0, 1.0), threshold: Optional[fl
 
 # ── phase unwrapping ────────────────────────────────────────────────────────
 
-def _laplacian_eig(shape, voxel_size):
+def _laplacian_eig_r(shape, voxel_size):
+    """Eigenvalues of the 7-point Laplacian on the half (rfft) spectrum, float32."""
     vs = _vox3(voxel_size)
-    out = np.zeros(shape, dtype=np.float64)
+    out = np.zeros(_rshape(shape), dtype=np.float32)
     for ax, (n, d) in enumerate(zip(shape, vs)):
-        k = np.arange(n)
-        v = (2 * np.cos(2 * np.pi * k / n) - 2) / d ** 2
+        k = np.arange(n // 2 + 1 if ax == 2 else n)
+        v = ((2 * np.cos(2 * np.pi * k / n) - 2) / d ** 2).astype(np.float32)
         s = [1, 1, 1]
-        s[ax] = n
-        out = out + v.reshape(s)
+        s[ax] = v.size
+        out += v.reshape(s)
     return out
 
 
 def _laplacian_unwrap(phase, voxel_size):
-    lam = _laplacian_eig(phase.shape, voxel_size)
+    shape = phase.shape
+    lam = _laplacian_eig_r(shape, voxel_size)
     c, s = np.cos(phase), np.sin(phase)
-    lap = lambda x: _ifftn_real(_fftn(x) * lam)
-    lp = c * lap(s) - s * lap(c)
-    inv = np.zeros_like(lam)
+    lp = c * _irfft(_rfft(s) * lam, shape)
+    lp -= s * _irfft(_rfft(c) * lam, shape)
+    del c, s
     nz = lam != 0
+    inv = np.zeros_like(lam)
     inv[nz] = 1.0 / lam[nz]
-    return _ifftn_real(_fftn(lp) * inv)
+    return _irfft(_rfft(lp) * inv, shape)
 
 
 @register_function(
@@ -445,9 +486,16 @@ def _laplacian_unwrap(phase, voxel_size):
     examples=["u = ov.tl.qsm_unwrap_phase(phase_echo, mask, method='quality')"],
 )
 def qsm_unwrap_phase(phase, mask=None, method: str = "quality", voxel_size=(1.0, 1.0, 1.0)) -> np.ndarray:
-    """Unwrap a 3D wrapped phase (radians). Outside ``mask`` the output is 0."""
-    p = np.asarray(phase, dtype=np.float64)
+    """Unwrap a 3D wrapped phase (radians). Outside ``mask`` the output is 0.
+
+    Works on the mask's bounding box only (memory and time scale with the
+    object, not the field of view).
+    """
+    p = np.asarray(phase, dtype=np.float32)
     m = np.ones(p.shape, bool) if mask is None else np.asarray(mask, bool)
+    out = np.zeros(p.shape, np.float32)
+    if not m.any():
+        return out
     if method == "quality":
         try:
             from skimage.restoration import unwrap_phase
@@ -455,17 +503,28 @@ def qsm_unwrap_phase(phase, mask=None, method: str = "quality", voxel_size=(1.0,
             warnings.warn("scikit-image missing: falling back to Laplacian unwrapping")
             method = "laplacian"
         else:
-            u = unwrap_phase(np.ma.array(p, mask=~m))
-            return np.ma.filled(u, 0.0).astype(np.float32)
+            sl = _bbox(m, 1)
+            mc = m[sl]
+            u = unwrap_phase(np.ma.array(p[sl].astype(np.float64), mask=~mc))
+            out[sl] = np.ma.filled(u, 0.0)
+            return out
     if method == "laplacian":
-        u = _laplacian_unwrap(np.where(m, p, 0.0), voxel_size)
+        sl = _bbox(m, 8)
+        pc, mc = p[sl], m[sl]
+        u = _laplacian_unwrap(np.where(mc, pc, np.float32(0)), voxel_size)
         # snap to the nearest 2*pi-consistent value of the measured phase
-        u = p + 2 * np.pi * np.round((u - p) / (2 * np.pi))
-        return np.where(m, u, 0.0).astype(np.float32)
+        u = pc + np.float32(2 * np.pi) * np.round((u - pc) / np.float32(2 * np.pi))
+        out[sl] = np.where(mc, u, 0)
+        return out
     raise ValueError("method must be 'quality' or 'laplacian'")
 
 
 # ── multi-echo field estimation ─────────────────────────────────────────────
+
+def _wrap(x):
+    """Wrap radians to [-pi, pi) in the input's precision."""
+    return (x + np.float32(np.pi)) % np.float32(2 * np.pi) - np.float32(np.pi)
+
 
 @register_function(
     aliases=["多回波场图", "B0 场图估计", "multi-echo field map", "frequency map from phase",
@@ -481,7 +540,7 @@ def qsm_unwrap_phase(phase, mask=None, method: str = "quality", voxel_size=(1.0,
 def qsm_multi_echo_field(phase, magnitude, echo_times, mask, unwrap: str = "quality",
                          offset_sigma_mm: float = 2.0, max_residual: float = 0.5,
                          voxel_size=(1.0, 1.0, 1.0), remove_offset: bool = True,
-                         echo_unwrap: str = "auto") -> Dict:
+                         echo_unwrap: str = "auto", return_unwrapped: bool = True) -> Dict:
     """Estimate the total field in Hz.
 
     phase, magnitude : (n_echo, x, y, z); phase in radians.
@@ -492,136 +551,172 @@ def qsm_multi_echo_field(phase, magnitude, echo_times, mask, unwrap: str = "qual
     max_residual : voxels whose magnitude-weighted RMS residual of the linear
         phase-vs-TE fit exceeds this (radians) are unreliable (noise, signal
         voids, unwrapping failures) and are left out of ``reliable_mask``.
+    return_unwrapped : also return the unwrapped echoes (n_echo x volume float32).
+
+    Single precision, processed per echo inside the mask's bounding box.
     """
-    ph = np.asarray(phase, dtype=np.float32)
-    mg = np.asarray(magnitude, dtype=np.float32)
-    if ph.ndim == 3:
-        ph, mg = ph[None], mg[None]
+    ph_in, mg_in = phase, magnitude
+    if np.ndim(ph_in) == 3:
+        ph_in, mg_in = np.asarray(ph_in)[None], np.asarray(mg_in)[None]
     te = _echo_times_seconds(echo_times)
-    if len(te) != ph.shape[0]:
-        raise ValueError(f"{len(te)} echo times for {ph.shape[0]} echoes")
-    m = np.asarray(mask, bool)
+    if len(te) != len(ph_in):
+        raise ValueError(f"{len(te)} echo times for {len(ph_in)} echoes")
+    vs = _vox3(voxel_size)
+    m_full = np.asarray(mask, bool)
+    shape = m_full.shape
+    sig = [offset_sigma_mm / v for v in vs]
+    sl = _bbox(m_full, int(np.ceil(4 * max(sig))) + 1)
+    m = m_full[sl]
     order = np.argsort(te)
-    ph, mg, te = ph[order], mg[order], te[order]
+    te = te[order]
     n = len(te)
-    z = mg * np.exp(1j * ph)
+    ph = [np.asarray(ph_in[i][sl], dtype=np.float32) for i in order]
+    mg = [np.asarray(mg_in[i][sl], dtype=np.float32) for i in order]
+    tef = [np.float32(t) for t in te]
     offset = np.zeros(m.shape, np.float32)
     guide = None
     if n >= 2:
-        dte = te[1] - te[0]
-        du = qsm_unwrap_phase(np.angle(z[1] * np.conj(z[0])), m, unwrap, voxel_size).astype(np.float64)
-        guide = du / dte                                     # rad/s
+        du = qsm_unwrap_phase(_wrap(ph[1] - ph[0]), m, unwrap, vs)
+        guide = du / np.float32(te[1] - te[0])                # rad/s
+        del du
         if remove_offset:
-            off = np.angle(z[0] * np.exp(-1j * guide * te[0]))
-            sig = [offset_sigma_mm / v for v in _vox3(voxel_size)]
+            off = _wrap(ph[0] - guide * tef[0])
             # smooth only inside the mask: outside it the guide is undefined
-            oc = np.where(m, mg[0], 0) * np.exp(1j * off)
-            sm = ndi.gaussian_filter(oc.real, sig) + 1j * ndi.gaussian_filter(oc.imag, sig)
-            offset = np.angle(sm).astype(np.float32)
-            z = z * np.exp(-1j * offset)[None]
+            a = np.where(m, mg[0], np.float32(0))
+            re_ = ndi.gaussian_filter(a * np.cos(off), sig)
+            im_ = ndi.gaussian_filter(a * np.sin(off), sig)
+            offset = np.arctan2(im_, re_).astype(np.float32)
+            del off, a, re_, im_
     elif remove_offset:
         warnings.warn("single echo: the phase offset cannot be separated from the field")
-    pc = np.angle(z)
-    w = mg ** 2
-    T = te[:, None, None, None].astype(np.float32)
+    pc = [_wrap(ph[e] - offset) for e in range(n)]
+    del ph
+    w = [g * g for g in mg]
+    del mg
+    den = sum(w[e] * tef[e] ** 2 for e in range(n))
+    wsum = np.maximum(sum(w), np.float32(1e-12))
 
     def _fit(U):
-        om = np.where(den > 0, (w * T * U).sum(0) / np.where(den > 0, den, 1), 0.0)
-        r = np.sqrt((w * (U - om[None] * T) ** 2).sum(0) / np.maximum(w.sum(0), 1e-12))
-        return om.astype(np.float32), r.astype(np.float32)
+        num = sum(w[e] * tef[e] * U[e] for e in range(n))
+        om = np.where(den > 0, num / np.where(den > 0, den, 1), 0).astype(np.float32)
+        del num
+        r2 = sum(w[e] * (U[e] - om * tef[e]) ** 2 for e in range(n))
+        return om, np.sqrt(r2 / wsum).astype(np.float32)
 
-    den = (w * T ** 2).sum(0)
     # spatial: every echo unwrapped in 3D, echoes aligned by whole cycles
-    U = np.empty(ph.shape, np.float32)
+    U = []
     for e in range(n):
-        u = qsm_unwrap_phase(pc[e], m, unwrap, voxel_size)
-        ref = guide * te[e] if guide is not None else (U[0] * te[e] / te[0] if e else None)
+        u = qsm_unwrap_phase(pc[e], m, unwrap, vs)
+        ref = guide * tef[e] if guide is not None else (U[0] * (tef[e] / tef[0]) if e else None)
         if ref is not None:
             k = np.round(np.median((u - ref)[m]) / (2 * np.pi))
-            u = u - np.float32(2 * np.pi * k)
-        U[e] = u
+            u -= np.float32(2 * np.pi * k)
+        U.append(u)
     omega, res = _fit(U)
     if guide is not None and echo_unwrap in ("auto", "temporal"):
         # temporal: each echo's cycle count from the unwrapped echo-difference
         # frequency (fewer wraps over the short spacing); keeps thin structures
         # whose phase jump at late echoes exceeds pi (veins, calcifications)
-        Ut = (pc + 2 * np.pi * np.round((guide[None] * T - pc) / (2 * np.pi))).astype(np.float32)
+        two_pi = np.float32(2 * np.pi)
+        Ut = [pc[e] + two_pi * np.round((guide * tef[e] - pc[e]) / two_pi) for e in range(n)]
         om_t, res_t = _fit(Ut)
         pick = (res_t < res) if echo_unwrap == "auto" else np.ones(m.shape, bool)
         omega = np.where(pick, om_t, omega)
         res = np.where(pick, res_t, res)
-        U = np.where(pick[None], Ut, U)
-    field = (omega / (2 * np.pi)).astype(np.float32)
-    field[~m] = 0
+        U = [np.where(pick, Ut[e], U[e]) for e in range(n)]
+        del Ut, om_t, res_t
+    del pc, w, den, wsum, guide
     if n < 2:
         res = np.zeros(m.shape, np.float32)
+    f = (omega / np.float32(2 * np.pi)).astype(np.float32)
+    f[~m] = 0
     res[~m] = 0
     rel = m & (res < max_residual)
     rel = ndi.binary_fill_holes(ndi.binary_opening(rel))
     rel = _largest_component(rel) if rel.any() else rel
-    return dict(field_hz=field, residual=res, reliable_mask=rel, phase_offset=offset,
-                unwrapped=U, echo_times=te)
+
+    def _full(x, dtype=np.float32):
+        o = np.zeros(shape, dtype)
+        o[sl] = x
+        return o
+    out = dict(field_hz=_full(f), residual=_full(res), reliable_mask=_full(rel, bool),
+               phase_offset=_full(offset), echo_times=te)
+    if return_unwrapped:
+        uw = np.zeros((n,) + shape, np.float32)
+        for e in range(n):
+            uw[e][sl] = np.where(m, U[e], 0)
+        out["unwrapped"] = uw
+    return out
 
 
 # ── background field removal ────────────────────────────────────────────────
 
-def _smv_k(shape, voxel_size, radius_mm):
+def _smv_kr(shape, voxel_size, radius_mm):
+    """Half-spectrum (rfft) of the normalised sphere of the given radius, float32."""
     vs = _vox3(voxel_size)
-    g = np.meshgrid(*[(sfft.fftfreq(n) * n) * v for n, v in zip(shape, vs)], indexing="ij", sparse=True)
-    s = ((g[0] ** 2 + g[1] ** 2 + g[2] ** 2) <= radius_mm ** 2).astype(np.float64)
+    g = np.meshgrid(*[((sfft.fftfreq(n) * n) * v).astype(np.float32) for n, v in zip(shape, vs)],
+                    indexing="ij", sparse=True)
+    s = ((g[0] ** 2 + g[1] ** 2 + g[2] ** 2) <= np.float32(radius_mm ** 2)).astype(np.float32)
     s /= s.sum()
-    return _fftn(s).real
+    return _rfft(s).real.astype(np.float32)
 
 
 def _vsharp(field, mask, voxel_size, radii, threshold):
-    F = _fftn(field)
-    M = _fftn(mask.astype(np.float64))
-    out = np.zeros(field.shape)
-    done = np.zeros(field.shape, bool)
+    shape = field.shape
+    F = _rfft(field.astype(np.float32))
+    M = _rfft(mask.astype(np.float32))
+    out = np.zeros(shape, np.float32)
+    done = np.zeros(shape, bool)
     inv = None
     delta = 1 - np.sqrt(1e-7)
     for r in sorted(radii, reverse=True):
-        S = _smv_k(field.shape, voxel_size, r)
+        S = _smv_kr(shape, voxel_size, r)
         if inv is None:
             om = 1 - S
-            inv = np.where(np.abs(om) < threshold, 0.0, 1.0 / np.where(np.abs(om) < threshold, 1, om))
-        cur = _ifftn_real(M * S) > delta
-        hp = _ifftn_real(F * (1 - S))
-        sel = cur & ~done
+            small = np.abs(om) < threshold
+            inv = np.where(small, 0, 1 / np.where(small, 1, om)).astype(np.float32)
+            del om, small
+        sel = _irfft(M * S, shape) > delta
+        sel &= ~done
+        hp = _irfft(F * (1 - S), shape)
         out[sel] = hp[sel]
         done |= sel
-    loc = _ifftn_real(_fftn(out) * inv)
+        del S, sel, hp
+    del F, M
+    loc = _irfft(_rfft(out) * inv, shape)
     loc[~done] = 0
     return loc, done
 
 
 def _pdf(field, mask, voxel_size, b0_dir, tol, max_iter, pad):
     from scipy.sparse.linalg import LinearOperator, cg
-    padw = pad
-    f = _pad(field, padw)
-    m = _pad(mask, padw)
-    d = qsm_dipole_kernel(f.shape, voxel_size, b0_dir).astype(np.float64)
+    f = _pad(field.astype(np.float32), pad)
+    m = _pad(mask, pad)
+    shp = f.shape
+    d = _dipole_r(shp, voxel_size, b0_dir)
     out = ~m
     n = int(out.sum())
-    shp = f.shape
+    mf = m.astype(np.float32)
 
     def A(v):
-        x = np.zeros(shp)
+        x = np.zeros(shp, np.float32)
         x[out] = v
-        y = _ifftn_real(_fftn(x) * d) * m
-        return _ifftn_real(_fftn(y) * d)[out]
+        y = _irfft(_rfft(x) * d, shp)
+        y *= mf
+        return _irfft(_rfft(y) * d, shp)[out]
 
-    b = _ifftn_real(_fftn(f * m) * d)[out]
-    op = LinearOperator((n, n), matvec=A, dtype=np.float64)
+    b = _irfft(_rfft(f * mf) * d, shp)[out]
+    op = LinearOperator((n, n), matvec=A, dtype=np.float32)
     try:
         xb, _ = cg(op, b, rtol=tol, maxiter=max_iter)
     except TypeError:            # scipy < 1.12
         xb, _ = cg(op, b, tol=tol, maxiter=max_iter)
-    x = np.zeros(shp)
+    del b
+    x = np.zeros(shp, np.float32)
     x[out] = xb
-    bg = _ifftn_real(_fftn(x) * d)
-    loc = (f - bg) * m
-    return _unpad(loc, padw), _unpad(m, padw)
+    del xb
+    loc = (f - _irfft(_rfft(x) * d, shp)) * mf
+    return _unpad(loc, pad), _unpad(m, pad)
 
 
 @register_function(
@@ -642,11 +737,12 @@ def qsm_background_removal(field, mask, voxel_size=(1.0, 1.0, 1.0), method: str 
     """Return ``(local_field, local_mask)``.
 
     V-SHARP / SHARP erode the mask by the smallest radius (edge voxels are lost
-    and set to 0); PDF keeps the whole mask but needs ``b0_dir``.
+    and set to 0); PDF keeps the whole mask but needs ``b0_dir``.  Background
+    removal can only remove fields of sources outside the mask (harmonic inside
+    it); judge it on data whose background satisfies that.
     """
-    f = np.asarray(field, dtype=np.float64)
     m = np.asarray(mask, bool)
-    f = np.where(m, f, 0.0)
+    f = np.where(m, np.asarray(field, dtype=np.float32), np.float32(0))
     vs = _vox3(voxel_size)
     if method in ("vsharp", "sharp"):
         if radii_mm is None:
@@ -662,14 +758,22 @@ def qsm_background_removal(field, mask, voxel_size=(1.0, 1.0, 1.0), method: str 
 
 # ── dipole inversion ────────────────────────────────────────────────────────
 
-def _diff_k(shape):
+def _diff_kr(shape):
+    """Forward-difference multipliers on the half (rfft) spectrum."""
     E = []
     for ax, n in enumerate(shape):
-        k = sfft.fftfreq(n)
+        k = sfft.rfftfreq(n) if ax == 2 else sfft.fftfreq(n)
         s = [1, 1, 1]
-        s[ax] = n
-        E.append((np.exp(2j * np.pi * k) - 1).reshape(s))
+        s[ax] = k.size
+        E.append((np.exp(2j * np.pi * k) - 1).astype(np.complex64).reshape(s))
     return E
+
+
+def _ete_r(shape):
+    out = np.zeros(_rshape(shape), np.float32)
+    for e in _diff_kr(shape):
+        out += (np.abs(e) ** 2).astype(np.float32)
+    return out
 
 
 def _grad(x):
@@ -677,30 +781,45 @@ def _grad(x):
 
 
 def _grad_adj(g):
-    return sum(np.roll(g[a], 1, axis=a) - g[a] for a in range(3))
+    out = np.roll(g[0], 1, axis=0) - g[0]
+    for a in (1, 2):
+        out += np.roll(g[a], 1, axis=a)
+        out -= g[a]
+    return out
 
 
 def _tv_admm(phi, d, lam, rho, n_iter, tol):
-    # single precision keeps the memory of a whole-head volume within ~1 GB
+    # single precision, half spectra: a whole-head volume stays well under 1 GB
+    shape = phi.shape
     phi = phi.astype(np.float32)
-    E = _diff_k(phi.shape)
-    ete = sum(np.abs(e) ** 2 for e in E)
-    den = (d.astype(np.float64) ** 2 + rho * ete).astype(np.float32)
+    den = d * d + np.float32(rho) * _ete_r(shape)
     den[den == 0] = 1.0
-    dphi = (d * _fftn(phi)).astype(np.complex64)
-    x = np.zeros(phi.shape, np.float32)
-    zs = [np.zeros(phi.shape, np.float32) for _ in range(3)]
-    us = [np.zeros(phi.shape, np.float32) for _ in range(3)]
-    thr = lam / rho
+    dphi = _rfft(phi) * d
+    del phi
+    x = np.zeros(shape, np.float32)
+    zs = [np.zeros(shape, np.float32) for _ in range(3)]
+    us = [np.zeros(shape, np.float32) for _ in range(3)]
+    thr = np.float32(lam / rho)
+    rho32 = np.float32(rho)
     for _ in range(n_iter):
         x_old = x
-        x = _ifftn_real((dphi + rho * _fftn(_grad_adj([zs[a] - us[a] for a in range(3)]))) / den)
+        q = _grad_adj([zs[a] - us[a] for a in range(3)])
+        X = _rfft(q)
+        del q
+        X *= rho32
+        X += dphi
+        X /= den
+        x = _irfft(X, shape)
+        del X
         g = _grad(x)
         for a in range(3):
             v = g[a] + us[a]
-            zs[a] = (np.sign(v) * np.maximum(np.abs(v) - thr, 0.0)).astype(np.float32)
-            us[a] = us[a] + g[a] - zs[a]
+            zs[a] = np.sign(v) * np.maximum(np.abs(v) - thr, np.float32(0))
+            us[a] = v - zs[a]          # u + grad - z
+            del v
+        del g
         dx = np.linalg.norm(x - x_old) / max(np.linalg.norm(x), 1e-12)
+        del x_old
         if dx < tol:
             break
     return x
@@ -731,31 +850,34 @@ def qsm_dipole_inversion(local_field, mask, voxel_size=(1.0, 1.0, 1.0), b0_dir=(
     m = np.asarray(mask, bool)
     vs = _vox3(voxel_size)
     pad = _pad_width(m.shape, vs, pad_mm)
-    phi = _pad(np.where(m, np.asarray(local_field, dtype=np.float64), 0.0), pad)
-    d = qsm_dipole_kernel(phi.shape, vs, b0_dir).astype(np.float64)
+    phi = _pad(np.where(m, np.asarray(local_field, dtype=np.float32), np.float32(0)), pad)
+    shape = phi.shape
+    d = _dipole_r(shape, vs, b0_dir)
     if method == "tv":
         lam = 3e-4 if lam is None else lam
         rho = 100 * lam if rho is None else rho
-        chi = _tv_admm(phi, d, lam, rho, n_iter, tol).astype(np.float64)
+        chi = _tv_admm(phi, d, lam, rho, n_iter, tol)
     elif method == "tikhonov":
         lam = 1e-2 if lam is None else lam
         if regularization == "identity":
-            g = 1.0
+            g = np.float32(1.0)
         elif regularization == "gradient":
-            g = sum(np.abs(e) ** 2 for e in _diff_k(phi.shape))
+            g = _ete_r(shape)
         else:
             raise ValueError("regularization must be 'identity' or 'gradient'")
-        den = d ** 2 + lam * g
-        den = np.where(den == 0, 1.0, den)
-        chi = _ifftn_real(_fftn(phi) * d / den)
+        den = d * d + np.float32(lam) * g
+        den[den == 0] = 1.0
+        chi = _irfft(_rfft(phi) * (d / den), shape)
     elif method == "tkd":
-        inv = np.where(np.abs(d) > tkd_threshold, 1.0 / np.where(np.abs(d) > tkd_threshold, d, 1), 0.0)
-        chi = _ifftn_real(_fftn(phi) * inv)
+        big = np.abs(d) > tkd_threshold
+        inv = np.where(big, 1 / np.where(big, d, 1), 0).astype(np.float32)
+        chi = _irfft(_rfft(phi) * inv, shape)
     else:
         raise ValueError("method must be 'tv', 'tikhonov' or 'tkd'")
-    chi = _unpad(chi, pad)
+    del phi
+    chi = np.ascontiguousarray(_unpad(chi, pad), dtype=np.float32)
     chi[~m] = 0
-    return chi.astype(np.float32)
+    return chi
 
 
 # ── full pipeline ───────────────────────────────────────────────────────────
@@ -799,12 +921,13 @@ def qsm_reconstruct(phase, magnitude, echo_times, b0_tesla: float, voxel_size=(1
         ph, mg = ph[None], mg[None]
     m0 = qsm_brain_mask(mg, vs) if mask is None else np.asarray(mask, bool)
     fe = qsm_multi_echo_field(ph, mg, echo_times, m0, unwrap=unwrap, max_residual=max_residual,
-                              voxel_size=vs)
+                              voxel_size=vs, return_unwrapped=False)
     m1 = fe["reliable_mask"] if refine_mask else m0
     loc_hz, lm = qsm_background_removal(np.where(m1, fe["field_hz"], 0), m1, vs, method=background,
                                         b0_dir=b0_dir)
     scale = 1.0 / (gamma_bar_mhz_per_t * float(b0_tesla))   # Hz -> ppm
-    loc_ppm = (loc_hz * scale).astype(np.float32)
+    loc_ppm = (loc_hz * np.float32(scale)).astype(np.float32)
+    del loc_hz
     chi = qsm_dipole_inversion(loc_ppm, lm, vs, b0_dir, method=inversion, lam=lam, **inversion_kw)
     if reference == "mask_mean":
         chi = np.where(lm, chi - chi[lm].mean(), 0).astype(np.float32)
