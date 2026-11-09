@@ -317,7 +317,12 @@ def leiden(  # noqa: PLR0912, PLR0913, PLR0915
     from .._backend import resolve_backend
     _backend = resolve_backend(backend)
     if flavor is None and _backend == "cpp":
-        flavor = "brisc"
+        # brisc's Leiden only optimises the RB-configuration objective; with a
+        # custom partition type or extra leidenalg arguments keep leidenalg.
+        if partition_type is None and not clustering_args:
+            flavor = "brisc"
+        else:
+            flavor = "leidenalg"
     if n_iterations is None:
         n_iterations = 2 if _backend == "cpp" else -1
     if flavor == "brisc":
