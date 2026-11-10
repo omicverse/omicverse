@@ -29,7 +29,15 @@ Pipeline
    real constriction between them, and their union is convex
    (``solidity >= merge_solidity``). Size alone never merges: a small nucleus
    pressed against a large one stays separate.
-5. **Depth split (stacks only).** Nuclei at different focal planes can overlap
+5. **Surface steps (stacks resolved in z, ``spacing`` given).** With fine
+   z-sampling each nucleus has a measurable top and bottom surface. Inside one
+   nucleus they are smooth; where a nucleus lies over (or under) another one
+   there is a near-vertical step at its rim, even when the two touch and the
+   DAPI signal is saturated. The projection mask is cut along those steps
+   before seeding (so a nucleus lying fully inside another's footprint still
+   gets its own label; shared pixels go to the upper one), and fragments are
+   never merged across a step. This replaces (6) for such stacks.
+6. **Depth split (coarse stacks).** Nuclei at different focal planes can overlap
    in projection and form one 2-D object with no constriction. For each
    object the per-pixel focal depth (intensity-weighted mean z) is smoothed
    inside the object and cut in two by Otsu. The split is accepted when
@@ -47,7 +55,7 @@ so the choices can be reported.
 """
 from __future__ import annotations
 
-from typing import Optional, Union
+from typing import Optional, Sequence, Union
 
 import numpy as np
 import pandas as pd
@@ -131,12 +139,24 @@ def _solidity(mask):
     return float(props[0].solidity) if props else 0.0
 
 
-def _merge_fragments(labels, neck_ratio, merge_solidity):
+def _interface_on(labels, a, b, barrier):
+    """Fraction of the a|b interface pixels that lie on ``barrier``."""
+    hit = tot = 0
+    for x, y, bx, by in ((labels[:, :-1], labels[:, 1:], barrier[:, :-1], barrier[:, 1:]),
+                         (labels[:-1, :], labels[1:, :], barrier[:-1, :], barrier[1:, :])):
+        sel = ((x == a) & (y == b)) | ((x == b) & (y == a))
+        tot += int(sel.sum())
+        hit += int((sel & (bx | by)).sum())
+    return hit / tot if tot else 0.0
+
+
+def _merge_fragments(labels, neck_ratio, merge_solidity, barrier=None):
     """Merge touching watershed fragments that are one nucleus: no constriction
     between them (interface >= neck_ratio * the smaller one's equivalent
     diameter) AND a convex union (solidity >= merge_solidity). Size alone never
-    merges: a small nucleus touching a large one is kept.
-    Returns (labels, n_merges)."""
+    merges: a small nucleus touching a large one is kept. Pairs whose interface
+    lies mostly on ``barrier`` (surface steps: nuclei at different depths) are
+    never merged. Returns (labels, n_merges)."""
     labels = labels.copy()
     rejected = set()
     n_merges = 0
@@ -156,7 +176,8 @@ def _merge_fragments(labels, neck_ratio, merge_solidity):
         if best is None:
             break
         _, a, b = best
-        if _solidity((labels == a) | (labels == b)) < merge_solidity:
+        if _solidity((labels == a) | (labels == b)) < merge_solidity or (
+                barrier is not None and _interface_on(labels, a, b, barrier) >= 0.5):
             rejected.add((a, b))
             continue
         keep, drop = (a, b) if areas[a] >= areas[b] else (b, a)
@@ -250,6 +271,60 @@ def _try_depth_split(region, fz, radius, min_gap, min_part_area, coherence, plan
     return pa, pb, gap, ratio
 
 
+def _surfaces(stack, proj_fg, sigma, spacing):
+    """Top / bottom surface (slice index) of the 3-D foreground per xy column,
+    the 3-D foreground's threshold, and whether nuclei are resolved in z
+    (not clipped by the first / last slice)."""
+    from scipy import ndimage as ndi
+    from skimage import filters
+
+    dz, dy, dx = spacing
+    sz = sigma * dx / dz
+    s = ndi.gaussian_filter(stack, (sz, sigma, sigma))
+    thr = filters.threshold_otsu(s) if np.ptp(s) > 0 else float(s.max()) + 1.0
+    fg3 = s > thr
+    cnt = fg3.sum(0)
+    nz = stack.shape[0]
+    zb = np.where(cnt > 0, fg3.argmax(0), 0).astype(float)
+    zt = np.where(cnt > 0, nz - 1 - fg3[::-1].argmax(0), 0).astype(float)
+    cols = proj_fg & (cnt > 0)
+    if not cols.any():
+        return zb, zt, False, {}
+    clipped = float(((zb[cols] == 0) | (zt[cols] == nz - 1)).mean())
+    thick = float(np.median(cnt[cols]))
+    resolved = clipped <= 0.25 and thick >= 4
+    return zb, zt, resolved, {"clipped_frac": clipped, "median_thickness_slices": thick}
+
+
+def _surface_steps(zb, zt, fg, radius, spacing, step_lo, step_hi):
+    """Pixels where the top or bottom surface of the nuclear volume steps
+    (the rim of a nucleus lying over / under another one).
+
+    Surfaces are median- then Gaussian-filtered at scales tied to the radius;
+    the slope is physical (um of depth per um in xy, so 1.0 = 45 degrees).
+    Steps are hysteresis-thresholded (``step_hi`` seeds, ``step_lo`` extends
+    them, closing the rim curve) and only long curves (>= radius / 2) are kept:
+    short steps are chromatin texture or noise."""
+    from scipy import ndimage as ndi
+    from skimage import filters, measure
+
+    dz, dy, dx = spacing
+    med = max(3, int(round(radius / 12.0)) | 1)
+    gs = max(1.0, radius / 40.0)
+    slope = np.zeros(fg.shape)
+    for d in (zb, zt):
+        d = ndi.gaussian_filter(ndi.median_filter(d, size=med), gs)
+        gy, gx = np.gradient(d)
+        slope = np.maximum(slope, np.hypot(gy * dz / dy, gx * dz / dx))
+    inner = ndi.binary_erosion(fg, iterations=max(1, int(round(radius / 20.0))))
+    edge = filters.apply_hysteresis_threshold(slope, step_lo, step_hi) & inner
+    el = measure.label(edge)
+    for p in measure.regionprops(el):
+        if p.axis_major_length < 0.5 * radius:
+            edge[el == p.label] = False
+    return edge
+
+
 def _drop_small(mask, min_area):
     from scipy import ndimage as ndi
 
@@ -341,6 +416,8 @@ def _recover_dim(sm, fg, thr, radius, min_area):
 def segment_nuclei(
     image,
     *,
+    spacing: Optional[Sequence[float]] = None,
+    mode: str = "auto",
     radius: Optional[float] = None,
     threshold: Union[str, float] = "auto",
     projection: str = "max",
@@ -355,6 +432,8 @@ def segment_nuclei(
     min_depth_gap: float = 1.0,
     plane_ratio: float = 1.5,
     coherence: float = 0.9,
+    step_lo: float = 0.6,
+    step_hi: float = 1.4,
     return_info: bool = False,
 ):
     """Segment nuclei into instances (one positive label per nucleus).
@@ -366,6 +445,17 @@ def segment_nuclei(
         first (e.g. ``stack[:, dapi_channel]`` for a ZCYX file). Pass the
         whole stack, not a projection, so overlapping nuclei at different
         depths can be separated.
+    spacing
+        Voxel size ``(dz, dy, dx)`` in the same unit (e.g. um) from the file's
+        calibration. Needed for the surface mode; always pass it for stacks.
+    mode
+        ``'auto'`` (default): for a stack with ``spacing`` whose nuclei are
+        resolved in z (their top and bottom lie inside the stack, and one
+        z-step is fine enough that it does not itself look like a rim), cut along
+        steps of the nuclear volume's top / bottom surface (``'surface'``);
+        otherwise split by focal depth (``'depth'``, coarse z-steps where
+        nuclei fill the whole stack). ``'surface'`` / ``'depth'`` force a
+        mode, ``'2d'`` uses the projection only.
     radius
         Typical nucleus radius in pixels. ``None`` (default) estimates it
         from the image; pass it when the image holds very few nuclei.
@@ -410,6 +500,11 @@ def segment_nuclei(
     coherence
         Each depth part's largest connected piece must hold this fraction of
         the part.
+    step_lo, step_hi
+        Surface mode: hysteresis thresholds on the surface slope (um of depth
+        per um in xy; 1.0 = 45 degrees). A nucleus's own top is flatter than
+        that away from its rim; the rim of a nucleus lying on another one is
+        a near-vertical step.
     return_info
         Also return a per-nucleus ``DataFrame`` and a dict of the estimated
         parameters / decisions.
@@ -463,29 +558,63 @@ def segment_nuclei(
         info["n_nuclei"] = 0
         return (empty, pd.DataFrame(), info) if return_info else empty
 
+    # stacks resolved in z: cut the projection along steps of the nuclear
+    # volume's top / bottom surface (nuclei lying over / under one another)
+    barrier = None
+    use_surface = False
+    if stack.shape[0] >= 3 and mode in ("auto", "surface"):
+        if spacing is None:
+            if mode == "surface":
+                raise ValueError("mode='surface' needs spacing=(dz, dy, dx)")
+        else:
+            zb, zt, resolved, sinfo = _surfaces(stack, fg, sigma, spacing)
+            # a one-slice quantisation step of the surface, after the smoothing
+            # used for slopes (Gaussian peak gradient ~0.4 / sigma), must stay
+            # below step_lo, otherwise coarse z-steps look like nucleus rims
+            gs = max(1.0, r / 40.0)
+            sinfo["slice_step_slope"] = 0.4 * spacing[0] / (spacing[2] * gs)
+            resolved = resolved and sinfo["slice_step_slope"] < step_lo
+            info.update(sinfo)
+            use_surface = resolved or mode == "surface"
+            if use_surface:
+                edge = _surface_steps(zb, zt, fg, r, spacing, step_lo, step_hi)
+                barrier = ndi.binary_dilation(edge, iterations=2)
+                info["step_px"] = int(edge.sum())
+    info["mode"] = "surface" if use_surface else (
+        "depth" if stack.shape[0] >= 3 and depth_split and mode != "2d" else "2d")
+
     # seeds + watershed on the distance transform
-    dist = ndi.gaussian_filter(ndi.distance_transform_edt(fg), sigma)
     h = max(r * h_frac, 1e-6)
-    markers = measure.label(morphology.h_maxima(dist, h))
+    dist_full = ndi.distance_transform_edt(fg)
+    if barrier is not None:
+        cut = fg & ~barrier
+        dist = ndi.gaussian_filter(ndi.distance_transform_edt(cut), sigma)
+        markers = measure.label(morphology.h_maxima(dist, h) & cut)
+        elevation = -ndi.gaussian_filter(dist_full, sigma) - 3.0 * dist
+    else:
+        dist = ndi.gaussian_filter(dist_full, sigma)
+        markers = measure.label(morphology.h_maxima(dist, h))
+        elevation = -dist
     comp, _ = ndi.label(fg)
     unseeded = np.setdiff1d(np.unique(comp[fg]), np.unique(comp[markers > 0]))
     if unseeded.size:
         extra = np.isin(comp, unseeded)
         markers[extra] = comp[extra] + markers.max()
-    labels = segmentation.watershed(-dist, markers, mask=fg)
+    labels = segmentation.watershed(elevation, markers, mask=fg)
     labels, _, _ = segmentation.relabel_sequential(labels)
     info["h"] = h
     info["n_watershed"] = int(labels.max())
 
     # shape checks: merge fragments without a constriction and with a convex union
-    labels, n_merge = _merge_fragments(labels, neck_ratio, merge_solidity)
+    labels, n_merge = _merge_fragments(labels, neck_ratio, merge_solidity, barrier)
     labels, _, _ = segmentation.relabel_sequential(labels)
     info["n_merged"] = int(n_merge)
 
     # depth split for stacks
     fz = None
     n_split = 0
-    if depth_split and stack.shape[0] >= 3 and labels.max() > 0:
+    if (depth_split and not use_surface and mode != "2d" and stack.shape[0] >= 3
+            and labels.max() > 0):
         fz = _focal_depth(stack, fg, sigma)
         spreads = [float(np.std(fz[labels == k])) for k in range(1, int(labels.max()) + 1)]
         sigma_depth = float(np.median(spreads))

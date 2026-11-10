@@ -64,6 +64,7 @@ CellSAM (GitHub) and Baysor (binary) are installed separately;
 from ._api import expand_labels, load_image, methods, segment
 from ._metrics import compare, evaluate
 from ._nuclei import segment_nuclei
+from ._cilia import detect_cilia
 from ._tiling import segment_tiled
 from ._transcripts import aggregate, assign_transcripts, segment_transcripts
 
@@ -72,6 +73,7 @@ __all__ = [
     "segment",
     "segment_tiled",
     "segment_nuclei",
+    "detect_cilia",
     "expand_labels",
     "load_image",
     "assign_transcripts",
