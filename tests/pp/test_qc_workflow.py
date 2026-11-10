@@ -73,3 +73,27 @@ def test_pl_qc_requires_metrics():
     a = ad.AnnData(np.zeros((5, 4), dtype=np.float32))
     with pytest.raises(ValueError):
         ov.pl.qc(a)
+
+
+def test_qc_cpu_gpu_mixed_in_memory_matches_cpu():
+    """cpu-gpu-mixed qc on an in-memory AnnData (regression: NameError
+    'backend' in 2.4.0) keeps the same cells and genes as cpu mode."""
+    import anndata as ad
+    import numpy as np
+    import scipy.sparse as sp
+    import omicverse as ov
+    rs = np.random.default_rng(0)
+    X = sp.csr_matrix(rs.poisson(0.6, (1200, 500)).astype(np.float32))
+    a = ad.AnnData(X)
+    a.var_names = [f"MT-{i}" if i < 5 else f"G{i}" for i in range(500)]
+    a.obs_names = [f"c{i}" for i in range(1200)]
+    kw = dict(doublets=False, tresh={"mito_perc": 0.5, "nUMIs": 150, "detected_genes": 100},
+              min_cells=3, min_genes=100)
+    try:
+        ov.settings.cpu_gpu_mixed_init()
+        m = ov.pp.qc(a.copy(), **kw)
+    finally:
+        ov.settings.cpu_init()
+    c = ov.pp.qc(a.copy(), **kw)
+    assert list(m.obs_names) == list(c.obs_names)
+    assert list(m.var_names) == list(c.var_names)
