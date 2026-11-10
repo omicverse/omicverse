@@ -774,7 +774,7 @@ def qc(
     elif settings.mode == 'cpu-gpu-mixed':
         print(f"{Colors.HEADER}{Colors.BOLD}{EMOJI['mixed']} Using CPU/GPU mixed mode for QC...{Colors.ENDC}")
         print_gpu_usage_color()
-        result = qc_cpu_gpu_mixed(adata, **kwargs, **mixed_only)
+        result = qc_cpu_gpu_mixed(adata, backend=_backend, **kwargs, **mixed_only)
         note(backend=f"omicverse({settings.mode}) · mixed · mode={mode}")
     else:
         print(f"{Colors.HEADER}{Colors.BOLD}{EMOJI['cpu']} Using CPU mode for QC...{Colors.ENDC}")
@@ -806,7 +806,7 @@ def qc_cpu_gpu_mixed(adata:anndata.AnnData, mode='seurat',
        path_viz=None, tresh=None,mt_startswith='auto',mt_genes=None,
        ribo_startswith=("RPS", "RPL"),ribo_genes=None,
        hb_startswith="^HB[^(P)]",hb_genes=None,
-       use_gpu=True,batch_wise_mad=None):
+       use_gpu=True,batch_wise_mad=None,backend=None):
     """
     Perform quality control on an AnnData object.
 
