@@ -995,9 +995,11 @@ def qsm_reconstruct(phase, magnitude, echo_times, b0_tesla: float, voxel_size=(1
 )
 def qsm_numerical_phantom(shape=(80, 80, 64), voxel_size=(1.0, 1.0, 1.0), b0_tesla: float = 3.0,
                           echo_times=(0.004, 0.008, 0.012, 0.016), b0_dir=(0.0, 0.0, 1.0),
-                          noise: float = 0.01, seed: int = 0) -> Dict:
+                          noise: float = 0.01, seed: int = 0, texture: float = 0.02) -> Dict:
     """Return dict(phase, magnitude, chi, brain_mask, structures, field_hz, ...).
 
+    ``texture`` adds zero-mean fine-scale tissue texture (ppm sd) so that the
+    phantom does not reward over-smoothing.
     All values are generic textbook magnitudes chosen to exercise the steps
     (wraps, background field, positive / negative sources); they are not
     calibrated to any dataset.
@@ -1028,6 +1030,15 @@ def qsm_numerical_phantom(shape=(80, 80, 64), voxel_size=(1.0, 1.0, 1.0), b0_tes
     inclusion = ell((-0.3, -0.25, -0.2), (0.04, 0.04, 0.04)) & brain
     chi[inclusion] = -1.5
     structures["negative_inclusion"] = (inclusion, -1.5)
+    if texture > 0:
+        # zero-mean fine-scale tissue texture (sd ``texture`` ppm, ~1.5 mm correlation):
+        # real brains are not piecewise constant, and a texture-free phantom rewards
+        # over-regularised (too smooth) inversions
+        tx = ndi.gaussian_filter(rng.standard_normal(shp).astype(np.float32),
+                                 [1.5 / v for v in vs])
+        tx -= tx[brain].mean()
+        tx *= np.float32(texture / max(float(tx[brain].std()), 1e-12))
+        chi = np.where(brain, chi + tx, chi).astype(np.float32)
     # air-like external sources (sinus / ear canals) and the head-air boundary
     full = chi.copy()
     full[~head] = 9.0
