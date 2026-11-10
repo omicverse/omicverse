@@ -6,7 +6,7 @@ Part of [roadmap #989](https://github.com/omicverse/omicverse/issues/989).
 
 ## Usage
 
-Install the optional backend with `pip install "omicverse[lemur]"` in an environment supported by the backend. Importing OmicVerse does not import the backend.
+Install the optional backend with `pip install "omicverse[lemur]"` using **Python 3.10 or later**. The optional backend has a higher Python floor than the base OmicVerse package. Importing OmicVerse does not import the backend.
 
 ```python
 import omicverse as ov
