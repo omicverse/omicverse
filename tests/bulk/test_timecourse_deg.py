@@ -1,7 +1,7 @@
 """Tests for ov.bulk.pyDEG.timecourse_deg — time-course / longitudinal DE.
 
 ``timecourse_deg`` is isomorphic to ``continuous_deg``: it is built on the
-vendored pure-Python limma-voom (``omicverse.external.pylimma``) and answers
+pure-Python limma-voom (``pylimma``, PyPI ``python-limma``) and answers
 the three classic time-course questions with a *moderated F-test over a
 block of design columns*:
 

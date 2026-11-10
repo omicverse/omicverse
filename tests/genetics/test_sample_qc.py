@@ -13,8 +13,11 @@ from omicverse.genetics._sample_qc import (
 )
 
 
-def _simulate(seed=0, n_sites=320, depth=60):
-    """4 individuals x (tumour, normal); known LOH, admixture and contamination."""
+def _simulate(seed=0, n_sites=320, depth=60, reruns=None):
+    """4 individuals x (tumour, normal); known LOH, admixture and contamination.
+
+    ``reruns`` = ``{new_library: sample}`` adds independently sequenced extra
+    libraries of existing samples (same DNA, new read sampling)."""
     rng = np.random.default_rng(seed)
     regions = np.repeat([f"r{i}" for i in range(8)], n_sites // 8)
     maf = rng.uniform(0.2, 0.5, n_sites)
@@ -39,14 +42,16 @@ def _simulate(seed=0, n_sites=320, depth=60):
         "T2": {"N2": 0.10},
     }
     rows = []
-    for s, af in true_af.items():
+    libraries = [(s, s) for s in true_af] + list((reruns or {}).items())
+    for lib, s in libraries:
+        af = true_af[s]
         m = mix.get(s, {})
         f = (1 - sum(m.values())) * af + sum(a * true_af[src] for src, a in m.items())
         p = np.clip(f * (1 - 0.004) + (1 - f) * 0.004, 0, 1)
         n = rng.poisson(depth, n_sites)
         k = rng.binomial(n, p)
         for j in range(n_sites):
-            rows.append((s, "chr1", 1000 + j * 50, "A", "G", regions[j], n[j] - k[j], k[j], 0, n[j],
+            rows.append((lib, "chr1", 1000 + j * 50, "A", "G", regions[j], n[j] - k[j], k[j], 0, n[j],
                          k[j] / n[j] if n[j] else np.nan, True))
     counts = pd.DataFrame(rows, columns=["sample", "chrom", "pos", "ref", "alt", "region_id", "ref_count",
                                          "alt_count", "other_count", "depth", "alt_fraction", "in_target"])
@@ -241,3 +246,46 @@ def test_batch_qc_germline_only_panel(sim_germline):
     assert ("P1", "cross_sample_contamination", "T1", "N2") in got
     assert not any(t in ("identity_mismatch", "low_tumor_content") for _, t, _, _ in got)
     assert not ((f["finding_type"] == "tumor_in_normal") & (f["affected"] != "N0")).any()
+
+
+# --- several libraries of one individual ------------------------------------
+def test_extra_libraries_stay_with_their_individual():
+    """A re-sequenced normal used to break the tumour/normal group.
+
+    Two libraries of N2 are each other's best match, so T2 -- whose best is
+    one of them -- was the mutual best of neither, was grouped with nobody
+    and its correct record came out MISMATCH."""
+    counts, manifest = _simulate(reruns={"N2-rerun": "N2", "N2-rerun2": "N2",
+                                         "T3-lib2": "T3"})
+    conc = sample_genotype_concordance(counts)
+    rel = resolve_sample_relationships(conc, manifest).set_index("case_id")
+    assert rel.loc["P2", "status"] == "SUPPORTED"          # was MISMATCH
+    assert rel.loc["P3", "status"] == "SUPPORTED"
+    # the planted swap is still caught
+    assert rel.loc["P0", "status"] == "MISMATCH" and rel.loc["P1", "status"] == "MISMATCH"
+
+    res = tumor_normal_batch_qc(counts, manifest)
+    groups = res["groups"]
+    assert set(groups["T2"]) == {"T2", "N2", "N2-rerun", "N2-rerun2"}
+    assert set(groups["T3"]) == {"T3", "N3", "T3-lib2"}
+    for i in (0, 1):                                       # individuals stay apart
+        assert set(groups[f"T{i}"]) == {f"T{i}", f"N{i}"}
+    assert res["pooled_libraries"] == {"N2-rerun": "N2", "N2-rerun2": "N2", "T3-lib2": "T3"}
+    # same findings as the batch without the extra libraries: nothing on an
+    # unlisted library, no re-run fitted as a "source" of its own sample
+    f = res["findings"]
+    got = {(r.case_id, r.finding_type, r.affected) for r in f.itertuples()}
+    ref = tumor_normal_batch_qc(*_simulate())["findings"]
+    assert got == {(r.case_id, r.finding_type, r.affected) for r in ref.itertuples()}
+    assert ("P2", "tumor_in_normal", "N2") in got and "NA" not in set(f["case_id"])
+
+
+def test_unrelated_orphan_is_not_absorbed():
+    """A sample whose own partner is missing must stay on its own."""
+    counts, manifest = _simulate(reruns={"N2-rerun": "N2"})
+    counts = counts[counts["sample"] != "N3"]              # T3's normal is missing
+    conc = sample_genotype_concordance(counts)
+    from omicverse.genetics._sample_qc import _same_individual_groups
+    groups = _same_individual_groups(conc)
+    assert groups["T3"] == {"T3"}
+    assert groups["T2"] == {"T2", "N2", "N2-rerun"}

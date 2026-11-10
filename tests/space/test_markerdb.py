@@ -202,3 +202,99 @@ def test_gene_under_distinct_names_shares_weight():
                                  cache=os.path.join(tempfile.mkdtemp(), "c.json"))
     s = kb["signatures"]["alpha cell"]
     assert abs(s["MA"] - s["MA-iso"]) < 1e-9 and s["MA"] <= 0.5 + 1e-9
+
+
+# --- panel names -> genes: alias ownership and Greek-prefixed abbreviations ---
+# The tables mirror the public records: NCBI lists ASMA ("alpha skeletal muscle
+# actin") as an alias of ACTA1; neither HGNC nor NCBI lists aSMA / alpha-SMA
+# for ACTA2; antibodies registered as "alpha-SMA" declare UniProt P62736 (ACTA2).
+MYGENE = {
+    "ASMA": [{"symbol": "ACTA1", "alias": ["ACTA", "ASMA", "NEM3"]}],
+    "CD45": [{"symbol": "PTPRCAP", "alias": ["LPAP", "CD45-AP"]},     # ranked first
+             {"symbol": "PTPRC", "alias": ["CD45", "LCA", "T200"]}],
+    "PDL1": [{"symbol": "CD274", "alias": ["B7-H1", "PD-L1", "PDL1"]}],
+}
+HGNC_ALIAS = {"Ki-67": [{"symbol": "MKI67", "alias_symbol": ["KIA", "Ki-67"]}],
+              "HER2": [{"symbol": "ERBB2", "alias_symbol": ["HER-2", "HER2", "NEU"]}]}
+UNIPROT_NAMES = {   # protein_name query -> reviewed entries
+    "beta-Catenin": [("CTNNBIP1", "Beta-catenin-interacting protein 1", []),
+                     ("CTNNB1", "Catenin beta-1", ["Beta-catenin"])],
+}
+ACCESSIONS = {"P62736": "ACTA2", "P68032": "ACTC1", "P63267": "ACTG2", "P35222": "CTNNB1"}
+ABREG = {"alpha-SMA": [("alpha-SMA", "P62736"), ("alpha-SMA", "p62736")],
+         "alpha SMA": [("alpha SMA", "P62736"), ("alpha SMA", "P62736"),
+                       ("alpha SMA", "P68032, P62736, P63267")]}
+
+
+def fake_names(url, params=None, headers=None, timeout=30):
+    import re
+    from urllib.parse import unquote
+    if "mygene.info" in url:
+        v = params["q"].split(" OR ")[0].split(":", 1)[1]
+        return {"hits": MYGENE.get(re.sub(r"[^A-Z0-9]", "", v.upper()), [])}
+    if "genenames.org/fetch/alias_symbol/" in url:
+        return {"response": {"docs": HGNC_ALIAS.get(unquote(url.rsplit("/", 1)[1]), [])}}
+    if "genenames.org" in url:
+        return {"response": {"docs": []}}
+    if "uniprot" in url:
+        q = params["query"]
+        m = re.search(r'protein_name:"([^"]+)"', q)
+        if m:
+            rows = UNIPROT_NAMES.get(m.group(1), [])
+            return {"results": [
+                {"genes": [{"geneName": {"value": g}}],
+                 "proteinDescription": {"recommendedName": {"fullName": {"value": rec}},
+                                        "alternativeNames": [{"fullName": {"value": a}} for a in alt]}}
+                for g, rec, alt in rows]}
+        accs = re.findall(r"accession:(\w+)", q)
+        return {"results": [{"genes": [{"geneName": {"value": ACCESSIONS[a]}}]}
+                            for a in accs if a in ACCESSIONS]}
+    if "antibodyregistry" in url:
+        return {"items": [{"abTarget": t, "abTargetUniprotId": a}
+                          for t, a in ABREG.get(params["q"], [])]}
+    return {"response": {"docs": []}, "hits": []}
+
+
+def test_panel_gene_map_greek_abbreviation_is_not_a_case_folded_alias():
+    """aSMA is alpha-smooth-muscle actin (ACTA2), not the ACTA1 alias ASMA."""
+    mdb._get = fake_names
+    names = ["aSMA", "a-SMA", "a.SMA", "ASMA", "bCatenin"]
+    src = {}
+    gm, miss = mdb.panel_gene_map(names, sources=src, workers=1)
+    assert gm["aSMA"] == gm["a-SMA"] == gm["a.SMA"] == ["ACTA2"]
+    assert src["aSMA"] == "antibody"
+    # an upper-case token *is* a symbol-style alias and keeps its NCBI meaning
+    assert gm["ASMA"] == ["ACTA1"] and src["ASMA"] == "mygene"
+    # beta-catenin: exact UniProt protein name, not the substring hit CTNNBIP1
+    assert gm["bCatenin"] == ["CTNNB1"] and src["bCatenin"] == "uniprot"
+    assert not miss
+
+
+def test_panel_gene_map_common_protein_aliases():
+    mdb._get = fake_names
+    src = {}
+    gm, miss = mdb.panel_gene_map(["Ki67", "CD45", "PD-L1", "HER2"], sources=src, workers=1)
+    assert gm["Ki67"] == ["MKI67"]               # via the nomenclature spelling Ki-67
+    assert gm["CD45"] == ["PTPRC"]               # the symbol whose alias list has CD45
+    assert gm["PD-L1"] == ["CD274"] and gm["HER2"] == ["ERBB2"]
+    assert src["HER2"] == "alias" and not miss
+
+
+def test_greek_abbreviation_unresolved_rather_than_wrong_when_offline():
+    """Without the protein-name sources, aSMA must not fall back to ACTA1."""
+    def offline(url, params=None, headers=None, timeout=30):
+        if "uniprot" in url or "antibodyregistry" in url:
+            raise OSError("offline")
+        return fake_names(url, params, headers, timeout)
+    mdb._get = offline
+    gm, miss = mdb.panel_gene_map(["aSMA"], workers=1)
+    assert "aSMA" not in gm and miss == ["aSMA"]
+
+
+def test_greek_prefix_detection_and_spellings():
+    for t in ("aSMA", "a-SMA", "a.SMA", "bCatenin", "b2M", "gH2AX"):
+        assert mdb._greek_prefixed(t), t
+    for t in ("ASMA", "B2M", "Ki67", "CD45", "beta-catenin", "dsDNA", "Vimentin"):
+        assert not mdb._greek_prefixed(t), t
+    assert "alpha-SMA" in mdb._name_variants("aSMA")
+    assert "Ki-67" in mdb._variants("Ki67")

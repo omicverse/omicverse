@@ -220,6 +220,7 @@ from ._perturbation import (
 )
 from ._density import add_density_contour, calculate_gene_density
 from ._plot1cell import plot1cell
+from ._celltype_tree import celltype_tree
 from ._cpdbviz import CellChatViz
 from ._ccc import ccc_heatmap, ccc_network_plot, ccc_stat_plot
 from ._ccc_compare import ccc_compare
@@ -391,6 +392,7 @@ __all__ = [
     "add_arrow",
     "bardotplot",
     "cellproportion",
+    "celltype_tree",
     "cellstackarea",
     "contour",
     "dotplot_doublegroup",

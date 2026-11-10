@@ -6,7 +6,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "omicverse"
-version = "2.3.2"
+version = "2.4.1"
 description = "OmicVerse: A single pipeline for exploring the entire transcriptome universe"
 readme = "README.md"
 requires-python = ">=3.9"
@@ -82,6 +82,10 @@ dependencies = [
     'openai>=1.0',
     'omicverse-skills>=0.3.0',
     'omicverse-notebook>=0.1.4',
+    # edgeR port used by pyDEG (edger/edgepy) and Milo; R-parity tested.
+    'pyedger>=0.2.2',
+    # limma port used by pyDEG (limma, continuous_deg, timecourse_deg); R-parity tested.
+    'python-limma>=0.1.1',
     #'cvxpy>=1.3',
     # anndata 0.12 is the only release that works with either zarr generation;
     # 0.13 requires zarr 3, and 0.11 requires zarr 2. omicverse itself touches
@@ -96,6 +100,10 @@ dependencies = [
     # anndata excludes it.
     'zarr>=2.16,<3; python_version < "3.11"',
     'zarr>=2.18.7,!=3.0.*; python_version >= "3.11"',
+    # Multithreaded C++ kernels behind the default backend='cpp' (QC, normalize,
+    # HVG, scale, PCA, neighbors, UMAP, Leiden, COSG); backend='python' or a
+    # missing install falls back to the original code.
+    'anndataoom-fast>=0.1.3',
 ]
 
 [project.optional-dependencies]
@@ -265,6 +273,8 @@ tests = [
   "matplotlib-venn>=1.1",
   "nbformat>=5.0",
   "httpx[socks]",
+  # ov.read(backend='dask') chunked mode
+  "dask[array]",
   # ov.micro test dependencies — scikit-bio powers Alpha/Beta/Ordinate,
   # ete3 powers attach_tree, pydeseq2 is the DESeq2 backend for DA.
   "scikit-bio>=0.6",
