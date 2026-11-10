@@ -767,10 +767,10 @@ def qc(
         print(f"{Colors.HEADER}{Colors.BOLD}{EMOJI['cpu']} Using CPU mode for QC (out-of-memory)...{Colors.ENDC}")
         result = qc_cpu(adata, backend=_backend, **kwargs)
         note(backend=f"omicverse({settings.mode}) · cpu(oom) · mode={mode}")
-    elif settings.mode == 'gpu':
+    elif settings.mode == 'gpu' or _is_dask_X(adata):
         print(f"{Colors.HEADER}{Colors.BOLD}{EMOJI['gpu']} Using RAPIDS GPU to calculate QC...{Colors.ENDC}")
         result = qc_gpu(adata, **kwargs)
-        note(backend=f"omicverse({settings.mode}) · rapids · mode={mode}")
+        note(backend=f"omicverse({settings.mode}) · {'dask' if _is_dask_X(adata) else 'rapids'} · mode={mode}")
     elif settings.mode == 'cpu-gpu-mixed':
         print(f"{Colors.HEADER}{Colors.BOLD}{EMOJI['mixed']} Using CPU/GPU mixed mode for QC...{Colors.ENDC}")
         print_gpu_usage_color()
@@ -1661,6 +1661,11 @@ def qc_cpu(
     return adata
 
 
+def _is_dask_X(adata) -> bool:
+    from ._dask import is_dask
+    return is_dask(getattr(adata, "X", None))
+
+
 def qc_gpu(adata, mode='seurat',
        min_cells=3, min_genes=200, nmads=5,
        max_cells_ratio=1,max_genes_ratio=1,
@@ -1673,8 +1678,18 @@ def qc_gpu(adata, mode='seurat',
     GPU-accelerated quality control using RAPIDS
 
     Doublet detection is performed after QC threshold filtering and final cell/gene filtering.
+    A Dask ``X`` (``ov.read(..., storage='disk')`` in GPU mode) is processed block by block.
     '''
-    import rapids_singlecell as rsc
+    dask_X = _is_dask_X(adata)
+    if dask_X:
+        from . import _dask
+        if doublets:
+            raise NotImplementedError(
+                "Doublet detection needs the whole matrix in memory; call "
+                "ov.pp.qc(..., doublets=False) on an AnnData read with storage='disk' in GPU mode.")
+        rsc = None
+    else:
+        import rapids_singlecell as rsc
     
     # Logging
     if tresh is None:
@@ -1692,8 +1707,9 @@ def qc_gpu(adata, mode='seurat',
         print(f"   {Colors.CYAN}Auto-detected mitochondrial prefix: {Colors.BOLD}'{mt_startswith}'{Colors.ENDC}")
     print(f"   {Colors.BLUE}Mitochondrial genes: {Colors.BOLD}{mt_startswith if mt_genes is None else 'custom list'}{Colors.ENDC}")
 
-    print(f"   {Colors.GREEN}{EMOJI['gpu']} Loading data to GPU...{Colors.ENDC}")
-    rsc.get.anndata_to_GPU(adata)
+    if not dask_X:
+        print(f"   {Colors.GREEN}{EMOJI['gpu']} Loading data to GPU...{Colors.ENDC}")
+        rsc.get.anndata_to_GPU(adata)
 
     # QC metrics
     print(f"\n{Colors.HEADER}{Colors.BOLD}📊 Step 1: Calculating QC Metrics{Colors.ENDC}")
@@ -1707,6 +1723,8 @@ def qc_gpu(adata, mode='seurat',
         if mt_startswith in _CE_MT_PREFIXES:
             # C. elegans: multiple prefixes, flag manually
             adata.var["mt"] = _mt_mask(adata.var_names, mt_startswith)
+        elif dask_X:
+            adata.var["mt"] = adata.var_names.str.startswith(mt_startswith)
         else:
             rsc.pp.flag_gene_family(adata, gene_family_name="mt", gene_family_prefix=mt_startswith)
         mt_genes_found = sum(adata.var["mt"])
@@ -1721,7 +1739,10 @@ def qc_gpu(adata, mode='seurat',
         # For tuple of prefixes, we need to flag each prefix separately
         adata.var["ribo"] = False
         for prefix in ribo_startswith:
-            rsc.pp.flag_gene_family(adata, gene_family_name="ribo_temp", gene_family_prefix=prefix)
+            if dask_X:
+                adata.var["ribo_temp"] = adata.var_names.str.startswith(prefix)
+            else:
+                rsc.pp.flag_gene_family(adata, gene_family_name="ribo_temp", gene_family_prefix=prefix)
             adata.var["ribo"] = adata.var["ribo"] | adata.var["ribo_temp"]
         adata.var.drop(columns=["ribo_temp"], inplace=True, errors='ignore')
         ribo_genes_found = sum(adata.var["ribo"])
@@ -1743,7 +1764,10 @@ def qc_gpu(adata, mode='seurat',
     # Print gene detection table
     _print_gene_detection_table(mt_genes_found, ribo_genes_found, hb_genes_found, mt_genes, ribo_genes, hb_genes)
 
-    rsc.pp.calculate_qc_metrics(adata, qc_vars=["mt", "ribo", "hb"])
+    if dask_X:
+        _dask.calculate_qc_metrics(adata, qc_vars=["mt", "ribo", "hb"])
+    else:
+        rsc.pp.calculate_qc_metrics(adata, qc_vars=["mt", "ribo", "hb"])
     adata.obs['nUMIs'] = adata.obs['total_counts']
     adata.obs['mito_perc'] = adata.obs['pct_counts_mt']/100
     adata.obs['ribo_perc'] = adata.obs['pct_counts_ribo']/100
@@ -1811,7 +1835,7 @@ def qc_gpu(adata, mode='seurat',
     removed = QC_test.loc[~QC_test.values]
     removed_cells.extend(list(removed.index.values))
     total_qc_failed = n1-np.sum(QC_test)
-    adata = adata[QC_test, :]
+    adata = adata[QC_test.values].copy() if dask_X else adata[QC_test, :]
     n2 = adata.shape[0]
     
     print(f"   {Colors.GREEN}✓ Combined QC filters: {Colors.BOLD}{total_qc_failed:,}{Colors.ENDC}{Colors.GREEN} cells removed ({total_qc_failed/n1*100:.1f}%){Colors.ENDC}")
@@ -1830,11 +1854,21 @@ def qc_gpu(adata, mode='seurat',
     # UMIs exceed n_cells (S100A8, LYZ, FCGR3B, ...) was removed. rapids-singlecell
     # exposes min_genes/max_genes/min_cells/max_cells separately, matching the CPU
     # path's _filter_cells_impl / _filter_genes_impl.
-    from . import _rsc_compat as _rscc  # any rapids-singlecell release
-    _rscc.filter_cells(adata, min_genes=min_genes)
-    _rscc.filter_cells(adata, max_genes=int(max_genes_ratio*adata.shape[1]))
-    _rscc.filter_genes(adata, min_cells=min_cells)
-    _rscc.filter_genes(adata, max_cells=int(max_cells_ratio*adata.shape[0]))
+    if dask_X:
+        # Genes per cell are already known; one pass counts cells per gene.
+        n_genes = adata.obs['detected_genes'].values
+        keep = (n_genes >= min_genes) & (n_genes <= int(max_genes_ratio*adata.shape[1]))
+        adata.obs['n_genes'] = n_genes
+        if not keep.all():
+            adata = adata[keep].copy()
+        _dask.filter_genes(adata, min_cells=min_cells,
+                           max_cells=int(max_cells_ratio*adata.shape[0]))
+    else:
+        from . import _rsc_compat as _rscc  # any rapids-singlecell release
+        _rscc.filter_cells(adata, min_genes=min_genes)
+        _rscc.filter_cells(adata, max_genes=int(max_genes_ratio*adata.shape[1]))
+        _rscc.filter_genes(adata, min_cells=min_cells)
+        _rscc.filter_genes(adata, max_cells=int(max_cells_ratio*adata.shape[0]))
     
     cells_final_filtered = cells_before_final - adata.shape[0]
     genes_final_filtered = genes_before_final - adata.shape[1]
