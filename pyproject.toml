@@ -108,7 +108,6 @@ flowsig = [
     "causaldag==0.1a163",
     "torch>=2.0,<3",
 ]
-resolvi = ["scvi-tools>=1.5.2,<1.6"]
 # Out-of-memory backend (Rust-powered AnnData). Install via:
 #   pip install omicverse[rust]
 # Enables ov.read(path, backend='rust') with chunked preprocessing.
@@ -239,6 +238,9 @@ gsmap = [
   "torch-geometric>=2.3.0,<3.0.0",
   "kaleido>=0.2.0,<1.0.0",
 ]
+
+# Optional ResolVI backend (roadmap #989); requires Python >= 3.12.
+resolvi = ["scvi-tools>=1.5.2,<1.6"]
 
 skillseeker = [
   "beautifulsoup4>=4.12",
