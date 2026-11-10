@@ -6,7 +6,7 @@ Part of [roadmap #989](https://github.com/omicverse/omicverse/issues/989).
 
 ## Usage
 
-Install the optional backend with `pip install "omicverse[novae]"` in an environment supported by the backend. Importing OmicVerse does not import the backend.
+Install the optional backend with `pip install "omicverse[novae]"` using **Python 3.11 or later**. The optional backend has a higher Python floor than the base OmicVerse package. Importing OmicVerse does not import the backend.
 
 ```python
 import omicverse as ov
@@ -25,4 +25,4 @@ Run `python -m pytest tests/test_backend_validation.py tests/test_roadmap989_nov
 
 The generic validation helper is byte-identical across the independent roadmap PRs. This PR introduces only the Novae public API and its optional dependency.
 
-Isolated cells may remain unassigned. An unavailable requested domain count raises instead of silently changing clustering. Pretrained inference requires a caller-loaded model; the smoke test trains from scratch.
+Isolated cells may remain unassigned. An unavailable requested domain count raises instead of silently changing clustering. Pretrained inference requires a caller-loaded model; the integration test trains a small synthetic model, saves and reloads its local checkpoint, then infers on a 40-gene subset across two slides. It checks that graph edges do not cross slide boundaries and that original expression, coordinates, graphs and cell order are preserved. It does not download or benchmark a public foundation checkpoint.
