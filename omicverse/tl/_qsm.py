@@ -418,19 +418,25 @@ def qsm_load_multi_echo(directory: Optional[str] = None, phase_files: Optional[S
     category="utils",
     description="Brain mask from GRE magnitude: threshold (default half the Otsu level of the "
                 "first-echo magnitude), morphological opening to cut thin links to scalp, largest "
-                "connected component, closing and hole filling. Generous by design; refine with "
-                "the phase-reliability mask of qsm_multi_echo_field.",
+                "connected component, closing, hole filling and a surface erosion (default 3 mm) "
+                "that drops the unreliable brain/skull/CSF partial-volume rim; refine with the "
+                "phase-reliability mask of qsm_multi_echo_field.",
     requires={}, produces={}, auto_fix="none",
     examples=["mask = ov.tl.qsm_brain_mask(d['magnitude'], voxel_size=d['voxel_size'])"],
 )
 def qsm_brain_mask(magnitude, voxel_size=(1.0, 1.0, 1.0), threshold: Optional[float] = None,
                    threshold_scale: float = 0.5, open_radius_mm: float = 4.0,
-                   close_radius_mm: float = 2.0) -> np.ndarray:
+                   close_radius_mm: float = 2.0, erode_mm: float = 3.0) -> np.ndarray:
     """Return a boolean brain mask.
 
     ``magnitude`` is 3D or (echo, x, y, z) (first echo used: highest SNR and
     least T2* dropout).  ``threshold`` overrides ``threshold_scale * Otsu``.
     A larger ``open_radius_mm`` separates brain from scalp more aggressively.
+    ``erode_mm`` finally peels the surface: in real, non-skull-stripped data
+    the outermost millimetres of a magnitude mask hold partial volume with
+    CSF, dura, skull and sinuses whose phase is unreliable, and strong
+    sources there streak into the cortex after inversion (0 keeps the
+    thresholded outline).
     """
     m = np.asarray(magnitude, dtype=np.float32)
     if m.ndim == 4:
@@ -445,7 +451,11 @@ def qsm_brain_mask(magnitude, voxel_size=(1.0, 1.0, 1.0), threshold: Optional[fl
     out = (ndi.binary_dilation(core, _ball(open_radius_mm, voxel_size)) & b) if open_radius_mm > 0 else core
     if close_radius_mm > 0:
         out = ndi.binary_closing(out, _ball(close_radius_mm, voxel_size))
-    return ndi.binary_fill_holes(out)
+    out = ndi.binary_fill_holes(out)
+    if erode_mm > 0:
+        out = ndi.binary_erosion(out, _ball(erode_mm, voxel_size))
+        out = _largest_component(out) if out.any() else out
+    return out
 
 
 # ── phase unwrapping ────────────────────────────────────────────────────────

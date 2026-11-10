@@ -86,10 +86,18 @@ def test_multi_echo_field_recovers_total_field(phantom):
 
 
 def test_brain_mask_covers_brain(phantom):
-    m = qsm_brain_mask(phantom["magnitude"], phantom["voxel_size"])
+    from scipy import ndimage as ndi
     b = phantom["brain_mask"]
-    assert (m & b).sum() > 0.98 * b.sum()
-    assert not m[0, 0, 0]
+    # outline (no surface erosion) covers the brain
+    m_full = qsm_brain_mask(phantom["magnitude"], phantom["voxel_size"], erode_mm=0)
+    assert (m_full & b).sum() > 0.98 * b.sum()
+    assert not m_full[0, 0, 0]
+    # default peels the surface: inside the outline, still covers the brain core
+    m = qsm_brain_mask(phantom["magnitude"], phantom["voxel_size"])
+    assert not (m & ~m_full).any()
+    core = ndi.binary_erosion(b, iterations=4)
+    assert (m & core).sum() > 0.98 * core.sum()
+    assert m.sum() < m_full.sum()
 
 
 @pytest.mark.parametrize("method", ["vsharp", "pdf"])
