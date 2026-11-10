@@ -723,8 +723,19 @@ def preprocess(
             "without no_cc, or switch to mode='cpu'."
         )
 
-    if is_oom:
-        # OOM: save a lazy reference to raw counts (zero memory cost)
+    from ._dask import is_dask
+    dask_X = is_dask(adata.X)
+    if dask_X:
+        if method_list_preview[0] != 'shiftlog' or (
+                len(method_list_preview) > 1 and method_list_preview[1] != 'pearson'):
+            raise NotImplementedError(
+                "A Dask X (backend='dask') supports mode='shiftlog|pearson'.")
+        if no_cc or exclude_highly_expressed:
+            raise NotImplementedError(
+                "no_cc and exclude_highly_expressed are not available for a Dask X.")
+    if is_oom or dask_X:
+        # OOM / Dask: a lazy reference to raw counts (zero memory cost; the
+        # Dask transforms below build new blocks instead of editing these)
         adata.layers['counts'] = adata.X
     else:
         adata.layers['counts'] = adata.X.copy()
@@ -736,17 +747,22 @@ def preprocess(
         if is_oom:
             from .._backend import oom_ops
             oom_ops(backend).chunked_identify_robust_genes(adata, percent_cells=0.05)
+        elif dask_X:
+            from . import _dask
+            _dask.identify_robust_genes(adata, percent_cells=0.05)
         else:
             identify_robust_genes(adata, percent_cells=0.05)
         if is_oom:
             adata._inplace_subset_var(adata.var['robust'].values)
+        elif dask_X:
+            _dask.subset_var(adata, adata.var['robust'].values)
         else:
             adata = adata[:, adata.var['robust']]
         print(f"{EMOJI['done']} Robust gene identification completed successfully.")
     method_list = mode.split('|')
     print(f"{Colors.CYAN}Begin size normalization: {method_list[0]} and HVGs selection {method_list[1]}{Colors.ENDC}")
     if exclude_highly_expressed is None:
-        normalize_exclude_highly_expressed = (
+        normalize_exclude_highly_expressed = not dask_X and (
             is_oom or settings.mode == 'cpu' or settings.mode == 'cpu-gpu-mixed'
         )
     else:
@@ -787,6 +803,18 @@ def preprocess(
             )
         data_load_end = time.time()
         print(f"{Colors.BLUE}    Time to analyze data (out-of-memory): {data_load_end - data_load_start:.2f} seconds.{Colors.ENDC}")
+    elif dask_X:
+        # Chunked (Dask) path: lazy normalisation, then one pass computes the
+        # Pearson residual variances and the statistics ov.pp.scale needs.
+        from . import _dask
+        data_load_start = time.time()
+        adata.X = _dask.log1p(_dask.normalize_total(adata.X, target_sum))
+        _dask.highly_variable_genes_pearson(
+            adata, layer='counts', n_top_genes=n_HVGs, batch_key=batch_key,
+            also_stats=[adata.X],
+        )
+        data_load_end = time.time()
+        print(f"{Colors.BLUE}    Time to analyze data (dask): {data_load_end - data_load_start:.2f} seconds.{Colors.ENDC}")
     elif settings.mode == 'cpu' or settings.mode == 'cpu-gpu-mixed':
         data_load_start = time.time()
         if method_list[0] == 'shiftlog': # Size normalization + scanpy batch aware HVGs selection
@@ -1219,7 +1247,15 @@ def scale(adata, max_value=10, layers_add='scaled', to_sparse=False,
         return
 
     from .._backend import resolve_backend
-    if ((settings.mode == 'cpu' or settings.mode == 'cpu-gpu-mixed')
+    from ._dask import is_dask
+    if is_dask(adata.X):
+        # Lazy z-scores of the Dask X; mean/std usually come from the pass
+        # preprocess already made, and ov.pp.pca reads only the HVG columns.
+        from . import _dask
+        scaled_data, _mean, _std = _dask.scale(
+            adata.X, max_value=max_value, zero_center=kwargs.get('zero_center', True))
+        to_sparse = False
+    elif ((settings.mode == 'cpu' or settings.mode == 'cpu-gpu-mixed')
             and resolve_backend(backend) == 'cpp' and issparse(adata.X)
             and adata.X.format == 'csr' and not (set(kwargs) - {'zero_center'})
             and kwargs.get('zero_center', True)):
@@ -1506,7 +1542,18 @@ def pca(adata, n_pcs=50, layer='scaled',inplace=True,random_state=SEED_DEFAULT,b
         key = f'{layer}|original'
     else:
         raise KeyError(f'Selected layer {layer} is not present. Compute it first!')
-    if settings.mode == 'cpu':
+    from ._dask import is_dask
+    if is_dask(X):
+        # Chunked (Dask) PCA: the HVG columns of the scaled blocks stay on the
+        # device between the covariance pass and the projection.
+        from . import _dask
+        _dask.pca(adata, layer=layer, n_comps=n_pcs,
+                  mask_var=kwargs.get('mask_var', 'highly_variable'))
+        adata.obsm[key + '|X_pca'] = adata.obsm['X_pca']
+        adata.varm[key + '|pca_loadings'] = adata.varm['PCs']
+        adata.uns[key + '|pca_var_ratios'] = adata.uns['pca']['variance_ratio']
+        adata.uns[key + '|cum_sum_eigenvalues'] = adata.uns['pca']['variance']
+    elif settings.mode == 'cpu':
         if sc.__version__ <'1.10':
             adata_mock=sc.AnnData(adata.layers[layer],obs=adata.obs,var=adata.var)
             sc.pp.pca(adata_mock, n_comps=n_pcs, random_state=random_state)

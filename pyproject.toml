@@ -273,6 +273,8 @@ tests = [
   "matplotlib-venn>=1.1",
   "nbformat>=5.0",
   "httpx[socks]",
+  # ov.read(backend='dask') chunked mode
+  "dask[array]",
   # ov.micro test dependencies — scikit-bio powers Alpha/Beta/Ordinate,
   # ete3 powers attach_tree, pydeseq2 is the DESeq2 backend for DA.
   "scikit-bio>=0.6",

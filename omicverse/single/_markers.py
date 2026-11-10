@@ -731,6 +731,20 @@ def find_markers(
         f"{Colors.BOLD}n_genes:{Colors.ENDC} {n_genes}"
     )
 
+    from ..pp._dask import is_dask
+    if is_dask(adata.layers[layer] if layer is not None else adata.X):
+        # A Dask X (ov.read(backend='dask')) is only streamed by the C++ COSG
+        # group statistics; anything else would load the whole matrix.
+        from .._backend import resolve_backend
+        if method != "cosg" or resolve_backend(backend) != "cpp" or groups != "all" \
+                or reference != "rest":
+            raise NotImplementedError(
+                "For a Dask X, find_markers supports method='cosg' with backend='cpp', "
+                "groups='all' and reference='rest'.")
+        import anndataoom_fast._omicverse as _aof
+        if not hasattr(_aof, "_group_stats_dask"):
+            raise ImportError("find_markers on a Dask X needs anndataoom-fast>=0.1.3")
+
     # ── COSG delegates to the dedicated module ─────────────────────────────────
     if method == "cosg":
         from ._cosg import cosg

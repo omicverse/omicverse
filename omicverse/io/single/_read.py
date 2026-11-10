@@ -114,7 +114,9 @@ def _read_h5ad_rust(path, **kwargs):
         "# Read compressed file",
         "df = ov.read('data.csv.gz')",
         "# Pass additional parameters",
-        "df = ov.read('data.csv', index_col=0, header=0)"
+        "df = ov.read('data.csv', index_col=0, header=0)",
+        "# Chunked GPU mode: X stays a Dask array of row blocks",
+        "adata = ov.read('data.h5ad', backend='dask', chunk_size=20000)"
     ],
     related=["utils.read_csv", "utils.read_h5ad", "pp.preprocess"]
 )
@@ -126,9 +128,13 @@ def read(path, backend='python', **kwargs):
     ----------
     path : str or pathlib.Path
         Input file path.
-    backend : {'python', 'rust'}, default='python'
+    backend : {'python', 'rust', 'dask'}, default='python'
         Backend used for ``.h5ad`` reading. ``'rust'`` loads out-of-memory
-        via ``anndataoom`` / ``anndata-rs``. When the file's sparse X has
+        via ``anndataoom`` / ``anndata-rs``. ``'dask'`` keeps ``X`` as a Dask
+        array of row blocks (``chunk_size`` cells each, on the GPU by
+        default) for the chunked GPU mode: ``ov.settings.gpu_init()`` then
+        ``qc``/``preprocess``/``scale``/``pca``/``find_markers`` stream the
+        blocks, so ``X`` never has to fit in GPU memory. When the file's sparse X has
         unsorted minor indices the call is aborted with a clear
         ``ValueError`` (rather than an anndata-rs panic) pointing at
         :func:`ov.utils.convert_adata_for_rust` for recovery.
@@ -157,7 +163,11 @@ def read(path, backend='python', **kwargs):
         if backend == 'rust':
             return _read_h5ad_rust(path, **kwargs)
 
-        raise ValueError("backend must be 'python' or 'rust'")
+        if backend == 'dask':
+            from ...pp._dask import read_h5ad as _read_h5ad_dask
+            return _read_h5ad_dask(path, **kwargs)
+
+        raise ValueError("backend must be 'python', 'rust' or 'dask'")
 
     if ext in {'.csv', '.tsv', '.txt', '.gz'}:
         sep = '\t' if ext in {'.tsv', '.txt'} or path.endswith(('.tsv.gz', '.txt.gz')) else ','
