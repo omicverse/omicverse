@@ -1678,7 +1678,7 @@ def qc_gpu(adata, mode='seurat',
     GPU-accelerated quality control using RAPIDS
 
     Doublet detection is performed after QC threshold filtering and final cell/gene filtering.
-    A Dask ``X`` (``ov.read(..., backend='dask')``) is processed block by block.
+    A Dask ``X`` (``ov.read(..., storage='disk')`` in GPU mode) is processed block by block.
     '''
     dask_X = _is_dask_X(adata)
     if dask_X:
@@ -1686,7 +1686,7 @@ def qc_gpu(adata, mode='seurat',
         if doublets:
             raise NotImplementedError(
                 "Doublet detection needs the whole matrix in memory; call "
-                "ov.pp.qc(..., doublets=False) on an AnnData read with backend='dask'.")
+                "ov.pp.qc(..., doublets=False) on an AnnData read with storage='disk' in GPU mode.")
         rsc = None
     else:
         import rapids_singlecell as rsc

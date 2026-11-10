@@ -733,7 +733,7 @@ def find_markers(
 
     from ..pp._dask import is_dask
     if is_dask(adata.layers[layer] if layer is not None else adata.X):
-        # A Dask X (ov.read(backend='dask')) is only streamed by the C++ COSG
+        # A Dask X (ov.read(storage='disk') in GPU mode) is only streamed by the C++ COSG
         # group statistics; anything else would load the whole matrix.
         from .._backend import resolve_backend
         if method != "cosg" or resolve_backend(backend) != "cpp" or groups != "all" \

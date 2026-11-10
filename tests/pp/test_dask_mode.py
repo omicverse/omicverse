@@ -1,4 +1,4 @@
-"""Chunked (Dask) mode: ``ov.read(backend='dask')`` + qc/preprocess/scale/pca
+"""Chunked GPU mode: ``ov.read(storage='disk')`` in GPU mode + qc/preprocess/scale/pca
 streams row blocks and gives the in-memory results.  Runs on CPU (scipy
 blocks); on a CUDA machine the same tests also run with GPU blocks."""
 import numpy as np
@@ -65,7 +65,11 @@ def _chunked(path, device):
         ov.settings.gpu_init()
     else:
         ov.settings.cpu_init()
-    a = ov.read(path, backend="dask", chunk_size=700, device=device)
+    if device == "gpu":
+        a = ov.read(path, storage="disk", chunk_size=700)
+    else:  # the same Dask code on scipy blocks (no GPU needed)
+        from omicverse.pp._dask import read_h5ad
+        a = read_h5ad(path, chunk_size=700, device="cpu")
     a = ov.pp.qc(a, mode="seurat", doublets=False,
                  tresh={"mito_perc": 0.5, "nUMIs": 500, "detected_genes": 100})
     ov.pp.preprocess(a, mode="shiftlog|pearson", n_HVGs=150)
@@ -120,7 +124,7 @@ def test_pearson_hvg_with_batches_matches_scanpy(h5ad):
     import scanpy as sc
     import omicverse as ov
     from omicverse.pp import _dask
-    a = ov.read(h5ad, backend="dask", chunk_size=500, device="cpu")
+    a = _dask.read_h5ad(h5ad, chunk_size=500, device="cpu")
     _dask.highly_variable_genes_pearson(a, layer=None, n_top_genes=100, batch_key="batch")
     b = ad.read_h5ad(h5ad)
     sc.experimental.pp.highly_variable_genes(b, flavor="pearson_residuals", n_top_genes=100,
@@ -133,6 +137,34 @@ def test_pearson_hvg_with_batches_matches_scanpy(h5ad):
 
 def test_doublets_on_dask_raise(h5ad):
     import omicverse as ov
-    a = ov.read(h5ad, backend="dask", device="cpu")
+    from omicverse.pp._dask import read_h5ad
+    a = read_h5ad(h5ad, device="cpu")
     with pytest.raises(NotImplementedError, match="doublets=False"):
         ov.pp.qc(a, doublets=True)
+
+
+def test_read_storage_follows_the_mode(h5ad, monkeypatch):
+    """storage='disk': AnnDataOOM in the CPU modes, Dask row blocks in GPU mode."""
+    import anndata as ad
+    import omicverse as ov
+    from omicverse.pp._dask import is_dask
+    assert type(ov.read(h5ad)) is ad.AnnData
+    monkeypatch.setattr(ov.settings, "mode", "gpu")  # gpu_init() without RAPIDS
+    a = ov.read(h5ad, storage="disk", chunk_size=500)
+    assert is_dask(a.X) and a.X.chunks[0][0] == 500
+    monkeypatch.setattr(ov.settings, "mode", "cpu")
+    pytest.importorskip("anndataoom")
+    b = ov.read(h5ad, storage="disk")
+    try:
+        assert type(b).__name__ == "AnnDataOOM"
+    finally:
+        b.close()
+
+
+def test_read_backend_is_a_deprecated_alias(h5ad):
+    import anndata as ad
+    import omicverse as ov
+    with pytest.warns(FutureWarning, match="storage='memory'"):
+        assert type(ov.read(h5ad, backend="python")) is ad.AnnData
+    with pytest.raises(ValueError, match="storage"):
+        ov.read(h5ad, storage="gpu")

@@ -729,7 +729,7 @@ def preprocess(
         if method_list_preview[0] != 'shiftlog' or (
                 len(method_list_preview) > 1 and method_list_preview[1] != 'pearson'):
             raise NotImplementedError(
-                "A Dask X (backend='dask') supports mode='shiftlog|pearson'.")
+                "A Dask X (storage='disk' in GPU mode) supports mode='shiftlog|pearson'.")
         if no_cc or exclude_highly_expressed:
             raise NotImplementedError(
                 "no_cc and exclude_highly_expressed are not available for a Dask X.")

@@ -60,7 +60,7 @@ class omicverseConfig:
             Also start a ``dask_cuda.LocalCUDACluster`` with one worker per
             device in ``devices`` (all visible GPUs when ``devices`` is a
             single index) and a client, so AnnData read with
-            ``ov.read(..., backend='dask')`` is processed on every GPU. The
+            ``ov.read(..., storage='disk')`` is streamed to every GPU. The
             client is kept in ``ov.settings.dask_client``.
 
         Returns

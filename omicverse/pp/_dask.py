@@ -1,8 +1,8 @@
 """Chunked GPU mode: AnnData whose ``X`` is a Dask array of row blocks.
 
-``ov.read(path, backend='dask')`` opens an ``.h5ad`` lazily: ``X`` becomes a
-Dask array whose blocks are CSR row slices read straight from the file into
-pinned memory and copied to the GPU.  In ``ov.settings.gpu_init()`` mode,
+In ``ov.settings.gpu_init()`` mode, ``ov.read(path, storage='disk')`` opens an
+``.h5ad`` lazily: ``X`` becomes a Dask array whose blocks are CSR row slices
+read straight from the file and copied to the GPU.  Then
 ``qc``, ``preprocess``, ``scale``, ``pca`` and ``find_markers(method='cosg')``
 stream those blocks through the GPU, so the matrix never has to fit in GPU (or
 host) memory; everything after PCA works on the small embedding as usual.
@@ -275,7 +275,7 @@ class _H5Source:
                 enc = enc.decode() if isinstance(enc, bytes) else str(enc)
                 if enc != "csr_matrix":
                     raise NotImplementedError(
-                        f"backend='dask' needs a CSR (or dense) {key!r}; found {enc!r}")
+                        f"storage='disk' in GPU mode needs a CSR (or dense) {key!r}; found {enc!r}")
                 self.shape = tuple(int(x) for x in g.attrs["shape"])
             else:
                 self.shape = tuple(int(x) for x in g.shape)
@@ -450,7 +450,7 @@ def read_h5ad(path, *, chunk_size: int = 20_000, device: str | None = None):
     X = da.concatenate(blocks, axis=0) if blocks else da.zeros((0, m), dtype=dtype)
     adata = anndata.AnnData(X=X, obs=obs, var=var, uns=uns)
     if skipped:
-        print(f"backend='dask' reads X, obs, var and uns; skipped: {', '.join(skipped)}")
+        print(f"storage='disk' (GPU) reads X, obs, var and uns; skipped: {', '.join(skipped)}")
     return adata
 
 
@@ -704,7 +704,7 @@ def normalize_total(X, target_sum):
     """Lazily scale every cell to ``target_sum`` counts (new blocks; the
     input blocks are not modified)."""
     if target_sum is None:
-        raise NotImplementedError("backend='dask' needs an explicit target_sum")
+        raise NotImplementedError("storage='disk' in GPU mode needs an explicit target_sum")
     return X.map_blocks(_normalize_block, float(target_sum), dtype=X.dtype, meta=_meta(X))
 
 
