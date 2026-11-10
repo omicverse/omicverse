@@ -98,6 +98,14 @@ def test_brain_mask_covers_brain(phantom):
     core = ndi.binary_erosion(b, iterations=4)
     assert (m & core).sum() > 0.98 * core.sum()
     assert m.sum() < m_full.sum()
+    # the phantom has scalp signal: auto mode detects a non-stripped head
+    _, info = qsm_brain_mask(phantom["magnitude"], phantom["voxel_size"], return_info=True)
+    assert info["skull_stripped"] is False and info["erode_mm"] > 0
+    # skull-stripped input (signal only inside the brain): no erosion
+    stripped = np.where(b[None], phantom["magnitude"], 0)
+    ms, info_s = qsm_brain_mask(stripped, phantom["voxel_size"], return_info=True)
+    assert info_s["skull_stripped"] is True and info_s["erode_mm"] == 0
+    assert (ms & b).sum() > 0.98 * b.sum()
 
 
 @pytest.mark.parametrize("method", ["vsharp", "pdf"])

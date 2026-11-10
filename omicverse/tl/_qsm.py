@@ -418,25 +418,32 @@ def qsm_load_multi_echo(directory: Optional[str] = None, phase_files: Optional[S
     category="utils",
     description="Brain mask from GRE magnitude: threshold (default half the Otsu level of the "
                 "first-echo magnitude), morphological opening to cut thin links to scalp, largest "
-                "connected component, closing, hole filling and a surface erosion (default 3 mm) "
-                "that drops the unreliable brain/skull/CSF partial-volume rim; refine with the "
+                "connected component, closing, hole filling and a surface erosion (auto: 3 mm when "
+                "the head is not skull-stripped, 0 when it is) that drops the unreliable "
+                "brain/skull/CSF partial-volume rim; refine with the "
                 "phase-reliability mask of qsm_multi_echo_field.",
     requires={}, produces={}, auto_fix="none",
     examples=["mask = ov.tl.qsm_brain_mask(d['magnitude'], voxel_size=d['voxel_size'])"],
 )
 def qsm_brain_mask(magnitude, voxel_size=(1.0, 1.0, 1.0), threshold: Optional[float] = None,
                    threshold_scale: float = 0.5, open_radius_mm: float = 4.0,
-                   close_radius_mm: float = 2.0, erode_mm: float = 3.0) -> np.ndarray:
+                   close_radius_mm: float = 2.0, erode_mm: Union[float, str] = "auto",
+                   head_erode_mm: float = 3.0, return_info: bool = False):
     """Return a boolean brain mask.
 
     ``magnitude`` is 3D or (echo, x, y, z) (first echo used: highest SNR and
     least T2* dropout).  ``threshold`` overrides ``threshold_scale * Otsu``.
     A larger ``open_radius_mm`` separates brain from scalp more aggressively.
-    ``erode_mm`` finally peels the surface: in real, non-skull-stripped data
-    the outermost millimetres of a magnitude mask hold partial volume with
-    CSF, dura, skull and sinuses whose phase is unreliable, and strong
-    sources there streak into the cortex after inversion (0 keeps the
-    thresholded outline).
+    ``erode_mm`` finally peels the surface.  In a non-skull-stripped head the
+    outermost millimetres of a magnitude mask hold partial volume with CSF,
+    dura, skull and sinuses whose phase is unreliable, and strong sources
+    there streak into the cortex after inversion.  ``'auto'`` (default)
+    erodes by ``head_erode_mm`` when the image carries tissue signal outside
+    the mask (above-threshold voxels outside it > 5 % of its volume: scalp /
+    face present) and by 0 when the magnitude is already skull-stripped (its
+    support is the brain; eroding it would only cut cortex and surface
+    veins).  A number forces that erosion.  ``return_info=True`` returns
+    ``(mask, info)`` with the decision.
     """
     m = np.asarray(magnitude, dtype=np.float32)
     if m.ndim == 4:
@@ -452,9 +459,20 @@ def qsm_brain_mask(magnitude, voxel_size=(1.0, 1.0, 1.0), threshold: Optional[fl
     if close_radius_mm > 0:
         out = ndi.binary_closing(out, _ball(close_radius_mm, voxel_size))
     out = ndi.binary_fill_holes(out)
-    if erode_mm > 0:
-        out = ndi.binary_erosion(out, _ball(erode_mm, voxel_size))
+    outside = int(np.count_nonzero(b & ~out))
+    ratio = outside / max(int(out.sum()), 1)
+    if erode_mm == "auto":
+        skull_stripped = ratio <= 0.05
+        er = 0.0 if skull_stripped else float(head_erode_mm)
+    else:
+        skull_stripped = None
+        er = float(erode_mm)
+    if er > 0:
+        out = ndi.binary_erosion(out, _ball(er, voxel_size))
         out = _largest_component(out) if out.any() else out
+    if return_info:
+        return out, dict(threshold=float(threshold), signal_outside_ratio=float(ratio),
+                         skull_stripped=skull_stripped, erode_mm=er)
     return out
 
 
@@ -929,7 +947,10 @@ def qsm_reconstruct(phase, magnitude, echo_times, b0_tesla: float, voxel_size=(1
     mg = np.asarray(magnitude, dtype=np.float32)
     if ph.ndim == 3:
         ph, mg = ph[None], mg[None]
-    m0 = qsm_brain_mask(mg, vs) if mask is None else np.asarray(mask, bool)
+    if mask is None:
+        m0, mask_info = qsm_brain_mask(mg, vs, return_info=True)
+    else:
+        m0, mask_info = np.asarray(mask, bool), dict(user_mask=True)
     fe = qsm_multi_echo_field(ph, mg, echo_times, m0, unwrap=unwrap, max_residual=max_residual,
                               voxel_size=vs, return_unwrapped=False)
     m1 = fe["reliable_mask"] if refine_mask else m0
@@ -947,7 +968,7 @@ def qsm_reconstruct(phase, magnitude, echo_times, b0_tesla: float, voxel_size=(1
     summary = dict(
         n_echoes=int(ph.shape[0]), echo_times_s=[float(t) for t in fe["echo_times"]],
         b0_tesla=float(b0_tesla), b0_dir=tuple(_unit(b0_dir)), voxel_size=vs,
-        mask_voxels=int(m0.sum()), reliable_voxels=int(m1.sum()), local_voxels=int(lm.sum()),
+        mask_voxels=int(m0.sum()), mask_info=mask_info, reliable_voxels=int(m1.sum()), local_voxels=int(lm.sum()),
         residual_p50_p99=[float(np.percentile(fe["residual"][m0], q)) for q in (50, 99)],
         field_hz_p1_p50_p99=[float(np.percentile(fe["field_hz"][m1], q)) for q in (1, 50, 99)],
         local_ppm_p1_p99=[float(np.percentile(loc_ppm[lm], q)) for q in (1, 99)],
