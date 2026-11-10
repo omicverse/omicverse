@@ -168,3 +168,19 @@ def test_read_backend_is_a_deprecated_alias(h5ad):
         assert type(ov.read(h5ad, backend="python")) is ad.AnnData
     with pytest.raises(ValueError, match="storage"):
         ov.read(h5ad, storage="gpu")
+
+
+def test_read_layer_as_x(tmp_path, monkeypatch):
+    """layer= reads raw counts stored next to a normalised X (SEA-AD layout)."""
+    import omicverse as ov
+    from omicverse.pp._dask import read_h5ad
+    a = _counts(n=300, g=50)
+    a.layers["UMIs"] = a.X.copy()
+    a.X = a.X.multiply(1 / (a.X.sum(1) + 1)).tocsr()
+    path = tmp_path / "layered.h5ad"
+    a.write_h5ad(path, compression="gzip")
+    b = read_h5ad(path, chunk_size=128, device="cpu", layer="UMIs")
+    assert abs(b.X.compute() - a.layers["UMIs"]).max() == 0
+    monkeypatch.setattr(ov.settings, "mode", "cpu")
+    with pytest.raises(NotImplementedError, match="layer="):
+        ov.read(path, storage="disk", layer="UMIs")

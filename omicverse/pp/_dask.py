@@ -397,12 +397,14 @@ def _empty_meta(sparse, device, dtype):
     return sp.csr_matrix((0, 0), dtype=dtype) if sparse else np.empty((0, 0), dtype)
 
 
-def read_h5ad(path, *, chunk_size: int = 20_000, device: str | None = None):
+def read_h5ad(path, *, chunk_size: int = 20_000, device: str | None = None, layer: str | None = None):
     """Open an ``.h5ad`` with ``X`` as a Dask array of row blocks.
 
     Arguments:
         path: ``.h5ad`` file; ``X`` must be CSR or dense.
         chunk_size: Cells per block.
+        layer: Read ``layers[layer]`` as ``X`` (e.g. raw counts stored next to
+            a normalised ``X``, as in the SEA-AD release).
         device: ``'gpu'`` (blocks are cupyx CSR matrices; default when cupy is
             importable) or ``'cpu'`` (scipy CSR blocks).
 
@@ -426,13 +428,14 @@ def read_h5ad(path, *, chunk_size: int = 20_000, device: str | None = None):
             device = "cpu"
     if device not in ("gpu", "cpu"):
         raise ValueError("device must be 'gpu' or 'cpu'")
-    src = _H5Source(path, "X")
+    key = "X" if layer is None else f"layers/{layer}"
+    src = _H5Source(path, key)
     n, m = src.shape
     with h5py.File(src.path, "r") as f:
         obs = read_elem(f["obs"])
         var = read_elem(f["var"])
         uns = read_elem(f["uns"]) if "uns" in f else {}
-        indptr = f["X"]["indptr"][:] if src.sparse else None
+        indptr = f[key]["indptr"][:] if src.sparse else None
         skipped = [k for k in ("layers", "obsm", "obsp", "varm", "varp", "raw")
                    if k in f and len(f[k])]
     dtype = np.dtype(src.dtypes["data" if src.sparse else None])

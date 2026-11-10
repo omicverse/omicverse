@@ -153,7 +153,8 @@ def read(path, storage='memory', *, backend=None, **kwargs):
         Deprecated spelling: ``'python'`` = ``storage='memory'``, ``'rust'`` =
         AnnDataOOM whatever the mode.
     **kwargs
-        Forwarded to the reader (``chunk_size`` for GPU ``storage='disk'``;
+        Forwarded to the reader (``chunk_size`` and ``layer`` — read
+        ``layers[layer]`` as ``X`` — for GPU ``storage='disk'``;
         ``pandas.read_csv`` options for tables).
 
     Returns
@@ -196,6 +197,10 @@ def read(path, storage='memory', *, backend=None, **kwargs):
                 from ...pp._dask import read_h5ad as _read_h5ad_dask
                 return _read_h5ad_dask(path, **kwargs)
             kwargs.pop('chunk_size', None)
+            if kwargs.get('layer') is not None:
+                raise NotImplementedError(
+                    "layer= (read a layer as X) is available for storage='disk' in GPU mode")
+            kwargs.pop('layer', None)
             return _read_h5ad_rust(path, **kwargs)
         raise ValueError("storage must be 'memory' or 'disk'")
 
