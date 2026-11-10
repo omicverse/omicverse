@@ -741,9 +741,6 @@ def find_markers(
             raise NotImplementedError(
                 "For a Dask X, find_markers supports method='cosg' with backend='cpp', "
                 "groups='all' and reference='rest'.")
-        import anndataoom_fast._omicverse as _aof
-        if not hasattr(_aof, "_group_stats_dask"):
-            raise ImportError("find_markers on a Dask X needs anndataoom-fast>=0.1.3")
 
     # ── COSG delegates to the dedicated module ─────────────────────────────────
     if method == "cosg":

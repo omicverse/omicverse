@@ -103,7 +103,7 @@ dependencies = [
     # Multithreaded C++ kernels behind the default backend='cpp' (QC, normalize,
     # HVG, scale, PCA, neighbors, UMAP, Leiden, COSG); backend='python' or a
     # missing install falls back to the original code.
-    'anndataoom-fast>=0.1.2',
+    'anndataoom-fast>=0.1.3',
 ]
 
 [project.optional-dependencies]
