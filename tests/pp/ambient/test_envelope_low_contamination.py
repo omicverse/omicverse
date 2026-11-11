@@ -97,6 +97,9 @@ def test_crossfit_recovers_low_contamination(mixture):
     out, pinned = _run(cells, raw, level_shrink=1.0)
     rho = out.obs["ambient_contamination"].to_numpy()
     assert not pinned
+    # deep empties (single preparation): the soup is cross-fitted as well
+    diag = out.uns["ambient"]["envelope_diagnostics"]
+    assert diag["soup_crossfit"] and diag["soup_selection_stability"] >= 0.8
     assert np.mean(rho <= 0.005) < 0.25
     assert 0.6 * truth.mean() < rho.mean() < 1.5 * truth.mean()
     # the default (conservative level_shrink=0.75) is no longer pinned either
