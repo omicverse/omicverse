@@ -10,7 +10,6 @@ from __future__ import annotations
 import numba as nb
 import numpy as np
 import scipy.sparse as sps
-import scipy.stats as sts
 from tqdm.auto import tqdm
 
 from .._monitor import monitor
@@ -24,24 +23,51 @@ from ._run import _run
 
 @nb.njit(parallel=True, cache=True)
 def _auc(
-    row: np.ndarray,
+    neg: np.ndarray,
     cnct: np.ndarray,
     starts: np.ndarray,
     offsets: np.ndarray,
     n_up: int,
     nsrc: int,
 ) -> np.ndarray:
-    es = np.zeros(nsrc)
-    for j in nb.prange(nsrc):
+    nobs, nvar = neg.shape
+    max_auc = np.zeros(nsrc)
+    for j in range(nsrc):
         fset = _getset(cnct, starts, offsets, j)
         x_th = np.arange(1, stop=fset.shape[0] + 1)
         x_th = x_th[x_th < n_up]
-        max_auc: float = np.sum(np.diff(np.append(x_th, n_up)) * x_th)
-        x = row[fset]
-        x = np.sort(x[x <= n_up])
-        y = np.arange(x.shape[0]) + 1
-        x = np.append(x, n_up)
-        es[j] = np.sum(np.diff(x) * y) / max_auc
+        max_auc[j] = np.sum(np.diff(np.append(x_th, n_up)) * x_th)
+    es = np.zeros((nobs, nsrc))
+    for i in nb.prange(nobs):
+        row = neg[i]
+        # Ordinal rank of the top n_up features (ties keep gene order); 0 marks
+        # features outside the top n_up. Rows with NaN rank as all-NaN in
+        # scipy, so none of their features is recovered.
+        rank = np.zeros(nvar, dtype=np.int64)
+        if not np.any(row != row):
+            # Select the n_up-th smallest value, stably sort the features below
+            # it and fill the remaining ranks with its ties in gene order.
+            kth = np.partition(row, n_up - 1)[n_up - 1]
+            top = np.nonzero(row < kth)[0]
+            top = top[np.argsort(row[top], kind="mergesort")]
+            r = top.shape[0]
+            rank[top] = np.arange(1, r + 1)
+            for g in range(nvar):
+                if r == n_up:
+                    break
+                if row[g] == kth:
+                    r += 1
+                    rank[g] = r
+        for j in range(nsrc):
+            # Area under the step recovery curve: sum_k k * (x_{k+1} - x_k)
+            # with x_{m+1} = n_up telescopes to m * n_up - sum(x).
+            m = 0
+            total = 0
+            for g in _getset(cnct, starts, offsets, j):
+                if rank[g] > 0:
+                    m += 1
+                    total += rank[g]
+            es[i, j] = (m * n_up - total) / max_auc[j]
     return es
 
 
@@ -72,13 +98,12 @@ def _func_aucell(
     nsrc = starts.size
     n_up = _validate_n_up(nvar, n_up)
     es = np.zeros(shape=(nobs, nsrc))
-    for i in tqdm(range(mat.shape[0]), disable=not verbose):
-        if isinstance(mat, sps.csr_matrix):
-            row = mat[i].toarray()[0]
-        else:
-            row = mat[i]
-        row = sts.rankdata(a=-row, method="ordinal")
-        es[i] = _auc(row=row, cnct=cnct, starts=starts, offsets=offsets, n_up=n_up, nsrc=nsrc)
+    # Rank cells in dense blocks of about 4M values to bound memory on CSR input.
+    bsize = max(1, 2**22 // nvar)
+    for b0 in tqdm(range(0, nobs, bsize), disable=not verbose):
+        block = mat[b0 : b0 + bsize]
+        block = block.toarray() if isinstance(mat, sps.csr_matrix) else np.asarray(block)
+        es[b0 : b0 + bsize] = _auc(neg=-block, cnct=cnct, starts=starts, offsets=offsets, n_up=n_up, nsrc=nsrc)
     return es, None
 
 

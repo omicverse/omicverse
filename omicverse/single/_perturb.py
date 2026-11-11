@@ -57,6 +57,7 @@ Over-expression mirrors the KO call with ``mode='oe'`` and an optional
 from __future__ import annotations
 
 import warnings
+from itertools import repeat
 from dataclasses import dataclass, field
 from typing import Any, Iterable, Sequence
 
@@ -1044,7 +1045,8 @@ def _run_sctenifoldknk(
     #
     # The counts DataFrame is gene-rows × cell-columns (transposed
     # relative to AnnData).
-    counts = _expression_matrix(adata, layer=layer).T  # genes × cells
+    expr = _expression_matrix(adata, layer=layer)
+    counts = expr.T  # genes × cells
     counts_df = pd.DataFrame(
         counts,
         index=list(adata.var_names),
@@ -1068,11 +1070,14 @@ def _run_sctenifoldknk(
             "missing from the network after filtering)."
         ) from exc
 
-    grn_base = _tensor_to_graph(wt_tensor, gene_names=gene_names)
+    # Convert the tensors (often DataFrames) to arrays once and reuse them.
+    wt_arr = np.asarray(wt_tensor) if wt_tensor is not None else None
+    ko_arr = np.asarray(ko_tensor) if ko_tensor is not None else None
+    grn_base = _tensor_to_graph(wt_arr, gene_names=gene_names)
     # For KO the KO tensor produced by scTenifoldKnk is the perturbed graph.
     # For KD / OE we scale the outgoing WT edges of each target.
-    if mode == "ko" and ko_tensor is not None:
-        grn_pert = _tensor_to_graph(ko_tensor, gene_names=gene_names)
+    if mode == "ko" and ko_arr is not None:
+        grn_pert = _tensor_to_graph(ko_arr, gene_names=gene_names)
     else:
         grn_pert = _apply_perturbation_to_graph(
             grn_base, targets=targets, mode=mode, fold_change=fold_change
@@ -1110,18 +1115,17 @@ def _run_sctenifoldknk(
     cell_names = None
     embedding = None
     transition_prob = None
-    if wt_tensor is not None and ko_tensor is not None:
+    if wt_arr is not None and ko_arr is not None:
         try:
             shared = list(gene_names)
             # X restricted to shared genes, in the same order as the PCNet
-            shared_in_adata = [g for g in shared if g in adata.var_names]
-            if len(shared_in_adata) == len(shared):
-                X_sub = _expression_matrix(adata[:, shared], layer=layer)
+            col_idx = adata.var_names.get_indexer(shared)
+            if (col_idx >= 0).all():
+                X_sub = expr[:, col_idx]
+                wt_arr = np.asarray(wt_arr, dtype=np.float64)
                 if mode == "ko":
-                    pert_arr = np.asarray(ko_tensor, dtype=np.float64)
-                    wt_arr = np.asarray(wt_tensor, dtype=np.float64)
+                    pert_arr = np.asarray(ko_arr, dtype=np.float64)
                 else:
-                    wt_arr = np.asarray(wt_tensor, dtype=np.float64)
                     pert_arr = wt_arr.copy()
                     target_rows = [i for i, gene in enumerate(shared) if gene in targets]
                     factor = 1.0 / fold_change if mode == "kd" else fold_change
@@ -2147,18 +2151,20 @@ def _tensor_to_graph(tensor, *, gene_names: Iterable[str]):
     # scTenifoldKnk emits; the visible structure is in the strongest 1-5%
     # of edges anyway.
     abs_arr = np.abs(arr)
-    if abs_arr.max() == 0:
+    abs_max = abs_arr.max()
+    if abs_max == 0:
         thresh = 0.0
     else:
-        thresh = abs_arr.max() / 200.0
-    rows, cols = np.where(abs_arr > thresh)
+        thresh = abs_max / 200.0
+    mask = abs_arr > thresh
+    np.fill_diagonal(mask, False)
+    rows, cols = np.nonzero(mask)
+    weights = arr[rows, cols].astype(np.float64).tolist()
+    # Object array of names so endpoints are looked up with fancy indexing.
+    names = np.fromiter(genes, dtype=object, count=len(genes))
     G = nx.DiGraph()
-    for g in genes:
-        G.add_node(g)
-    for r, c in zip(rows.tolist(), cols.tolist()):
-        if r == c:
-            continue
-        G.add_edge(genes[r], genes[c], weight=float(arr[r, c]))
+    G.add_nodes_from(genes)
+    G.add_weighted_edges_from(zip(names[rows].tolist(), names[cols].tolist(), weights))
     return G
 
 
@@ -2272,7 +2278,7 @@ def _apply_perturbation_to_graph(graph, *, targets, mode, fold_change):
                 w_new = w * fold_change
             else:  # pragma: no cover
                 w_new = w
-            pert[u][v]["weight"] = w_new
+            data["weight"] = w_new
     return pert
 
 
@@ -2280,18 +2286,30 @@ def _diff_grn(grn_base, grn_pert) -> pd.DataFrame:
     """Return a long-format edge-weight diff table."""
     if grn_base is None or grn_pert is None:
         return pd.DataFrame()
-    edges_b = {(u, v): float(d.get("weight", 1.0)) for u, v, d in grn_base.edges(data=True)}
-    edges_p = {(u, v): float(d.get("weight", 1.0)) for u, v, d in grn_pert.edges(data=True)}
-    keys = sorted(set(edges_b) | set(edges_p))
-    if not keys:
+    def out_weights(graph):
+        # {source: {target: weight}} read straight from the adjacency.
+        return {u: {v: float(d.get("weight", 1.0)) for v, d in nbrs.items()}
+                for u, nbrs in graph.adjacency()}
+
+    adj_b = out_weights(grn_base)
+    adj_p = out_weights(grn_pert)
+    # Sorting sources, then each source's targets, gives the same order as
+    # sorting the (source, target) pairs, with far fewer tuple comparisons.
+    sources, targets, wb, wp = [], [], [], []
+    for u in sorted(u for u in adj_b.keys() | adj_p.keys() if adj_b.get(u) or adj_p.get(u)):
+        nbrs_b = adj_b.get(u, {})
+        nbrs_p = adj_p.get(u, {})
+        vs = sorted(nbrs_b.keys() | nbrs_p.keys())
+        sources += repeat(u, len(vs))
+        targets += vs
+        wb += map(nbrs_b.get, vs, repeat(0.0))
+        wp += map(nbrs_p.get, vs, repeat(0.0))
+    if not targets:
         return pd.DataFrame()
-    rows = []
-    for u, v in keys:
-        wb = edges_b.get((u, v), 0.0)
-        wp = edges_p.get((u, v), 0.0)
-        if wb == 0.0 and wp == 0.0:
-            continue
-        rows.append((u, v, wb, wp, wp - wb))
+    # Build from rows so dtypes match when every edge is dropped (object
+    # columns), as column-wise construction would infer float64 instead.
+    rows = [(u, v, b, p, p - b) for u, v, b, p in zip(sources, targets, wb, wp)
+            if b != 0.0 or p != 0.0]
     return pd.DataFrame(rows, columns=["source", "target", "weight_base", "weight_pert", "delta"])
 
 
@@ -2308,12 +2326,17 @@ def _delta_from_grn(grn_base, grn_pert, *, targets, mode, fold_change) -> pd.Dat
         return pd.DataFrame()
     import networkx as nx
     all_nodes = sorted(set(grn_base.nodes) | set(grn_pert.nodes))
-    rows = []
-    for g in all_nodes:
-        in_b = sum(float(d.get("weight", 1.0)) for _, _, d in grn_base.in_edges(g, data=True))
-        in_p = sum(float(d.get("weight", 1.0)) for _, _, d in grn_pert.in_edges(g, data=True))
-        delta = in_p - in_b
-        log2_fc = np.log2((in_p + 1e-6) / (in_b + 1e-6))
-        rows.append((g, in_b, in_p, delta, log2_fc))
-    df = pd.DataFrame(rows, columns=["gene", "mean_base", "mean_pert", "delta", "log2_fc"])
+
+    def in_weights(graph):
+        return [sum([float(d.get("weight", 1.0)) for d in graph.pred[g].values()]) for g in all_nodes]
+
+    in_b = np.array(in_weights(grn_base))
+    in_p = np.array(in_weights(grn_pert))
+    df = pd.DataFrame({
+        "gene": all_nodes,
+        "mean_base": in_b,
+        "mean_pert": in_p,
+        "delta": in_p - in_b,
+        "log2_fc": np.log2((in_p + 1e-6) / (in_b + 1e-6)),
+    })
     return df

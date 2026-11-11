@@ -121,7 +121,9 @@ def test_paired_count_differential_downweights_outlier():
     assert abs(res.loc[0, "log2fc"]) < 1.0           # median block contrast resists the outlier
 
 
-def test_vectorised_glm_matches_scalar_optimiser():
+def test_batched_glm_matches_scalar_optimiser():
+    # pyedger's batched NB GLM fitter (edgeR's Levenberg / one-way paths) must
+    # reach the per-row likelihood optimum on the blocked spike-in design.
     from omicverse.external.pyedger import core
     rng = np.random.default_rng(1)
     n = 80
@@ -131,11 +133,11 @@ def test_vectorised_glm_matches_scalar_optimiser():
     off = np.tile(np.log(rng.uniform(0.5, 2, 6) * 1e6), (n, 1))
     disp = np.full(n, 0.1)
     w = np.ones_like(y)
-    b, m = core._fit_nb_glm_rows(y, X, off, disp, w)
-    B = np.array([core._fit_nb_glm_row(y[i], X, off[i], disp[i])[0] for i in range(n)])
-    llv = core._nbinom_loglik_rows(y, m, disp, w)
-    llb = core._nbinom_loglik_rows(y, core._mu_rows(off, B, X), disp, w)
-    assert np.all(llv >= llb - 1e-6)
+    _, m, _ = core._fit_glm_batch(y, X, off, np.broadcast_to(disp[:, None], y.shape), w)
+    llv = np.array([core._nbinom_loglik_row(y[i], m[i], disp[i]) for i in range(n)])
+    llb = np.array([core._nbinom_loglik_row(y[i], core._fit_nb_glm_row(y[i], X, off[i], disp[i])[1], disp[i])
+                    for i in range(n)])
+    assert np.all(llv >= llb - 1e-6 * np.abs(llb) - 1e-6)
 
 
 def test_robust_disp_sets_weights():

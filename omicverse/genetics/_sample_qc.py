@@ -488,16 +488,102 @@ def sample_genotype_concordance(
         lambda x: x.iloc[1] if len(x) > 1 else np.nan)
     df["gap_to_next"] = np.where(df["rank"] == 1, df["sample"].map(second) - df["discordance"], np.nan)
     df.attrs["n_informative_sites"] = int(A.shape[0])
-    return df.sort_values(["sample", "rank"]).reset_index(drop=True)
+    # opposite homozygotes expected between two *unrelated* people at these
+    # sites (Hardy-Weinberg, allele frequency from the batch's genotype calls)
+    dose = np.where(G >= 0, G / 2.0, np.nan)
+    with np.errstate(invalid="ignore"):
+        p = np.nanmean(dose, axis=1) if dose.size else np.array([])
+    p = p[np.isfinite(p)]
+    df.attrs["unrelated_opposite_hom_rate"] = float(np.mean(2 * p ** 2 * (1 - p) ** 2)) if p.size else np.nan
+    out = df.sort_values(["sample", "rank"]).reset_index(drop=True)
+    out.attrs.update(df.attrs)
+    return out
 
 
 def _same_individual_groups(conc: pd.DataFrame) -> Dict[str, set]:
-    """Union of mutual-best pairs -> {sample: set of same-individual samples}."""
-    groups = {s: {s} for s in set(conc["sample"]) | set(conc["comparator"])}
+    """``{sample: set of same-individual samples}`` from the concordance.
+
+    1. Mutual-best pairs are joined (two samples that are each other's
+       closest genotype match).
+    2. Groups are then merged while two groups are each other's nearest
+       group (single linkage on discordance) **and** their closest pair's
+       opposite-homozygote count is better explained by the same-individual
+       error rate than by the rate expected between unrelated people.
+
+    Step 2 is what keeps several libraries of one person together: two
+    libraries of the same normal are each other's best match (discordance
+    ~0), so the tumour -- whose best match is one of them, or a tie between
+    them -- is the best match of neither and step 1 alone leaves it on its
+    own (a false identity mismatch). The opposite-homozygote test is
+    robust to tumour LOH (a heterozygous site becomes homozygous, never the
+    opposite homozygote) and stops an unrelated orphan sample from being
+    absorbed by its nearest group. The same-individual rate is estimated
+    from the mutual-best pairs, the unrelated rate from the panel's allele
+    frequencies (``conc.attrs['unrelated_opposite_hom_rate']``) or, failing
+    that, from the pairs left in different groups.
+    """
+    samples = sorted(set(conc["sample"]) | set(conc["comparator"]))
+    groups = {s: {s} for s in samples}
     for s, c in conc.loc[conc["mutual_best"], ["sample", "comparator"]].itertuples(index=False):
         g = groups[s] | groups[c]
         for x in g:
             groups[x] = g
+
+    d = {(a, b): (float(x), int(o), int(n)) for a, b, x, o, n in
+         conc[["sample", "comparator", "discordance", "opposite_hom", "n_compared"]].itertuples(index=False)
+         if np.isfinite(x) and n > 0}
+    if not d:
+        return groups
+    mb = conc[conc["mutual_best"] & (conc["n_compared"] > 0)]
+    e_same = (float(mb["opposite_hom"].sum()) + 1.0) / (float(mb["n_compared"].sum()) + 2.0)
+    e_unrel = float(conc.attrs.get("unrelated_opposite_hom_rate", np.nan))
+    if not np.isfinite(e_unrel) or e_unrel <= 0:
+        apart = [(o, n) for (a, b), (_, o, n) in d.items() if b not in groups[a]]
+        if apart:
+            e_unrel = (sum(o for o, _ in apart) + 1.0) / (sum(n for _, n in apart) + 2.0)
+    if not np.isfinite(e_unrel) or e_unrel <= e_same:
+        return groups
+
+    def same_person(o: int, n: int) -> bool:
+        # binomial log-likelihood ratio, same individual vs unrelated
+        return o * np.log(e_same / e_unrel) + (n - o) * np.log((1 - e_same) / (1 - e_unrel)) > 0
+
+    def link(G, H):
+        best = None
+        for a in G:
+            for b in H:
+                v = d.get((a, b)) or d.get((b, a))
+                if v is not None and (best is None or v[0] < best[0]):
+                    best = v
+        return best
+
+    while True:
+        parts = list({id(g): g for g in groups.values()}.values())
+        if len(parts) < 2:
+            break
+        near = {}
+        for i, G in enumerate(parts):
+            cands = [(link(G, H), j) for j, H in enumerate(parts) if j != i]
+            cands = [(v, j) for v, j in cands if v is not None]
+            if cands:
+                dmin = min(v[0] for v, _ in cands)
+                near[i] = {j for v, j in cands if v[0] <= dmin + 1e-12}
+        merged = False
+        for i, js in near.items():
+            for j in js:
+                if j <= i or i not in near.get(j, set()):
+                    continue
+                _, o, n = link(parts[i], parts[j])
+                if same_person(o, n):
+                    g = parts[i] | parts[j]
+                    for x in g:
+                        groups[x] = g
+                    merged = True
+                    break
+            if merged:
+                break
+        if not merged:
+            break
     return groups
 
 
@@ -527,7 +613,14 @@ def resolve_sample_relationships(
 
     Columns: ``case_id, a, b, submitted_rank_for_a, submitted_discordance,
     best_for_a, best_for_a_discordance, best_for_b, status`` where status is
-    ``SUPPORTED`` (submitted pair is mutual-best) or ``MISMATCH``.
+    ``SUPPORTED`` (the submitted pair is in one same-individual group) or
+    ``MISMATCH``.
+
+    Same-individual groups (see ``_same_individual_groups``) join mutual-best
+    pairs and then reciprocal-nearest groups whose opposite-homozygote count
+    fits the same-individual error rate, so a batch may hold several
+    libraries of one person (re-runs, replicate normals, a second tumour
+    library) without breaking the tumour / normal record.
     """
     conc = concordance.set_index(["sample", "comparator"])
     groups = _same_individual_groups(concordance)
@@ -973,6 +1066,48 @@ def tumor_in_normal_shift(
 # --------------------------------------------------------------------------
 # batch review
 # --------------------------------------------------------------------------
+def _replicate_libraries(counts: pd.DataFrame, groups: Mapping[str, set], listed: Iterable[str],
+                         min_depth: int = 8) -> Dict[str, str]:
+    """``{library: manifest sample}`` for libraries absent from the manifest
+    whose same-individual group contains manifest samples: the manifest
+    sample with the closest allele-fraction profile (a tumour re-run matches
+    its tumour, not the normal, at LOH and somatic sites)."""
+    listed = set(listed)
+    extra = [s for s in groups if s not in listed and (groups[s] & listed)]
+    if not extra:
+        return {}
+    af = _wide(counts, "alt_fraction")
+    dp = _wide(counts, "depth").reindex_like(af)
+    ok = dp >= min_depth
+    out = {}
+    for lib in extra:
+        best, best_d = None, np.inf
+        for m in sorted(groups[lib] & listed):
+            v = (ok[lib] & ok[m]).values
+            if v.sum() == 0:
+                continue
+            dist = float(np.nanmean(np.abs(af[lib].values[v] - af[m].values[v])))
+            if dist < best_d:
+                best, best_d = m, dist
+        if best is not None:
+            out[lib] = best
+    return out
+
+
+def _pool_libraries(counts: pd.DataFrame, replicate_of: Mapping[str, str]) -> pd.DataFrame:
+    """Sum the allele counts of re-run libraries into their manifest sample."""
+    c = counts.assign(sample=counts["sample"].replace(dict(replicate_of)))
+    num = [x for x in ("ref_count", "alt_count", "other_count", "depth") if x in c.columns]
+    key = [x for x in c.columns if x not in num + ["alt_fraction"]]
+    out = c.groupby(key, as_index=False, sort=False, dropna=False)[num].sum()
+    rd = out["ref_count"] + out["alt_count"] if {"ref_count", "alt_count"} <= set(out.columns) \
+        else out["depth"]
+    out["alt_fraction"] = out["alt_count"] / rd.where(rd > 0)
+    out = out[[x for x in counts.columns if x in out.columns]]
+    out.attrs.update(counts.attrs)
+    return out
+
+
 @register_function(
     aliases=["tumor_normal_batch_qc", "paired_tumor_normal_qc", "sequencing_batch_qc",
              "sample_qc_review", "肿瘤正常配对质控", "测序批次质控"],
@@ -1010,8 +1145,19 @@ def tumor_normal_batch_qc(
     tin_alpha: float = 1e-4,
     tin_min_fraction: float = 0.02,
     tin_kwargs: Optional[dict] = None,
+    pool_replicates: bool = True,
 ) -> Dict[str, object]:
     """Run identity, contamination and tumour-content checks for a batch.
+
+    Several libraries of one individual may be present (re-sequenced
+    normals, a second tumour library). Identity groups are formed on every
+    library; a library that is not in the manifest but belongs to a manifest
+    individual is treated as a re-run of the manifest sample whose allele
+    fractions it matches best and, with ``pool_replicates=True``, its counts
+    are pooled into that sample for the contamination / imbalance steps (a
+    re-run would otherwise be fitted as a "source" of its own sample). Put a
+    library in the manifest if it is a distinct sample. ``pooled_libraries``
+    in the result lists what was pooled.
 
     Finding types (``finding_type``):
 
@@ -1048,14 +1194,23 @@ def tumor_normal_batch_qc(
     own normal) is tumour content and is never reported as contamination.
     Each finding goes to the case in which its affected sample was submitted.
 
-    Returns a dict with ``findings`` (DataFrame), ``concordance``,
-    ``relationships``, ``contamination``, ``imbalance`` (per tumour summary)
-    and ``groups`` (same-individual sets).
+    Returns a dict with ``findings`` (DataFrame), ``concordance`` (every
+    library), ``relationships``, ``contamination``, ``imbalance`` (per tumour
+    summary), ``groups`` (same-individual sets over every library) and
+    ``pooled_libraries`` (``{re-run library: manifest sample}``).
     """
     contamination_kwargs = contamination_kwargs or {}
     imbalance_kwargs = imbalance_kwargs or {}
-    conc = sample_genotype_concordance(counts)
-    groups = _same_individual_groups(conc)
+    conc_all = sample_genotype_concordance(counts)
+    groups_all = _same_individual_groups(conc_all)
+    listed = set(manifest[tumor_col]) | set(manifest[normal_col])
+    replicate_of = _replicate_libraries(counts, groups_all, listed) if pool_replicates else {}
+    if replicate_of:
+        counts = _pool_libraries(counts, replicate_of)
+        conc = sample_genotype_concordance(counts)
+        groups = _same_individual_groups(conc)
+    else:
+        conc, groups = conc_all, groups_all
     rel = resolve_sample_relationships(conc, manifest, case_col=case_col, a_col=tumor_col, b_col=normal_col)
     tumors = set(manifest[tumor_col])
     normals = set(manifest[normal_col])
@@ -1181,9 +1336,10 @@ def tumor_normal_batch_qc(
 
     if read_summary is not None and "outliers" in read_summary:
         for r in read_summary.itertuples(index=False):
-            if r.outliers and r.sample in case_of:
+            case = case_of.get(r.sample) or case_of.get(replicate_of.get(r.sample, ""))
+            if r.outliers and case:
                 findings.append({
-                    "case_id": case_of[r.sample], "finding_type": "library_outlier", "priority": 5,
+                    "case_id": case, "finding_type": "library_outlier", "priority": 5,
                     "affected": r.sample, "comparison": "NA", "region_id": "NA", "support_loci": np.nan,
                     "effect_size": float(r.median_read_length), "confidence": "MEDIUM",
                     "evidence": f"{r.sample} read-level batch outlier: {r.outliers}",
@@ -1194,5 +1350,7 @@ def tumor_normal_batch_qc(
     if len(fdf):
         fdf = (fdf.sort_values(["case_id", "priority"]).groupby("case_id", sort=False)
                .head(max_findings_per_case).reset_index(drop=True))
-    return {"findings": fdf, "concordance": conc, "relationships": rel, "contamination": cont,
-            "imbalance": pd.DataFrame(imb_rows), "groups": {k: sorted(v) for k, v in groups.items()}}
+    return {"findings": fdf, "concordance": conc_all, "relationships": rel, "contamination": cont,
+            "imbalance": pd.DataFrame(imb_rows),
+            "groups": {k: sorted(v) for k, v in groups_all.items()},
+            "pooled_libraries": dict(replicate_of)}
