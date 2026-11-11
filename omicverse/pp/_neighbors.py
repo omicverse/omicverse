@@ -281,6 +281,7 @@ def neighbors(  # noqa: PLR0913
     n_jobs: int | None = None,
     key_added: str | None = None,
     copy: bool = False,
+    backend: str | None = None,
 ) -> AnnData | None:
     r"""Compute nearest neighbors distance matrix and neighborhood graph with GPU acceleration.
 
@@ -413,6 +414,8 @@ def neighbors(  # noqa: PLR0913
     from ._gpu_cache import cache_invalidate
     cache_invalidate(adata)
     neighbors = Neighbors(adata)
+    from .._backend import resolve_backend
+    neighbors._backend = resolve_backend(backend)
     neighbors.compute_neighbors(
         n_neighbors,
         n_pcs=n_pcs,
@@ -843,6 +846,13 @@ class Neighbors:
         method, transformer, shortcut = self._handle_transformer(
             method, transformer, knn=knn, kwds=transformer_kwds_default
         )
+        if (getattr(self, "_backend", "python") == "cpp" and metric == "euclidean"
+                and type(transformer).__name__ == "PyNNDescentTransformer"):
+            # backend='cpp': multithreaded inverted-file kNN (brisc-style) in
+            # place of single-threaded pynndescent; same output format, higher recall.
+            from anndataoom_fast import IVFKNNTransformer
+            transformer = IVFKNNTransformer(n_neighbors=n_neighbors, metric=metric,
+                                            random_state=random_state)
 
         if self._adata.shape[0] >= 10000 and not knn:
             print(f"   {EMOJI['warning']} {Colors.WARNING}Large dataset without knn=True may require significant memory{Colors.ENDC}")
@@ -882,7 +892,12 @@ class Neighbors:
         elif method == "gauss":
             print(f"   {Colors.CYAN}💡 Using Gaussian kernel connectivity{Colors.ENDC}")
 
-        if method == "umap":
+        if method == "umap" and getattr(self, "_backend", "python") == "cpp":
+            # Bit-identical to umap-learn's fuzzy_simplicial_set, multithreaded.
+            from anndataoom_fast import fuzzy_simplicial_set
+            self._connectivities = fuzzy_simplicial_set(
+                knn_indices, knn_distances, self.n_neighbors).tocsr()
+        elif method == "umap":
             from ._connectivity import umap
             self._connectivities = umap(
                 knn_indices,

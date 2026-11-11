@@ -4,9 +4,10 @@ Currently hosts the cross-species preprocessing extracted from
 :mod:`omicverse.single` so it can be reused independently of the integration
 backend, and channel-level QC for multichannel electrophysiology
 (:func:`channel_qc_table`, :func:`bridged_channel_pairs`,
-:func:`erp_channel_outliers`), and open-set individual re-identification from
-images (:func:`reid_embed`, :func:`reid_local_verify`,
-:func:`reid_open_set_cluster`).
+:func:`erp_channel_outliers`), leakage-aware ranking of fixed prediction
+models for transfer to new environments (:func:`rank_models_for_transfer`) and
+open-set individual re-identification from images (:func:`reid_embed`,
+:func:`reid_local_verify`, :func:`reid_open_set_cluster`).
 """
 from ._cross_species import cross_species_align
 from ._bonsai import bonsai
@@ -20,6 +21,8 @@ from ._reid import (load_reid_backbone, reid_embed, reid_view_center, reid_candi
                     reid_local_verify, reid_fuse_similarity, reid_pair_auc,
                     reid_fit_projection, reid_select_threshold, reid_open_set_cluster,
                     reid_pipeline)
+from ._transfer_ranking import (rank_models_for_transfer, dependence_components,
+                                transfer_ranking_source)
 
 __all__ = ["cross_species_align", "bonsai", "bandpass_filter", "channel_qc_table",
            "bridged_channel_pairs", "erp_channel_outliers",
@@ -29,4 +32,5 @@ __all__ = ["cross_species_align", "bonsai", "bandpass_filter", "channel_qc_table
            "load_reid_backbone", "reid_embed", "reid_view_center", "reid_candidate_pairs",
            "reid_local_verify", "reid_fuse_similarity", "reid_pair_auc",
            "reid_fit_projection", "reid_select_threshold", "reid_open_set_cluster",
-           "reid_pipeline"]
+           "reid_pipeline",
+           "rank_models_for_transfer", "dependence_components", "transfer_ranking_source"]

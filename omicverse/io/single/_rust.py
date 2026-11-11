@@ -27,7 +27,7 @@ Colors = _PlainColors()
     description="Convert PyDataFrameElem or Rust DataFrame objects to pandas DataFrame",
     examples=[
         "# Convert Rust backend obs to pandas",
-        "adata = ov.read('data.h5ad', backend='rust')",
+        "adata = ov.read('data.h5ad', storage='disk')",
         "obs_df = ov.utils.convert_to_pandas(adata.obs)",
         "print(obs_df)  # Displays as pandas DataFrame",
         "# Convert Rust backend var to pandas",
@@ -159,7 +159,7 @@ class PyDataFrameElemWrapper:
     category="utils",
     description="Wrap PyDataFrameElem to provide pandas DataFrame-like interface",
     examples=[
-        "adata = ov.read('data.h5ad', backend='rust')",
+        "adata = ov.read('data.h5ad', storage='disk')",
         "obs_wrapper = ov.utils.wrap_dataframe(adata.obs)",
     ],
     related=["utils.convert_to_pandas", "utils.read"]
@@ -184,15 +184,15 @@ def wrap_dataframe(df_obj):
 @register_function(
     aliases=["AnnData兼容转换", "convert_adata_for_rust", "fix_adata_compatibility", "修复兼容性", "rust_compatibility"],
     category="utils",
-    description="Rewrite an AnnData as an h5ad that ov.read(backend='rust') can open (sort CSR indices, strip NaN/Inf, preserve obsm/varm/uns/obsp/varp/layers)",
+    description="Rewrite an AnnData as an h5ad that ov.read(storage='disk') can open (sort CSR indices, strip NaN/Inf, preserve obsm/varm/uns/obsp/varp/layers)",
     examples=[
         "adata_rust = ov.utils.convert_adata_for_rust(adata, output_file='fixed_data.h5ad')",
-        "adata = ov.read('fixed_data.h5ad', backend='rust')",
+        "adata = ov.read('fixed_data.h5ad', storage='disk')",
     ],
     related=["utils.read", "utils.convert_to_pandas", "pp.preprocess"]
 )
 def convert_adata_for_rust(adata, output_file=None, verbose=True, close_file=True):
-    """Rewrite an AnnData object as an ``.h5ad`` file that ``ov.read(..., backend='rust')`` can open.
+    """Rewrite an AnnData object as an ``.h5ad`` file that ``ov.read(..., storage='disk')`` can open.
 
     Sorts CSR/CSC minor indices, strips NaN/Inf, coerces problematic obs/var dtypes,
     and preserves ``obsm``, ``varm``, ``uns``, ``obsp``, ``varp`` and ``layers``.

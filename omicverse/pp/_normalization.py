@@ -651,6 +651,7 @@ def normalize_total(
     layer_norm: str | None = None,
     inplace: bool = True,
     copy: bool = False,
+    backend: str | None = None,
 ) -> AnnData | dict[str, np.ndarray] | None:
     """\
     Normalize counts per cell.
@@ -769,7 +770,8 @@ def normalize_total(
             raise NotImplementedError(
                 "Out-of-core normalize_total only supports inplace=True."
             )
-        from anndataoom import chunked_normalize_total as _chunked_normalize_total
+        from .._backend import oom_ops
+        _chunked_normalize_total = oom_ops(backend).chunked_normalize_total
         _ts = float(target_sum) if target_sum is not None else None
         _chunked_normalize_total(
             adata,
@@ -821,7 +823,18 @@ def normalize_total(
     start = datetime.now()
 
     gene_subset = None
-    counts_per_cell = axis_sum(x, axis=1)
+    from .._backend import resolve_backend
+    _cpp = (resolve_backend(backend) == 'cpp' and issparse(x) and getattr(x, 'format', None) == 'csr'
+            and not is_rust and layer is None and layers is None)
+    if _cpp:
+        # Multithreaded pass: same float32 arithmetic, but the highly-expressed
+        # test runs on the stored entries instead of a dense n x G mask.
+        from .._backend import cpp_memory
+        _mem = cpp_memory()
+        counts_per_cell, _cpp_subset = _mem.size_factor_counts(
+            x, exclude_highly_expressed=exclude_highly_expressed, max_fraction=max_fraction)
+    else:
+        counts_per_cell = axis_sum(x, axis=1)
 
     # ── Side product for downstream Pearson HVG ───────────────────────
     # `omicverse.pp.experimental._highly_variable_pearson_residuals` runs
@@ -835,7 +848,17 @@ def normalize_total(
     # Only applies to the global (no-batch) case -- the per-batch HVG path
     # needs per-batch sums that this scan does not split out.
     _pre_x = x
-    if hasattr(_pre_x, "tocsr") and not isinstance(_pre_x, np.ndarray):
+    if _cpp:
+        # Only kept when no gene is excluded (see below); skip the extra pass otherwise.
+        if exclude_highly_expressed:
+            _pearson_precompute = None
+        else:
+            _g = _mem.gene_sums(x)
+            _pearson_precompute = {
+                "sums_genes": _g[0], "sq_sums_genes": _g[1], "sum_total": float(_g[0].sum()),
+                "n_obs": int(x.shape[0]), "n_vars": int(x.shape[1]),
+            }
+    elif hasattr(_pre_x, "tocsr") and not isinstance(_pre_x, np.ndarray):
         try:
             # Try a sparse-native sum-axis-0 / squared-sum-axis-0; both
             # are O(nnz) on a CSR / CSC. Fall back silently if the input
@@ -873,8 +896,11 @@ def normalize_total(
 
         # at least one cell as more than max_fraction of counts per cell
 
-        gene_subset = axis_sum((x > counts_per_cell[:, None] * max_fraction), axis=0)
-        gene_subset = np.asarray(np.ravel(gene_subset) == 0)
+        if _cpp:
+            gene_subset = _cpp_subset
+        else:
+            gene_subset = axis_sum((x > counts_per_cell[:, None] * max_fraction), axis=0)
+            gene_subset = np.asarray(np.ravel(gene_subset) == 0)
 
         n_excluded = (~gene_subset).sum()
         print(f"   {EMOJI['warning']} {Colors.WARNING}Excluding {Colors.BOLD}{n_excluded:,}{Colors.ENDC}{Colors.WARNING} highly-expressed genes from normalization computation{Colors.ENDC}")
@@ -885,7 +911,9 @@ def normalize_total(
                 print(f"   {Colors.WARNING}Excluded genes: {Colors.BOLD}{excluded_genes}{Colors.ENDC}")
             else:
                 print(f"   {Colors.WARNING}Excluded genes: {Colors.BOLD}{adata.var_names[~gene_subset].tolist()}{Colors.ENDC}")
-        if is_rust:
+        if _cpp:
+            pass  # counts_per_cell already excludes those genes
+        elif is_rust:
             # Use integer indexing for Rust backend
             gene_indices = np.where(gene_subset)[0]
             counts_per_cell = axis_sum(x[:, gene_indices], axis=1)

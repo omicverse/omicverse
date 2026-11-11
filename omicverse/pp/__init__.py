@@ -18,6 +18,8 @@ Dimensionality reduction:
     tsne: t-SNE embedding
     umap: UMAP embedding
     sude: SUDE (Scalable Unsupervised Dimensionality reduction via Embedding)
+    pacmap: PaCMAP embedding (anndataoom-fast port of brisc)
+    localmap: LocalMAP embedding (anndataoom-fast port of brisc)
     
 Neighborhood analysis:
     neighbors: Compute neighborhood graph
@@ -85,6 +87,7 @@ from ._recover import recover_counts,binary_search
 from ._normalization import log1p,normalize_total
 from ._scrublet import scrublet, scrublet_simulate_doublets
 from ._champ import champ
+from ._embed_brisc import pacmap, localmap  # anndataoom-fast port of brisc
 
 # Ambient / contamination-RNA removal — exposed as ``ov.pp.ambient``.
 # The sub-package's __init__ is light (native backend imports are deferred
@@ -112,6 +115,8 @@ __all__ = [
     'tsne',
     'umap',
     'sude',
+    'pacmap',
+    'localmap',
     
     # Neighborhood and clustering
     'neighbors',

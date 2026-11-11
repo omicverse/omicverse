@@ -50,3 +50,22 @@ def test_leiden_gpu_multilevel_accepts_list_resolution():
     leiden_gpu_sparse_multilevel(adata, resolution=[1.0], key_added="leiden")
     assert "leiden" in adata.obs
     assert adata.obs["leiden"].nunique() >= 1
+
+
+@pytest.mark.parametrize("mode", ["cpu", "cpu-gpu-mixed"])
+def test_pp_leiden_resolution_list_same_keys_in_every_mode(mode):
+    """A list of resolutions gives the same obs columns in every mode."""
+    import omicverse as ov
+    if mode != "cpu":
+        pytest.importorskip("torch")
+    adata = _small_adata_with_graph()
+    old = ov.settings.mode
+    try:
+        ov.settings.mode = mode
+        kw = {"device": "cpu"} if mode != "cpu" else {}
+        ov.pp.leiden(adata, resolution=[0.5, 1.0], key_added="lv", **kw)
+    finally:
+        ov.settings.mode = old
+    for r in (0.5, 1.0):
+        assert adata.obs[f"lv_{r}"].notna().all() and adata.obs[f"lv_{r}"].nunique() > 1
+    assert (adata.obs["lv"].astype(str) == adata.obs["lv_0.5"].astype(str)).all()
