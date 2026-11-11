@@ -4,7 +4,12 @@ Currently hosts the cross-species preprocessing extracted from
 :mod:`omicverse.single` so it can be reused independently of the integration
 backend, and channel-level QC for multichannel electrophysiology
 (:func:`channel_qc_table`, :func:`bridged_channel_pairs`,
-:func:`erp_channel_outliers`).
+:func:`erp_channel_outliers`), leakage-aware ranking of fixed prediction
+models for transfer to new environments (:func:`rank_models_for_transfer`),
+quantitative susceptibility mapping from multi-echo gradient-echo MRI
+(:func:`qsm_reconstruct` and its steps) and open-set individual
+re-identification from images (:func:`reid_embed`, :func:`reid_local_verify`,
+:func:`reid_open_set_cluster`).
 """
 from ._cross_species import cross_species_align
 from ._bonsai import bonsai
@@ -14,9 +19,26 @@ from ._erp import repair_reject_epochs, channel_erps
 from ._trigger import trigger_onsets
 from ._choice_model import (fit_choice_model, choice_model_loglik,
                             choice_model_forward_validation, export_choice_predictor)
+from ._reid import (load_reid_backbone, reid_embed, reid_view_center, reid_candidate_pairs,
+                    reid_local_verify, reid_fuse_similarity, reid_pair_auc,
+                    reid_fit_projection, reid_select_threshold, reid_open_set_cluster,
+                    reid_pipeline)
+from ._qsm import (qsm_load_multi_echo, qsm_save_nifti, qsm_brain_mask, qsm_unwrap_phase,
+                   qsm_multi_echo_field, qsm_background_removal, qsm_dipole_inversion,
+                   qsm_reconstruct, qsm_dipole_kernel, qsm_forward_field, qsm_numerical_phantom)
+from ._transfer_ranking import (rank_models_for_transfer, dependence_components,
+                                transfer_ranking_source)
 
 __all__ = ["cross_species_align", "bonsai", "bandpass_filter", "channel_qc_table",
            "bridged_channel_pairs", "erp_channel_outliers",
            "repair_reject_epochs", "channel_erps", "trigger_onsets",
            "fit_choice_model", "choice_model_loglik",
-           "choice_model_forward_validation", "export_choice_predictor"]
+           "choice_model_forward_validation", "export_choice_predictor",
+           "load_reid_backbone", "reid_embed", "reid_view_center", "reid_candidate_pairs",
+           "reid_local_verify", "reid_fuse_similarity", "reid_pair_auc",
+           "reid_fit_projection", "reid_select_threshold", "reid_open_set_cluster",
+           "reid_pipeline",
+           "qsm_load_multi_echo", "qsm_save_nifti", "qsm_brain_mask", "qsm_unwrap_phase",
+           "qsm_multi_echo_field", "qsm_background_removal", "qsm_dipole_inversion",
+           "qsm_reconstruct", "qsm_dipole_kernel", "qsm_forward_field", "qsm_numerical_phantom",
+           "rank_models_for_transfer", "dependence_components", "transfer_ranking_source"]

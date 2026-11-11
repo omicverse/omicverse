@@ -34,6 +34,13 @@ for spatial transcriptomics (Martinez-de-Morentin et al.)::
 Methods
 -------
 ``watershed``  Spateo-style marker watershed; scikit-image only.
+
+``segment_nuclei`` is a model-free nucleus instance segmenter for a 2-D
+nuclear stain or a ``(Z, Y, X)`` stack (scales estimated from the image,
+h-maxima watershed, shape-checked merges, focal-depth split of nuclei that
+overlap in projection)::
+
+    labels, table, info = ov.space.seg.segment_nuclei(dapi_zyx, return_info=True)
 ``cellpose``   Cellpose 2/3/4; ``restore_type='denoise_cyto3'`` (v3) and
                Cellpose-SAM ``'cpsam'`` (v4, default when installed).
 ``stardist``   StarDist ``2D_versatile_fluo`` / ``2D_versatile_he``.
@@ -56,6 +63,8 @@ CellSAM (GitHub) and Baysor (binary) are installed separately;
 """
 from ._api import expand_labels, load_image, methods, segment
 from ._metrics import compare, evaluate
+from ._nuclei import segment_nuclei
+from ._cilia import detect_cilia
 from ._tiling import segment_tiled
 from ._transcripts import aggregate, assign_transcripts, segment_transcripts
 
@@ -63,6 +72,8 @@ __all__ = [
     "methods",
     "segment",
     "segment_tiled",
+    "segment_nuclei",
+    "detect_cilia",
     "expand_labels",
     "load_image",
     "assign_transcripts",
