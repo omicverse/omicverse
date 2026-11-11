@@ -103,10 +103,12 @@ def _read_h5ad_rust(path, **kwargs):
 @register_function(
     aliases=["读取数据", "read", "load_data", "数据读取", "file_reader"],
     category="utils",
-    description="Universal file reader for common bioinformatics data formats including h5ad, csv, tsv, txt, and gzipped files",
+    description="Universal file reader for common bioinformatics data formats including h5ad, csv, tsv, txt, and gzipped files; h5ad either in memory or kept on disk (storage='disk')",
     examples=[
-        "# Read AnnData file",
+        "# Read AnnData file into memory",
         "adata = ov.read('data.h5ad')",
+        "# Keep the matrix on disk (data larger than RAM / GPU memory)",
+        "adata = ov.read('data.h5ad', storage='disk')",
         "# Read CSV file",
         "df = ov.read('data.csv')",
         "# Read TSV file",
@@ -114,50 +116,93 @@ def _read_h5ad_rust(path, **kwargs):
         "# Read compressed file",
         "df = ov.read('data.csv.gz')",
         "# Pass additional parameters",
-        "df = ov.read('data.csv', index_col=0, header=0)"
+        "df = ov.read('data.csv', index_col=0, header=0)",
     ],
-    related=["utils.read_csv", "utils.read_h5ad", "pp.preprocess"]
+    related=["utils.read_csv", "utils.read_h5ad", "pp.preprocess", "settings.gpu_init"]
 )
-def read(path, backend='python', **kwargs):
+def read(path, storage='memory', *, backend=None, **kwargs):
     r"""
     Read common omics file formats into AnnData or pandas DataFrame.
+
+    For ``.h5ad`` files two choices decide how omicverse runs: where the
+    matrix lives (``storage``, here) and where it is computed on
+    (``ov.settings.cpu_init()`` / ``cpu_gpu_mixed_init()`` / ``gpu_init()``,
+    called *before* ``ov.read``):
+
+    ==============  ======================  ===================================
+    mode            ``storage='memory'``    ``storage='disk'``
+    ==============  ======================  ===================================
+    cpu             AnnData in RAM          AnnDataOOM (anndataoom): streamed
+                                            from disk by the C++ kernels
+    cpu-gpu-mixed   AnnData in RAM          AnnDataOOM; PCA/kNN/UMAP on GPU
+    gpu             AnnData in RAM, moved   Dask row blocks streamed from disk
+                    to the GPU (RAPIDS)     to the GPU (``chunk_size`` cells)
+    ==============  ======================  ===================================
+
+    ``storage='disk'`` keeps memory low (SEA-AD, 1.38M cells / 91 GB: 13 GB
+    on CPU, 5 GB in GPU mode); every step re-reads the file, so it relies on
+    disk / page-cache bandwidth.
 
     Parameters
     ----------
     path : str or pathlib.Path
         Input file path.
-    backend : {'python', 'rust'}, default='python'
-        Backend used for ``.h5ad`` reading. ``'rust'`` loads out-of-memory
-        via ``anndataoom`` / ``anndata-rs``. When the file's sparse X has
-        unsorted minor indices the call is aborted with a clear
-        ``ValueError`` (rather than an anndata-rs panic) pointing at
-        :func:`ov.utils.convert_adata_for_rust` for recovery.
+    storage : {'memory', 'disk'}, default='memory'
+        Where the ``.h5ad`` matrix lives; see the table above.
+    backend : {'python', 'rust'}, optional
+        Deprecated spelling: ``'python'`` = ``storage='memory'``, ``'rust'`` =
+        AnnDataOOM whatever the mode.
     **kwargs
-        Additional keyword arguments forwarded to backend readers.
+        Forwarded to the reader (``chunk_size`` and ``layer`` — read
+        ``layers[layer]`` as ``X`` — for GPU ``storage='disk'``;
+        ``pandas.read_csv`` options for tables).
 
     Returns
     -------
-    anndata.AnnData or pandas.DataFrame
-        Loaded AnnData object (for ``.h5ad``) or DataFrame (for table files).
+    anndata.AnnData, AnnDataOOM or pandas.DataFrame
+        Loaded object (for ``.h5ad``) or DataFrame (for table files).
 
     Raises
     ------
     ImportError
-        If ``backend='rust'`` is requested but ``anndataoom`` is not installed.
+        If ``storage='disk'`` needs ``anndataoom`` (CPU modes) or ``dask``
+        (GPU mode) and it is not installed.
     ValueError
-        If ``backend`` is invalid for ``.h5ad`` reading, the file suffix is
-        unsupported, or the ``.h5ad`` has an unsorted sparse ``X``.
+        If ``storage``/``backend`` is invalid, the file suffix is unsupported,
+        or the ``.h5ad`` has an unsorted sparse ``X`` (AnnDataOOM; see
+        :func:`ov.utils.convert_adata_for_rust`).
     """
     ext = Path(path).suffix.lower()
+    if storage in ('python', 'rust') and backend is None:  # read(path, 'rust')
+        storage, backend = 'memory', storage
 
     if ext == '.h5ad':
-        if backend == 'python':
-            return _anndata_read_h5ad(path, **kwargs)
-
-        if backend == 'rust':
+        if backend is not None:
+            import warnings
+            if backend not in ('python', 'rust'):
+                raise ValueError("backend must be 'python' or 'rust' (deprecated; use storage=)")
+            warnings.warn(
+                f"ov.read(backend={backend!r}) is deprecated; use "
+                f"storage={'memory' if backend == 'python' else 'disk'!r} "
+                "(storage='disk' streams to the GPU in ov.settings.gpu_init() mode).",
+                FutureWarning, stacklevel=2)
+            if backend == 'python':
+                return _anndata_read_h5ad(path, **kwargs)
             return _read_h5ad_rust(path, **kwargs)
-
-        raise ValueError("backend must be 'python' or 'rust'")
+        if storage == 'memory':
+            return _anndata_read_h5ad(path, **kwargs)
+        if storage == 'disk':
+            from ..._settings import settings
+            if settings.mode == 'gpu':
+                from ...pp._dask import read_h5ad as _read_h5ad_dask
+                return _read_h5ad_dask(path, **kwargs)
+            kwargs.pop('chunk_size', None)
+            if kwargs.get('layer') is not None:
+                raise NotImplementedError(
+                    "layer= (read a layer as X) is available for storage='disk' in GPU mode")
+            kwargs.pop('layer', None)
+            return _read_h5ad_rust(path, **kwargs)
+        raise ValueError("storage must be 'memory' or 'disk'")
 
     if ext in {'.csv', '.tsv', '.txt', '.gz'}:
         sep = '\t' if ext in {'.tsv', '.txt'} or path.endswith(('.tsv.gz', '.txt.gz')) else ','
