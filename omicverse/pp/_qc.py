@@ -58,13 +58,18 @@ def _filter_cells_impl(
     min_genes=None,
     max_counts=None,
     max_genes=None,
-    inplace=True
+    inplace=True,
+    backend='python',
 ):
     """Internal implementation of cell filtering."""
     X = adata.X
     if _is_oom(adata):
         # out-of-core: one chunked pass over X, never densify/materialise.
         n_counts, n_genes = _oom_axis_stats(X, axis=1)
+    elif sparse.issparse(X) and backend == 'cpp' and X.format == 'csr':
+        from .._backend import cpp_memory
+        _m = cpp_memory().qc_metrics(X)
+        n_counts, n_genes = _m['nUMIs'], _m['n_positive']
     elif sparse.issparse(X):
         n_counts = np.asarray(X.sum(axis=1)).flatten()
         n_genes = np.asarray((X > 0).sum(axis=1)).flatten()
@@ -96,12 +101,17 @@ def _filter_genes_impl(
     min_cells=None,
     max_counts=None,
     max_cells=None,
-    inplace=True
+    inplace=True,
+    backend='python',
 ):
     """Internal implementation of gene filtering."""
     X = adata.X
     if _is_oom(adata):
         n_counts, n_cells = _oom_axis_stats(X, axis=0)
+    elif (sparse.issparse(X) and backend == 'cpp' and X.format == 'csr'
+          and min_counts is None and max_counts is None):
+        from .._backend import cpp_memory
+        n_counts, n_cells = None, cpp_memory().positive_counts(X)
     elif sparse.issparse(X):
         n_counts = np.asarray(X.sum(axis=0)).flatten()
         n_cells = np.asarray((X > 0).sum(axis=0)).flatten()
@@ -691,6 +701,7 @@ def qc(
     hb_genes=None,
     use_gpu: bool = True,
     batch_wise_mad=None,
+    backend: Optional[str] = None,
     **kwargs,
 ):
     r'''
@@ -750,22 +761,24 @@ def qc(
     # only where needed.
     mixed_only = dict(use_gpu=use_gpu, batch_wise_mad=batch_wise_mad)
 
+    from .._backend import resolve_backend
+    _backend = resolve_backend(backend)
     if _is_oom(adata):
         print(f"{Colors.HEADER}{Colors.BOLD}{EMOJI['cpu']} Using CPU mode for QC (out-of-memory)...{Colors.ENDC}")
-        result = qc_cpu(adata, **kwargs)
+        result = qc_cpu(adata, backend=_backend, **kwargs)
         note(backend=f"omicverse({settings.mode}) · cpu(oom) · mode={mode}")
-    elif settings.mode == 'gpu':
+    elif settings.mode == 'gpu' or _is_dask_X(adata):
         print(f"{Colors.HEADER}{Colors.BOLD}{EMOJI['gpu']} Using RAPIDS GPU to calculate QC...{Colors.ENDC}")
         result = qc_gpu(adata, **kwargs)
-        note(backend=f"omicverse({settings.mode}) · rapids · mode={mode}")
+        note(backend=f"omicverse({settings.mode}) · {'dask' if _is_dask_X(adata) else 'rapids'} · mode={mode}")
     elif settings.mode == 'cpu-gpu-mixed':
         print(f"{Colors.HEADER}{Colors.BOLD}{EMOJI['mixed']} Using CPU/GPU mixed mode for QC...{Colors.ENDC}")
         print_gpu_usage_color()
-        result = qc_cpu_gpu_mixed(adata, **kwargs, **mixed_only)
+        result = qc_cpu_gpu_mixed(adata, backend=_backend, **kwargs, **mixed_only)
         note(backend=f"omicverse({settings.mode}) · mixed · mode={mode}")
     else:
         print(f"{Colors.HEADER}{Colors.BOLD}{EMOJI['cpu']} Using CPU mode for QC...{Colors.ENDC}")
-        result = qc_cpu(adata, **kwargs)
+        result = qc_cpu(adata, backend=_backend, **kwargs)
         note(backend=f"omicverse({settings.mode}) · cpu · mode={mode}")
 
     # Build viz from whatever actually ended up on the (possibly filtered)
@@ -793,7 +806,7 @@ def qc_cpu_gpu_mixed(adata:anndata.AnnData, mode='seurat',
        path_viz=None, tresh=None,mt_startswith='auto',mt_genes=None,
        ribo_startswith=("RPS", "RPL"),ribo_genes=None,
        hb_startswith="^HB[^(P)]",hb_genes=None,
-       use_gpu=True,batch_wise_mad=None):
+       use_gpu=True,batch_wise_mad=None,backend=None):
     """
     Perform quality control on an AnnData object.
 
@@ -1011,10 +1024,10 @@ def qc_cpu_gpu_mixed(adata:anndata.AnnData, mode='seurat',
     genes_before_final = adata.shape[1]
     
     if not is_rust:
-        _filter_cells_impl(adata, min_genes=min_genes)
-        _filter_genes_impl(adata, min_cells=min_cells)
-        _filter_cells_impl(adata, max_genes=int(max_genes_ratio*adata.shape[1]))
-        _filter_genes_impl(adata, max_cells=int(max_cells_ratio*adata.shape[0]))
+        _filter_cells_impl(adata, min_genes=min_genes, backend=backend)
+        _filter_genes_impl(adata, min_cells=min_cells, backend=backend)
+        _filter_cells_impl(adata, max_genes=int(max_genes_ratio*adata.shape[1]), backend=backend)
+        _filter_genes_impl(adata, max_cells=int(max_cells_ratio*adata.shape[0]), backend=backend)
     else:
         selected_cells = True
         if min_genes: selected_cells &= adata.obs["detected_genes"] >= min_genes
@@ -1210,6 +1223,7 @@ def qc_cpu(
     ribo_genes: Optional[list] = None,
     hb_startswith: Optional[str] = "^HB[^(P)]",
     hb_genes: Optional[list] = None,
+    backend: str = 'python',
     **kwargs
 ):
     r"""
@@ -1306,11 +1320,22 @@ def qc_cpu(
 
     if is_oom:
         # Out-of-memory path — chunked, never loads full matrix
-        from anndataoom import chunked_qc_metrics, chunked_gene_group_pct
-        chunked_qc_metrics(adata)
-        adata.obs['mito_perc'] = chunked_gene_group_pct(adata, adata.var["mt"].values)
-        adata.obs['ribo_perc'] = chunked_gene_group_pct(adata, adata.var["ribo"].values)
-        adata.obs['hb_perc'] = chunked_gene_group_pct(adata, adata.var["hb"].values)
+        from .._backend import oom_ops
+        _ops = oom_ops(backend)
+        _ops.chunked_qc_metrics(adata)
+        adata.obs['mito_perc'] = _ops.chunked_gene_group_pct(adata, adata.var["mt"].values)
+        adata.obs['ribo_perc'] = _ops.chunked_gene_group_pct(adata, adata.var["ribo"].values)
+        adata.obs['hb_perc'] = _ops.chunked_gene_group_pct(adata, adata.var["hb"].values)
+    elif issparse(adata.X) and backend == 'cpp':
+        # One multithreaded pass for all metrics; same float32 arithmetic as below.
+        from .._backend import cpp_memory
+        _m = cpp_memory().qc_metrics(adata.X, mt=adata.var["mt"].values,
+                                     ribo=adata.var["ribo"].values, hb=adata.var["hb"].values)
+        adata.obs['nUMIs'] = _m['nUMIs']
+        adata.obs['mito_perc'] = _m['mito_perc']
+        adata.obs['ribo_perc'] = _m['ribo_perc']
+        adata.obs['hb_perc'] = _m['hb_perc']
+        adata.obs['detected_genes'] = _m['detected_genes']
     elif issparse(adata.X):
         adata.obs['nUMIs'] = np.array(adata.X.sum(axis=1)).reshape(-1)
         adata.obs['mito_perc'] = np.array(adata[:, adata.var["mt"]].X.sum(axis=1)).reshape(-1) / \
@@ -1428,8 +1453,8 @@ def qc_cpu(
 
         # Recompute n_cells after cell subsetting. Uses chunked streaming —
         # never materialises the full X.
-        from anndataoom import chunked_qc_metrics
-        chunked_qc_metrics(adata)
+        from .._backend import oom_ops
+        oom_ops(backend).chunked_qc_metrics(adata)
         n_cell = adata.var["n_cells"].values
         adata.var["n_cell"] = n_cell
         selected_genes = np.ones(adata.n_vars, dtype=bool)
@@ -1439,10 +1464,10 @@ def qc_cpu(
             selected_genes &= n_cell <= max_cells_ratio * adata.shape[0]
         adata._inplace_subset_var(selected_genes)
     else:
-        _filter_cells_impl(adata, min_genes=min_genes)
-        _filter_genes_impl(adata, min_cells=min_cells)
-        _filter_cells_impl(adata, max_genes=int(max_genes_ratio*adata.shape[1]))
-        _filter_genes_impl(adata, max_cells=int(max_cells_ratio*adata.shape[0]))
+        _filter_cells_impl(adata, min_genes=min_genes, backend=backend)
+        _filter_genes_impl(adata, min_cells=min_cells, backend=backend)
+        _filter_cells_impl(adata, max_genes=int(max_genes_ratio*adata.shape[1]), backend=backend)
+        _filter_genes_impl(adata, max_cells=int(max_cells_ratio*adata.shape[0]), backend=backend)
 
     cells_final_filtered = cells_before_final - adata.shape[0]
     genes_final_filtered = genes_before_final - adata.shape[1]
@@ -1636,6 +1661,11 @@ def qc_cpu(
     return adata
 
 
+def _is_dask_X(adata) -> bool:
+    from ._dask import is_dask
+    return is_dask(getattr(adata, "X", None))
+
+
 def qc_gpu(adata, mode='seurat',
        min_cells=3, min_genes=200, nmads=5,
        max_cells_ratio=1,max_genes_ratio=1,
@@ -1648,8 +1678,18 @@ def qc_gpu(adata, mode='seurat',
     GPU-accelerated quality control using RAPIDS
 
     Doublet detection is performed after QC threshold filtering and final cell/gene filtering.
+    A Dask ``X`` (``ov.read(..., storage='disk')`` in GPU mode) is processed block by block.
     '''
-    import rapids_singlecell as rsc
+    dask_X = _is_dask_X(adata)
+    if dask_X:
+        from . import _dask
+        if doublets:
+            raise NotImplementedError(
+                "Doublet detection needs the whole matrix in memory; call "
+                "ov.pp.qc(..., doublets=False) on an AnnData read with storage='disk' in GPU mode.")
+        rsc = None
+    else:
+        import rapids_singlecell as rsc
     
     # Logging
     if tresh is None:
@@ -1667,8 +1707,9 @@ def qc_gpu(adata, mode='seurat',
         print(f"   {Colors.CYAN}Auto-detected mitochondrial prefix: {Colors.BOLD}'{mt_startswith}'{Colors.ENDC}")
     print(f"   {Colors.BLUE}Mitochondrial genes: {Colors.BOLD}{mt_startswith if mt_genes is None else 'custom list'}{Colors.ENDC}")
 
-    print(f"   {Colors.GREEN}{EMOJI['gpu']} Loading data to GPU...{Colors.ENDC}")
-    rsc.get.anndata_to_GPU(adata)
+    if not dask_X:
+        print(f"   {Colors.GREEN}{EMOJI['gpu']} Loading data to GPU...{Colors.ENDC}")
+        rsc.get.anndata_to_GPU(adata)
 
     # QC metrics
     print(f"\n{Colors.HEADER}{Colors.BOLD}📊 Step 1: Calculating QC Metrics{Colors.ENDC}")
@@ -1682,6 +1723,8 @@ def qc_gpu(adata, mode='seurat',
         if mt_startswith in _CE_MT_PREFIXES:
             # C. elegans: multiple prefixes, flag manually
             adata.var["mt"] = _mt_mask(adata.var_names, mt_startswith)
+        elif dask_X:
+            adata.var["mt"] = adata.var_names.str.startswith(mt_startswith)
         else:
             rsc.pp.flag_gene_family(adata, gene_family_name="mt", gene_family_prefix=mt_startswith)
         mt_genes_found = sum(adata.var["mt"])
@@ -1696,7 +1739,10 @@ def qc_gpu(adata, mode='seurat',
         # For tuple of prefixes, we need to flag each prefix separately
         adata.var["ribo"] = False
         for prefix in ribo_startswith:
-            rsc.pp.flag_gene_family(adata, gene_family_name="ribo_temp", gene_family_prefix=prefix)
+            if dask_X:
+                adata.var["ribo_temp"] = adata.var_names.str.startswith(prefix)
+            else:
+                rsc.pp.flag_gene_family(adata, gene_family_name="ribo_temp", gene_family_prefix=prefix)
             adata.var["ribo"] = adata.var["ribo"] | adata.var["ribo_temp"]
         adata.var.drop(columns=["ribo_temp"], inplace=True, errors='ignore')
         ribo_genes_found = sum(adata.var["ribo"])
@@ -1718,7 +1764,10 @@ def qc_gpu(adata, mode='seurat',
     # Print gene detection table
     _print_gene_detection_table(mt_genes_found, ribo_genes_found, hb_genes_found, mt_genes, ribo_genes, hb_genes)
 
-    rsc.pp.calculate_qc_metrics(adata, qc_vars=["mt", "ribo", "hb"])
+    if dask_X:
+        _dask.calculate_qc_metrics(adata, qc_vars=["mt", "ribo", "hb"])
+    else:
+        rsc.pp.calculate_qc_metrics(adata, qc_vars=["mt", "ribo", "hb"])
     adata.obs['nUMIs'] = adata.obs['total_counts']
     adata.obs['mito_perc'] = adata.obs['pct_counts_mt']/100
     adata.obs['ribo_perc'] = adata.obs['pct_counts_ribo']/100
@@ -1786,7 +1835,7 @@ def qc_gpu(adata, mode='seurat',
     removed = QC_test.loc[~QC_test.values]
     removed_cells.extend(list(removed.index.values))
     total_qc_failed = n1-np.sum(QC_test)
-    adata = adata[QC_test, :]
+    adata = adata[QC_test.values].copy() if dask_X else adata[QC_test, :]
     n2 = adata.shape[0]
     
     print(f"   {Colors.GREEN}✓ Combined QC filters: {Colors.BOLD}{total_qc_failed:,}{Colors.ENDC}{Colors.GREEN} cells removed ({total_qc_failed/n1*100:.1f}%){Colors.ENDC}")
@@ -1805,10 +1854,21 @@ def qc_gpu(adata, mode='seurat',
     # UMIs exceed n_cells (S100A8, LYZ, FCGR3B, ...) was removed. rapids-singlecell
     # exposes min_genes/max_genes/min_cells/max_cells separately, matching the CPU
     # path's _filter_cells_impl / _filter_genes_impl.
-    rsc.pp.filter_cells(adata, min_genes=min_genes)
-    rsc.pp.filter_cells(adata, max_genes=int(max_genes_ratio*adata.shape[1]))
-    rsc.pp.filter_genes(adata, min_cells=min_cells)
-    rsc.pp.filter_genes(adata, max_cells=int(max_cells_ratio*adata.shape[0]))
+    if dask_X:
+        # Genes per cell are already known; one pass counts cells per gene.
+        n_genes = adata.obs['detected_genes'].values
+        keep = (n_genes >= min_genes) & (n_genes <= int(max_genes_ratio*adata.shape[1]))
+        adata.obs['n_genes'] = n_genes
+        if not keep.all():
+            adata = adata[keep].copy()
+        _dask.filter_genes(adata, min_cells=min_cells,
+                           max_cells=int(max_cells_ratio*adata.shape[0]))
+    else:
+        from . import _rsc_compat as _rscc  # any rapids-singlecell release
+        _rscc.filter_cells(adata, min_genes=min_genes)
+        _rscc.filter_cells(adata, max_genes=int(max_genes_ratio*adata.shape[1]))
+        _rscc.filter_genes(adata, min_cells=min_cells)
+        _rscc.filter_genes(adata, max_cells=int(max_cells_ratio*adata.shape[0]))
     
     cells_final_filtered = cells_before_final - adata.shape[0]
     genes_final_filtered = genes_before_final - adata.shape[1]

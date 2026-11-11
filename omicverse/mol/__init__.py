@@ -31,6 +31,10 @@ Visualization    ``view`` (py3Dmol interactive 3D — survives nbconvert),
 Druggability     ``pockets``, ``druggability`` (rust-fpocket backend)
 Known drugs      ``known_drugs`` (ChEMBL)
 Docking          ``dock``, ``redock_validate``, ``DockingResult``
+Pharmacophore    ``pharmacophore_align`` / ``align_pharmacophore_set``
+                 (receptor-free pose generation against interaction and
+                 excluded volumes), ``pharmacophore_features``,
+                 ``pharmacophore_score``, ``pose_strain_energy``
 Dynamics         ``simulate`` (one-call MD), or the explicit stages
                  ``prepare_system`` → ``minimize`` → ``equilibrate`` →
                  ``production``; ``MDSystem``, ``MDTrajectory``
@@ -77,6 +81,13 @@ _LAZY_ATTRS: dict[str, tuple[str, str]] = {
     "known_drugs":       ("._drugs", "known_drugs"),
     # Docking
     "dock":              ("._dock", "dock"),
+    # Pharmacophore alignment (receptor-free pose generation)
+    "pharmacophore_features":  ("._pharmacophore", "pharmacophore_features"),
+    "pharmacophore_score":     ("._pharmacophore", "pharmacophore_score"),
+    "pose_strain_energy":      ("._pharmacophore", "pose_strain_energy"),
+    "pharmacophore_align":     ("._pharmacophore", "pharmacophore_align"),
+    "align_pharmacophore_set": ("._pharmacophore", "align_pharmacophore_set"),
+    "PharmacophorePose":       ("._pharmacophore", "PharmacophorePose"),
     "redock_validate":   ("._dock", "redock_validate"),
     "DockingResult":     ("._dock", "DockingResult"),
     # Molecular dynamics — system preparation & the three run stages
@@ -110,8 +121,8 @@ _LAZY_ATTRS: dict[str, tuple[str, str]] = {
 }
 
 _REGISTRY_SUBMODULES = ("._structure", "._view", "._pocket", "._drugs",
-                        "._dock", ".md._system", ".md._run", ".md._analysis",
-                        ".md._mmgbsa")
+                        "._dock", "._pharmacophore", ".md._system", ".md._run",
+                        ".md._analysis", ".md._mmgbsa")
 
 
 def _hydrate_registry() -> None:
