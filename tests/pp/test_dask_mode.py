@@ -184,3 +184,51 @@ def test_read_layer_as_x(tmp_path, monkeypatch):
     monkeypatch.setattr(ov.settings, "mode", "cpu")
     with pytest.raises(NotImplementedError, match="layer="):
         ov.read(path, storage="disk", layer="UMIs")
+
+
+@pytest.mark.skipif("gpu" not in DEVICES, reason="needs a CUDA device")
+def test_staging_copy_waits_for_the_device():
+    """The pinned staging buffer is refilled right after each copy; the copy
+    must have landed by then even when the GPU queue is busy (regression:
+    asynchronous copies corrupted ~5% of the values of SEA-AD)."""
+    import cupy as cp
+    from omicverse.pp import _dask
+    busy = cp.RawKernel(r"""
+    extern "C" __global__ void busy(long long cycles) {
+        long long t0 = clock64();
+        while (clock64() - t0 < cycles) {}
+    }""", "busy")
+    stage = _dask._staging()
+    n = 1 << 20
+    src = stage[:n]
+    src[:] = 7
+    dst = cp.zeros(n, dtype=cp.uint8)
+    busy((1,), (1,), (cp.int64(400_000_000),))  # ~0.2 s ahead of the copy on the stream
+    _dask._copy_from_stage(dst, src)
+    src[:] = 0                                  # refill, as the next piece would
+    assert int((dst == 7).sum()) == n
+
+
+@pytest.mark.skipif("gpu" not in DEVICES, reason="needs a CUDA device")
+@pytest.mark.parametrize("compression", [None, "gzip"])
+def test_gpu_blocks_exact_through_pinned_buffer(tmp_path, compression):
+    """Blocks larger than the pinned staging buffer are decoded and copied
+    piece by piece; the device blocks equal the file exactly."""
+    import threading
+    import anndata as ad
+    from omicverse.pp import _dask
+    X = sp.random(20_000, 500, density=0.05, format="csr", dtype=np.float32,
+                  random_state=np.random.default_rng(7))
+    X.data = np.ceil(X.data * 30)
+    path = tmp_path / f"big_{compression}.h5ad"
+    ad.AnnData(X).write_h5ad(path, compression=compression)
+    old_bytes, old_local = _dask._STAGE_BYTES, _dask._LOCAL
+    _dask._STAGE_BYTES, _dask._LOCAL = 1 << 16, threading.local()  # many pieces per block
+    try:
+        b = _dask.read_h5ad(path, chunk_size=7_000, device="gpu")
+        _dask._GENE_STATS.clear()
+        st = _dask.gene_stats(b.X)
+    finally:
+        _dask._STAGE_BYTES, _dask._LOCAL = old_bytes, old_local
+    np.testing.assert_array_equal(st["nnz"], np.diff(X.tocsc().indptr))
+    np.testing.assert_allclose(st["sum"], np.asarray(X.sum(0)).ravel(), rtol=1e-12)
