@@ -27,7 +27,10 @@ written here:
 * **context**: optional tissue / disease names select atlas scopes; labels
   whose cell type the atlas never records there are left out;
 * **panel names → genes**: HGNC (symbols, aliases, previous symbols, protein
-  names), then MyGene.info.
+  names), then MyGene.info; an alias match keeps the approved symbol whose
+  alias list holds the name. Abbreviations led by a lower-case Greek letter
+  (``aSMA``) go through their spelled-out name (HGNC / UniProt names, RRID
+  antibody targets) first.
 
 Network access is required.  The atlas marker endpoint needs an OmicOS
 account token (``OMICOS_USER_TOKEN``, injected into OmicOS kernels); the
@@ -79,7 +82,9 @@ def _norm(s: str) -> str:
 
 def _variants(name: str) -> List[str]:
     s = str(name).strip()
-    out = [s, re.sub(r"[\s._\-]+", "", s), re.sub(r"[._\-]+", " ", s)]
+    out = [s, re.sub(r"[\s._\-]+", "", s), re.sub(r"[._\-]+", " ", s),
+           # "Ki67" is written "Ki-67" in the nomenclature
+           re.sub(r"(?<=[A-Za-z])(?=\d)", "-", re.sub(r"[\s._\-]+", "", s))]
     seen, res = set(), []
     for v in out:
         if v and v not in seen:
@@ -102,14 +107,90 @@ def _match_kind(name: str, genes: Sequence[str]) -> str:
     return "symbol" if any(_norm(g) == n for g in genes) else "alias / name"
 
 
+_TAXON = {"human": "9606", "homo sapiens": "9606", "hs": "9606",
+          "mouse": "10090", "mus musculus": "10090", "mm": "10090"}
+
+
+def _greek_prefixed(name: str) -> bool:
+    """True for a protein-name abbreviation led by a lower-case Greek letter
+    (``aSMA``, ``a-SMA``, ``a.SMA``, ``bCatenin``, ``b2M``).
+
+    Gene symbols and their aliases are upper-case identifiers, and the
+    lower-case letter is the abbreviation of alpha / beta / ...; folding the
+    case turns ``aSMA`` (alpha-*smooth*-muscle actin, ACTA2) into the NCBI
+    alias ``ASMA`` (alpha-*skeletal*-muscle actin, ACTA1).
+    """
+    return re.match(r"^[abgdk](?:[.\-_ ]+\S|\d|[A-Z])", str(name).strip()) is not None
+
+
+def _alias_owners(token: str, docs: Sequence[dict], field: str = "alias",
+                  keep_case: bool = False) -> List[str]:
+    """Symbols among ``docs`` whose own symbol / alias / previous-symbol list
+    contains ``token`` (separator-insensitive; case-insensitive unless
+    ``keep_case``)."""
+    def key(x):
+        return re.sub(r"[^A-Za-z0-9]", "", x) if keep_case else _norm(x)
+    n = key(str(token))
+    out = []
+    for d in docs:
+        names = [d.get("symbol", "")]
+        for f in dict.fromkeys((field, "alias_symbol", "prev_symbol")):
+            v = d.get(f) or []
+            names += [v] if isinstance(v, str) else list(v)
+        if any(isinstance(x, str) and key(x) == n for x in names):
+            out.append(d["symbol"])
+    return list(dict.fromkeys(out))
+
+
+def _protein_name_genes(name: str, species: str, timeout: float) -> Tuple[List[str], str]:
+    """Genes for a Greek-prefixed protein-name abbreviation, from the spelled-
+    out names only (``aSMA`` -> ``alpha-SMA``): HGNC approved / alias /
+    previous names, then reviewed UniProt protein names (both by **exact**
+    name), then the UniProt targets that Antibody Registry (RRID) entries of
+    that name declare (majority target)."""
+    taxon = _TAXON.get(str(species).lower())
+    raw = _norm(name)
+    spelled = [v for v in _name_variants(name) if _norm(v) != raw]
+    human = taxon == "9606"
+    for v in spelled:
+        if human:
+            g = _hgnc_exact_name(v, timeout)
+            if g:
+                return g, "name"
+    if taxon:
+        for v in spelled:
+            g = _uniprot_exact_name(v, timeout, taxon)
+            if g:
+                return g, "uniprot"
+        g = _antibody_registry_majority(spelled, timeout, taxon)
+        if g:
+            return g, "antibody"
+    return [], ""
+
+
 def _gene_candidates(name: str, species: str, timeout: float) -> Tuple[List[str], str]:
     """Exact nomenclature matches first, free-text search last.
 
     Returns ``(candidates, source)``; ``source`` says which rule matched
-    (``symbol``, ``alias``, ``mygene``, ``stem``, ``family``, ``name``) so that
-    matches other than an approved symbol can be reviewed.
+    (``symbol``, ``alias``, ``mygene``, ``name``, ``uniprot``, ``antibody``,
+    ``stem``, ``family``) so that matches other than an approved symbol can
+    be reviewed.
+
+    Alias hits are restricted to the approved symbols whose own alias (or
+    previous-symbol) list contains the name; a Greek-prefixed abbreviation
+    (``aSMA``) is resolved by its spelled-out protein name before any
+    case-folded alias match is considered (see :func:`_greek_prefixed`).
     """
     human = species.lower() in ("human", "homo sapiens", "hs")
+    greek = _greek_prefixed(name)
+    if greek:
+        if human:
+            docs = _hgnc(f"fetch/symbol/{urllib.parse.quote(str(name).strip())}", timeout)
+            if docs:
+                return [d["symbol"] for d in docs], "symbol"
+        g, src = _protein_name_genes(name, species, timeout)
+        if g:
+            return g, src
     for v in _variants(name):
         q = urllib.parse.quote(v)
         if human:
@@ -120,15 +201,22 @@ def _gene_candidates(name: str, species: str, timeout: float) -> Tuple[List[str]
             # alias index can miss paralogues (CD16 -> FCGR3A and FCGR3B)
             docs = _hgnc(f"fetch/alias_symbol/{q}", timeout) + _hgnc(f"fetch/prev_symbol/{q}", timeout)
             if docs:
-                return list(dict.fromkeys(d["symbol"] for d in docs)), "alias"
+                own = _alias_owners(v, docs, "alias_symbol", keep_case=greek)
+                if own or not greek:
+                    return own or list(dict.fromkeys(d["symbol"] for d in docs)), "alias"
         try:
             hits = _get(f"{_MYGENE}/query",
                         params={"q": f"symbol:{v} OR alias:{v}", "species": species,
-                                "fields": "symbol", "size": 10}, timeout=timeout).get("hits", [])
+                                "fields": "symbol,alias", "size": 10},
+                        timeout=timeout).get("hits", [])
         except Exception:
             hits = []
         if hits:
-            return list(dict.fromkeys(h["symbol"] for h in hits)), "mygene"
+            # the approved symbol whose alias list carries the name, not
+            # whatever else the full-text index ranked alongside it
+            own = _alias_owners(v, hits, "alias", keep_case=greek)
+            if own or not greek:
+                return own or list(dict.fromkeys(h["symbol"] for h in hits)), "mygene"
     if human:   # symbol stems ("HLA-DR" -> HLA-DRA, HLA-DRB1, ...)
         for v in _variants(name):
             if " " in v or len(v) > 8:
@@ -220,11 +308,12 @@ _GREEK = {"a": "alpha", "b": "beta", "g": "gamma", "d": "delta", "k": "kappa"}
 
 def _name_variants(name: str) -> List[str]:
     """Spellings of a panel name: separators normalised, a one-letter Greek
-    prefix spelled out (a.SMA -> alpha-SMA, b.Catenin -> beta-catenin,
+    prefix spelled out (a.SMA / aSMA -> alpha-SMA, b.Catenin -> beta-catenin,
     B2-microglobulin -> beta-2-microglobulin)."""
     s = str(name).strip()
     out = [s, re.sub(r"[._]+", " ", s).strip(), re.sub(r"[._ ]+", "-", s).strip("-")]
-    m = re.match(r"^([abgdkABGDK])(?:[.\-_ ]|(?=\d))(\d?)[.\-_ ]?(.+)$", s)
+    m = re.match(r"^([abgdkABGDK])(?:[.\-_ ]|(?=\d))(\d?)[.\-_ ]?(.+)$", s) \
+        or re.match(r"^([abgdk])()(?=[A-Z])(.+)$", s)
     if m:
         g = _GREEK[m.group(1).lower()]
         rest = m.group(3)
@@ -262,6 +351,90 @@ def _antibody_registry_genes(name: str, timeout: float, taxon: str = "9606") -> 
     if not acc:
         return []
     q = " OR ".join(f"accession:{a}" for a in acc)
+    return _uniprot_query(f"({q}) AND organism_id:{taxon}", timeout)
+
+
+def _hgnc_exact_name(name: str, timeout: float) -> List[str]:
+    """HGNC genes whose approved, alias or previous *name* equals ``name``
+    (HGNC's search is token-based, so hits are checked for equality)."""
+    q = urllib.parse.quote(f'"{name}"')
+    n = _norm(name)
+    for field in ("name", "alias_name", "prev_name"):
+        docs = _hgnc(f"search/{field}:{q}", timeout)
+        out = []
+        for d in docs:
+            rec = _hgnc(f"fetch/symbol/{urllib.parse.quote(d['symbol'])}", timeout)
+            rec = rec[0] if rec else {}
+            vals = rec.get(field) or []
+            vals = [vals] if isinstance(vals, str) else list(vals)
+            if any(_norm(x) == n for x in vals):
+                out.append(d["symbol"])
+        if out:
+            return list(dict.fromkeys(out))
+    return []
+
+
+def _uniprot_names(entry: dict) -> List[str]:
+    pd_ = entry.get("proteinDescription") or {}
+    out = []
+    blocks = [pd_.get("recommendedName") or {}] + list(pd_.get("alternativeNames") or [])
+    for b in blocks:
+        if b.get("fullName"):
+            out.append(b["fullName"].get("value", ""))
+        out += [x.get("value", "") for x in b.get("shortNames") or []]
+    return out
+
+
+def _uniprot_exact_name(name: str, timeout: float, taxon: str = "9606") -> List[str]:
+    """Genes of reviewed UniProt entries with a protein name (recommended,
+    alternative or short) **equal** to ``name``."""
+    try:
+        js = _get(_UNIPROT, params={
+            "query": f'protein_name:"{name}" AND organism_id:{taxon} AND reviewed:true',
+            "fields": "gene_primary,protein_name", "size": 25, "format": "json"},
+            timeout=timeout)
+    except Exception:
+        return []
+    n = _norm(name)
+    out = []
+    for r in js.get("results", []):
+        if any(_norm(x) == n for x in _uniprot_names(r)):
+            for g in r.get("genes", [])[:1]:
+                v = g.get("geneName", {}).get("value")
+                if v:
+                    out.append(v)
+    return list(dict.fromkeys(out))
+
+
+def _antibody_registry_majority(names: Sequence[str], timeout: float,
+                                taxon: str = "9606") -> List[str]:
+    """Genes of the UniProt target(s) declared by most Antibody Registry
+    (RRID) entries named ``names`` -- an antibody panel's channel measures
+    what its antibody binds. Multi-target entries split their vote; targets
+    with at least half the top vote are kept."""
+    votes: Dict[str, float] = {}
+    for v in names:
+        try:
+            items = _get(_ABREG, params={"q": v, "page": 1, "size": 100},
+                         timeout=timeout).get("items", [])
+        except Exception:
+            continue
+        n = _norm(v)
+        for it in items:
+            if n and n not in _norm(it.get("abTarget") or "") \
+                    and n not in _norm(it.get("abName") or ""):
+                continue
+            acc = []
+            for f in ("abTargetUniprotId", "uniprotId"):
+                acc += [a.upper() for a in _ACC.findall(str(it.get(f) or "").upper())]
+            acc = list(dict.fromkeys(acc))
+            for a in acc:
+                votes[a] = votes.get(a, 0.0) + 1.0 / len(acc)
+    if not votes:
+        return []
+    top = max(votes.values())
+    keep = [a for a, c in sorted(votes.items(), key=lambda x: -x[1]) if c >= 0.5 * top][:4]
+    q = " OR ".join(f"accession:{a}" for a in keep)
     return _uniprot_query(f"({q}) AND organism_id:{taxon}", timeout)
 
 
@@ -312,8 +485,16 @@ def panel_gene_map(markers: Iterable[str], species: str = "human", *,
         workers: parallel requests.
         sources: optional dict filled with ``{marker: rule}`` — how each name
             was matched (``symbol`` = approved HGNC symbol; ``alias`` /
-            ``mygene`` / ``stem`` / ``family`` / ``name`` are indirect matches
-            worth reviewing; ``override``).
+            ``mygene`` / ``name`` / ``uniprot`` / ``antibody`` / ``stem`` /
+            ``family`` are indirect matches worth reviewing; ``override``).
+
+    Alias matches keep only the approved symbols whose own alias list
+    contains the name. A name led by a lower-case Greek letter (``aSMA``,
+    ``bCatenin``) is a protein-name abbreviation, not a symbol: it is resolved
+    through its spelled-out name (``alpha-SMA``) in HGNC names, UniProt
+    protein names and the antibodies registered under that name (RRID), before
+    any case-insensitive alias match -- which would read ``aSMA`` as the NCBI
+    alias ``ASMA`` of ACTA1 (alpha-*skeletal* muscle actin).
 
     Returns:
         ``(gene_map, unresolved)`` — ``{marker: [gene symbols]}`` and the list

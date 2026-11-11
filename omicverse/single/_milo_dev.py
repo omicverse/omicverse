@@ -453,7 +453,7 @@ class Milo:
 
         """
         import patsy
-        from ..external import pyedger as _edger
+        import pyedger as _edger
         try:
             sample_adata = mdata["milo"]
         except KeyError:
@@ -548,10 +548,11 @@ class Milo:
             # Dispersion + quasi-likelihood GLM against the design — exactly the
             # engine miloR::testNhoods wraps (edgeR estimateDisp -> glmQLFit ->
             # glmQLFTest), via the pure-Python pyedger port. No inmoose / R.
-            # Note: pyedger's design-based dispersion uses trend_method='none'
-            # and robust QL moderation is not yet implemented (robust=False),
-            # which also matches the previous inmoose behaviour. R-parity vs
-            # Bioconductor edgeR (same options) is pinned in
+            # Note: dispersion uses trend_method='none' and robust QL
+            # moderation is not implemented in pyedger (robust=False), which
+            # also matches the previous inmoose behaviour. pyedger follows
+            # edgeR 4.10's legacy=FALSE QL method; agreement with Bioconductor
+            # edgeR (same options) is pinned in
             # tests/single/test_milo_pyedger_parity.py.
             _edger.estimateDisp(dge, design=X, trend_method="none", robust=False)
             # legacy=False is edgeR 4.x's (and miloR's) default bias-adjusted QL
