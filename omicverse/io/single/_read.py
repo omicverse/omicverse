@@ -100,6 +100,35 @@ def _read_h5ad_rust(path, **kwargs):
     return adata
 
 
+def _read_h5ad_threaded(path):
+    """``anndata.read_h5ad`` with a CSR ``X`` read by anndataoom-fast on all
+    threads (int32 indices).  None when it does not apply (backend='python',
+    anndataoom-fast without ``read_csr``, non-CSR ``X`` or a ``raw`` section)."""
+    from ..._backend import resolve_backend
+    if resolve_backend(None) != 'cpp':
+        return None
+    try:
+        import h5py
+        from anndataoom_fast.memory import read_csr
+    except ImportError:
+        return None
+    try:
+        from anndata.io import read_elem
+    except ImportError:  # anndata < 0.11
+        from anndata.experimental import read_elem
+    import anndata
+    with h5py.File(path, 'r') as f:
+        if 'X' not in f or 'raw' in f or not isinstance(f['X'], h5py.Group):
+            return None
+        enc = f['X'].attrs.get('encoding-type', b'')
+        enc = enc.decode() if isinstance(enc, bytes) else str(enc)
+        if enc != 'csr_matrix':
+            return None
+        parts = {k: read_elem(f[k]) for k in
+                 ('obs', 'var', 'uns', 'obsm', 'varm', 'obsp', 'varp', 'layers') if k in f}
+    return anndata.AnnData(X=read_csr(path), **parts)
+
+
 @register_function(
     aliases=["读取数据", "read", "load_data", "数据读取", "file_reader"],
     category="utils",
@@ -190,7 +219,8 @@ def read(path, storage='memory', *, backend=None, **kwargs):
                 return _anndata_read_h5ad(path, **kwargs)
             return _read_h5ad_rust(path, **kwargs)
         if storage == 'memory':
-            return _anndata_read_h5ad(path, **kwargs)
+            fast = None if kwargs else _read_h5ad_threaded(path)
+            return fast if fast is not None else _anndata_read_h5ad(path, **kwargs)
         if storage == 'disk':
             from ..._settings import settings
             if settings.mode == 'gpu':
