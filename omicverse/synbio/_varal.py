@@ -378,12 +378,18 @@ def variant_library(reference: Union[str, Path], variants: Any, *,
     ref = _read_fasta_sequence(reference)
     if not ref:
         raise ValueError("ov.synbio.variant_library: empty reference sequence.")
-    tables = variants if isinstance(variants, (list, tuple)) and not (
-        variants and isinstance(variants[0], str) and len(variants) == 2
-        and _looks_like_path(variants[0]) is False
-    ) else [variants]
-    if not isinstance(tables, (list, tuple)):
-        tables = [tables]
+    def _is_record(item: Any) -> bool:
+        # an element of ONE table: a bare sequence string that is not a path, or an
+        # ``(id, sequence)`` pair — as opposed to a table (frame, path, mapping, list)
+        if isinstance(item, str):
+            return _looks_like_path(item) is False
+        return (isinstance(item, (list, tuple)) and len(item) == 2
+                and all(isinstance(x, str) for x in item))
+
+    if isinstance(variants, (list, tuple)) and variants and not _is_record(variants[0]):
+        tables = list(variants)
+    else:
+        tables = [variants]
     pairs: List[Tuple[str, str]] = []
     for table in tables:
         pairs.extend(_as_id_sequence_pairs(table, id_col, sequence_col))

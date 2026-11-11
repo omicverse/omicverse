@@ -162,6 +162,19 @@ def test_library_accepts_several_tables_and_rejects_bad_input(landscape):
         library.index("missing")
 
 
+def test_library_accepts_one_list_of_pairs_or_sequences(landscape):
+    reference = landscape.reference
+    a, b, c = landscape.variant(1), landscape.variant(2), landscape.variant(3)
+    pairs = ov.synbio.variant_library(reference, [("a", a), ("b", b), ("c", c)])
+    assert pairs.ids == ("a", "b", "c")
+    two_pairs = ov.synbio.variant_library(reference, [("a", a), ("b", b)])
+    assert two_pairs.ids == ("a", "b")
+    bare = ov.synbio.variant_library(reference, [a, b, c])
+    assert len(bare) == 3 and bare.n_mutations[2] == 3
+    nested = ov.synbio.variant_library(reference, [[("a", a)], [("b", b)]])
+    assert nested.ids == ("a", "b")
+
+
 # ---------------------------------------------------------------------------
 # evidence
 # ---------------------------------------------------------------------------
