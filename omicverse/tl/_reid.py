@@ -509,7 +509,9 @@ def reid_local_verify(paths: Sequence, pairs: pd.DataFrame, *, image_root: Optio
     null_inl = np.array([r[1] for r in nres], dtype=float)
     cut = float(max(min_inliers, np.quantile(null_inl, null_quantile) if len(null_inl) else 0))
     pairs["accepted"] = pairs["inliers"] > cut
-    pairs.attrs["null_inliers"] = null_inl
+    # a list, not an array: pandas 3 compares attrs on groupby / concat and an
+    # array there raises "truth value of an array is ambiguous"
+    pairs.attrs["null_inliers"] = [float(v) for v in np.asarray(null_inl).ravel()]
     pairs.attrs["inlier_cut"] = cut
     if log:
         log(f"reid_local_verify: {len(pairs)} pairs + {len(null)} null pairs in "
@@ -894,6 +896,28 @@ def _labels_cluster_attach(cl, sc, names, a):
     return lab.astype(str)
 
 
+def _must_link_components(n, must_link):
+    """Connected components of the must-link graph over ``n`` images."""
+    parent = list(range(n))
+
+    def find(i):
+        while parent[i] != i:
+            parent[i] = parent[parent[i]]
+            i = parent[i]
+        return i
+
+    for u, v in (must_link or ()):
+        u, v = int(u), int(v)
+        if 0 <= u < n and 0 <= v < n:
+            ru, rv = find(u), find(v)
+            if ru != rv:
+                parent[ru] = rv
+    comps = {}
+    for i in range(n):
+        comps.setdefault(find(i), []).append(i)
+    return [c for c in comps.values() if len(c) > 1]
+
+
 def _labels_image_attach(s, sc, names, a, method, linkage, t_clusters, must_link):
     n = len(s)
     base = np.full(n, "", dtype=object)
@@ -901,6 +925,16 @@ def _labels_image_attach(s, sc, names, a, method, linkage, t_clusters, must_link
         b = sc.argmax(axis=1)
         att = sc[np.arange(n), b] >= a
         base[att] = ["g:" + str(x) for x in names[b[att]]]
+        # a verified pair must not be split by the attachment threshold: if any
+        # image of a must-link component matches the gallery, the whole
+        # component takes the identity of its best-scoring member
+        for comp in _must_link_components(n, must_link):
+            lab = {base[i] for i in comp if base[i] != ""}
+            if lab:  # unattached members, or members attached to different
+                # identities: the whole component follows its best-scoring member
+                best = max(comp, key=lambda i: sc[i, b[i]])
+                for i in comp:
+                    base[i] = "g:" + str(names[b[best]])
     rest = np.flatnonzero(base == "")
     if len(rest) == 0:
         return [base.astype(str)] * len(t_clusters)
@@ -1057,7 +1091,11 @@ def reid_open_set_cluster(sim_qq: np.ndarray, *, sim_qg: Optional[np.ndarray] = 
         2 images per individual are kept so the simulation stays informative).
     verified, must_link_verified
         Pairs from :func:`reid_local_verify`.  Accepted pairs are forced into
-        the same cluster.  Without a gallery, the method (agglomerative /
+        the same cluster in every mode: with ``attach_mode="cluster"`` they are
+        merged before clustering, and with ``attach_mode="image"`` a component
+        of accepted pairs that reaches the gallery takes, as a whole, the
+        identity of its best-scoring member, so the attachment threshold cannot
+        split a verified pair between a known and a new individual.  Without a gallery, the method (agglomerative /
         HDBSCAN with ``method="auto"``) and cut are chosen by cross-validation
         on the verified pairs: half of the accepted pairs are forced together,
         the partition is scored by pairwise F1 on the other half (positives)

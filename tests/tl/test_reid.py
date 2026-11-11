@@ -56,6 +56,44 @@ def test_open_set_with_gallery_attaches_known_and_clusters_new():
     assert abs(res["n_clusters"] - k_true) / k_true < 0.25
 
 
+def test_image_attach_keeps_verified_pairs_together():
+    """A verified pair must not be split by the attachment threshold: with
+    attach_mode='image' the component takes its best member's identity."""
+    x, y = _population(30, 4, seed=7)
+    rng = np.random.default_rng(3)
+    g_idx, q_idx = [], []
+    for i in range(30):
+        idx = rng.permutation(np.flatnonzero(y == i))
+        if i < 20:
+            g_idx += list(idx[: len(idx) // 2])
+            q_idx += list(idx[len(idx) // 2:])
+        else:
+            q_idx += list(idx)
+    q_idx, g_idx = np.array(q_idx), np.array(g_idx)
+    xq, xg = x[q_idx], x[g_idx]
+    pairs = reid_candidate_pairs(xq @ xq.T, k=4)
+    pairs["accepted"] = y[q_idx][pairs["first"]] == y[q_idx][pairs["second"]]
+    res = reid_open_set_cluster(xq @ xq.T, sim_qg=xq @ xg.T, gallery_labels=y[g_idx],
+                                sim_gg=xg @ xg.T, attach_mode="image", verified=pairs,
+                                n_rep=2, log=None)
+    labels = np.asarray(res["labels"])
+    acc = pairs[pairs["accepted"].astype(bool)]
+    split = sum(labels[int(r.first)] != labels[int(r.second)] for r in acc.itertuples())
+    assert split == 0, f"{split} of {len(acc)} verified pairs were split"
+
+
+def test_verified_pairs_table_survives_pandas_groupby():
+    """attrs must hold plain python values: pandas 3 compares attrs on groupby
+    and an array there raises 'truth value of an array is ambiguous'."""
+    x, y = _population(20, 3, seed=8)
+    s = x @ x.T
+    pairs = reid_candidate_pairs(s, k=4)
+    pairs["accepted"] = y[pairs["first"]] == y[pairs["second"]]
+    pairs.attrs.setdefault("null_inliers", [1.0, 2.0])
+    assert not isinstance(pairs.attrs["null_inliers"], np.ndarray)
+    pairs.groupby("accepted")["sim"].describe()  # must not raise
+
+
 def test_open_set_without_reference_uses_verified_pairs():
     x, y = _population(50, 4, noise=0.5, seed=3)
     s = x @ x.T
