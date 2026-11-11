@@ -92,8 +92,7 @@ def _compute(*tasks):
         return dask.compute(*tasks)
     except (ImportError, ValueError):
         pass
-    workers = int(os.environ.get("OV_DASK_WORKERS", "8"))
-    return dask.compute(*tasks, scheduler="threads", num_workers=workers)
+    return dask.compute(*tasks, scheduler="threads", num_workers=_workers())
 
 
 def _persist(*arrays):
@@ -104,8 +103,7 @@ def _persist(*arrays):
         return dask.persist(*arrays)
     except (ImportError, ValueError):
         pass
-    return dask.persist(*arrays, scheduler="threads",
-                        num_workers=int(os.environ.get("OV_DASK_WORKERS", "8")))
+    return dask.persist(*arrays, scheduler="threads", num_workers=_workers())
 
 
 def _row_ids(indptr, nnz):
@@ -237,6 +235,29 @@ _LOCAL = __import__("threading").local()
 _STAGE_BYTES = 64 << 20
 
 
+def _workers():
+    return int(os.environ.get("OV_DASK_WORKERS", "8"))
+
+
+def _decode_threads():
+    """Decoder threads per block read: the CPUs shared by the concurrent
+    block reads (compressed h5ad files are bound by decompression)."""
+    try:
+        n = len(os.sched_getaffinity(0))
+    except AttributeError:  # not Linux
+        n = os.cpu_count() or 1
+    return max(1, n // _workers())
+
+
+def _copy_from_stage(dst, src):
+    """Host → device copy out of the reused pinned buffer.  ``set`` from
+    pinned memory is asynchronous, so wait before the buffer is refilled."""
+    import cupy as cp
+    stream = cp.cuda.get_current_stream()
+    dst.set(src, stream=stream)
+    stream.synchronize()
+
+
 def _staging():
     """This thread's pinned host buffer for disk → GPU copies."""
     buf = getattr(_LOCAL, "stage", None)
@@ -291,6 +312,9 @@ class _H5Source:
         dt = np.dtype(self.dtypes[k])
         off = self.offsets[k]
         if off is None or not hasattr(os, "preadv"):
+            ds = self._chunked(k)
+            if ds is not None and hasattr(ds, "read_into"):
+                return self._decode_device(ds, k, a, b)
             return cp.asarray(self.read(k, a, b))
         out = cp.empty(b - a, dtype=dt)
         stage = _staging()
@@ -308,7 +332,31 @@ class _H5Source:
                     raise OSError(f"short read from {self.path}")
                 done += n
             o = (e0 - a) * dt.itemsize
-            dst[o:o + nbytes].set(stage[:nbytes])
+            _copy_from_stage(dst[o:o + nbytes], stage[:nbytes])
+        return out
+
+    def _target_dtype(self, k):
+        """Decode values to float32/64 and indices to int32 (the GPU layout)."""
+        dt = np.dtype(self.dtypes[k])
+        if k == "indices":
+            return np.dtype(np.int32) if self.shape[1] < 2**31 else np.dtype(np.int64)
+        return dt if dt in (np.float32, np.float64) else np.dtype(np.float32)
+
+    def _decode_device(self, ds, k, a, b):
+        """Compressed chunks decoded by anndataoom-fast straight into this
+        thread's pinned buffer (already converted to the GPU dtype), then
+        copied to the device piece by piece."""
+        import cupy as cp
+        dt = self._target_dtype(k)
+        out = cp.empty(b - a, dtype=dt)
+        stage = _staging()
+        per = max(1, stage.nbytes // dt.itemsize)
+        view = stage[:per * dt.itemsize].view(dt)
+        nt = _decode_threads()
+        for e0 in range(a, b, per):
+            e1 = min(b, e0 + per)
+            ds.read_into(e0, e1, view[:e1 - e0], nt)
+            _copy_from_stage(out[e0 - a:e1 - a], view[:e1 - e0])
         return out
 
     def _fd(self):
@@ -323,6 +371,10 @@ class _H5Source:
         off = self.offsets[k]
         if off is None or not hasattr(os, "preadv"):
             ds = self._chunked(k)
+            if ds is not None and hasattr(ds, "read_into"):
+                out = np.empty(b - a, dtype=self._target_dtype(k))
+                ds.read_into(a, b, out, _decode_threads())
+                return out
             if ds is not None:  # anndataoom-fast decodes chunks without the HDF5 lock
                 return ds.read(a, b).astype(dt, copy=False)
             import h5py
