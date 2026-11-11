@@ -200,6 +200,16 @@ def test_ledger_concordance():
     assert not bool(t.set_index("structure").loc["y", "concordant"])
 
 
+def test_ledger_concordance_with_no_abnormality_yet():
+    # the raw output of ledger_add_read leaves abnormality unset: an empty
+    # table, not a KeyError on 'concordant'
+    led = [{"sheet": "R01", "series": "A", "instance": 3, "structure": "x",
+            "abnormality": None, "acute": None},
+           {"sheet": "R01", "series": "A", "instance": 4, "structure": "x"}]
+    t = rad.ledger_concordance(led)
+    assert t.empty and "concordant" in t.columns
+
+
 def test_ledger_add_read_and_hotspots(tmp_path, study):
     out = str(tmp_path / "sv")
     sh = rad.structure_survey(study, out, region_mm=40, max_sheets=10)

@@ -118,7 +118,12 @@ def render_slices(study: Optional[DicomStudy], series: Sequence[Union[str, int, 
     crop and the out-of-plane distance to the reference slice.
     """
     import matplotlib
-    matplotlib.use("Agg")
+    if matplotlib.get_backend().lower() not in ("agg", "pdf", "ps", "svg", "cairo", "template"):
+        # only force a headless backend when the session has an interactive one
+        # that cannot write files unattended; never override a notebook's inline
+        # backend, which would silence every later plt.show()
+        if not matplotlib.get_backend().lower().startswith("module://"):
+            matplotlib.use("Agg")
     import matplotlib.pyplot as plt
 
     sers = [_resolve(study, s) for s in series]
@@ -236,7 +241,12 @@ def montage(series: DicomSeries, instances: Optional[Iterable[int]] = None, *,
     into several montages (``instances=``, ≤ 12–16 per sheet) rather than
     shrinking the tiles; the sheet is capped at ``max_px`` on its longest side."""
     import matplotlib
-    matplotlib.use("Agg")
+    if matplotlib.get_backend().lower() not in ("agg", "pdf", "ps", "svg", "cairo", "template"):
+        # only force a headless backend when the session has an interactive one
+        # that cannot write files unattended; never override a notebook's inline
+        # backend, which would silence every later plt.show()
+        if not matplotlib.get_backend().lower().startswith("module://"):
+            matplotlib.use("Agg")
     import matplotlib.pyplot as plt
 
     ids = list(instances) if instances is not None else series.instance_numbers

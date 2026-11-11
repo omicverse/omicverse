@@ -308,8 +308,14 @@ def ledger_concordance(ledger: Union[str, Sequence[Dict]], *, min_slices: int = 
         if c not in df:
             df[c] = d
     df["normal"] = df["normal"].map(lambda v: bool(v) if v is not None and v == v else False)
-    ab = df[~df.normal & (df.abnormality.astype(str) != "")]
+    df["abnormality"] = df["abnormality"].map(lambda v: "" if v is None or v != v else str(v))
+    ab = df[~df.normal & (df.abnormality != "")]
     out = []
+    if ab.empty:  # nothing abnormal reported yet: an empty table, not a KeyError
+        return pd.DataFrame(columns=["structure", "abnormality", "n_slices_max_series",
+                                     "n_series", "n_reads", "acute_votes", "high_conf",
+                                     "contradicting_reads_same_slice", "concordant",
+                                     "series", "instances", "sheets"])
     for (st, a), g in ab.groupby(["structure", "abnormality"]):
         per_series = g.groupby("series")["instance"].nunique()
         same = df[(df.structure == st) & df.normal]
