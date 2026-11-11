@@ -14,6 +14,26 @@ import numpy as np
 import pandas as pd
 from anndata import AnnData
 from .._oom_compat import oom_guard as _oom_guard
+from .._oom_compat import is_oom as _is_oom
+
+
+def _oom_guard_unless_cpp_cosg(func):
+    """Materialise an AnnDataOOM before find_markers, except for COSG with
+    backend='cpp', whose group sums stream the on-disk matrix directly."""
+    import functools
+    guarded = _oom_guard(materialize=True, result_keys_uns=['*'])(func)
+
+    @functools.wraps(func)
+    def wrapper(*args, **kwargs):
+        adata = kwargs.get("adata", args[0] if args else None)
+        method = kwargs.get("method", args[2] if len(args) > 2 else "cosg")
+        if adata is not None and _is_oom(adata) and method == "cosg":
+            from .._backend import resolve_backend
+            if resolve_backend(kwargs.get("backend")) == "cpp":
+                return func(*args, **kwargs)
+        return guarded(*args, **kwargs)
+
+    return wrapper
 from scipy import sparse, stats
 
 from .._registry import register_function
@@ -614,7 +634,7 @@ def _cosg_add_pts(
     ],
     related=["single.get_markers", "pl.markers_dotplot", "single.cosg"],
 )
-@_oom_guard(materialize=True, result_keys_uns=['*'])
+@_oom_guard_unless_cpp_cosg
 @tracked("find_markers", "ov.single.find_markers")
 def find_markers(
     adata: AnnData,
@@ -630,6 +650,7 @@ def find_markers(
     rankby_abs: bool = False,
     tie_correct: bool = False,
     pts: bool = True,
+    backend: Optional[str] = None,
     **kwargs,
 ) -> None:
     r"""Find marker genes for each cluster / group in single-cell data.
@@ -710,6 +731,17 @@ def find_markers(
         f"{Colors.BOLD}n_genes:{Colors.ENDC} {n_genes}"
     )
 
+    from ..pp._dask import is_dask
+    if is_dask(adata.layers[layer] if layer is not None else adata.X):
+        # A Dask X (ov.read(storage='disk') in GPU mode) is only streamed by the C++ COSG
+        # group statistics; anything else would load the whole matrix.
+        from .._backend import resolve_backend
+        if method != "cosg" or resolve_backend(backend) != "cpp" or groups != "all" \
+                or reference != "rest":
+            raise NotImplementedError(
+                "For a Dask X, find_markers supports method='cosg' with backend='cpp', "
+                "groups='all' and reference='rest'.")
+
     # ── COSG delegates to the dedicated module ─────────────────────────────────
     if method == "cosg":
         from ._cosg import cosg
@@ -724,12 +756,18 @@ def find_markers(
             use_raw=_use_raw_cosg,
             layer=layer,
             reference=reference,
+            backend=backend,
             **kwargs,
         )
 
         # ── Compute pct (pts / pts_rest) for cosg results ─────────────────
         if pts:
-            _cosg_add_pts(adata, key_added, groupby, use_raw=_use_raw_cosg, layer=layer)
+            from .._backend import resolve_backend
+            if resolve_backend(backend) == 'cpp':
+                from anndataoom_fast._omicverse import ov_cosg_add_pts
+                ov_cosg_add_pts(adata, key_added, groupby, use_raw=_use_raw_cosg, layer=layer)
+            else:
+                _cosg_add_pts(adata, key_added, groupby, use_raw=_use_raw_cosg, layer=layer)
 
         print(
             f"{Colors.GREEN}{EMOJI['done']} Done{Colors.ENDC} | "
