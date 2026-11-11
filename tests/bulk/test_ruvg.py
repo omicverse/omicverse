@@ -6,6 +6,7 @@ import pandas as pd
 import pytest
 from scipy import sparse
 
+pytest.importorskip("pyruvseq")
 from omicverse.bulk import ruvg
 
 

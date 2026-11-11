@@ -603,3 +603,7 @@ __all__ = [
     "PlotData",
     "ObsView",
 ]
+
+from .._roadmap_ports import nebulosa_density
+if "__all__" in globals():
+    __all__ += ['nebulosa_density']

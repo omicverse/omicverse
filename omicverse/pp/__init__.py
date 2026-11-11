@@ -147,3 +147,6 @@ __all__ = [
     'binary_search',
     'log1p',
 ]
+from .._roadmap_ports import scran_pooling
+if "__all__" in globals():
+    __all__ += ['scran_pooling']

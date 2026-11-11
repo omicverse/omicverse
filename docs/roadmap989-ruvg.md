@@ -2,8 +2,7 @@
 
 `ov.bulk.ruvg` implements the RUVg **matrix method** from RUVSeq. It is a
 first subset of [roadmap #989](https://github.com/omicverse/omicverse/issues/989),
-not a full RUVSeq port. It requires NumPy, pandas and SciPy already used by
-OmicVerse; neither R nor rpy2 is required at runtime.
+not a full RUVSeq port. The algorithm now lives in the optional pyruvseq standalone package. Install the pinned backend following [the standalone adapter guide](roadmap989-ports.md). Neither R nor rpy2 is required at runtime.
 
 ## Usage
 
