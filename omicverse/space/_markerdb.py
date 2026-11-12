@@ -43,7 +43,10 @@ import json
 import math
 import os
 import re
+import threading
+import time
 import urllib.parse
+import warnings
 from pathlib import Path
 from typing import Dict, Iterable, List, Mapping, Optional, Sequence, Tuple
 
@@ -56,13 +59,62 @@ _HGNC = "https://rest.genenames.org"
 _MYGENE = "https://mygene.info/v3"
 
 
-def _get(url, params=None, headers=None, timeout=30):
+_RETRY_STATUS = (429, 500, 502, 503, 504)
+_FAIL = threading.local()       # per-thread count of failed lookups (see _tracked)
+
+
+def _get(url, params=None, headers=None, timeout=30, retries: int = 3):
+    """GET JSON; transient failures (rate limits, 5xx, connection errors,
+    timeouts) are retried with backoff before the error is raised."""
     import requests
 
-    r = requests.get(url, params=params, headers=headers or {"Accept": "application/json"},
-                     timeout=timeout)
-    r.raise_for_status()
-    return r.json()
+    for attempt in range(retries + 1):
+        try:
+            r = requests.get(url, params=params, headers=headers or {"Accept": "application/json"},
+                             timeout=timeout)
+        except (requests.ConnectionError, requests.Timeout):
+            if attempt == retries:
+                raise
+            time.sleep(min(2 ** attempt, 8))
+            continue
+        if r.status_code in _RETRY_STATUS and attempt < retries:
+            try:
+                wait = float(r.headers.get("Retry-After", ""))
+            except ValueError:
+                wait = 2 ** attempt
+            time.sleep(min(max(wait, 0.5), 10))
+            continue
+        r.raise_for_status()
+        return r.json()
+
+
+def _transient(err) -> bool:
+    """Network / rate-limit / server errors (worth retrying later), as opposed
+    to a definite answer such as 404 or a malformed reply."""
+    try:
+        import requests
+    except Exception:
+        return False
+    if isinstance(err, (requests.ConnectionError, requests.Timeout)):
+        return True
+    resp = getattr(err, "response", None)
+    return isinstance(err, requests.HTTPError) and resp is not None and resp.status_code in _RETRY_STATUS
+
+
+def _note_fail(err=None):
+    """Record that a lookup in this thread failed transiently (network /
+    service error), so that its empty result is not mistaken for 'no match'
+    and cached."""
+    if err is None or _transient(err):
+        _FAIL.n = getattr(_FAIL, "n", 0) + 1
+
+
+def _tracked(fn):
+    """Run ``fn()``; return ``(result, failed)`` where ``failed`` says whether
+    any lookup inside it hit a network / service error."""
+    _FAIL.n = 0
+    out = fn()
+    return out, getattr(_FAIL, "n", 0) > 0
 
 
 def _pmap(fn, items, workers: int = 8):
@@ -96,7 +148,8 @@ def _variants(name: str) -> List[str]:
 def _hgnc(path: str, timeout: float) -> List[dict]:
     try:
         return _get(f"{_HGNC}/{path}", timeout=timeout)["response"]["docs"]
-    except Exception:
+    except Exception as _e:
+        _note_fail(_e)
         return []
 
 
@@ -209,7 +262,8 @@ def _gene_candidates(name: str, species: str, timeout: float) -> Tuple[List[str]
                         params={"q": f"symbol:{v} OR alias:{v}", "species": species,
                                 "fields": "symbol,alias", "size": 10},
                         timeout=timeout).get("hits", [])
-        except Exception:
+        except Exception as _e:
+            _note_fail(_e)
             hits = []
         if hits:
             # the approved symbol whose alias list carries the name, not
@@ -292,7 +346,8 @@ def _uniprot_query(query: str, timeout: float, size: int = 25) -> List[str]:
     try:
         js = _get(_UNIPROT, params={"query": query, "fields": "gene_primary", "size": size,
                                     "format": "json"}, timeout=timeout)
-    except Exception:
+    except Exception as _e:
+        _note_fail(_e)
         return []
     out = []
     for r in js.get("results", []):
@@ -338,7 +393,8 @@ def _antibody_registry_genes(name: str, timeout: float, taxon: str = "9606") -> 
     for v in _name_variants(name):
         try:
             items = _get(_ABREG, params={"q": v, "page": 1, "size": 100}, timeout=timeout).get("items", [])
-        except Exception:
+        except Exception as _e:
+            _note_fail(_e)
             continue
         n = _norm(v)
         for it in items:
@@ -393,7 +449,8 @@ def _uniprot_exact_name(name: str, timeout: float, taxon: str = "9606") -> List[
             "query": f'protein_name:"{name}" AND organism_id:{taxon} AND reviewed:true',
             "fields": "gene_primary,protein_name", "size": 25, "format": "json"},
             timeout=timeout)
-    except Exception:
+    except Exception as _e:
+        _note_fail(_e)
         return []
     n = _norm(name)
     out = []
@@ -417,7 +474,8 @@ def _antibody_registry_majority(names: Sequence[str], timeout: float,
         try:
             items = _get(_ABREG, params={"q": v, "page": 1, "size": 100},
                          timeout=timeout).get("items", [])
-        except Exception:
+        except Exception as _e:
+            _note_fail(_e)
             continue
         n = _norm(v)
         for it in items:
@@ -471,7 +529,8 @@ def panel_gene_map(markers: Iterable[str], species: str = "human", *,
                    overrides: Optional[Mapping[str, Sequence[str]]] = None,
                    marker_genes: Optional[Mapping[str, int]] = None,
                    timeout: float = 20.0, workers: int = 8,
-                   sources: Optional[Dict[str, str]] = None):
+                   sources: Optional[Dict[str, str]] = None,
+                   failed: Optional[List[str]] = None):
     r"""Resolve panel marker names to gene symbols from public gene nomenclature.
 
     Arguments:
@@ -487,6 +546,9 @@ def panel_gene_map(markers: Iterable[str], species: str = "human", *,
             was matched (``symbol`` = approved HGNC symbol; ``alias`` /
             ``mygene`` / ``name`` / ``uniprot`` / ``antibody`` / ``stem`` /
             ``family`` are indirect matches worth reviewing; ``override``).
+        failed: optional list filled with the names whose lookup hit a
+            network / service error (after retries): their result — even an
+            empty one — may be incomplete and should not be cached.
 
     Alias matches keep only the approved symbols whose own alias list
     contains the name. A name led by a lower-case Greek letter (``aSMA``,
@@ -502,7 +564,11 @@ def panel_gene_map(markers: Iterable[str], species: str = "human", *,
     """
     markers = list(markers)
     todo = [m for m in markers if not (overrides and m in overrides)]
-    cands = dict(zip(todo, _pmap(lambda m: _gene_candidates(m, species, timeout), todo, workers)))
+    tracked = dict(zip(todo, _pmap(lambda m: _tracked(lambda: _gene_candidates(m, species, timeout)),
+                                   todo, workers)))
+    cands = {m: v[0] for m, v in tracked.items()}
+    if failed is not None:
+        failed.extend(m for m in todo if tracked[m][1])
     gm, miss = {}, []
     for m in markers:
         if overrides and m in overrides:
@@ -529,7 +595,8 @@ def _ols_docs(params: dict, timeout: float) -> List[dict]:
     try:
         docs = _get(f"{_OLS}/search", params={"ontology": "cl", "fieldList": "obo_id,label,synonym",
                                               **params}, timeout=timeout)["response"]["docs"]
-    except Exception:
+    except Exception as _e:
+        _note_fail(_e)
         return []
     return [d for d in docs if str(d.get("obo_id", "")).startswith("CL:")]
 
@@ -572,7 +639,8 @@ def _ols_parents(cl_id: str, timeout: float) -> List[str]:
             out += [t.get("obo_id") for t in js.get("_embedded", {}).get("terms", [])
                     if str(t.get("obo_id", "")).startswith("CL:")]
             url = js.get("_links", {}).get("next", {}).get("href")
-    except Exception:
+    except Exception as _e:
+        _note_fail(_e)
         pass
     return out
 
@@ -904,11 +972,16 @@ def markerdb_signatures(
     gsrc = store.setdefault("gene_source", {})
     todo = [m for m in panel_markers if (m not in gcache or m not in gsrc)
             and not (gene_overrides and m in gene_overrides)]
+    lookup_failed: List[str] = []
+    fresh: Dict[str, Tuple[List[str], str]] = {}
     if todo:
         srcd: Dict[str, str] = {}
         got, _ = panel_gene_map(todo, species, marker_genes=usage, timeout=timeout,
-                                workers=workers, sources=srcd)
+                                workers=workers, sources=srcd, failed=lookup_failed)
         for m in todo:
+            if m in lookup_failed:      # possibly incomplete: use now, retry next call
+                fresh[m] = (got.get(m, []), srcd.get(m, ""))
+                continue
             gcache[m] = got.get(m, [])
             gsrc[m] = srcd.get(m, "")
     pncache = store.setdefault("protein_name_cache", {})
@@ -918,7 +991,7 @@ def markerdb_signatures(
         pncache[n] = g
     gm, miss = {}, []
     for m in panel_markers:
-        g = gcache.get(m, [])
+        g = fresh[m][0] if m in fresh else gcache.get(m, [])
         if m in pn and pncache.get(pn[m]):
             g = _pick(pncache[pn[m]], usage) or pncache[pn[m]]
         if gene_overrides and m in gene_overrides:
@@ -934,7 +1007,9 @@ def markerdb_signatures(
     def _gname(g):
         d = _hgnc(f"fetch/symbol/{urllib.parse.quote(g)}", timeout)
         return d[0].get("name", "") if d else ""
-    for g, n in zip(need, _pmap(_gname, need, workers)):
+    for g, (n, bad) in zip(need, _pmap(lambda g: _tracked(lambda: _gname(g)), need, workers)):
+        if bad:
+            continue                    # not cached: retried on the next call
         gnames[g] = n
     gene_names = {m: {g: gnames.get(g, "") for g in genes} for m, genes in gm.items()}
     gene_to_markers: Dict[str, List[str]] = {}
@@ -1026,8 +1101,11 @@ def markerdb_signatures(
         if not todo:
             return
         if not tok:
-            raise RuntimeError("OMICOS_USER_TOKEN is not set; the atlas marker endpoint needs "
-                               "an OmicOS account token")
+            raise RuntimeError(
+                "OMICOS_USER_TOKEN is not set; the atlas marker endpoint needs an OmicOS account "
+                "token (OmicOS kernels receive it at start; if it is missing the session has no "
+                "cloud credential). Report this as a blocker. Do NOT substitute marker signatures "
+                "written by hand or from memory: annotations built on them are not evidence-based.")
         chunks = [todo[i:i + 20] for i in range(0, len(todo), 20)]
 
         def fetch(chunk):
@@ -1036,7 +1114,17 @@ def markerdb_signatures(
                                 "include_negative": "true", "pmids_per_gene": 0},
                         headers={"Accept": "application/json", "Authorization": f"Bearer {tok}"},
                         timeout=timeout).get("templates", [])
-        for got in _pmap(fetch, chunks, min(workers, 4)):
+        try:
+            fetched = _pmap(fetch, chunks, min(workers, 4))
+        except Exception as e:
+            code = getattr(getattr(e, "response", None), "status_code", None)
+            if code in (401, 403):
+                raise RuntimeError(
+                    f"the atlas marker endpoint refused the OmicOS token (HTTP {code}). Report this "
+                    "as a blocker. Do NOT substitute marker signatures written by hand or from "
+                    "memory: annotations built on them are not evidence-based.") from e
+            raise
+        for got in fetched:
             for t in got:
                 tmpl_store[t["cell_name"]] = t
         for n in todo:
@@ -1101,8 +1189,15 @@ def markerdb_signatures(
             for g in genes:
                 src.setdefault(g.upper(), []).append(tag)
         return {"genes": src, "cl": _cl_synonym_terms(m, timeout)}
-    for m, got in zip(need, _pmap(_alt, need, workers)):
-        acache[m] = got
+    alias_now: Dict[str, dict] = {}
+    for m, (got, bad) in zip(need, _pmap(lambda m: _tracked(lambda: _alt(m)), need, workers)):
+        if bad:
+            alias_now[m] = got          # used now, not cached
+            if m not in lookup_failed:
+                lookup_failed.append(m)
+        else:
+            acache[m] = got
+    acache = {**acache, **alias_now}
     # cell-type synonyms -> the atlas markers of that cell type (or its nearest ancestor)
     cl_need = sorted({c for m in suspects for c in acache[m]["cl"]})
     cl_gen = _cl_lineage(cl_need, pcache, timeout, workers) if cl_need else {}
@@ -1316,8 +1411,13 @@ def markerdb_signatures(
               defines=sorted(defines.get(m, [])))
          for m, genes in gm.items()],
         key=lambda r: (r["match"] != "alias / name", bool(r["defines"]), r["atlas_usage"]))
+    if lookup_failed:
+        warnings.warn("markerdb_signatures: nomenclature lookups failed (network / rate limit) for "
+                      f"{sorted(lookup_failed)}; their gene mapping may be missing or incomplete and "
+                      "was not cached — call markerdb_signatures again (same cache) before scoring")
     save()
     return dict(signatures=signatures, parents=parents, polar=polar, defining=defining,
+                lookup_failed=sorted(lookup_failed),
                 resolved=res,
                 cl_ids=cl_of, unresolved_labels=unresolved_labels,
                 out_of_context=out_of_context, context_scopes=ctx_scopes,
