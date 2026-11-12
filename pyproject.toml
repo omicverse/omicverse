@@ -371,10 +371,10 @@ airr = [
 # / 'scar') are heavyweight and intentionally NOT bundled here — install
 # CellBender / scAR directly when needed.
 ambient = [
-  "pysoupx>=0.1.0",        # SoupX — empty-droplet soup profile, multinomial subtraction
-  "pydecontx>=0.1.0",      # DecontX — variational-EM contamination mixture
-  "pyfastcar>=0.1.0",      # FastCAR — deterministic per-gene ambient subtraction
-  "pysccdc>=0.1.0",        # scCDC — entropy-based GCG-specific decontamination
+  "pysoupx>=0.1.1",        # SoupX — empty-droplet soup profile, multinomial subtraction
+  "pydecontx>=0.1.1",      # DecontX — variational-EM contamination mixture
+  "pyfastcar>=0.1.1",      # FastCAR — deterministic per-gene ambient subtraction
+  "pysccdc>=0.1.1",        # scCDC — entropy-based GCG-specific decontamination
 ]
 
 # Lipidomics backend for the lipidomics path of ``ov.metabol`` — a

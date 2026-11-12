@@ -227,20 +227,19 @@ def count_integrity_check(
     rm = _mat(raw, raw_layer)
     cm = _mat(corrected, corrected_layer)
 
-    rm = rm.toarray() if sp.issparse(rm) else np.asarray(rm)
-    cm = cm.toarray() if sp.issparse(cm) else np.asarray(cm)
     if rm.shape != cm.shape:
         raise ValueError(
             f"raw {rm.shape} and corrected {cm.shape} shape mismatch.")
-    rm = rm.astype(np.float64)
-    cm = cm.astype(np.float64)
-
-    diff = cm - rm
-    increased = diff > tol
-    n_increased = int(increased.sum())
-    max_increase = float(diff.max()) if diff.size else 0.0
-    n_total = int(rm.size)
-    n_unchanged = int((np.abs(diff) <= tol).sum())
+    # sparse-friendly: only the stored entries of the difference can differ
+    rm = sp.csr_matrix(rm, dtype=np.float64)
+    cm = sp.csr_matrix(cm, dtype=np.float64)
+    diff = (cm - rm).tocsr()
+    d = diff.data
+    n_total = int(rm.shape[0]) * int(rm.shape[1])
+    n_increased = int((d > tol).sum())
+    max_increase = float(max(d.max(), 0.0)) if d.size and d.size < n_total else (
+        float(d.max()) if d.size else 0.0)
+    n_unchanged = n_total - int((np.abs(d) > tol).sum())
 
     total_raw = float(rm.sum())
     total_corr = float(cm.sum())
