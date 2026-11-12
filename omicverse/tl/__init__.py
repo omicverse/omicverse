@@ -9,7 +9,10 @@ models for transfer to new environments (:func:`rank_models_for_transfer`),
 quantitative susceptibility mapping from multi-echo gradient-echo MRI
 (:func:`qsm_reconstruct` and its steps) and open-set individual
 re-identification from images (:func:`reid_embed`, :func:`reid_local_verify`,
-:func:`reid_open_set_cluster`).
+:func:`reid_open_set_cluster`), data-entry error audits of linked clinical / EHR
+tables (:func:`audit_clinical_tables`) and study-level effect-size extraction for
+meta-analysis (:func:`extract_group_stats`, :func:`group_comparisons`,
+:func:`meta_effect_sizes`).
 """
 from ._cross_species import cross_species_align
 from ._bonsai import bonsai
@@ -28,6 +31,10 @@ from ._qsm import (qsm_load_multi_echo, qsm_save_nifti, qsm_brain_mask, qsm_unwr
                    qsm_reconstruct, qsm_dipole_kernel, qsm_forward_field, qsm_numerical_phantom)
 from ._transfer_ranking import (rank_models_for_transfer, dependence_components,
                                 transfer_ranking_source)
+from ._clinical_audit import (load_clinical_tables, infer_clinical_schema, audit_clinical_tables,
+                              drug_sex_reference)
+from ._meta_analysis import (parse_mean_sd, extract_group_stats, group_comparisons, pool_group_stats,
+                             hedges_g, sd_from_summary, recompute_group_test, meta_effect_sizes)
 
 __all__ = ["cross_species_align", "bonsai", "bandpass_filter", "channel_qc_table",
            "bridged_channel_pairs", "erp_channel_outliers",
@@ -41,4 +48,7 @@ __all__ = ["cross_species_align", "bonsai", "bandpass_filter", "channel_qc_table
            "qsm_load_multi_echo", "qsm_save_nifti", "qsm_brain_mask", "qsm_unwrap_phase",
            "qsm_multi_echo_field", "qsm_background_removal", "qsm_dipole_inversion",
            "qsm_reconstruct", "qsm_dipole_kernel", "qsm_forward_field", "qsm_numerical_phantom",
-           "rank_models_for_transfer", "dependence_components", "transfer_ranking_source"]
+           "rank_models_for_transfer", "dependence_components", "transfer_ranking_source",
+           "load_clinical_tables", "infer_clinical_schema", "audit_clinical_tables", "drug_sex_reference",
+           "parse_mean_sd", "extract_group_stats", "group_comparisons", "pool_group_stats", "hedges_g",
+           "sd_from_summary", "recompute_group_test", "meta_effect_sizes"]
