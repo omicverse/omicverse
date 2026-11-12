@@ -87,51 +87,9 @@ OmicVerse可以通过conda或pypi安装，您需要首先安装`pytorch`。请�
 
 请查看[omicverse页面](https://starlitnightly.github.io/omicverse/)或[omicverse.readthedocs.io](https://omicverse.readthedocs.io/en/latest/index.html)上的文档和教程。
 
-## `4` [J.A.R.V.I.S 入门](#)
+智能体工作流（OpenClaw、MCP 服务器和 J.A.R.V.I.S. 消息机器人）的说明见 [OmicClaw](https://github.com/omicverse/omicclaw)。
 
-### 4.1 OpenClaw
-
-OmicVerse 现在可以与 OpenClaw 项目配合进行直接交互式分析，例如：
-
-```bash
-omicverse claw 'help me annotate the lung scrna-seq'
-```
-
-这个模块由 `ov.Agent` 提供支持，适合通过对话方式分析 `AnnData`。
-
-完整教程可见 [这里](https://omicverse.readthedocs.io/en/latest/Tutorials-llm/t_ov_agent_pbmc3k/)
-
-### 4.2 MCP Server（Model Context Protocol）
-
-OmicVerse 提供了一个 MCP 服务器，可通过标准 [Model Context Protocol](https://modelcontextprotocol.io/) 将已注册的分析工具暴露给 Claude Code 等 AI 助手。
-
-```bash
-# 安装 MCP 依赖
-pip install -e "omicverse[mcp]"
-
-# 启动服务器（stdio transport）
-python -m omicverse.mcp        # 或者：omicverse-mcp
-python -m omicverse.mcp --phase P0   # 仅启用核心流程工具
-```
-
-完整教程可见 [这里](https://omicverse.readthedocs.io/en/latest/Tutorials-llm/t_mcp_guide/)
-
-### 4.3 J.A.R.V.I.S 消息系统
-
-如果你想通过手机等消息端分析 `AnnData`，可以尝试：
-
-```bash
-# 安装 jarvis 依赖
-pip install "omicverse[jarvis]"
-
-# 通过 Telegram 启动 J.A.R.V.I.S
-omicverse jarvis --channel telegram --token "$TELEGRAM_BOT_TOKEN"
-```
-
-完整教程可见 [这里](https://omicverse.readthedocs.io/en/latest/Tutorials-jarvis/t_msg_bot_overview/)
-
-
-## `5` [数据框架和参考](#)
+## `4` [数据框架和参考](#)
 
 omicverse基于以下四种数据结构实现。
 
@@ -298,12 +256,12 @@ omicverse基于以下四种数据结构实现。
 - [2] [pegasus](https://github.com/lilab-bcb/pegasus/) 是分析数百万个单细胞转录组的工具。它是一个命令行工具、一个python包和基于云的分析工作流的基础。
 - [3] [cNMF](https://github.com/dylkot/cNMF) 是从单细胞RNA-Seq (scRNA-Seq)数据推断基因表达程序的分析管道。
 
-## `6` [联系方式](#)
+## `5` [联系方式](#)
 
 - Zehua Zeng ([starlitnightly@gmail.com](mailto:starlitnightly@gmail.com) 或 [zehuazeng@xs.ustb.edu.cn](mailto:zehuazeng@xs.ustb.edu.cn))
 - Lei Hu ([hulei@westlake.edu.cn](mailto:hulei@westlake.edu.cn))
 
-## `7` [开发者指南和贡献](#)
+## `6` [开发者指南和贡献](#)
 
 如果您想为omicverse贡献代码，请参考我们的[开发者文档](https://omicverse.readthedocs.io/en/latest/Developer_guild/)。
 
@@ -333,7 +291,7 @@ pytest
 > 我们要感谢以下微信公众号推广Omicverse。
 > <p align="center"> <a href="https://mp.weixin.qq.com/s/egAnRfr3etccU_RsN-zIlg" target="_blank" rel="noreferrer"> <img src="../README.assets/image-20230701163953794.png" alt="linux" width="50" height="50"/> </a> <a href="https://zhuanlan.zhihu.com/c_1257815636945915904?page=3" target="_blank" rel="noreferrer"> <img src="../README.assets/WechatIMG688.png" alt="linux" width="50" height="50"/> </a> </p>
 
-## `8` [引用](https://doi.org/10.1038/s41467-024-50194-3)
+## `7` [引用](https://doi.org/10.1038/s41467-024-50194-3)
 
 如果您在工作中使用`omicverse`，请按以下方式引用`omicverse`论文：
 
@@ -351,7 +309,7 @@ pytest
 >
 > _imetaomics_ 2025年11月6日. doi: [10.1002/imo2.70064](https://doi.org/10.1002/imo2.70064).
 
-## `9` [其他](#)
+## `8` [其他](#)
 
 如果您想赞助我们项目的开发，可以前往爱发电网站 (https://ifdian.net/a/starlitnightly) 赞助我们。
 

@@ -83,51 +83,9 @@ OmicVerseはcondaまたはpypiを通じてインストールでき、最初に`p
 
 [omicverseページ](https://starlitnightly.github.io/omicverse/)または[omicverse.readthedocs.io](https://omicverse.readthedocs.io/en/latest/index.html)でドキュメントとチュートリアルをご確認ください。
 
-## `4` [J.A.R.V.I.S 入門](#)
+エージェントワークフロー（OpenClaw、MCP サーバー、J.A.R.V.I.S. メッセージボット）は [OmicClaw](https://github.com/omicverse/omicclaw) を参照してください。
 
-### 4.1 OpenClaw
-
-OmicVerse は OpenClaw プロジェクトと連携した対話的解析をサポートしています。たとえば次のように使えます。
-
-```bash
-omicverse claw 'help me annotate the lung scrna-seq'
-```
-
-このモジュールは `ov.Agent` によって支えられており、対話形式で `AnnData` を解析するのに適しています。
-
-完全なチュートリアルは [こちら](https://omicverse.readthedocs.io/en/latest/Tutorials-llm/t_ov_agent_pbmc3k/)
-
-### 4.2 MCP Server（Model Context Protocol）
-
-OmicVerse は、登録済み解析ツールを [Model Context Protocol](https://modelcontextprotocol.io/) を通じて Claude Code などの AI アシスタントへ提供する MCP サーバーを備えています。
-
-```bash
-# MCP 依存関係付きでインストール
-pip install -e "omicverse[mcp]"
-
-# サーバー起動（stdio transport）
-python -m omicverse.mcp        # または: omicverse-mcp
-python -m omicverse.mcp --phase P0   # コアパイプラインツールのみ
-```
-
-完全なチュートリアルは [こちら](https://omicverse.readthedocs.io/en/latest/Tutorials-llm/t_mcp_guide/)
-
-### 4.3 J.A.R.V.I.S メッセージシステム
-
-携帯電話やメッセージチャネルから `AnnData` を解析したい場合は、次を試すことができます。
-
-```bash
-# jarvis 依存関係付きでインストール
-pip install "omicverse[jarvis]"
-
-# Telegram で J.A.R.V.I.S を起動
-omicverse jarvis --channel telegram --token "$TELEGRAM_BOT_TOKEN"
-```
-
-完全なチュートリアルは [こちら](https://omicverse.readthedocs.io/en/latest/Tutorials-jarvis/t_msg_bot_overview/)
-
-
-## `5` [データフレームワークと参考文献](#)
+## `4` [データフレームワークと参考文献](#)
 
 omicverseは以下の4つのデータ構造に基づくインフラストラクチャとして実装されています。
 
@@ -294,12 +252,12 @@ omicverseは以下の4つのデータ構造に基づくインフラストラク�
 - [2] [pegasus](https://github.com/lilab-bcb/pegasus/) は、数百万の単一細胞の転写産物を解析するためのツールです。これは、コマンドラインツール、pythonパッケージ、およびクラウドベースの解析ワークフローの基盤です。
 - [3] [cNMF](https://github.com/dylkot/cNMF) は、単一細胞RNA-Seq (scRNA-Seq)データから遺伝子発現プログラムを推論するための解析パイプラインです。
 
-## `6` [お問い合わせ](#)
+## `5` [お問い合わせ](#)
 
 - Zehua Zeng ([starlitnightly@gmail.com](mailto:starlitnightly@gmail.com) または [zehuazeng@xs.ustb.edu.cn](mailto:zehuazeng@xs.ustb.edu.cn))
 - Lei Hu ([hulei@westlake.edu.cn](mailto:hulei@westlake.edu.cn))
 
-## `7` [開発者ガイドと貢献](#)
+## `6` [開発者ガイドと貢献](#)
 
 omicverseに貢献したい場合は、[開発者ドキュメント](https://omicverse.readthedocs.io/en/latest/Developer_guild/)をご参照ください。
 
@@ -329,7 +287,7 @@ pytest
 > Omicverseを推進してくださった以下のWeChat公式アカウントに感謝いたします。
 > <p align="center"> <a href="https://mp.weixin.qq.com/s/egAnRfr3etccU_RsN-zIlg" target="_blank" rel="noreferrer"> <img src="../README.assets/image-20230701163953794.png" alt="linux" width="50" height="50"/> </a> <a href="https://zhuanlan.zhihu.com/c_1257815636945915904?page=3" target="_blank" rel="noreferrer"> <img src="../README.assets/WechatIMG688.png" alt="linux" width="50" height="50"/> </a> </p>
 
-## `8` [引用](https://doi.org/10.1038/s41467-024-50194-3)
+## `7` [引用](https://doi.org/10.1038/s41467-024-50194-3)
 
 作業で`omicverse`を使用する場合は、以下のように`omicverse`の出版物を引用してください：
 
@@ -347,7 +305,7 @@ pytest
 >
 > _imetaomics_ 2025年11月6日. doi: [10.1002/imo2.70064](https://doi.org/10.1002/imo2.70064).
 
-## `9` [その他](#)
+## `8` [その他](#)
 
 プロジェクトの開発をスポンサーしたい場合は、afdianウェブサイト（https://ifdian.net/a/starlitnightly）にアクセスしてスポンサーしてください。
 
