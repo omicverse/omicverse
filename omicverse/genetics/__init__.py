@@ -91,6 +91,13 @@ Sequencing sample QC      ``snp_allele_counts``, ``bam_read_summary``,
                           ``tumor_normal_allelic_imbalance``,
                           ``tumor_in_normal_shift``,
                           ``tumor_normal_batch_qc``
+Family haplotypes         ``two_phase_weights``, ``haplotype_frequencies``,
+                          ``fit_haplotype_prior`` (covariate / group /
+                          shared-family prior under biased sampling),
+                          ``fit_crossover_intervals``, ``gamete_sequences``,
+                          ``confident_copy_calls``, ``compatible_diplotypes``,
+                          ``structural_identifiability``,
+                          ``simulate_family_cohort``, ``pedigree_core_source``
 TWAS                      ``twas`` (spredixcan / smultixcan / predixcan),
                           ``load_twas_model``, ``make_twas_covariance``
 Plotting                  ``manhattan``, ``qqplot``, ``regional_plot``,
@@ -179,6 +186,18 @@ _LAZY_ATTRS: dict[str, tuple[str, str]] = {
     "tumor_normal_allelic_imbalance": ("._sample_qc", "tumor_normal_allelic_imbalance"),
     "tumor_in_normal_shift":   ("._sample_qc", "tumor_in_normal_shift"),
     "tumor_normal_batch_qc":   ("._sample_qc", "tumor_normal_batch_qc"),
+    # Family-based haplotype inference (pedigrees, biased / two-phase sampling)
+    "two_phase_weights":       ("._pedigree", "two_phase_weights"),
+    "haplotype_frequencies":   ("._pedigree", "haplotype_frequencies"),
+    "fit_haplotype_prior":     ("._pedigree", "fit_haplotype_prior"),
+    "HaplotypePrior":          ("._pedigree", "HaplotypePrior"),
+    "fit_crossover_intervals": ("._pedigree", "fit_crossover_intervals"),
+    "gamete_sequences":        ("._pedigree", "gamete_sequences"),
+    "confident_copy_calls":    ("._pedigree", "confident_copy_calls"),
+    "compatible_diplotypes":   ("._pedigree", "compatible_diplotypes"),
+    "structural_identifiability": ("._pedigree", "structural_identifiability"),
+    "simulate_family_cohort":  ("._pedigree", "simulate_family_cohort"),
+    "pedigree_core_source":    ("._pedigree", "pedigree_core_source"),
     # gsMap — spatial GWAS mapping
     "gsmap":                     ("._gsmap", "gsmap"),
     # Plotting
@@ -215,6 +234,7 @@ _REGISTRY_SUBMODULES = (
     "._twas",
     "._gsmap",
     "._sample_qc",
+    "._pedigree",
     ".plotting",
 )
 
