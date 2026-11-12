@@ -144,21 +144,21 @@ def test_doublets_on_dask_raise(h5ad):
 
 
 def test_read_storage_follows_the_mode(h5ad, monkeypatch):
-    """storage='disk' (the default): AnnDataOOM in the CPU modes, Dask row
-    blocks in GPU mode; storage='memory' gives a plain AnnData."""
+    """storage='disk': AnnDataOOM in the CPU modes, Dask row blocks in GPU
+    mode; the default storage='memory' gives a plain AnnData."""
     import anndata as ad
     import omicverse as ov
     from omicverse.pp._dask import is_dask
     monkeypatch.setattr(ov.settings, "mode", "cpu")
-    assert type(ov.read(h5ad, storage="memory")) is ad.AnnData
+    assert type(ov.read(h5ad)) is ad.AnnData  # default = memory
     pytest.importorskip("anndataoom")
-    for b in (ov.read(h5ad), ov.read(h5ad, storage="disk")):  # default = disk
-        try:
-            assert type(b).__name__ == "AnnDataOOM"
-        finally:
-            b.close()
+    b = ov.read(h5ad, storage="disk")
+    try:
+        assert type(b).__name__ == "AnnDataOOM"
+    finally:
+        b.close()
     monkeypatch.setattr(ov.settings, "mode", "gpu")  # gpu_init() without RAPIDS
-    a = ov.read(h5ad, chunk_size=500)
+    a = ov.read(h5ad, storage="disk", chunk_size=500)
     assert is_dask(a.X) and a.X.chunks[0][0] == 500
 
 

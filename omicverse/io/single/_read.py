@@ -134,12 +134,12 @@ def _read_h5ad_threaded(path):
 @register_function(
     aliases=["读取数据", "read", "load_data", "数据读取", "file_reader"],
     category="utils",
-    description="Universal file reader for common bioinformatics data formats including h5ad, csv, tsv, txt, and gzipped files; h5ad kept on disk by default (storage='disk') or read into memory (storage='memory')",
+    description="Universal file reader for common bioinformatics data formats including h5ad, csv, tsv, txt, and gzipped files; h5ad read into memory (default) or kept on disk (storage='disk')",
     examples=[
-        "# Read an AnnData file; the matrix stays on disk (default)",
+        "# Read AnnData file into memory",
         "adata = ov.read('data.h5ad')",
-        "# Read the whole AnnData into memory",
-        "adata = ov.read('data.h5ad', storage='memory')",
+        "# Keep the matrix on disk (data larger than RAM / GPU memory)",
+        "adata = ov.read('data.h5ad', storage='disk')",
         "# Read CSV file",
         "df = ov.read('data.csv')",
         "# Read TSV file",
@@ -151,7 +151,7 @@ def _read_h5ad_threaded(path):
     ],
     related=["utils.read_csv", "utils.read_h5ad", "pp.preprocess", "settings.gpu_init"]
 )
-def read(path, storage='disk', *, backend=None, **kwargs):
+def read(path, storage='memory', *, backend=None, **kwargs):
     r"""
     Read common omics file formats into AnnData or pandas DataFrame.
 
@@ -170,17 +170,17 @@ def read(path, storage='disk', *, backend=None, **kwargs):
                     to the GPU (RAPIDS)     to the GPU (``chunk_size`` cells)
     ==============  ======================  ===================================
 
-    ``storage='disk'`` (the default) keeps memory low (SEA-AD, 1.38M cells /
-    91 GB: 13 GB on CPU, 5 GB in GPU mode); every step re-reads the file, so it
-    relies on disk / page-cache bandwidth. Use ``storage='memory'`` for a plain
-    in-memory ``anndata.AnnData`` (e.g. for tools that need one, or when the
-    file will be overwritten while the object is in use).
+    ``storage='disk'`` keeps memory low (SEA-AD, 1.38M cells / 91 GB: 13 GB
+    on CPU, 5 GB in GPU mode); every step re-reads the file, so it relies on
+    disk / page-cache bandwidth. Not every omicverse / scanpy function accepts
+    a disk-backed object yet; the default ``storage='memory'`` returns a plain
+    ``anndata.AnnData``.
 
     Parameters
     ----------
     path : str or pathlib.Path
         Input file path.
-    storage : {'disk', 'memory'}, default='disk'
+    storage : {'memory', 'disk'}, default='memory'
         Where the ``.h5ad`` matrix lives; see the table above.
     backend : {'python', 'rust'}, optional
         Deprecated spelling: ``'python'`` = ``storage='memory'``, ``'rust'`` =
