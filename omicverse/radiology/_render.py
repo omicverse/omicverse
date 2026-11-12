@@ -27,6 +27,25 @@ from ._dicom import DicomSeries, DicomStudy
 __all__ = ["render_slices", "montage", "region_sheets"]
 
 
+def _check_out(path: str) -> None:
+    """Warn when a rendered image lands outside the working directory.
+
+    Agent image readers (vision tools) commonly accept only files inside the
+    session's working directory; an image written elsewhere (e.g. into a
+    deliverable directory under another root) cannot be read, and the
+    deliverable directory should not collect working files anyway.
+    """
+    import os
+    import warnings
+    full = os.path.realpath(os.path.abspath(path))
+    cwd = os.path.realpath(os.getcwd())
+    if os.path.commonpath([full, cwd]) != cwd:
+        msg = (f"ov.radiology: image written outside the working directory ({full}); image-reading tools "
+               f"may refuse it. Render to a relative path (e.g. 'survey/...') under {cwd} instead.")
+        warnings.warn(msg, stacklevel=3)
+        print("WARNING:", msg)
+
+
 def _window(img: np.ndarray, lo: float = 1.0, hi: float = 99.5) -> Tuple[float, float]:
     v = img[np.isfinite(img)]
     if v.size == 0:
@@ -211,6 +230,7 @@ def render_slices(study: Optional[DicomStudy], series: Sequence[Union[str, int, 
     if title:
         fig.suptitle(title, fontsize=10)
     fig.tight_layout()
+    _check_out(out)
     fig.savefig(out, dpi=100)
     plt.close(fig)
     return {"path": out, "panels": meta}
@@ -288,6 +308,7 @@ def montage(series: DicomSeries, instances: Optional[Iterable[int]] = None, *,
                  f"down = {d['down']}" + (f"; crop rows {crop[0]}-{crop[1]}, cols {crop[2]}-{crop[3]}"
                                           if crop else ""), fontsize=9)
     fig.tight_layout()
+    _check_out(out)
     fig.savefig(out, dpi=100)
     plt.close(fig)
     return {"path": out, "instances": ids, "directions": d}
