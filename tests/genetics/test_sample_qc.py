@@ -289,3 +289,59 @@ def test_unrelated_orphan_is_not_absorbed():
     groups = _same_individual_groups(conc)
     assert groups["T3"] == {"T3"}
     assert groups["T2"] == {"T2", "N2", "N2-rerun"}
+
+
+def _simulate_parent_child(seed=0, n_sites=320, depth=60):
+    """Parent (0), child (1) and an unrelated person (2), each tumour + normal.
+
+    A child carries one allele of its parent at every site, so the two never
+    show opposite homozygotes -- yet they are different people."""
+    rng = np.random.default_rng(seed)
+    regions = np.repeat([f"r{i}" for i in range(8)], n_sites // 8)
+    maf = rng.uniform(0.2, 0.5, n_sites)
+    hap = lambda: rng.binomial(1, maf)                               # noqa: E731
+    parent = (hap(), hap())
+    child = (np.where(rng.random(n_sites) < 0.5, parent[0], parent[1]), hap())
+    germ = {0: (parent[0] + parent[1]) / 2, 1: (child[0] + child[1]) / 2, 2: (hap() + hap()) / 2}
+    true_af = {}
+    for i, g in germ.items():
+        true_af[f"N{i}"] = g.copy()
+        t = g.copy()
+        loh = np.isin(regions, [f"r{i}", f"r{i + 4}"]) & (g == 0.5)
+        t[loh] = rng.choice([0.0, 1.0], loh.sum())
+        true_af[f"T{i}"] = 0.9 * t + 0.1 * g
+    rows = []
+    for s, f in true_af.items():
+        p = np.clip(f * (1 - 0.004) + (1 - f) * 0.004, 0, 1)
+        n = rng.poisson(depth, n_sites)
+        k = rng.binomial(n, p)
+        for j in range(n_sites):
+            rows.append((s, "chr1", 1000 + j * 50, "A", "G", regions[j], n[j] - k[j], k[j], 0, n[j],
+                         k[j] / n[j] if n[j] else np.nan, True))
+    return pd.DataFrame(rows, columns=["sample", "chrom", "pos", "ref", "alt", "region_id", "ref_count",
+                                       "alt_count", "other_count", "depth", "alt_fraction", "in_target"])
+
+
+@pytest.mark.parametrize("seed", [0, 1, 2])
+def test_relatives_are_not_merged_into_one_individual(seed):
+    """Parent and child share an allele at every site (no opposite
+    homozygotes), so the opposite-homozygote merge of #1030 joined them into
+    one person: a record pairing the parent's tumour with the child's normal
+    came out SUPPORTED. They disagree in both het/hom directions, which tumour
+    LOH never does."""
+    from omicverse.genetics._sample_qc import _same_individual_groups
+    counts = _simulate_parent_child(seed)
+    conc = sample_genotype_concordance(counts)
+    groups = _same_individual_groups(conc)
+    assert {tuple(sorted(g)) for g in groups.values()} == {("N0", "T0"), ("N1", "T1"), ("N2", "T2")}
+    manifest = pd.DataFrame({"case_id": ["P0", "P1", "P2"], "tumor_alias": ["T0", "T1", "T2"],
+                             "submitted_baseline_alias": ["N1", "N0", "N2"]})   # P0/P1 swapped normals
+    st = resolve_sample_relationships(conc, manifest).set_index("case_id")["status"]
+    assert st["P0"] == "MISMATCH" and st["P1"] == "MISMATCH" and st["P2"] == "SUPPORTED"
+    f = tumor_normal_batch_qc(counts, manifest)["findings"]
+    assert {"P0", "P1"} <= set(f.loc[f["finding_type"] == "identity_mismatch", "case_id"])
+    pc = conc[(conc["sample"] == "N0") & (conc["comparator"] == "N1")].iloc[0]
+    assert pc["opposite_hom"] == 0 and pc["loh_inconsistent"] > 0.1 * pc["n_compared"]
+    for i in range(3):                                     # tumour vs own normal: LOH is one-directional
+        tn = conc[(conc["sample"] == f"T{i}") & (conc["comparator"] == f"N{i}")].iloc[0]
+        assert tn["loh_inconsistent"] <= 2

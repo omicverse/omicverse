@@ -458,7 +458,15 @@ def sample_genotype_concordance(
     Returns
     -------
     Long DataFrame ``sample, comparator, n_compared, discordance,
-    opposite_hom, rank, mutual_best, gap_to_next`` (one row per ordered pair).
+    opposite_hom, het_hom, hom_het, loh_inconsistent, rank, mutual_best,
+    gap_to_next`` (one row per ordered pair). ``het_hom`` counts sites where
+    the sample is heterozygous and the comparator homozygous, ``hom_het`` the
+    reverse. ``loh_inconsistent = opposite_hom + min(het_hom, hom_het)`` counts
+    the mismatches that loss of heterozygosity in *one* of the two libraries
+    cannot explain (LOH turns a heterozygote into a homozygote in the tumour
+    only, never the other way round and never into the opposite homozygote):
+    ~0 for two libraries of one person, tumour / normal included, and a
+    sizeable fraction of the sites for two different people.
     """
     af = _wide(counts, "alt_fraction")
     dp = _wide(counts, "depth").reindex_like(af)
@@ -478,8 +486,11 @@ def sample_genotype_concordance(
         n = int(v.sum())
         disc = float((G[v, i] != G[v, j]).mean()) if n else np.nan
         opp = int((np.abs(G[v, i] - G[v, j]) == 2).sum())
-        rows.append((samples[i], samples[j], n, disc, opp))
-    df = pd.DataFrame(rows, columns=["sample", "comparator", "n_compared", "discordance", "opposite_hom"])
+        het_hom = int(((G[v, i] == 1) & (G[v, j] != 1)).sum())
+        hom_het = int(((G[v, i] != 1) & (G[v, j] == 1)).sum())
+        rows.append((samples[i], samples[j], n, disc, opp, het_hom, hom_het, opp + min(het_hom, hom_het)))
+    df = pd.DataFrame(rows, columns=["sample", "comparator", "n_compared", "discordance", "opposite_hom",
+                                     "het_hom", "hom_het", "loh_inconsistent"])
     df["rank"] = df.groupby("sample")["discordance"].rank(method="min").astype(int)
     best = df[df["rank"] == 1].groupby("sample")["comparator"].apply(set).to_dict()
     df["mutual_best"] = [(c in best.get(s, set())) and (s in best.get(c, set()))
@@ -495,6 +506,14 @@ def sample_genotype_concordance(
         p = np.nanmean(dose, axis=1) if dose.size else np.array([])
     p = p[np.isfinite(p)]
     df.attrs["unrelated_opposite_hom_rate"] = float(np.mean(2 * p ** 2 * (1 - p) ** 2)) if p.size else np.nan
+    # and LOH-inconsistent mismatches (opposite homozygote, or het/hom in the
+    # direction LOH of the other library does not produce): one direction of
+    # het/hom is 2pq(p^2+q^2) per site; min(two directions) <= that, so this
+    # is an upper bound used only when the batch has no unrelated pairs to
+    # measure the rate on
+    df.attrs["unrelated_loh_inconsistent_rate"] = (
+        float(np.mean(2 * p ** 2 * (1 - p) ** 2 + 2 * p * (1 - p) * (p ** 2 + (1 - p) ** 2)))
+        if p.size else np.nan)
     out = df.sort_values(["sample", "rank"]).reset_index(drop=True)
     out.attrs.update(df.attrs)
     return out
@@ -507,20 +526,30 @@ def _same_individual_groups(conc: pd.DataFrame) -> Dict[str, set]:
        closest genotype match).
     2. Groups are then merged while two groups are each other's nearest
        group (single linkage on discordance) **and** their closest pair's
-       opposite-homozygote count is better explained by the same-individual
-       error rate than by the rate expected between unrelated people.
+       count of LOH-inconsistent mismatches (``loh_inconsistent``: opposite
+       homozygotes plus the smaller of the two het/hom directions) is better
+       explained by the same-individual error rate than by the rate between
+       different people.
 
     Step 2 is what keeps several libraries of one person together: two
     libraries of the same normal are each other's best match (discordance
     ~0), so the tumour -- whose best match is one of them, or a tie between
     them -- is the best match of neither and step 1 alone leaves it on its
-    own (a false identity mismatch). The opposite-homozygote test is
-    robust to tumour LOH (a heterozygous site becomes homozygous, never the
-    opposite homozygote) and stops an unrelated orphan sample from being
-    absorbed by its nearest group. The same-individual rate is estimated
-    from the mutual-best pairs, the unrelated rate from the panel's allele
-    frequencies (``conc.attrs['unrelated_opposite_hom_rate']``) or, failing
-    that, from the pairs left in different groups.
+    own (a false identity mismatch). The statistic is robust to tumour LOH
+    (a heterozygous site becomes homozygous in the tumour only, so all of
+    its mismatches fall in one het/hom direction) and stops an unrelated
+    sample from being absorbed by its nearest group: two different people
+    disagree in both het/hom directions. Opposite homozygotes alone are not
+    enough for that -- at panels of common, mostly-reference sites and with
+    contaminated libraries (whose homozygous sites fall out as ambiguous)
+    two different people can share every homozygous call at ~120 sites.
+
+    The same-individual rate is estimated from the mutual-best pairs; the
+    rate between different people from the pairs left in different groups
+    and from Hardy-Weinberg at the panel's allele frequencies
+    (``conc.attrs['unrelated_loh_inconsistent_rate']``), taking the smaller
+    of the two that exceed the same-individual rate (fewer merges when they
+    disagree).
     """
     samples = sorted(set(conc["sample"]) | set(conc["comparator"]))
     groups = {s: {s} for s in samples}
@@ -529,20 +558,25 @@ def _same_individual_groups(conc: pd.DataFrame) -> Dict[str, set]:
         for x in g:
             groups[x] = g
 
+    if "loh_inconsistent" in conc.columns:
+        stat, attr = "loh_inconsistent", "unrelated_loh_inconsistent_rate"
+    else:                                   # concordance from an older release
+        stat, attr = "opposite_hom", "unrelated_opposite_hom_rate"
     d = {(a, b): (float(x), int(o), int(n)) for a, b, x, o, n in
-         conc[["sample", "comparator", "discordance", "opposite_hom", "n_compared"]].itertuples(index=False)
+         conc[["sample", "comparator", "discordance", stat, "n_compared"]].itertuples(index=False)
          if np.isfinite(x) and n > 0}
     if not d:
         return groups
     mb = conc[conc["mutual_best"] & (conc["n_compared"] > 0)]
-    e_same = (float(mb["opposite_hom"].sum()) + 1.0) / (float(mb["n_compared"].sum()) + 2.0)
-    e_unrel = float(conc.attrs.get("unrelated_opposite_hom_rate", np.nan))
-    if not np.isfinite(e_unrel) or e_unrel <= 0:
-        apart = [(o, n) for (a, b), (_, o, n) in d.items() if b not in groups[a]]
-        if apart:
-            e_unrel = (sum(o for o, _ in apart) + 1.0) / (sum(n for _, n in apart) + 2.0)
-    if not np.isfinite(e_unrel) or e_unrel <= e_same:
+    e_same = (float(mb[stat].sum()) + 1.0) / (float(mb["n_compared"].sum()) + 2.0)
+    candidates = [float(conc.attrs.get(attr, np.nan))]
+    apart = [(o, n) for (a, b), (_, o, n) in d.items() if b not in groups[a]]
+    if apart:
+        candidates.append((sum(o for o, _ in apart) + 1.0) / (sum(n for _, n in apart) + 2.0))
+    candidates = [e for e in candidates if np.isfinite(e) and e > e_same]
+    if not candidates:
         return groups
+    e_unrel = min(candidates)
 
     def same_person(o: int, n: int) -> bool:
         # binomial log-likelihood ratio, same individual vs unrelated
@@ -617,8 +651,8 @@ def resolve_sample_relationships(
     ``MISMATCH``.
 
     Same-individual groups (see ``_same_individual_groups``) join mutual-best
-    pairs and then reciprocal-nearest groups whose opposite-homozygote count
-    fits the same-individual error rate, so a batch may hold several
+    pairs and then reciprocal-nearest groups whose LOH-inconsistent mismatch
+    count fits the same-individual error rate, so a batch may hold several
     libraries of one person (re-runs, replicate normals, a second tumour
     library) without breaking the tumour / normal record.
     """
