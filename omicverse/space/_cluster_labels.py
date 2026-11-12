@@ -69,10 +69,10 @@ def _default_review(rr) -> str:
     evidence columns (``lineage_z``, ``alt_lineage_z``) — independent of the
     arguments the scorer was called with.  Same states as the scorer:
     ``fixed``; ``resolved`` (another candidate leads only on one defining
-    marker, or the winner is weak but no candidate reaches the mean, or no
-    signature is present, when the result has a ``label_of_exclusion``);
-    ``open`` (winner below the mean or unmeasured while another candidate
-    reaches it, or with no label of exclusion).  Without those columns: fixed."""
+    marker, or the winner is weak but no candidate reaches the mean, when
+    the result has a ``label_of_exclusion``); ``open`` (winner below the mean
+    or unmeasured while another candidate reaches it, or with no label of
+    exclusion, or no signature present — ``top_label`` empty).  Without those columns: fixed."""
     if "lineage_z" not in rr.index:
         return "fixed (no evidence columns)"
     def _f(k):
@@ -82,6 +82,8 @@ def _default_review(rr) -> str:
             v = float("nan")
         return v
     lz, alt = _f("lineage_z"), _f("alt_lineage_z")
+    if "top_label" in rr.index and (rr["top_label"] is None or rr["top_label"] != rr["top_label"]):
+        return "open: no signature present"
     if lz == lz and lz >= REVIEW_BELOW:
         if alt == alt and alt > lz:
             return (f"resolved: winner leads on the whole signature; another candidate leads "

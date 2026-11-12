@@ -130,10 +130,14 @@ def test_writer_recomputes_default_flags_ignoring_review_text():
         overrides={str(i): (x, "ev") for i, x in enumerate("VWXYZ")})
     # 0 fixed; 1 open (weak winner, alternative above the mean); 2 resolved (the
     # alternative leads on one marker only); 3 resolved (no alternative reaches the
-    # mean); 4 resolved (no signature present)
+    # mean); 4 resolved (unmeasured winner, no alternative)
     assert tab["label"].tolist() == ["A", "W", "C", "D", "E"]
     aud = pd.read_csv(os.path.join(d, "a.audit.csv"))
     assert (aud["source"] == "override refused (resolved)").sum() == 3
+    # no signature present (empty top_label): open
+    res5 = res.assign(top_label=["A", "B", "C", "D", None])
+    tab5, _ = cl.write_cluster_labels(res5, os.path.join(d, "e.csv"), overrides={"4": ("Z", "ev")})
+    assert tab5["label"].tolist()[4] == "Z"
     # without a label of exclusion a weak winner nobody beats stays open
     tab3, _ = cl.write_cluster_labels(res.drop(columns="label_of_exclusion"), os.path.join(d, "c.csv"),
                                       overrides={"3": ("Y", "ev")})

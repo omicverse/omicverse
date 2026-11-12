@@ -233,15 +233,21 @@ def test_review_states_open_resolved_fixed():
     assert st(float("nan"), float("nan"), 0.0, "A", None, 0.3, float("nan"), None, "R").startswith("resolved")
 
 
-def test_lineage_ignored_on_resolved_clusters():
+def test_lineage_ignored_on_fixed_or_resolved_clusters():
     p = cs.cluster_marker_profile(_panel(), "cluster")
     d = {"A": ["m1"], "B": ["m2"], "B_x": ["m3"], "B_y": ["m4"]}
     par = {"B_x": "B", "B_y": "B"}
     r = cs.score_cluster_signatures(p, SIGS, parents=par, defining=d, residual_label="R")
-    assert str(r.at["q1", "review"]).startswith("resolved") and r.at["q1", "label"] == "R"
+    # no signature present: the label of exclusion is a default, left open
+    assert str(r.at["q1", "review"]).startswith("open") and r.at["q1", "label"] == "R"
+    resolved = [c for c in r.index if str(r.at[c, "review"]).startswith("resolved")]
+    fixed = [c for c in r.index if r.at[c, "review"] == "fixed"]
+    c0 = (resolved or fixed)[0]
+    other = "B" if r.at[c0, "top_label"] == "A" else "A"
     r2 = cs.score_cluster_signatures(p, SIGS, parents=par, defining=d, residual_label="R",
-                                     lineage={"q1": "A"})
-    assert r2.at["q1", "label"] == "R" and "ignored" in r2.at["q1", "reason"]
+                                     lineage={c0: other, "q1": "A"})
+    assert r2.at[c0, "top_label"] == r.at[c0, "top_label"] and "ignored" in r2.at[c0, "reason"]
+    assert r2.at["q1", "top_label"] == "A"
 
 
 def test_residual_label_signature_does_not_compete():

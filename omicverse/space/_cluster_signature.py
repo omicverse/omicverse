@@ -547,12 +547,13 @@ def score_cluster_signatures(
             ``defining_check`` rule, already applied — or the winner is weak
             but no other candidate reaches the threshold; the numbers are in
             the text; with a ``residual_label``, a weak winner that no
-            candidate beats and clusters with no signature present are
-            resolved too — the presence test decided them against the label of
-            exclusion); ``'open: ...'`` (winner's evidence below the threshold
-            or unmeasured while another candidate's reaches it, or — without a
-            ``residual_label`` — while none does: the caller may choose its
-            unassigned label; the only state a caller may change).  ``lineage=`` changes of
+            candidate beats is resolved too — the presence test decided it
+            against the label of exclusion); ``'open: ...'`` (winner's
+            evidence below the threshold or unmeasured while another
+            candidate's reaches it; or — without a ``residual_label`` — while
+            none does, so the caller may choose its unassigned label; or no
+            signature present at all: the label of exclusion is a default,
+            not evidence — the only states a caller may change).  ``lineage=`` changes of
             fixed or resolved clusters are always ignored.  The threshold is
             the dataset mean (``REVIEW_BELOW = 0``); a caller value is used
             only if it is stricter (smaller: opens fewer clusters) — ``None``
@@ -757,9 +758,9 @@ def score_cluster_signatures(
         if not elig:
             rows[cl] = dict(top_label=None, score=np.nan, runner_up=None, margin=np.nan,
                             lineage_z=np.nan, alt_lineage_z=np.nan, alt_label=None,
-                            review=(f"resolved: no label's markers reach presence -> {rl} "
-                                    "(label of exclusion; neighbourhood rule below)")
-                            if residual_label is not None else "open: no signature present",
+                            review=("open: no signature present - no label's markers reach "
+                                    f"presence ({rl}, or a neighbourhood alternative); change only "
+                                    "to a label whose own markers you can cite"),
                             eligible="", candidates="", reason="no signature present")
             continue
         ranked = sorted(elig, key=lambda l: -first.at[cl, l])
