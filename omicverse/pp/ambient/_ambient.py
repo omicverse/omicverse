@@ -32,6 +32,7 @@ absent.
 from __future__ import annotations
 
 import importlib
+import warnings
 from typing import Optional
 
 import numpy as np
@@ -45,6 +46,9 @@ from ._diagnostics import count_integrity_check
 _NATIVE_METHODS = ("soupx", "decontx", "fastcar", "sccdc", "envelope")
 _DL_METHODS = ("cellbender", "scar")
 _ALL_METHODS = _NATIVE_METHODS + _DL_METHODS
+
+# SoupX rho used when neither cluster labels nor contamination_fraction exist
+_SOUPX_FALLBACK_RHO = 0.1
 
 
 # ---------------------------------------------------------------------------
@@ -92,14 +96,26 @@ def _as_dense(x):
     return x.toarray() if sp.issparse(x) else np.asarray(x)
 
 
+_CLUSTER_KEY_CANDIDATES = ("clusters", "leiden", "louvain", "cell_type",
+                           "celltype")
+
+
+def _find_cluster_key(adata, cluster_key: Optional[str]) -> Optional[str]:
+    """Return ``cluster_key``, or the first candidate column in ``obs``.
+
+    An explicit ``cluster_key`` is returned unchanged (even if it is not an
+    ``obs`` column); ``None`` comes back only when no candidate is found.
+    """
+    if cluster_key is None:
+        for cand in _CLUSTER_KEY_CANDIDATES:
+            if cand in adata.obs:
+                return cand
+    return cluster_key
+
+
 def _resolve_clusters(adata, cluster_key: Optional[str], method: str):
     """Return a cluster-label column name, validating it exists."""
-    if cluster_key is None:
-        for cand in ("clusters", "leiden", "louvain", "cell_type",
-                     "celltype"):
-            if cand in adata.obs:
-                cluster_key = cand
-                break
+    cluster_key = _find_cluster_key(adata, cluster_key)
     if cluster_key is None or cluster_key not in adata.obs:
         raise ValueError(
             f"method='{method}' needs a filtered, *clustered* AnnData. "
@@ -122,17 +138,42 @@ def _run_soupx(adata, *, raw=None, layer=None, cluster_key=None,
             "(it estimates the soup profile from the empty droplets). "
             "Pass raw=<unfiltered AnnData>.")
 
+    # Like DecontX / scCDC, pick up obs['clusters'/'leiden'/...] when no
+    # cluster_key is given, so the documented call (raw= only) on a clustered
+    # AnnData still gets SoupX's automatic rho estimate.
+    requested_key = cluster_key
+    cluster_key = _find_cluster_key(adata, cluster_key)
+    has_clusters = cluster_key is not None and cluster_key in adata.obs
+    if not has_clusters:
+        cluster_key = None
+
     sc = soupx.SoupChannel.from_anndata(
         adata, raw=raw, cluster_key=cluster_key, soup_range=soup_range)
 
-    has_clusters = cluster_key is not None and cluster_key in adata.obs
     if contamination_fraction is not None:
         soupx.set_contamination_fraction(sc, float(contamination_fraction))
     elif has_clusters:
         soupx.auto_est_cont(sc, verbose=verbose)
     else:
         # no clusters and no rho — fall back to a conservative default
-        soupx.set_contamination_fraction(sc, 0.1)
+        if requested_key is not None:
+            why = (f"cluster_key={requested_key!r} is not a column of "
+                   "adata.obs")
+        else:
+            why = ("no cluster labels found in adata.obs (looked for "
+                   f"{', '.join(_CLUSTER_KEY_CANDIDATES)})")
+        warnings.warn(
+            f"method='soupx': {why}, so SoupX's automatic contamination "
+            "estimate (auto_est_cont) was skipped and a fixed "
+            f"contamination_fraction={_SOUPX_FALLBACK_RHO} is used for "
+            "every cell. Pass cluster_key='<obs column>' (e.g. "
+            "cluster_key='leiden') to estimate it automatically, or "
+            "contamination_fraction=<value> to set it explicitly.",
+            UserWarning,
+            # user -> registry wrapper -> remove_ambient -> _run_soupx
+            stacklevel=4,
+        )
+        soupx.set_contamination_fraction(sc, _SOUPX_FALLBACK_RHO)
 
     clusters = None if has_clusters else False
     corrected = soupx.adjust_counts(
@@ -146,6 +187,7 @@ def _run_soupx(adata, *, raw=None, layer=None, cluster_key=None,
         "soup_range": soup_range,
         "contamination_fraction": float(np.mean(rho)),
         "auto_estimated": contamination_fraction is None and has_clusters,
+        "cluster_key": cluster_key,
     }
     return corrected_cg, rho, n_genes_corrected, meta
 
@@ -366,7 +408,11 @@ def remove_ambient(
         ``.X``.
     cluster_key
         ``obs`` column with cluster / cell-type labels — required for
-        DecontX and scCDC, optional for SoupX (enables auto rho).
+        DecontX and scCDC, optional for SoupX (enables auto rho). When
+        ``None``, the first of ``obs['clusters']``, ``'leiden'``,
+        ``'louvain'``, ``'cell_type'``, ``'celltype'`` that exists is used.
+        SoupX without any cluster labels (and no
+        ``contamination_fraction``) warns and falls back to rho = 0.1.
     batch_key
         ``obs`` column with per-cell batch / sample labels — optional.
         When set, DecontX decontaminates each batch separately.
