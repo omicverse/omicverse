@@ -91,3 +91,18 @@ def test_apply_selection_rules():
              "fluency": {"select": ["phonemic count", "semantic count"]}}
     d = apply_selection_rules(led, rules)
     assert list(d["decision"]) == ["keep", "exclude", "keep", "keep", "exclude", "exclude"]
+
+
+def test_comparison_workbook(tmp_path):
+    from omicverse.tl._meta_analysis import comparison_workbook
+    p = tmp_path / "a.xml"
+    p.write_text(_JATS)
+    wb = comparison_workbook({"s1": str(p)}, case=r"depress|MDD|patients")
+    tab = wb[wb["layout"] != "text"]
+    assert {"family", "stat_class"} <= set(wb.columns)
+    assert set(tab["row"]) == {"Switching task: Part A time (s)", "Switching task: Part B time (s)", "Errors"}
+    err = tab[tab["row"] == "Errors"].iloc[0]
+    assert err["n_case"] == 22 and err["n_control"] == 20
+    # in-text comparison is kept with unknown n so it can be completed by hand
+    txt = wb[wb["layout"] == "text"]
+    assert len(txt) == 1 and np.isnan(txt["n_case"].iloc[0])

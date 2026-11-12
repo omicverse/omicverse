@@ -32,7 +32,8 @@ import pandas as pd
 from .._registry import register_function
 
 __all__ = ["parse_mean_sd", "extract_group_stats", "group_comparisons", "pool_group_stats", "hedges_g",
-           "sd_from_summary", "recompute_group_test", "meta_effect_sizes", "apply_selection_rules"]
+           "sd_from_summary", "recompute_group_test", "meta_effect_sizes", "apply_selection_rules",
+           "comparison_workbook"]
 
 _NUM = r"[-−–]?\s?(?:\d{1,3}(?:,\d{3})+|\d+)?(?:[.,·]\d+)?"
 
@@ -556,25 +557,35 @@ def group_comparisons(ledger: pd.DataFrame, case: str, control: str, n_map: Opti
                 return n
         return nh
 
-    led["n"] = [_n(g, nh) for g, nh in zip(led["group"], led["n_header"])]
-    led["is_case"] = led["group"].astype(str).str.contains(case, flags=flags, regex=True)
-    led["is_ctrl"] = led["group"].astype(str).str.contains(control, flags=flags, regex=True) & ~led["is_case"]
+    led["n"] = pd.to_numeric(pd.Series([_n(g, nh) for g, nh in zip(led["group"], led["n_header"])], index=led.index), errors="coerce")
+    # control wins for names matching both patterns ("non-depressed", "healthy non-patients")
+    led["is_ctrl"] = led["group"].astype(str).str.contains(control, flags=flags, regex=True)
+    led["is_case"] = led["group"].astype(str).str.contains(case, flags=flags, regex=True) & ~led["is_ctrl"]
     out = []
     key = ["table", "row", "row_no"] if "row_no" in led else ["table", "row"]
     led = led.assign(row_no=led["row_no"].fillna(-1)) if "row_no" in led else led
     for kk, g in led.groupby(key, sort=False):
         t, r = kk[0], kk[1]
         ca, co = g[g["is_case"]], g[g["is_ctrl"]]
-        if ca.empty or co.empty or ca["n"].isna().any() or co["n"].isna().any():
+        if ca.empty or co.empty:
             continue
-        if len(ca) > 1:
-            N, M, S = pool_group_stats(ca["n"], ca["mean"], ca["sd"])
+        if ca["n"].isna().any():
+            # sizes unknown: keep the row visible (n / pooled stats NaN) so it is decided, not lost
+            N = float("nan")
+            M = float(ca["mean"].iloc[0]) if len(ca) == 1 else float("nan")
+            S = float(ca["sd"].iloc[0]) if len(ca) == 1 else float("nan")
+        elif len(ca) > 1:
+            N, M, S = pool_group_stats(ca["n"].astype(float), ca["mean"], ca["sd"])
         else:
             N, M, S = float(ca["n"].iloc[0]), float(ca["mean"].iloc[0]), float(ca["sd"].iloc[0])
         for _, c in co.iterrows():
-            out.append({"table": t, "row": r, "case_groups": " + ".join(ca["group"].astype(str)),
+            out.append({"table": t, "section": g["section"].iloc[0] if "section" in g else "", "row": r,
+                        "layout": g["layout"].iloc[0], "case_groups": " + ".join(ca["group"].astype(str)),
+                        "case_subgroups": [(None if pd.isna(a) else float(a), float(b), float(c_))
+                                           for a, b, c_ in zip(ca["n"], ca["mean"], ca["sd"])],
                         "control_group": c["group"], "n_case": N, "mean_case": M, "sd_case": S,
-                        "n_control": float(c["n"]), "mean_control": float(c["mean"]),
+                        "n_control": float(c["n"]) if pd.notna(c["n"]) else float("nan"),
+                        "mean_control": float(c["mean"]),
                         "sd_control": float(c["sd"])})
     res = pd.DataFrame(out)
     if len(res):
@@ -665,3 +676,66 @@ def apply_selection_rules(ledger: pd.DataFrame, rules: dict, study: str = "study
             dec.append("exclude"); why.append(f"'{c_}' is not a selected statistic of '{f_}'")
     df["decision"], df["reason"] = dec, why
     return df
+
+
+_CONTROL_DEFAULT = r"control|healthy|\bHC\b|\bNC\b|\bCTL\b|comparison|non[- ]?\w+"
+
+
+@register_function(
+    aliases=["荟萃分析工作簿", "comparison workbook", "meta-analysis extraction workbook",
+             "all case-control comparisons of all articles"],
+    category="utils",
+    description="One table of EVERY case-vs-control comparison printed in a set of articles: runs "
+                "extract_group_stats on each file, pairs case groups (pooled when several) with the "
+                "control group per table row / in-text statistic, adds Hedges' g, and leaves empty "
+                "family / stat_class columns to be labelled and decided with apply_selection_rules. "
+                "Rows whose group sizes are unknown are kept with NaN n (fill them from the text).",
+    examples=["wb = ov.tl.comparison_workbook({doi: path, ...}, case=r'depress|patient', "
+              "n_map={doi: {r'HC': 14}})",
+              "wb.to_csv('/app/data/workbook.csv', index=False)"],
+    related=["tl.extract_group_stats", "tl.apply_selection_rules", "tl.meta_effect_sizes"],
+)
+def comparison_workbook(sources: dict, case: Union[str, dict], control: Union[str, dict] = _CONTROL_DEFAULT,
+                        exclude: Union[None, str, dict] = None, n_map: Optional[dict] = None,
+                        include_text: bool = True) -> pd.DataFrame:
+    """Return the workbook: one row per (study, table row / text statistic, control group).
+
+    ``sources`` maps a study id (e.g. the DOI) to one path or a list of paths (XML / HTML / PDF /
+    text of the same article). ``case``, ``control`` and ``exclude`` are regexes on group
+    names, or dicts study -> regex for study-specific names (``control`` is tried first, so a
+    group named e.g. "non-depressed" is a control). ``n_map``: study -> {group regex: n}.
+
+    Columns: ``study, source, table, section, row, layout, case_groups, case_subgroups,
+    control_group, n_case, mean_case, sd_case, n_control, mean_control, sd_control, d,
+    family, stat_class`` (the last two empty, to label).
+    """
+    pick = lambda v, k: (v.get(k) if isinstance(v, dict) else v)
+    frames = []
+    for sid, paths in sources.items():
+        if isinstance(paths, (str, Path)):
+            paths = [paths]
+        for pth in paths:
+            led = extract_group_stats(pth, include_text=include_text)
+            if led.empty:
+                continue
+            ctl = pick(control, sid) or _CONTROL_DEFAULT
+            cs = pick(case, sid)
+            # control wins over case for names matching both ("non-depressed")
+            led = led.copy()
+            led["group"] = led["group"].astype(str)
+            is_ctl = led["group"].str.contains(ctl, flags=re.I, regex=True)
+            led.loc[is_ctl, "group"] = "[control] " + led.loc[is_ctl, "group"]
+            cmp_ = group_comparisons(led, case=cs, control=r"^\[control\] ", n_map=(n_map or {}).get(sid),
+                                     exclude=pick(exclude, sid))
+            if cmp_.empty:
+                continue
+            cmp_["control_group"] = cmp_["control_group"].str.replace(r"^\[control\] ", "", regex=True)
+            cmp_.insert(0, "source", Path(str(pth)).name)
+            cmp_.insert(0, "study", sid)
+            frames.append(cmp_)
+    if not frames:
+        return pd.DataFrame()
+    wb = pd.concat(frames, ignore_index=True)
+    wb["family"] = ""
+    wb["stat_class"] = ""
+    return wb
