@@ -88,19 +88,7 @@
 <sub>CPU: omicverse 2.4.2 (`storage='disk'`), brisc and Seurat 6.0.0 (in-memory, `setThreads(64)`; RunUMAP segfaulted) on the same 128-core node. GPU: omicverse on one H100. Scanpy, Seurat + BPCells and rapids-singlecell (4× H100) from the brisc paper. [Scripts](https://github.com/omicverse/anndataoom-fast/tree/main/benchmarks/fig4)</sub>
 
 
-## `2` [Directory structure](#)
-
-````shell
-.
-├── omicverse                  # Main Python package
-├── omicverse_guide            # Documentation files
-├── omicverse_web              # Web Analysis Platform
-├── sample                     # Some test data
-├── LICENSE
-└── README.md
-````
-
-## `3` [General Getting Started](#)
+## `2` [General Getting Started](#)
 
 OmicVerse can be installed via conda or pypi and you need to install `pytorch` at first. Please refer to the [installation tutorial](https://starlitnightly.github.io/omicverse/Installation_guild/) for more detailed installation steps and adaptations for different platforms (`Windows`, `Linux` or `Mac OS`).
 
@@ -110,7 +98,7 @@ Please checkout the documentations and tutorials at [omicverse page](https://sta
 
 Agent workflows — OpenClaw, the MCP server and the J.A.R.V.I.S. message bots — are documented in [OmicClaw](https://github.com/omicverse/omicclaw).
 
-## `4` [Feature coverage](https://omicverse.readthedocs.io/en/latest/Feature_coverage/)
+## `3` [Feature coverage](https://omicverse.readthedocs.io/en/latest/Feature_coverage/)
 
 <picture>
   <source media="(prefers-color-scheme: dark)" srcset="README.assets/feature_coverage_dark.png">
@@ -119,12 +107,12 @@ Agent workflows — OpenClaw, the MCP server and the J.A.R.V.I.S. message bots �
 
 Feature coverage of omicverse and ten other frameworks over 49 audited analysis features. The full table with per-cell evidence, the data framework and the list of published tools included in OmicVerse are in the [documentation](https://omicverse.readthedocs.io/en/latest/Feature_coverage/).
 
-## `5` [Contact](#)
+## `4` [Contact](#)
 
-- Zehua Zeng ([starlitnightly@gmail.com](mailto:starlitnightly@gmail.com) or [zehuazeng@xs.ustb.edu.cn](mailto:zehuazeng@xs.ustb.edu.cn))
-- Lei Hu ([hulei@westlake.edu.cn](mailto:hulei@westlake.edu.cn))
+- Zehua Zeng ([starlitnightly@gmail.com](mailto:starlitnightly@gmail.com) or [steorra@omicos.cn](mailto:steorra@omicos.cn))
+- Meng Xu ([mengxu@omicos.cn](mailto:mengxu@omicos.cn))
 
-## `6` [Developer Guild and Contributing](#)
+## `5` [Developer Guild and Contributing](#)
 
 If you would like to contribute to omicverse, please refer to our [developer documentation](https://omicverse.readthedocs.io/en/latest/Developer_guild/).
 
@@ -156,7 +144,7 @@ The optional `tests` extra and the `requirements-latest.txt` file now include `p
 > <p align="center"> <a href="https://mp.weixin.qq.com/s/egAnRfr3etccU_RsN-zIlg" target="_blank" rel="noreferrer"> <img src="README.assets/image-20230701163953794.png" alt="linux" width="50" height="50"/> </a> <a href="https://zhuanlan.zhihu.com/c_1257815636945915904?page=3" target="_blank" rel="noreferrer"> <img src="README.assets/WechatIMG688.png" alt="linux" width="50" height="50"/> </a> </p>
 
 
-## `7` [Citation](https://doi.org/10.1038/s41467-024-50194-3)
+## `6` [Citation](https://doi.org/10.1038/s41467-024-50194-3)
 
 If you use `omicverse` in your work, please cite the `omicverse` publication as follows:
 
@@ -181,7 +169,7 @@ Here are some other related packages, feel free to reference them if you use the
 > _imetaomics_ 2025 Nov 06. doi: [10.1002/imo2.70064](https://doi.org/10.1002/imo2.70064).
 
 
-## `8` [Other](#)
+## `7` [Other](#)
 
 If you would like to sponsor the development of our project, you can go to the afdian website (https://ifdian.net/a/starlitnightly) and sponsor us.
 

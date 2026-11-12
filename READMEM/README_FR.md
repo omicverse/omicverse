@@ -63,19 +63,7 @@
 ![omicverse-light](https://raw.githubusercontent.com/Starlitnightly/ImageStore/main/omicverse_img/background_light.png#gh-light-mode-only)
 ![omicverse-dark](https://raw.githubusercontent.com/Starlitnightly/ImageStore/main/omicverse_img/background_dark.png#gh-dark-mode-only)
 
-## `2` [Structure des Répertoires](#)
-
-````shell
-.
-├── omicverse                  # Package Python principal
-├── omicverse_guide            # Fichiers de documentation
-├── omicverse_web              # Plateforme d'analyse web
-├── sample                     # Quelques données de test
-├── LICENSE
-└── README.md
-````
-
-## `3` [Commencer](#)
+## `2` [Commencer](#)
 
 OmicVerse peut être installé via conda ou pypi et vous devez installer `pytorch` en premier. Veuillez consulter le [tutoriel d'installation](https://starlitnightly.github.io/omicverse/Installation_guild/) pour des étapes d'installation plus détaillées et des adaptations pour différentes plateformes (`Windows`, `Linux` ou `Mac OS`).
 
@@ -85,7 +73,7 @@ Veuillez consulter la documentation et les tutoriels sur la [page omicverse](htt
 
 Les workflows d’agents — OpenClaw, le serveur MCP et les bots de messagerie J.A.R.V.I.S. — sont documentés dans [OmicClaw](https://github.com/omicverse/omicclaw).
 
-## `4` [Couverture fonctionnelle](https://omicverse.readthedocs.io/en/latest/Feature_coverage/)
+## `3` [Couverture fonctionnelle](https://omicverse.readthedocs.io/en/latest/Feature_coverage/)
 
 <picture>
   <source media="(prefers-color-scheme: dark)" srcset="../README.assets/feature_coverage_dark.png">
@@ -94,12 +82,12 @@ Les workflows d’agents — OpenClaw, le serveur MCP et les bots de messagerie 
 
 Couverture fonctionnelle d’omicverse comparée à dix autres frameworks sur 49 fonctions d’analyse vérifiées. Le tableau complet avec les preuves par cellule, le cadre de données et la liste des outils publiés intégrés à OmicVerse sont dans la [documentation](https://omicverse.readthedocs.io/en/latest/Feature_coverage/).
 
-## `5` [Contact](#)
+## `4` [Contact](#)
 
-- Zehua Zeng ([starlitnightly@gmail.com](mailto:starlitnightly@gmail.com) ou [zehuazeng@xs.ustb.edu.cn](mailto:zehuazeng@xs.ustb.edu.cn))
-- Lei Hu ([hulei@westlake.edu.cn](mailto:hulei@westlake.edu.cn))
+- Zehua Zeng ([starlitnightly@gmail.com](mailto:starlitnightly@gmail.com) ou [steorra@omicos.cn](mailto:steorra@omicos.cn))
+- Meng Xu ([mengxu@omicos.cn](mailto:mengxu@omicos.cn))
 
-## `6` [Guide du Développeur et Contribution](#)
+## `5` [Guide du Développeur et Contribution](#)
 
 Si vous souhaitez contribuer à omicverse, veuillez consulter notre [documentation développeur](https://omicverse.readthedocs.io/en/latest/Developer_guild/).
 
@@ -129,7 +117,7 @@ L'extra optionnel `tests` et le fichier `requirements-latest.txt` incluent déj�
 > Nous aimerions remercier les comptes officiels WeChat suivants pour la promotion d'Omicverse.
 > <p align="center"> <a href="https://mp.weixin.qq.com/s/egAnRfr3etccU_RsN-zIlg" target="_blank" rel="noreferrer"> <img src="../README.assets/image-20230701163953794.png" alt="linux" width="50" height="50"/> </a> <a href="https://zhuanlan.zhihu.com/c_1257815636945915904?page=3" target="_blank" rel="noreferrer"> <img src="../README.assets/WechatIMG688.png" alt="linux" width="50" height="50"/> </a> </p>
 
-## `7` [Citation](https://doi.org/10.1038/s41467-024-50194-3)
+## `6` [Citation](https://doi.org/10.1038/s41467-024-50194-3)
 
 Si vous utilisez `omicverse` dans votre travail, veuillez citer la publication `omicverse` comme suit :
 
@@ -147,7 +135,7 @@ Voici quelques autres packages connexes, n'hésitez pas à les référencer si v
 >
 > _imetaomics_ 6 Juin 2025. doi: [10.1002/imo2.70064](https://doi.org/10.1002/imo2.70064).
 
-## `8` [Autre](#)
+## `7` [Autre](#)
 
 Si vous souhaitez parrainer le développement de notre projet, vous pouvez aller sur le site web afdian (https://ifdian.net/a/starlitnightly) et nous parrainer.
 

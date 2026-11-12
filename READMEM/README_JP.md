@@ -63,19 +63,7 @@
 ![omicverse-light](https://raw.githubusercontent.com/Starlitnightly/ImageStore/main/omicverse_img/background_light.png#gh-light-mode-only)
 ![omicverse-dark](https://raw.githubusercontent.com/Starlitnightly/ImageStore/main/omicverse_img/background_dark.png#gh-dark-mode-only)
 
-## `2` [ディレクトリ構造](#)
-
-````shell
-.
-├── omicverse                  # メインPythonパッケージ
-├── omicverse_guide            # ドキュメントファイル
-├── omicverse_web              # Web解析プラットフォーム
-├── sample                     # いくつかのテストデータ
-├── LICENSE
-└── README.md
-````
-
-## `3` [使い始める](#)
+## `2` [使い始める](#)
 
 OmicVerseはcondaまたはpypiを通じてインストールでき、最初に`pytorch`をインストールする必要があります。詳細なインストール手順と異なるプラットフォーム（`Windows`、`Linux`、`Mac OS`）への適応については、[インストールチュートリアル](https://starlitnightly.github.io/omicverse/Installation_guild/)をご参照ください。
 
@@ -85,7 +73,7 @@ OmicVerseはcondaまたはpypiを通じてインストールでき、最初に`p
 
 エージェントワークフロー（OpenClaw、MCP サーバー、J.A.R.V.I.S. メッセージボット）は [OmicClaw](https://github.com/omicverse/omicclaw) を参照してください。
 
-## `4` [機能カバレッジ](https://omicverse.readthedocs.io/en/latest/Feature_coverage/)
+## `3` [機能カバレッジ](https://omicverse.readthedocs.io/en/latest/Feature_coverage/)
 
 <picture>
   <source media="(prefers-color-scheme: dark)" srcset="../README.assets/feature_coverage_dark.png">
@@ -94,12 +82,12 @@ OmicVerseはcondaまたはpypiを通じてインストールでき、最初に`p
 
 49 項目の分析機能（逐一検証済み）における omicverse と他の 10 フレームワークの機能カバレッジ比較です。セルごとの根拠を含む完全な表、データフレームワーク、OmicVerse に含まれる公開ツールの一覧は[ドキュメント](https://omicverse.readthedocs.io/en/latest/Feature_coverage/)を参照してください。
 
-## `5` [お問い合わせ](#)
+## `4` [お問い合わせ](#)
 
-- Zehua Zeng ([starlitnightly@gmail.com](mailto:starlitnightly@gmail.com) または [zehuazeng@xs.ustb.edu.cn](mailto:zehuazeng@xs.ustb.edu.cn))
-- Lei Hu ([hulei@westlake.edu.cn](mailto:hulei@westlake.edu.cn))
+- Zehua Zeng ([starlitnightly@gmail.com](mailto:starlitnightly@gmail.com) または [steorra@omicos.cn](mailto:steorra@omicos.cn))
+- Meng Xu ([mengxu@omicos.cn](mailto:mengxu@omicos.cn))
 
-## `6` [開発者ガイドと貢献](#)
+## `5` [開発者ガイドと貢献](#)
 
 omicverseに貢献したい場合は、[開発者ドキュメント](https://omicverse.readthedocs.io/en/latest/Developer_guild/)をご参照ください。
 
@@ -129,7 +117,7 @@ pytest
 > Omicverseを推進してくださった以下のWeChat公式アカウントに感謝いたします。
 > <p align="center"> <a href="https://mp.weixin.qq.com/s/egAnRfr3etccU_RsN-zIlg" target="_blank" rel="noreferrer"> <img src="../README.assets/image-20230701163953794.png" alt="linux" width="50" height="50"/> </a> <a href="https://zhuanlan.zhihu.com/c_1257815636945915904?page=3" target="_blank" rel="noreferrer"> <img src="../README.assets/WechatIMG688.png" alt="linux" width="50" height="50"/> </a> </p>
 
-## `7` [引用](https://doi.org/10.1038/s41467-024-50194-3)
+## `6` [引用](https://doi.org/10.1038/s41467-024-50194-3)
 
 作業で`omicverse`を使用する場合は、以下のように`omicverse`の出版物を引用してください：
 
@@ -147,7 +135,7 @@ pytest
 >
 > _imetaomics_ 2025年11月6日. doi: [10.1002/imo2.70064](https://doi.org/10.1002/imo2.70064).
 
-## `8` [その他](#)
+## `7` [その他](#)
 
 プロジェクトの開発をスポンサーしたい場合は、afdianウェブサイト（https://ifdian.net/a/starlitnightly）にアクセスしてスポンサーしてください。
 
