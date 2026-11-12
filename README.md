@@ -89,11 +89,12 @@
 
 ### Speed and memory on 1.4M cells
 
-The standard single-cell workflow (load, QC, normalize + HVG, PCA, kNN, Leiden at 5 resolutions, embedding, markers) on SEA-AD MTG (1.38M cells × 36,601 genes). omicverse 2.4.2 streams the matrix from disk (`ov.read(path, storage='disk')`, default `backend='cpp'`) and finishes in about a minute — close to brisc, which loads the whole matrix into RAM, while using 13.5 GB instead of 114 GB.
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="README.assets/benchmark_seaad_dark.png">
+  <img src="README.assets/benchmark_seaad_light.png" width="85%" alt="Runtime and peak memory on SEA-AD (1.38M cells): omicverse 67 s / 13.5 GB, brisc 61 s / 114 GB, Scanpy 1.4 h / 256 GB, Seurat 2.9 h / 15 GB">
+</picture>
 
-<p align="center"><img src="README.assets/benchmark_seaad_1.4M.png" width="90%" alt="Total runtime and peak memory on SEA-AD: omicverse, brisc, Scanpy, Seurat + BPCells"></p>
-
-omicverse and brisc were run on the same AMD EPYC 9754 node (fastest of 32/64/128 threads each, LocalMAP embedding); Scanpy and Seurat + BPCells are the values reported in the [brisc paper](https://doi.org/10.64898/2026.11.03.764120) on a 192-core node (UMAP embedding). Benchmark scripts: [anndataoom-fast/benchmarks/fig4](https://github.com/omicverse/anndataoom-fast/tree/main/benchmarks/fig4).
+<sub>omicverse 2.4.2 (`storage='disk'`) and brisc on the same 128-core node; Scanpy and Seurat + BPCells from the brisc paper. [Scripts](https://github.com/omicverse/anndataoom-fast/tree/main/benchmarks/fig4)</sub>
 
 
 ## `2` [Directory structure](#)
