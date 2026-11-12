@@ -87,13 +87,14 @@ def _default_review(rr) -> str:
             return (f"resolved: winner leads on the whole signature; another candidate leads "
                     f"only on one defining marker (z={alt:.1f} vs {lz:.1f})")
         return "fixed"
+    lzs = f"z={lz:.1f}" if lz == lz else "unmeasured (no signature present)"
     if alt == alt and alt >= REVIEW_BELOW:
-        return f"open: winner evidence z={lz:.1f} below {REVIEW_BELOW}; another candidate z={alt:.1f}"
+        return f"open: winner evidence {lzs} below {REVIEW_BELOW}; another candidate z={alt:.1f}"
     excl = rr["label_of_exclusion"] if "label_of_exclusion" in rr.index else None
     if excl is None or excl != excl or str(excl) in ("", "None"):
-        return f"open: winner evidence z={lz:.1f} below {REVIEW_BELOW}; no label of exclusion"
-    return (f"resolved: winner evidence z={lz:.1f} below {REVIEW_BELOW} but no candidate reaches "
-            f"it; the presence test decided it against {excl}")
+        return f"open: winner evidence {lzs}; no candidate reaches {REVIEW_BELOW}; no label of exclusion"
+    return (f"resolved: winner evidence {lzs}; no candidate reaches {REVIEW_BELOW}; the presence "
+            f"test decided it against the label of exclusion {excl}")
 
 
 def _sort_clusters(idx):
