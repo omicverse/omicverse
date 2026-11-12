@@ -617,6 +617,32 @@ def score_cluster_signatures(
             ``False``: a cluster that lacks a label's positive markers is
             evidence against it, so only labels without a usable signature
             — weak, empty or absent — are neighbourhood alternatives).
+        lineage_markers: ``{label: [markers]}`` (``kb['lineage_markers']`` from
+            :func:`markerdb_signatures`: the defining markers of the label's
+            Cell Ontology ancestors that its own atlas entry also lists).  A
+            label is not a candidate in a cluster where every one of its
+            lineage markers on the panel is below that marker's background
+            (median cluster, or the dim mode) — e.g. a proliferation-defined
+            T-cell state in a cluster without the T-cell marker.
+        switch_rule: ``'specific'`` (default): in a single-marker conflict
+            (another candidate's lineage evidence is higher than the
+            winner's, both at or above the review threshold) the other
+            candidate takes the cluster when its evidence is a stand-out
+            (raw z >= ``defining_check[1]``), coherent (all defining markers on
+            that path at or above the threshold) and larger than the
+            winner's after weighting each marker by its *specificity* (the
+            largest lineage's share of the marker's positive weight across
+            the signatures, a lineage being a top-level label with its
+            descendants) and its *contrast* on this panel (share of the
+            brightest cluster mean above the marker's background).  The
+            defining-marker check also compares candidates on
+            contrast-weighted evidence.  ``'none'`` keeps the winner
+            (``review`` = ``resolved``).
+        split_axis: ``'increment'`` (default): in non-polar contrast splits
+            each child is scored on what it adds to its parent (its positive
+            weights above the parent's), so markers shared with the parent do
+            not decide between siblings; equal axes go to the child weighting
+            them more.  ``'signature'``: the child's whole signature.
         residual_ratio: a residual cluster takes an alternative only when the
             alternative's neighbourhood share is at least ``residual_ratio`` ×
             the residual label's share (default 2: a clear majority is needed

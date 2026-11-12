@@ -324,3 +324,52 @@ def test_failed_lookup_is_reported_and_not_cached():
     kb2 = mdb.markerdb_signatures(labels, ["MA", "MB", "MG"], token="T", server_url="http://x",
                                   cache=cache, resolve_aliases=False)
     assert kb2["gene_map"]["MB"] == ["GB"] and kb2["lookup_failed"] == []
+
+
+ATLAS3 = [{"cell_name": "root cell", "cl_id": "CL:10"}, {"cell_name": "kid one", "cl_id": "CL:11"},
+          {"cell_name": "kid two", "cl_id": "CL:12"}, {"cell_name": "other a", "cl_id": "CL:20"},
+          {"cell_name": "other b", "cl_id": "CL:21"}, {"cell_name": "other c", "cl_id": "CL:22"}]
+TEMPLATES3 = {
+    "root cell": {"positive": [("GA", 10), ("GC", 10)], "negative": []},
+    "kid one": {"positive": [("GB", 10), ("GA", 1)], "negative": []},   # a state of the root lineage
+    "kid two": {"positive": [("GC", 10)], "negative": []},              # a subtype marked by GC
+    "other a": {"positive": [("GD", 10)], "negative": []},
+    "other b": {"positive": [("GE", 10)], "negative": []},
+    "other c": {"positive": [("GF", 10)], "negative": []},
+}
+
+
+def fake_get3(url, params=None, headers=None, timeout=30):
+    if url.endswith("/api/markers/gene_celltype_counts"):
+        return {"counts": {g: {"positive": 1} for g in ("GA", "GB", "GC", "GD", "GE", "GF")}}
+    if url.endswith("/api/markers/celltypes"):
+        return {"celltypes": ATLAS3}
+    if url.endswith("/api/markers/celltype_markers"):
+        names = params["cell_names"].split("|")
+        return {"templates": [
+            {"cell_name": n, "cl_id": None,
+             "positive": [{"gene": g, "n_pmid": k} for g, k in TEMPLATES3[n]["positive"]],
+             "negative": []} for n in names]}
+    if "/fetch/symbol/" in url:
+        q = url.rsplit("/", 1)[1]
+        g = {"MA": "GA", "MB": "GB", "MC": "GC", "MD": "GD", "ME": "GE", "MF": "GF"}.get(q)
+        return {"response": {"docs": [{"symbol": g}] if g else []}}
+    if "hierarchicalParents" in url:
+        key = next((k for k in ("CL_11", "CL_12") if k in url), "")
+        return {"_embedded": {"terms": [{"obo_id": "CL:10"}] if key else []}, "_links": {}}
+    return {"response": {"docs": []}, "hits": []}
+
+
+def test_lineage_markers_and_subtype_markers_not_inherited():
+    mdb._get = fake_get3
+    labels = ["root cell", "kid one", "kid two", "other a", "other b", "other c"]
+    kb = mdb.markerdb_signatures(labels, ["MA", "MB", "MC", "MD", "ME", "MF"], token="T",
+                                 server_url="http://x")
+    # kid one's own entry lists the root's defining marker GA: its lineage marker
+    assert kb["lineage_markers"].get("kid one") == ["MA"]
+    # the root's GC defines kid two (another descendant of the root): kid one
+    # does not inherit it; without the rule it would
+    assert "MC" not in kb["signatures"]["kid one"]
+    old = mdb.markerdb_signatures(labels, ["MA", "MB", "MC", "MD", "ME", "MF"], token="T",
+                                  server_url="http://x", subtype_markers=False)
+    assert old["signatures"]["kid one"].get("MC", 0) > 0

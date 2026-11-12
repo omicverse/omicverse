@@ -910,6 +910,11 @@ def markerdb_signatures(
         inherit_depth / inherit_decay: a label also carries the markers of its
             CL ancestors up to ``inherit_depth`` generations, scaled by
             ``inherit_decay ** generation`` (``0`` disables inheritance).
+        subtype_markers: ``True`` (default): an ancestor's marker that is a
+            defining marker of another label descending from that ancestor
+            (it separates the ancestor's subtypes, e.g. one T-cell subset's
+            co-receptor listed for T cells in general) is not inherited by
+            labels outside that subtype.
         cache: optional JSON path; network results are stored and reused.
         workers: parallel requests.
 
@@ -921,7 +926,11 @@ def markerdb_signatures(
         (``{parent: [child, child]}`` — opposed sibling pairs: each one's
         defining panel marker is an atlas negative marker of the other),
         ``defining`` (``{label: [panel markers]}`` — the label's own markers
-        with at least half its top support), ``resolved``
+        with at least half its top support), ``lineage_markers``
+        (``{label: [panel markers]}`` — defining markers of the label's CL
+        ancestors that its own atlas entry also lists as positive, limited to
+        markers that define another label and that most labels do not carry;
+        pass to :func:`score_cluster_signatures`), ``resolved``
         (``{label: {"terms": [{cell_name, cl_id}], "score"}}``), ``cl_ids``,
         ``unresolved_labels``, ``out_of_context`` (labels dropped by
         ``context``), ``context_scopes``, ``gene_map``, ``gene_names``
