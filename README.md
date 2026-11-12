@@ -91,10 +91,10 @@
 
 <picture>
   <source media="(prefers-color-scheme: dark)" srcset="README.assets/benchmark_seaad_dark.png">
-  <img src="README.assets/benchmark_seaad_light.png" width="85%" alt="Runtime and peak memory on SEA-AD (1.38M cells): omicverse 67 s / 13.5 GB, brisc 61 s / 114 GB, Scanpy 1.4 h / 256 GB, Seurat 2.9 h / 15 GB">
+  <img src="README.assets/benchmark_seaad_light.png" width="85%" alt="Runtime and peak memory on SEA-AD (1.38M cells). CPU: omicverse 67 s / 13.5 GB, brisc 61 s / 114 GB, Scanpy 1.4 h / 256 GB, Seurat + BPCells 2.9 h / 15 GB, Seurat v6 crashed after 7.8 h / 288 GB. GPU: omicverse[gpu] 71 s / 5.2 GB, omicverse[mixed] 2.6 min / 13.4 GB, rapids-singlecell 3.8 min">
 </picture>
 
-<sub>omicverse 2.4.2 (`storage='disk'`) and brisc on the same 128-core node; Scanpy and Seurat + BPCells from the brisc paper. [Scripts](https://github.com/omicverse/anndataoom-fast/tree/main/benchmarks/fig4)</sub>
+<sub>CPU: omicverse 2.4.2 (`storage='disk'`), brisc and Seurat 6.0.0 (in-memory, `setThreads(64)`; RunUMAP segfaulted) on the same 128-core node. GPU: omicverse on one H100. Scanpy, Seurat + BPCells and rapids-singlecell (4× H100) from the brisc paper. [Scripts](https://github.com/omicverse/anndataoom-fast/tree/main/benchmarks/fig4)</sub>
 
 
 ## `2` [Directory structure](#)
