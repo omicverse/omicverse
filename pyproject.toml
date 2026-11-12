@@ -104,6 +104,10 @@ dependencies = [
     # HVG, scale, PCA, neighbors, UMAP, Leiden, COSG); backend='python' or a
     # missing install falls back to the original code.
     'anndataoom-fast>=0.1.5',
+    # ov.read(path) keeps .h5ad matrices on disk by default (storage='disk'):
+    # AnnDataOOM in the CPU modes, Dask row blocks in GPU mode.
+    'anndataoom>=0.1.9,<1.0',
+    'dask[array]',
 ]
 
 [project.optional-dependencies]
@@ -116,9 +120,8 @@ flowsig = [
     "causaldag==0.1a163",
     "torch>=2.0,<3",
 ]
-# Out-of-memory backend (Rust-powered AnnData). Install via:
-#   pip install omicverse[rust]
-# Enables ov.read(path, backend='rust') with chunked preprocessing.
+# Out-of-memory backend (Rust-powered AnnData); now a core dependency, the
+# extra is kept so `pip install omicverse[rust]` keeps working.
 rust = [
     "anndataoom>=0.1.0,<1.0",
 ]
