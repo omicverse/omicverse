@@ -459,12 +459,14 @@ def recover_sample_annotations(
         raw_prepared[c] = Xc
         prepared[c] = Xc
         adjusted[c] = False
-        if batch_key is not None and batch_adjust != "never":
+        if batch_key is not None:
             meta = pd.concat([ref.loc[ref[cohort_key] == c, [sample_key, batch_key]],
                               qry.loc[qry[cohort_key] == c, [sample_key, batch_key]]])
             b = meta.drop_duplicates(sample_key).set_index(sample_key)[batch_key]
             b = b.reindex(Xc.index)
-            batch_of[c] = b
+            batch_of[c] = b  # also used for leave-one-batch-out validation
+            if batch_adjust == "never":
+                continue
             Xa, rep = annotation_batch_center(Xc, b)
             if rep["mode"] != "none":
                 prepared[c] = Xa
