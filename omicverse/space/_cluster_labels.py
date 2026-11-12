@@ -228,6 +228,12 @@ def write_cluster_labels(
     diff = aud[aud["scorer_label"] != aud["written_label"]].reset_index(drop=True)
     print(f"[write_cluster_labels] wrote {len(tab)} rows to {path}; "
           f"{len(diff)} accepted override(s); audit {_audit_path(path)}")
+    n_ref = int(aud["source"].astype(str).str.startswith("override refused").sum())
+    if n_ref:
+        print(f"[write_cluster_labels] {n_ref} override(s) refused: those clusters are fixed or "
+              "resolved by the evidence and keep the scorer's label. This file is the deliverable "
+              "- do not rewrite it by other means; put any disagreement, with its numbers, in the "
+              "report.")
     return tab, diff
 
 
@@ -320,4 +326,6 @@ def audit_cluster_labels(
     print(f"[audit_cluster_labels] {len(out)} unrecorded difference(s) in {path}")
     if len(out):
         print(out.to_string(index=False))
+        print("[audit_cluster_labels] rewrite the file with write_cluster_labels (scorer labels plus "
+              "accepted overrides) - never by hand - and audit again")
     return out
