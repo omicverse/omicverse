@@ -96,6 +96,16 @@ def _as_dense(x):
     return x.toarray() if sp.issparse(x) else np.asarray(x)
 
 
+def _removed_fraction(raw_x, corrected_x):
+    """Per-cell share of counts removed by a correction (rows = cells).
+
+    Works on sparse matrices without densifying them."""
+    before = np.asarray(raw_x.sum(axis=1), dtype=np.float64).ravel()
+    after = np.asarray(corrected_x.sum(axis=1), dtype=np.float64).ravel()
+    with np.errstate(divide="ignore", invalid="ignore"):
+        return np.where(before > 0, (before - after) / before, 0.0)
+
+
 _CLUSTER_KEY_CANDIDATES = ("clusters", "leiden", "louvain", "cell_type",
                            "celltype")
 
@@ -193,8 +203,8 @@ def _run_soupx(adata, *, raw=None, layer=None, cluster_key=None,
 
 
 def _run_decontx(adata, *, raw=None, layer=None, cluster_key=None,
-                 batch_key=None, max_iter=500, seed=12345, verbose=False,
-                 **kwargs):
+                 batch_key=None, max_iter=500, seed=12345, n_jobs=1,
+                 verbose=False, **kwargs):
     """DecontX — needs a filtered, clustered matrix."""
     decontx_mod = _require("pydecontx", "DecontX ambient removal")
     cluster_key = _resolve_clusters(adata, cluster_key, "decontx")
@@ -217,7 +227,7 @@ def _run_decontx(adata, *, raw=None, layer=None, cluster_key=None,
 
     res = decontx_mod.decontx(
         adata, z=z, batch=batch, background=background, max_iter=max_iter,
-        seed=seed, layer=layer, verbose=verbose)
+        seed=seed, layer=layer, verbose=verbose, n_jobs=n_jobs)
     # res.decontx_counts is genes x cells
     corrected_cg = sp.csr_matrix(res.decontx_counts.T)
     rho = np.asarray(res.contamination, dtype=float)
@@ -252,12 +262,7 @@ def _run_fastcar(adata, *, raw=None, layer=None,
         layer=layer, inplace=False)
 
     corrected_cg = sp.csr_matrix(_get_X(out, layer))
-    raw_X = _as_dense(_get_X(adata, layer)).astype(np.float64)
-    corr_X = _as_dense(corrected_cg).astype(np.float64)
-    removed = raw_X.sum(axis=1) - corr_X.sum(axis=1)
-    libsize = raw_X.sum(axis=1)
-    with np.errstate(divide="ignore", invalid="ignore"):
-        rho = np.where(libsize > 0, removed / libsize, 0.0)
+    rho = _removed_fraction(_get_X(adata, layer), corrected_cg)
     fc_info = out.uns.get("fastcar", {})
     n_genes_corrected = int(fc_info.get("n_genes_corrected", 0))
     meta = {
@@ -270,7 +275,7 @@ def _run_fastcar(adata, *, raw=None, layer=None,
 
 def _run_sccdc(adata, *, raw=None, layer=None, cluster_key=None,
                restriction_factor=0.5, min_cell=50, auc_thres=0.9,
-               **kwargs):
+               random_state=1, **kwargs):
     """scCDC — needs a filtered, clustered matrix; corrects only GCGs."""
     sccdc = _require("pysccdc", "scCDC ambient removal")
     cluster_key = _resolve_clusters(adata, cluster_key, "sccdc")
@@ -279,7 +284,8 @@ def _run_sccdc(adata, *, raw=None, layer=None, cluster_key=None,
     # scCDC detection has its own (larger) min_cell default; honour min_cell
     gcg = sccdc.ContaminationDetection(
         adata, cluster_key=cluster_key, layer=layer,
-        min_cell=max(min_cell, 100), **det_kwargs)
+        min_cell=max(min_cell, 100), random_state=random_state,
+        **det_kwargs)
     gcgs = list(gcg.index)
 
     out = sccdc.ContaminationCorrection(
@@ -290,12 +296,7 @@ def _run_sccdc(adata, *, raw=None, layer=None, cluster_key=None,
         auc_thres=auc_thres, min_cell=min_cell)
 
     corrected_cg = sp.csr_matrix(out.layers["Corrected"])
-    raw_X = _as_dense(_get_X(adata, layer)).astype(np.float64)
-    corr_X = _as_dense(corrected_cg).astype(np.float64)
-    removed = raw_X.sum(axis=1) - corr_X.sum(axis=1)
-    libsize = raw_X.sum(axis=1)
-    with np.errstate(divide="ignore", invalid="ignore"):
-        rho = np.where(libsize > 0, removed / libsize, 0.0)
+    rho = _removed_fraction(_get_X(adata, layer), corrected_cg)
     meta = {
         "cluster_key": cluster_key,
         "GCGs": gcgs,
@@ -430,9 +431,12 @@ def remove_ambient(
     **kwargs
         Method-specific options, forwarded to the backend. Notable ones:
         SoupX — ``contamination_fraction``, ``soup_range``,
-        ``round_to_int``; DecontX — ``max_iter``, ``seed``; FastCAR —
+        ``round_to_int``; DecontX — ``max_iter``, ``seed``, ``n_jobs``
+        (threads; the result does not depend on it); FastCAR —
         ``empty_droplet_cutoff``, ``contamination_chance_cutoff``; scCDC —
-        ``restriction_factor``, ``min_cell``, ``auc_thres``.
+        ``restriction_factor``, ``min_cell``, ``auc_thres``,
+        ``random_state`` (default 1, which reproduces R scCDC: its curve
+        fit always starts from ``set.seed(1)``).
 
     Returns
     -------
@@ -449,7 +453,8 @@ def remove_ambient(
 
     out = adata.copy() if copy else adata
 
-    raw_before = _as_dense(_get_X(out, layer)).astype(np.float64).copy()
+    before = _get_X(out, layer)
+    raw_before = before.copy() if sp.issparse(before) else np.array(before, dtype=np.float64)
     if keep_raw_layer:
         out.layers[raw_layer_name] = sp.csr_matrix(_get_X(out, layer))
 
@@ -473,7 +478,7 @@ def remove_ambient(
     }
     if check_integrity:
         info["count_integrity"] = count_integrity_check(
-            raw_before, _as_dense(corrected_cg))
+            raw_before, corrected_cg)
     out.uns["ambient"] = info
 
     if verbose:
