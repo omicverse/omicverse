@@ -646,19 +646,29 @@ def _ols_parents(cl_id: str, timeout: float) -> List[str]:
 
 
 def _cl_lineage(cl_ids: Iterable[str], parents: Dict[str, List[str]], timeout: float,
-                workers: int, max_depth: int = 30) -> Dict[str, Dict[str, int]]:
+                workers: int, max_depth: int = 30,
+                failed: Optional[List[str]] = None) -> Dict[str, Dict[str, int]]:
     """``{term: {ancestor: generation}}`` by breadth-first search over CL
-    ``is_a`` / ``part_of`` parents; ``parents`` is a shared cache."""
+    ``is_a`` / ``part_of`` parents; ``parents`` is a shared cache.  A parent
+    lookup that hit a network / service error is used as returned but not
+    cached, and its term is appended to ``failed``."""
     cl_ids = [c for c in dict.fromkeys(cl_ids) if c]
     gen = {c: {} for c in cl_ids}
     front = {c: {c} for c in cl_ids}
+    now: Dict[str, List[str]] = {}
     for depth in range(1, max_depth + 1):
-        need = sorted({x for f in front.values() for x in f} - set(parents))
-        for c, p in zip(need, _pmap(lambda x: _ols_parents(x, timeout), need, workers)):
-            parents[c] = p
+        need = sorted({x for f in front.values() for x in f} - set(parents) - set(now))
+        for c, (p, bad) in zip(need, _pmap(lambda x: _tracked(lambda: _ols_parents(x, timeout)),
+                                           need, workers)):
+            if bad:
+                now[c] = p
+                if failed is not None and c not in failed:
+                    failed.append(c)
+            else:
+                parents[c] = p
         nxt = {}
         for c, f in front.items():
-            new = {p for x in f for p in parents.get(x, [])} - set(gen[c]) - {c}
+            new = {p for x in f for p in (parents.get(x) or now.get(x) or [])} - set(gen[c]) - {c}
             for p in new:
                 gen[c][p] = depth
             if new:
@@ -947,7 +957,10 @@ def markerdb_signatures(
         / exclusion label), ``gene_map_source`` (``{marker: rule}``),
         ``gene_review`` (``{marker: ["GENE (approved name)"]}`` for indirect
         matches) and ``evidence``
-        (``{label: {marker: [[cell type, gene, n_pmid, polarity, generation]]}}``).
+        (``{label: {marker: [[cell type, gene, n_pmid, polarity, generation]]}}``),
+        ``lookup_failed`` (panel names, ``label: ...`` matches and ``CL ...``
+        ontology lookups that hit a network / service error: used as returned,
+        not cached — call again with the same cache until it is empty).
     """
     labels = list(dict.fromkeys(labels))
     if weighting not in ("relative", "share", "literature"):
@@ -1052,23 +1065,29 @@ def markerdb_signatures(
         if text:
             return _resolve_description(lab, text, atlas, timeout) or _resolve_label(lab, atlas, timeout)
         return _resolve_label(lab, atlas, timeout)
-    for l, hit in zip(new, _pmap(_res, new, workers)):
+    resolved_now: Dict[str, Optional[dict]] = {}
+    for l, (hit, bad) in zip(new, _pmap(lambda l: _tracked(lambda: _res(l)), new, workers)):
+        if bad:                         # an ontology lookup failed: use now, retry next call
+            resolved_now[l] = hit
+            lookup_failed.append(f"label: {l}")
+            continue
         resolved[l] = hit
         text = (descriptions or {}).get(l)
         if text:
             desc_store[l] = text
         else:
             desc_store.pop(l, None)
+    res_all = {**resolved, **resolved_now}
     # an atlas cell type serves one label only (the closest name)
     owner: Dict[tuple, str] = {}
     for lab in labels:
-        r = resolved.get(lab)
+        r = res_all.get(lab)
         if not r:
             continue
         key = tuple(sorted(t["cell_name"] for t in r["terms"]))
-        if key not in owner or r["score"] > resolved[owner[key]]["score"]:
+        if key not in owner or r["score"] > res_all[owner[key]]["score"]:
             owner[key] = lab
-    res = {lab: r for lab, r in resolved.items() if lab in labels and r
+    res = {lab: r for lab, r in res_all.items() if lab in labels and r
            and owner.get(tuple(sorted(t["cell_name"] for t in r["terms"]))) == lab}
     unresolved_labels = [l for l in labels if l not in res]
 
@@ -1081,13 +1100,20 @@ def markerdb_signatures(
             return r["terms"][0]["cl_id"]
         names = ([r["terms"][0]["cell_name"]] if r and len(r["terms"]) == 1 else []) + [l]
         return _cl_exact(names, timeout)
-    for l, c in zip(need, _pmap(_cl_of, need, workers)):
-        clc[l] = c
-    cl_of = {l: clc.get(l) for l in labels if clc.get(l)}
+    clc_now: Dict[str, Optional[str]] = {}
+    for l, (c, bad) in zip(need, _pmap(lambda l: _tracked(lambda: _cl_of(l)), need, workers)):
+        if bad:
+            clc_now[l] = c
+            lookup_failed.append(f"label CL term: {l}")
+        else:
+            clc[l] = c
+    cl_of = {l: clc.get(l) or clc_now.get(l) for l in labels if clc.get(l) or clc_now.get(l)}
 
     # 3. CL lineage (labels' terms) -> inherited atlas terms and CL parents
     pcache = store.setdefault("cl_parents", {})
-    lineage = _cl_lineage(cl_of.values(), pcache, timeout, workers)
+    cl_failed: List[str] = []
+    lineage = _cl_lineage(cl_of.values(), pcache, timeout, workers, failed=cl_failed)
+    lookup_failed += [f"CL parents: {c}" for c in cl_failed]
     save()
 
     def inherited(lab):
@@ -1471,9 +1497,10 @@ def markerdb_signatures(
          for m, genes in gm.items()],
         key=lambda r: (r["match"] != "alias / name", bool(r["defines"]), r["atlas_usage"]))
     if lookup_failed:
-        warnings.warn("markerdb_signatures: nomenclature lookups failed (network / rate limit) for "
-                      f"{sorted(lookup_failed)}; their gene mapping may be missing or incomplete and "
-                      "was not cached — call markerdb_signatures again (same cache) before scoring")
+        warnings.warn("markerdb_signatures: lookups failed (network / rate limit) for "
+                      f"{sorted(lookup_failed)}; their gene mapping, label match or ontology "
+                      "lineage may be missing or incomplete and was not cached — call "
+                      "markerdb_signatures again (same cache) before scoring")
     save()
     return dict(signatures=signatures, parents=parents, polar=polar, defining=defining,
                 lineage_markers=lineage_markers,

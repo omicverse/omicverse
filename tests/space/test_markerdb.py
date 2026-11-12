@@ -373,3 +373,43 @@ def test_lineage_markers_and_subtype_markers_not_inherited():
     old = mdb.markerdb_signatures(labels, ["MA", "MB", "MC", "MD", "ME", "MF"], token="T",
                                   server_url="http://x", subtype_markers=False)
     assert old["signatures"]["kid one"].get("MC", 0) > 0
+
+
+def test_failed_ontology_lookup_is_reported_and_not_cached():
+    """A label whose ontology search fails transiently must not be cached with
+    a loose fallback match; it is reported and resolved on the next call."""
+    import tempfile, os, json
+    import requests
+    state = {"down": True}
+    atlas = ATLAS + [{"cell_name": "inflamed alpha cell", "cl_id": "CL:7"}]
+
+    def flaky(url, params=None, headers=None, timeout=30):
+        if "ols4" in url and state["down"]:
+            raise requests.ConnectionError("service unavailable")
+        if url.endswith("/api/markers/celltypes"):
+            return {"celltypes": atlas}
+        if "ols4/api/search" in url and params and "A1 alpha" in str(params.get("q")):
+            return {"response": {"docs": [{"obo_id": "CL:7", "label": "inflamed alpha cell",
+                                           "synonym": ["A1 alpha cell"]}]}}
+        if url.endswith("/api/markers/celltype_markers"):
+            names = params["cell_names"].split("|")
+            tm = dict(TEMPLATES, **{"inflamed alpha cell": {"positive": [("GA", 3), ("GB", 6)],
+                                                            "negative": []}})
+            return {"templates": [
+                {"cell_name": n, "cl_id": None,
+                 "positive": [{"gene": g, "n_pmid": k} for g, k in tm[n]["positive"]],
+                 "negative": [{"gene": g, "n_pmid": k} for g, k in tm[n]["negative"]]}
+                for n in names]}
+        return fake_get(url, params, headers, timeout)
+    mdb._get = flaky
+    cache = os.path.join(tempfile.mkdtemp(), "c.json")
+    labels = ["alpha cell", "A1 alpha cell", "gamma cell"]
+    kb = mdb.markerdb_signatures(labels, ["MA", "MB", "MG"], token="T", server_url="http://x",
+                                 cache=cache, resolve_aliases=False)
+    assert "label: A1 alpha cell" in kb["lookup_failed"]
+    assert "A1 alpha cell" not in json.load(open(cache))["resolved"]
+    state["down"] = False
+    kb2 = mdb.markerdb_signatures(labels, ["MA", "MB", "MG"], token="T", server_url="http://x",
+                                  cache=cache, resolve_aliases=False)
+    assert kb2["resolved"]["A1 alpha cell"]["terms"][0]["cell_name"] == "inflamed alpha cell"
+    assert not [x for x in kb2["lookup_failed"] if x.startswith("label")]
