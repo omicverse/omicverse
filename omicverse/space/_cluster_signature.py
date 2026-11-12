@@ -434,6 +434,9 @@ def score_cluster_signatures(
     rel_from: str = "background",
     peak: float = 0.5,
     residual_to_testable: bool = False,
+    lineage_markers: Optional[Mapping[str, Sequence[str]]] = None,
+    switch_rule: str = "specific",
+    split_axis: str = "increment",
 ) -> pd.DataFrame:
     r"""Assign cluster labels from caller-defined marker signatures.
 
@@ -713,6 +716,19 @@ def score_cluster_signatures(
         return v if v is not None and np.isfinite(v) else 0.0
     pres = pd.DataFrame({l: [_pres(l, cl) for cl in profile.index] for l in signatures},
                         index=profile.index)
+    # lineage requirement: a label whose lineage markers (its ontology
+    # ancestors' defining markers, e.g. kb['lineage_markers']) are all measured
+    # below their background in a cluster cannot be that cluster's label
+    lin_ok = pd.DataFrame(True, index=profile.index, columns=list(signatures))
+    for l, ms in (lineage_markers or {}).items():
+        if l not in lin_ok.columns:
+            continue
+        cols = list(dict.fromkeys(cmap[m] for m in ms if m in cmap))
+        if not cols:
+            continue
+        above = pd.concat([profile[f"mean:{c}"] >= _background(profile[f"mean:{c}"])
+                           for c in cols], axis=1).any(axis=1)
+        lin_ok[l] = above
     first = scores.copy()
     pres_first = pres.copy()
     desc: Dict[str, List[str]] = {}
@@ -728,7 +744,7 @@ def score_cluster_signatures(
                 continue
             ds = [d for d in ds if d in first.columns]
             # a child vouches for its lineage only where it fits (positive score)
-            fits = {d: (scores[d] > 0) for d in ds}
+            fits = {d: (scores[d] > 0) & lin_ok[d] for d in ds}
             child = pd.concat([scores[d].where(fits[d]) for d in ds], axis=1).max(axis=1) \
                 if ds else pd.Series(np.nan, index=first.index)
             cpres = pd.concat([pres[d].where(fits[d], 0.0) for d in ds], axis=1).max(axis=1) \
@@ -752,9 +768,37 @@ def score_cluster_signatures(
         rb_note = (f"review_below={review_below!r} ignored (only stricter values than "
                    f"{REVIEW_BELOW} are accepted)")
         warnings.warn("score_cluster_signatures: " + rb_note)
+    # marker contrast on this panel: the share of the brightest cluster mean
+    # that lies above the marker's background (a marker most clusters carry
+    # near its maximum - unspecific staining - has a small contrast, and its
+    # cross-cluster z-scores overstate the evidence)
+    contrast_q: Dict[str, float] = {}
+    for c in set(cmap.values()):
+        x = profile[f"mean:{c}"]
+        mx = float(x.max())
+        contrast_q[c] = max(0.0, (mx - _background(x)) / mx) if mx > 0 else 0.0
+    # marker specificity across lineages (a top-level label with its
+    # descendants), from the signatures themselves: the largest lineage's share
+    # of the marker's weight (1 = one lineage only; a receptor carried by
+    # several lineages is low)
+    def _top_of(l):
+        x, seen = l, set()
+        while x in parents and x not in seen:
+            seen.add(x)
+            x = parents[x]
+        return x
+    _lw: Dict[str, Dict[str, float]] = {}
+    for l, sig in signatures.items():
+        t = _top_of(l)
+        for m, w in sig.items():
+            if w > 0 and not m.startswith("pos:") and m in cmap:
+                d = _lw.setdefault(cmap[m], {})
+                d[t] = max(d.get(t, 0.0), w)
+    specificity = {c: max(d.values()) / sum(d.values()) for c, d in _lw.items()}
     rows = {}
     for cl in profile.index:
-        elig = [l for l in top if pres_first.at[cl, l] >= presence and np.isfinite(first.at[cl, l])]
+        elig = [l for l in top if pres_first.at[cl, l] >= presence and np.isfinite(first.at[cl, l])
+                and lin_ok.at[cl, l]]
         if not elig:
             rows[cl] = dict(top_label=None, score=np.nan, runner_up=None, margin=np.nan,
                             lineage_z=np.nan, alt_lineage_z=np.nan, alt_label=None,
@@ -781,6 +825,25 @@ def score_cluster_signatures(
                     if ms:
                         vals.append(min(profile.at[cl, f"z:{c}"] for c in ms))
             return max(vals) if vals else np.nan
+
+        def _lin_paths(l, wfun):
+            """lineage evidence paths of a label: (weighted value, raw z,
+            coherent) for its own defining markers (best one; coherent when all
+            of them are at or above the review threshold) and for each
+            descendant (its weakest defining marker)"""
+            zz = lambda c: profile.at[cl, f"z:{c}"]
+            out = []
+            own = _own_z(l)
+            if own:
+                c = max(own, key=lambda c: zz(c) * wfun(c))
+                out.append((zz(c) * wfun(c), zz(c), all(zz(x) >= rb for x in own)))
+            if children_support_parent:
+                for d in desc.get(l, []):
+                    ms = _own_z(d)
+                    if ms:
+                        c = min(ms, key=lambda c: zz(c) * wfun(c))
+                        out.append((zz(c) * wfun(c), zz(c), all(zz(x) >= rb for x in ms)))
+            return out
 
         def _zs(l, k=3):
             ms = defining.get(l, []) if isinstance(defining, Mapping) else \
@@ -814,7 +877,12 @@ def score_cluster_signatures(
             if np.isfinite(_dz(b, False)) and _dz(b, False) < lo:
                 ev = {l: _dz(l) for l in ranked[:n_candidates]}
                 ev = {l: v for l, v in ev.items() if np.isfinite(v)}
-                a = max(ev, key=ev.get) if ev else b
+                # the candidates are compared on contrast-weighted evidence (a
+                # stand-out on a marker with little contrast over its background
+                # is weak evidence); the switch needs a raw stand-out
+                evq = {l: max(p[0] for p in _lin_paths(l, lambda c: contrast_q.get(c, 1.0)))
+                       for l in ev if _lin_paths(l, lambda c: contrast_q.get(c, 1.0))}
+                a = max(evq, key=evq.get) if evq else b
                 if a != b and ev[a] >= hi:
                     note = f"; defining-marker check: {b} (z {_dz(b, False):.1f}) -> {a} (z {ev[a]:.1f})"
                     ranked = [a] + [l for l in ranked if l != a]
@@ -824,6 +892,30 @@ def score_cluster_signatures(
         alt = {l: _lin_z(l) for l in ranked[1:n_candidates]} if isinstance(defining, Mapping) else {}
         alt = {l: v for l, v in alt.items() if np.isfinite(v)}
         ba = max(alt, key=alt.get) if alt else None
+        if (switch_rule == "specific" and defining_check is not None and ba is not None
+                and not note
+                and np.isfinite(lz) and lz >= rb and alt[ba] > lz):
+            # single-marker conflict: another candidate's lineage marker stands out
+            # more than the winner's.  It takes the cluster only when that
+            # evidence is coherent (all its defining markers on the path at or
+            # above the mean), a stand-out, and stronger than the winner's once
+            # each marker is weighted by its specificity across lineages and
+            # its contrast on this panel
+            wf = lambda c: specificity.get(c, 1.0) * contrast_q.get(c, 1.0)
+            pw = _lin_paths(b, wf)
+            pa = [p for p in _lin_paths(ba, wf) if p[2] and p[1] >= defining_check[1]]
+            ew = max(p[0] for p in pw) if pw else -np.inf
+            if pa and max(p[0] for p in pa) > ew:
+                ea = max(p[0] for p in pa)
+                note += (f"; single-marker conflict: {b} -> {ba} (specificity x contrast "
+                         f"weighted lineage evidence {ea:.2f} vs {ew:.2f})")
+                ranked = [ba] + [l for l in ranked if l != ba]
+                b = ranked[0]
+                r = ranked[1] if len(ranked) > 1 else None
+                lz = _lin_z(b)
+                alt = {l: _lin_z(l) for l in ranked[1:n_candidates]}
+                alt = {l: v for l, v in alt.items() if np.isfinite(v)}
+                ba = max(alt, key=alt.get) if alt else None
         rv = _review_state(lz, alt[ba] if ba is not None else np.nan, rb, b, ba,
                            first.at[cl, b], first.at[cl, ba] if ba is not None else np.nan,
                            defining_check, residual_label) if isinstance(defining, Mapping) else "fixed"
@@ -900,6 +992,28 @@ def score_cluster_signatures(
     ss = scores if norm == "l1" else pd.DataFrame(
         {lab: [_sig_score(profile, cmap, sig, cl, min_weight, "l1", stat, neg) for cl in profile.index]
          for lab, sig in signatures.items()}, index=profile.index)
+    if split_axis == "increment":
+        # a child is told apart from its siblings by what it adds to its
+        # parent: its markers weighted above the parent's weight for them
+        # (the markers it shares with the parent move every member alike)
+        inc = {}
+        for ch, pa in parents.items():
+            if ch in signatures and pa in signatures:
+                pw = signatures[pa]
+                d = {m: w - max(pw.get(m, 0.0), 0.0) for m, w in signatures[ch].items()
+                     if w > 0 and w - max(pw.get(m, 0.0), 0.0) > 0}
+                if any(m in cmap or (m.startswith("pos:") and m[4:] in cmap) for m in d):
+                    inc[ch] = d
+        inc_mass = {ch: sum(w for m, w in d.items() if (m[4:] if m.startswith("pos:") else m) in cmap)
+                    for ch, d in inc.items()}
+        if inc:
+            ssi = ss.copy()
+            for ch, d in inc.items():
+                ssi[ch] = [_sig_score(profile, cmap, d, cl, 0.0, "l1", stat, neg) for cl in profile.index]
+    elif split_axis != "signature":
+        raise ValueError("split_axis must be 'increment' or 'signature'")
+    if split_axis != "increment" or not inc:
+        ssi, inc_mass = ss, {}
     split_done: set = set()
     for _ in range(4):
         changed = False
@@ -945,8 +1059,15 @@ def score_cluster_signatures(
                             out.at[c, "reason"] = f"{out.at[c, 'reason']}; split of {pa} by poles: {kk}"
                         changed = True
                         continue
-                k = max(spread, key=spread.get)
-                v = ss.loc[members, k].sort_values(ascending=False)
+                if pa not in polar:
+                    # non-polar parents: children compared on their increments over
+                    # the parent; equal axes go to the child that weights it more
+                    spread = {k: ssi.loc[members, k].max() - ssi.loc[members, k].min() for k in kids}
+                    k = max(spread, key=lambda k: (round(spread[k], 9), inc_mass.get(k, 0.0)))
+                    v = ssi.loc[members, k].sort_values(ascending=False)
+                else:
+                    k = max(spread, key=spread.get)
+                    v = ss.loc[members, k].sort_values(ascending=False)
                 c = v.index[0]
                 take = [c]
                 if split_gap and len(members) > 2:

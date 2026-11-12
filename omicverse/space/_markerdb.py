@@ -850,6 +850,7 @@ def markerdb_signatures(
     inherit_depth: int = 2,
     inherit_decay: float = 0.5,
     ontology_parents: bool = False,
+    subtype_markers: bool = True,
     cache: Optional[str] = None,
     timeout: float = 30.0,
     workers: int = 8,
@@ -1254,6 +1255,25 @@ def markerdb_signatures(
         return acc
 
     signatures, evidence, empty, own = {}, {}, [], {}
+    # an ancestor's marker that defines another label descending from that
+    # ancestor separates the ancestor's subtypes (e.g. a co-receptor of one
+    # T-cell subset listed for T cells in general); it is not inherited by
+    # labels outside that subtype
+    pre_def = {lab: set(own_defining(lab)) for lab in res}
+    cl_name = {v: k for k, v in atlas_by_cl.items()}
+
+    def _subtype_marker(lab, anc_name, mk):
+        a = cl_name.get(anc_name)
+        if not a:
+            return False
+        mine = lineage.get(cl_of.get(lab), {})
+        for o, ms in pre_def.items():
+            if o == lab or mk not in ms or not cl_of.get(o):
+                continue
+            if a in lineage.get(cl_of[o], {}) and cl_of[o] not in mine and cl_of[o] != cl_of.get(lab):
+                return True
+        return False
+
     for lab in res:
         acc, ev = {}, {}
         sources = [(t["cell_name"], 0) for t in res[lab]["terms"]] + inherited(lab)
@@ -1265,6 +1285,8 @@ def markerdb_signatures(
                 for mk in gene_to_markers.get(g, []):
                     if gen > 0 and mk in spoken:
                         continue        # the specific statement overrides the inherited one
+                    if gen > 0 and subtype_markers and _subtype_marker(lab, name, mk):
+                        continue
                     if gen == 0:
                         spoken.add(mk)
                     a = acc.setdefault(mk, [0.0, 0.0])
@@ -1395,6 +1417,34 @@ def markerdb_signatures(
     gene_review = {m: [f"{g} ({gnames.get(g, '')})" for g in genes] for m, genes in gm.items()
                    if gene_map_source.get(m) not in ("symbol", "override")}
     defining = {lab: own_defining(lab) for lab in signatures}
+    # lineage markers: defining markers of the label's Cell Ontology ancestors
+    # (within inherit_depth) that the label's own atlas entry also lists as
+    # positive - the lineage the label belongs to, as opposed to the state /
+    # subtype markers that define the label itself
+    lineage_markers: Dict[str, List[str]] = {}
+    # markers carried by most labels (e.g. a pan-leukocyte antigen in an immune
+    # label set) separate no lineage from another
+    npos: Dict[str, int] = {}
+    for sig in signatures.values():
+        for m, w in sig.items():
+            if w > 0:
+                npos[m] = npos.get(m, 0) + 1
+    pan = {m for m, k in npos.items() if 2 * k > len(signatures)}
+    for lab in signatures:
+        ownpos = {g for term in res[lab]["terms"]
+                  for g, d in rel(tmpl_store.get(term["cell_name"], {}), 0.0).items()
+                  if d.get("positive", 0.0) > d.get("negative", 0.0)}
+        lm = set()
+        for name, gen in inherited(lab):
+            for g in top_genes(tmpl_store.get(name, {}), 0.5):
+                if g in ownpos:
+                    lm.update(gene_to_markers.get(g, []))
+        # only markers that define some label of the set identify a lineage
+        # (pan-lineage markers carried by everything do not)
+        lm = {m for m in lm if m not in defining[lab] and m not in pan
+              and any(m in defining[o] for o in signatures if o != lab)}
+        if lm:
+            lineage_markers[lab] = sorted(lm)
     # review table for the panel-name -> gene mapping: how it was matched, how
     # often the atlas uses the gene as a marker, which candidate labels it defines
     defines: Dict[str, List[str]] = {}
@@ -1417,6 +1467,7 @@ def markerdb_signatures(
                       "was not cached — call markerdb_signatures again (same cache) before scoring")
     save()
     return dict(signatures=signatures, parents=parents, polar=polar, defining=defining,
+                lineage_markers=lineage_markers,
                 lookup_failed=sorted(lookup_failed),
                 resolved=res,
                 cl_ids=cl_of, unresolved_labels=unresolved_labels,
