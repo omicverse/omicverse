@@ -254,7 +254,9 @@ def measure_band_defect(anat: DicomSeries, fluid: DicomSeries, instance: int,
                 if (not v or j == len(flag) - 1) and s is not None:
                     runs.append((s, j if v else j - 1))
                     s = None
-            runs = [(p, q) for p, q in runs if arc[q] - arc[p] >= 2.0 and L - arc[q] > end_margin_mm]
+            runs = [(p, q) for p, q in runs if arc[q] - arc[p] >= 2.0]
+            out["run_at_reference_end"] = any(L - arc[q] <= end_margin_mm for p, q in runs)
+            runs = [(p, q) for p, q in runs if L - arc[q] > end_margin_mm]
             if not runs:
                 out["found"] = False
                 return out
@@ -321,6 +323,9 @@ def measure_band_defect(anat: DicomSeries, fluid: DicomSeries, instance: int,
     warn = []
     if not best.get("found"):
         warn.append(f"no defect run on the {pool} most conspicuous slices")
+        if any(r.get("run_at_reference_end") for r in ranked[:max(1, pool)]):
+            warn.append("an abnormal run reaches the last waypoint: the last waypoint is probably on or just "
+                        "beyond the defect, not on the attachment - move it to where the structure meets the bone")
     else:
         if best["beyond_defect_mm"] < 10.0:
             warn.append(f"the reference end lies only {best['beyond_defect_mm']} mm beyond the defect: check "
