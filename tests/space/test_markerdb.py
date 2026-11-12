@@ -298,3 +298,29 @@ def test_greek_prefix_detection_and_spellings():
         assert not mdb._greek_prefixed(t), t
     assert "alpha-SMA" in mdb._name_variants("aSMA")
     assert "Ki-67" in mdb._variants("Ki67")
+
+
+def test_failed_lookup_is_reported_and_not_cached():
+    """A nomenclature lookup that fails transiently (network / rate limit) must
+    not be cached as 'no match': it is reported and retried on the next call."""
+    import tempfile, os, json
+    import requests
+    state = {"down": True}
+
+    def flaky(url, params=None, headers=None, timeout=30):
+        if state["down"] and ("genenames" in url or "mygene" in url) and url.endswith("MB"):
+            raise requests.ConnectionError("rate limited")
+        if state["down"] and "mygene" in url and params and "MB" in str(params.get("q")):
+            raise requests.ConnectionError("rate limited")
+        return fake_get(url, params, headers, timeout)
+    mdb._get = flaky
+    cache = os.path.join(tempfile.mkdtemp(), "c.json")
+    labels = ["alpha cell", "beta-positive alpha cell", "gamma cell"]
+    kb = mdb.markerdb_signatures(labels, ["MA", "MB", "MG"], token="T", server_url="http://x",
+                                 cache=cache, resolve_aliases=False)
+    assert "MB" in kb["lookup_failed"] and "MB" not in kb["gene_map"]
+    assert "MB" not in json.load(open(cache))["gene_cache"]
+    state["down"] = False
+    kb2 = mdb.markerdb_signatures(labels, ["MA", "MB", "MG"], token="T", server_url="http://x",
+                                  cache=cache, resolve_aliases=False)
+    assert kb2["gene_map"]["MB"] == ["GB"] and kb2["lookup_failed"] == []
