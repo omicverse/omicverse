@@ -407,3 +407,11 @@ def test_measure_band_defect_extends_from_inside_defect(tmp_path):
     d = rad.measure_band_defect(st["Sag T1"], st["Sag STIR"], 3, [(50, 30), (139, 30)], search=0)
     assert d["found"] and d["trace_extended"] >= 1
     assert d["measurement_mm"] == pytest.approx(10.0, abs=2.5)
+
+
+def test_render_outside_working_directory_warns(tmp_path, study, monkeypatch):
+    work = tmp_path / "work"; work.mkdir()
+    monkeypatch.chdir(work)
+    uid = study["Sag T1"].uid
+    with pytest.warns(UserWarning, match="outside the working directory"):
+        rad.render_slices(study, [uid], instance=study["Sag T1"].instance_numbers[0], out=str(tmp_path / "x.png"))
