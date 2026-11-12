@@ -517,9 +517,13 @@ def audit_clinical_tables(
             # check that no other reading of the patient sits near the suspicious one
             med = g.transform("median")
             dev = lv - med
-            near = (dev.abs() >= math.log10(jump_ratio) / 2).groupby(key).transform("sum")
-            item_pos = x.groupby("item")["v"].apply(lambda s: s.quantile(0.995)) if not x.empty else pd.Series(dtype=float)
-            hit = y[(dev.abs() >= math.log10(jump_ratio)) & (near <= 1)]
+            # nearest other reading of the same patient and item (log10 distance): a sustained
+            # level has close neighbours, a slip stands alone (two unrelated slips do too)
+            o = pd.DataFrame({"k": key, "lv": lv}).sort_values(["k", "lv"])
+            gap = pd.concat([(o["lv"] - o.groupby("k")["lv"].shift(1)).abs(),
+                             (o.groupby("k")["lv"].shift(-1) - o["lv"]).abs()], axis=1).min(axis=1)
+            nn = gap.reindex(y.index)
+            hit = y[(dev.abs() >= math.log10(jump_ratio)) & (nn >= math.log10(2))]
             # a sustained level is the patient's state; a single excursion is a slip
             F.add(tn, hit["rid"], "impossible_value", "subject_jump", tn + "|jump|" + hit["rid"],
                   dev.loc[hit.index].abs(),
@@ -529,10 +533,12 @@ def audit_clinical_tables(
 
         # disagreeing duplicates of one observation
         if on("duplicate_conflict"):
+            # the observation is the specimen when the table has one (several specimens of one
+            # analyte at one instant are legitimate); otherwise patient + item + instant
             keys = []
             if "spec" in x.columns:
                 keys.append(["spec", "item"])
-            if m.get("time"):
+            elif m.get("time"):
                 keys.append(["subj", "item", "time"])
             for k in keys:
                 z_ = w[w["v"].notna()]
