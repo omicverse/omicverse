@@ -217,6 +217,33 @@ def test_review_flags_and_enforced_lineage():
     assert n_open(r4) <= n_open(r0) and r4.attrs["review_below"] == -5.0
 
 
+def test_review_states_open_resolved_fixed():
+    st = getattr(cs, "_review_state", None)
+    if st is None:
+        from omicverse.space._cluster_signature import _review_state as st
+    assert st(1.0, 0.5, 0.0, "A", "B", 1.0, 0.2, (0.5, 1.5)) == "fixed"
+    # another candidate leads on one defining marker only: resolved, winner kept
+    s = st(0.8, 1.4, 0.0, "A", "B", 0.9, 0.5, (0.5, 1.5))
+    assert s.startswith("resolved: keep A") and "0.90" in s and "z=1.4" in s
+    # weak winner, alternative above the mean: open
+    assert st(-0.4, 0.6, 0.0, "A", "B", 0.3, 0.2, None).startswith("open")
+    # weak winner, no alternative reaches the mean: resolved
+    assert st(-0.4, -0.1, 0.0, "A", "B", 0.3, 0.2, None, "R").startswith("resolved: keep A")
+    assert st(-0.4, -0.1, 0.0, "A", "B", 0.3, 0.2, None).startswith("open")
+    assert st(float("nan"), float("nan"), 0.0, "A", None, 0.3, float("nan"), None, "R").startswith("resolved")
+
+
+def test_lineage_ignored_on_resolved_clusters():
+    p = cs.cluster_marker_profile(_panel(), "cluster")
+    d = {"A": ["m1"], "B": ["m2"], "B_x": ["m3"], "B_y": ["m4"]}
+    par = {"B_x": "B", "B_y": "B"}
+    r = cs.score_cluster_signatures(p, SIGS, parents=par, defining=d, residual_label="R")
+    assert str(r.at["q1", "review"]).startswith("resolved") and r.at["q1", "label"] == "R"
+    r2 = cs.score_cluster_signatures(p, SIGS, parents=par, defining=d, residual_label="R",
+                                     lineage={"q1": "A"})
+    assert r2.at["q1", "label"] == "R" and "ignored" in r2.at["q1", "reason"]
+
+
 def test_residual_label_signature_does_not_compete():
     p = cs.cluster_marker_profile(_panel(), "cluster")
     sigs = dict(SIGS, R={"m1": 0.05})            # weak signature of the exclusion label
