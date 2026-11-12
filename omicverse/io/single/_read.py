@@ -72,15 +72,17 @@ def _read_h5ad_rust(path, **kwargs):
         import anndataoom
     except ImportError:
         raise ImportError(
-            "Rust backend requires the 'anndataoom' package. "
-            "Install with:  pip install omicverse[rust]   (or  pip install anndataoom)"
+            "ov.read(storage='disk') needs the 'anndataoom' package (a dependency of "
+            "omicverse): pip install anndataoom. Or read into memory with "
+            "ov.read(path, storage='memory')."
         ) from None
 
     if not _h5ad_csr_sorted(path):
         raise ValueError(
-            f"Cannot read {path} with backend='rust': its sparse X matrix has "
+            f"Cannot read {path} with storage='disk': its sparse X matrix has "
             "unsorted minor indices, which anndata-rs rejects.\n"
-            "Rewrite with sorted indices, e.g.:\n"
+            "Read it into memory instead with ov.read(path, storage='memory'), or "
+            "rewrite it with sorted indices, e.g.:\n"
             "    import anndata as ad\n"
             f"    a = ad.read_h5ad('{path}')\n"
             "    a.X.sort_indices()\n"
@@ -132,12 +134,12 @@ def _read_h5ad_threaded(path):
 @register_function(
     aliases=["读取数据", "read", "load_data", "数据读取", "file_reader"],
     category="utils",
-    description="Universal file reader for common bioinformatics data formats including h5ad, csv, tsv, txt, and gzipped files; h5ad either in memory or kept on disk (storage='disk')",
+    description="Universal file reader for common bioinformatics data formats including h5ad, csv, tsv, txt, and gzipped files; h5ad kept on disk by default (storage='disk') or read into memory (storage='memory')",
     examples=[
-        "# Read AnnData file into memory",
+        "# Read an AnnData file; the matrix stays on disk (default)",
         "adata = ov.read('data.h5ad')",
-        "# Keep the matrix on disk (data larger than RAM / GPU memory)",
-        "adata = ov.read('data.h5ad', storage='disk')",
+        "# Read the whole AnnData into memory",
+        "adata = ov.read('data.h5ad', storage='memory')",
         "# Read CSV file",
         "df = ov.read('data.csv')",
         "# Read TSV file",
@@ -149,7 +151,7 @@ def _read_h5ad_threaded(path):
     ],
     related=["utils.read_csv", "utils.read_h5ad", "pp.preprocess", "settings.gpu_init"]
 )
-def read(path, storage='memory', *, backend=None, **kwargs):
+def read(path, storage='disk', *, backend=None, **kwargs):
     r"""
     Read common omics file formats into AnnData or pandas DataFrame.
 
@@ -168,15 +170,17 @@ def read(path, storage='memory', *, backend=None, **kwargs):
                     to the GPU (RAPIDS)     to the GPU (``chunk_size`` cells)
     ==============  ======================  ===================================
 
-    ``storage='disk'`` keeps memory low (SEA-AD, 1.38M cells / 91 GB: 13 GB
-    on CPU, 5 GB in GPU mode); every step re-reads the file, so it relies on
-    disk / page-cache bandwidth.
+    ``storage='disk'`` (the default) keeps memory low (SEA-AD, 1.38M cells /
+    91 GB: 13 GB on CPU, 5 GB in GPU mode); every step re-reads the file, so it
+    relies on disk / page-cache bandwidth. Use ``storage='memory'`` for a plain
+    in-memory ``anndata.AnnData`` (e.g. for tools that need one, or when the
+    file will be overwritten while the object is in use).
 
     Parameters
     ----------
     path : str or pathlib.Path
         Input file path.
-    storage : {'memory', 'disk'}, default='memory'
+    storage : {'disk', 'memory'}, default='disk'
         Where the ``.h5ad`` matrix lives; see the table above.
     backend : {'python', 'rust'}, optional
         Deprecated spelling: ``'python'`` = ``storage='memory'``, ``'rust'`` =
@@ -194,8 +198,8 @@ def read(path, storage='memory', *, backend=None, **kwargs):
     Raises
     ------
     ImportError
-        If ``storage='disk'`` needs ``anndataoom`` (CPU modes) or ``dask``
-        (GPU mode) and it is not installed.
+        If ``anndataoom`` (CPU modes) or ``dask`` (GPU mode), both hard
+        dependencies, are missing from the environment.
     ValueError
         If ``storage``/``backend`` is invalid, the file suffix is unsupported,
         or the ``.h5ad`` has an unsorted sparse ``X`` (AnnDataOOM; see
