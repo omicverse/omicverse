@@ -628,9 +628,9 @@ def score_cluster_signatures(
         switch_rule: ``'specific'`` (default): in a single-marker conflict
             (another candidate's lineage evidence is higher than the
             winner's, both at or above the review threshold) the other
-            candidate takes the cluster when its evidence is a stand-out
-            (raw z >= ``defining_check[1]``), coherent (all defining markers on
-            that path at or above the threshold) and larger than the
+            candidate takes the cluster when its evidence is coherent (all
+            defining markers on that path at or above the threshold) and
+            larger than the
             winner's after weighting each marker by its *specificity* (the
             largest lineage's share of the marker's positive weight across
             the signatures, a lineage being a top-level label with its
@@ -948,12 +948,12 @@ def score_cluster_signatures(
             # single-marker conflict: another candidate's lineage marker stands out
             # more than the winner's.  It takes the cluster only when that
             # evidence is coherent (all its defining markers on the path at or
-            # above the mean), a stand-out, and stronger than the winner's once
-            # each marker is weighted by its specificity across lineages and
-            # its contrast on this panel
+            # above the mean) and stronger than the winner's once each marker
+            # is weighted by its specificity across lineages and its contrast
+            # on this panel
             wf = lambda c: specificity.get(c, 1.0) * contrast_q.get(c, 1.0)
             pw = _lin_paths(b, wf)
-            pa = [p for p in _lin_paths(ba, wf) if p[2] and p[1] >= defining_check[1]]
+            pa = [p for p in _lin_paths(ba, wf) if p[2] and p[1] >= rb]
             ew = max(p[0] for p in pw) if pw else -np.inf
             if pa and max(p[0] for p in pa) > ew:
                 ea = max(p[0] for p in pa)
