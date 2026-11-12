@@ -63,19 +63,7 @@
 ![omicverse-light](https://raw.githubusercontent.com/Starlitnightly/ImageStore/main/omicverse_img/background_light.png#gh-light-mode-only)
 ![omicverse-dark](https://raw.githubusercontent.com/Starlitnightly/ImageStore/main/omicverse_img/background_dark.png#gh-dark-mode-only)
 
-## `2` [디렉토리 구조](#)
-
-````shell
-.
-├── omicverse                  # 메인 Python 패키지
-├── omicverse_guide            # 문서 파일들
-├── omicverse_web              # 웹 분석 플랫폼
-├── sample                     # 일부 테스트 데이터
-├── LICENSE
-└── README.md
-````
-
-## `3` [시작하기](#)
+## `2` [시작하기](#)
 
 OmicVerse는 conda 또는 pypi를 통해 설치할 수 있으며 먼저 `pytorch`를 설치해야 합니다. 더 자세한 설치 단계와 다양한 플랫폼(`Windows`, `Linux` 또는 `Mac OS`)에 대한 적응은 [설치 튜토리얼](https://starlitnightly.github.io/omicverse/Installation_guild/)을 참조하세요.
 
@@ -85,7 +73,7 @@ OmicVerse는 conda 또는 pypi를 통해 설치할 수 있으며 먼저 `pytorch
 
 에이전트 워크플로(OpenClaw, MCP 서버, J.A.R.V.I.S. 메시지 봇)는 [OmicClaw](https://github.com/omicverse/omicclaw)에서 안내합니다.
 
-## `4` [기능 범위](https://omicverse.readthedocs.io/en/latest/Feature_coverage/)
+## `3` [기능 범위](https://omicverse.readthedocs.io/en/latest/Feature_coverage/)
 
 <picture>
   <source media="(prefers-color-scheme: dark)" srcset="../README.assets/feature_coverage_dark.png">
@@ -94,12 +82,12 @@ OmicVerse는 conda 또는 pypi를 통해 설치할 수 있으며 먼저 `pytorch
 
 검증된 49개 분석 기능에서 omicverse와 다른 10개 프레임워크의 기능 범위 비교입니다. 셀별 근거가 포함된 전체 표, 데이터 프레임워크, OmicVerse에 포함된 공개 도구 목록은 [문서](https://omicverse.readthedocs.io/en/latest/Feature_coverage/)에서 확인할 수 있습니다.
 
-## `5` [연락처](#)
+## `4` [연락처](#)
 
-- Zehua Zeng ([starlitnightly@gmail.com](mailto:starlitnightly@gmail.com) 또는 [zehuazeng@xs.ustb.edu.cn](mailto:zehuazeng@xs.ustb.edu.cn))
-- Lei Hu ([hulei@westlake.edu.cn](mailto:hulei@westlake.edu.cn))
+- Zehua Zeng ([starlitnightly@gmail.com](mailto:starlitnightly@gmail.com) 또는 [steorra@omicos.cn](mailto:steorra@omicos.cn))
+- Meng Xu ([mengxu@omicos.cn](mailto:mengxu@omicos.cn))
 
-## `6` [개발자 가이드 및 기여](#)
+## `5` [개발자 가이드 및 기여](#)
 
 omicverse에 기여하고 싶으시면, [개발자 문서](https://omicverse.readthedocs.io/en/latest/Developer_guild/)를 참조하세요.
 
@@ -129,7 +117,7 @@ pytest
 > Omicverse를 홍보해주신 다음 WeChat 공식 계정들에게 감사드립니다.
 > <p align="center"> <a href="https://mp.weixin.qq.com/s/egAnRfr3etccU_RsN-zIlg" target="_blank" rel="noreferrer"> <img src="../README.assets/image-20230701163953794.png" alt="linux" width="50" height="50"/> </a> <a href="https://zhuanlan.zhihu.com/c_1257815636945915904?page=3" target="_blank" rel="noreferrer"> <img src="../README.assets/WechatIMG688.png" alt="linux" width="50" height="50"/> </a> </p>
 
-## `7` [인용](https://doi.org/10.1038/s41467-024-50194-3)
+## `6` [인용](https://doi.org/10.1038/s41467-024-50194-3)
 
 작업에서 `omicverse`를 사용하시면, 다음과 같이 `omicverse` 발행물을 인용해 주세요:
 
@@ -147,7 +135,7 @@ pytest
 >
 > _imetaomics_ 2025년 11월 6일. doi: [10.1002/imo2.70064](https://doi.org/10.1002/imo2.70064).
 
-## `8` [기타](#)
+## `7` [기타](#)
 
 우리 프로젝트의 개발을 후원하고 싶으시면, afdian 웹사이트(https://ifdian.net/a/starlitnightly)로 가서 후원해 주세요.
 

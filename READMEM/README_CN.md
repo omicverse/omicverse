@@ -67,19 +67,7 @@
 ![omicverse-light](https://raw.githubusercontent.com/Starlitnightly/ImageStore/main/omicverse_img/background_light.png#gh-light-mode-only)
 ![omicverse-dark](https://raw.githubusercontent.com/Starlitnightly/ImageStore/main/omicverse_img/background_dark.png#gh-dark-mode-only)
 
-## `2` [目录结构](#)
-
-````shell
-.
-├── omicverse                  # 主要Python包
-├── omicverse_guide            # 文档文件
-├── omicverse_web              # Web分析平台
-├── sample                     # 一些测试数据
-├── LICENSE
-└── README.md
-````
-
-## `3` [开始使用](#)
+## `2` [开始使用](#)
 
 OmicVerse可以通过conda或pypi安装，您需要首先安装`pytorch`。请参考[安装教程](https://starlitnightly.github.io/omicverse/Installation_guild/)了解更详细的安装步骤和不同平台的适配（`Windows`、`Linux`或`Mac OS`）。
 
@@ -89,7 +77,7 @@ OmicVerse可以通过conda或pypi安装，您需要首先安装`pytorch`。请�
 
 智能体工作流（OpenClaw、MCP 服务器和 J.A.R.V.I.S. 消息机器人）的说明见 [OmicClaw](https://github.com/omicverse/omicclaw)。
 
-## `4` [功能覆盖](https://omicverse.readthedocs.io/en/latest/Feature_coverage/)
+## `3` [功能覆盖](https://omicverse.readthedocs.io/en/latest/Feature_coverage/)
 
 <picture>
   <source media="(prefers-color-scheme: dark)" srcset="../README.assets/feature_coverage_dark.png">
@@ -98,12 +86,12 @@ OmicVerse可以通过conda或pypi安装，您需要首先安装`pytorch`。请�
 
 omicverse 与另外十个框架在 49 项经逐项核对的分析功能上的覆盖对比。带逐格证据的完整功能表、数据框架以及 OmicVerse 收录的已发表工具清单见[文档](https://omicverse.readthedocs.io/en/latest/Feature_coverage/)。
 
-## `5` [联系方式](#)
+## `4` [联系方式](#)
 
-- Zehua Zeng ([starlitnightly@gmail.com](mailto:starlitnightly@gmail.com) 或 [zehuazeng@xs.ustb.edu.cn](mailto:zehuazeng@xs.ustb.edu.cn))
-- Lei Hu ([hulei@westlake.edu.cn](mailto:hulei@westlake.edu.cn))
+- Zehua Zeng ([starlitnightly@gmail.com](mailto:starlitnightly@gmail.com) 或 [steorra@omicos.cn](mailto:steorra@omicos.cn))
+- Meng Xu ([mengxu@omicos.cn](mailto:mengxu@omicos.cn))
 
-## `6` [开发者指南和贡献](#)
+## `5` [开发者指南和贡献](#)
 
 如果您想为omicverse贡献代码，请参考我们的[开发者文档](https://omicverse.readthedocs.io/en/latest/Developer_guild/)。
 
@@ -133,7 +121,7 @@ pytest
 > 我们要感谢以下微信公众号推广Omicverse。
 > <p align="center"> <a href="https://mp.weixin.qq.com/s/egAnRfr3etccU_RsN-zIlg" target="_blank" rel="noreferrer"> <img src="../README.assets/image-20230701163953794.png" alt="linux" width="50" height="50"/> </a> <a href="https://zhuanlan.zhihu.com/c_1257815636945915904?page=3" target="_blank" rel="noreferrer"> <img src="../README.assets/WechatIMG688.png" alt="linux" width="50" height="50"/> </a> </p>
 
-## `7` [引用](https://doi.org/10.1038/s41467-024-50194-3)
+## `6` [引用](https://doi.org/10.1038/s41467-024-50194-3)
 
 如果您在工作中使用`omicverse`，请按以下方式引用`omicverse`论文：
 
@@ -151,7 +139,7 @@ pytest
 >
 > _imetaomics_ 2025年11月6日. doi: [10.1002/imo2.70064](https://doi.org/10.1002/imo2.70064).
 
-## `8` [其他](#)
+## `7` [其他](#)
 
 如果您想赞助我们项目的开发，可以前往爱发电网站 (https://ifdian.net/a/starlitnightly) 赞助我们。
 
