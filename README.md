@@ -108,49 +108,7 @@ You can use `conda install omicverse -c conda-forge` or `pip install -U omicvers
 
 Please checkout the documentations and tutorials at [omicverse page](https://starlitnightly.github.io/omicverse/) or [omicverse.readthedocs.io](https://omicverse.readthedocs.io/en/latest/index.html).
 
-
-## `4` [J.A.R.V.I.S Getting Started](#)
-
-### 4.1 OpenClaw 
-
-OmicVerse provide an directly interact analysis with OpenClaw project. You can use
-
-```bash
-omicverse claw 'help me annotate the lung scrna-seq'
-```
-
-This module supported by `ov.Agent` function. And i think that will be convinent for you to analysis the anndata using OpenClaw. 
-
-The full tutorial could be found at [here](https://omicverse.readthedocs.io/en/latest/Tutorials-llm/t_ov_agent_pbmc3k/)
-
-### 4.2 MCP Server (Model Context Protocol)
-
-OmicVerse provide an MCP server that exposes registered analysis tools to AI assistants (Claude Code, etc.) via the standard [Model Context Protocol](https://modelcontextprotocol.io/).
-
-
-```bash
-# Install with MCP dependencies
-pip install -e "omicverse[mcp]"
-
-# Start the server (stdio transport)
-python -m omicverse.mcp        # or: omicverse-mcp
-python -m omicverse.mcp --phase P0   # core pipeline tools only
-```
-The full tutorial could be found at [here](https://omicverse.readthedocs.io/en/latest/Tutorials-llm/t_mcp_guide/)
-
-### 4.3 J.A.R.V.I.S Msg system
-
-If you want to analysis the `AnnData` using Mobile Phone, maybe you can try 
-
-```bash
-# Install with jarvis dependencies
-pip install "omicverse[jarvis]"
-
-# Start to chat with JARVIS using telegram
-omicverse jarvis --channel telegram --token "$TELEGRAM_BOT_TOKEN"
-```
-The full tutorial could be found at [here](https://omicverse.readthedocs.io/en/latest/Tutorials-jarvis/t_msg_bot_overview/)
-
+Agent workflows — OpenClaw, the MCP server and the J.A.R.V.I.S. message bots — are documented in [OmicClaw](https://github.com/omicverse/omicclaw).
 
 ## `4` [Data Framework and Reference](#)
 

@@ -81,51 +81,9 @@ Sie können `conda install omicverse -c conda-forge` oder `pip install -U omicve
 
 Bitte schauen Sie sich die Dokumentation und Tutorials auf der [omicverse-Seite](https://starlitnightly.github.io/omicverse/) oder [omicverse.readthedocs.io](https://omicverse.readthedocs.io/en/latest/index.html) an.
 
-## `4` [J.A.R.V.I.S Einstieg](#)
+Agenten-Workflows – OpenClaw, der MCP-Server und die J.A.R.V.I.S.-Nachrichtenbots – sind in [OmicClaw](https://github.com/omicverse/omicclaw) dokumentiert.
 
-### 4.1 OpenClaw
-
-OmicVerse unterstützt jetzt direkte interaktive Analysen mit dem OpenClaw-Projekt. Zum Beispiel:
-
-```bash
-omicverse claw 'help me annotate the lung scrna-seq'
-```
-
-Dieses Modul wird durch `ov.Agent` unterstützt und eignet sich gut für die dialogbasierte Analyse von `AnnData`.
-
-Das vollständige Tutorial finden Sie [hier](https://omicverse.readthedocs.io/en/latest/Tutorials-llm/t_ov_agent_pbmc3k/)
-
-### 4.2 MCP Server (Model Context Protocol)
-
-OmicVerse stellt einen MCP-Server bereit, der registrierte Analysewerkzeuge über das standardisierte [Model Context Protocol](https://modelcontextprotocol.io/) für KI-Assistenten wie Claude Code verfügbar macht.
-
-```bash
-# Mit MCP-Abhängigkeiten installieren
-pip install -e "omicverse[mcp]"
-
-# Server starten (stdio-Transport)
-python -m omicverse.mcp        # oder: omicverse-mcp
-python -m omicverse.mcp --phase P0   # nur Kern-Workflow-Tools
-```
-
-Das vollständige Tutorial finden Sie [hier](https://omicverse.readthedocs.io/en/latest/Tutorials-llm/t_mcp_guide/)
-
-### 4.3 J.A.R.V.I.S Nachrichtensystem
-
-Wenn Sie `AnnData` über das Mobiltelefon oder einen Messaging-Kanal analysieren möchten, können Sie Folgendes ausprobieren:
-
-```bash
-# Mit jarvis-Abhängigkeiten installieren
-pip install "omicverse[jarvis]"
-
-# J.A.R.V.I.S über Telegram starten
-omicverse jarvis --channel telegram --token "$TELEGRAM_BOT_TOKEN"
-```
-
-Das vollständige Tutorial finden Sie [hier](https://omicverse.readthedocs.io/en/latest/Tutorials-jarvis/t_msg_bot_overview/)
-
-
-## `5` [Daten-Framework und Referenz](#)
+## `4` [Daten-Framework und Referenz](#)
 
 omicverse ist als Infrastruktur implementiert, die auf den folgenden vier Datenstrukturen basiert.
 
@@ -292,12 +250,12 @@ Die Tabelle enthält die veröffentlichten Tools
 - [2] [pegasus](https://github.com/lilab-bcb/pegasus/) ist ein Tool zur Analyse von Transkriptomen von Millionen von Einzelzellen. Es ist ein Kommandozeilen-Tool, ein Python-Paket und eine Basis für Cloud-basierte Analyse-Workflows.
 - [3] [cNMF](https://github.com/dylkot/cNMF) ist eine Analyse-Pipeline zur Ableitung von Genexpressionsprogrammen aus Einzelzell-RNA-Seq (scRNA-Seq)-Daten.
 
-## `6` [Kontakt](#)
+## `5` [Kontakt](#)
 
 - Zehua Zeng ([starlitnightly@gmail.com](mailto:starlitnightly@gmail.com) oder [zehuazeng@xs.ustb.edu.cn](mailto:zehuazeng@xs.ustb.edu.cn))
 - Lei Hu ([hulei@westlake.edu.cn](mailto:hulei@westlake.edu.cn))
 
-## `7` [Entwicklerhandbuch und Beitrag](#)
+## `6` [Entwicklerhandbuch und Beitrag](#)
 
 Wenn Sie zu omicverse beitragen möchten, schauen Sie sich bitte unsere [Entwicklerdokumentation](https://omicverse.readthedocs.io/en/latest/Developer_guild/) an.
 
@@ -327,7 +285,7 @@ Das optionale Extra `tests` und die Datei `requirements-latest.txt` enthalten be
 > Wir möchten den folgenden offiziellen WeChat-Accounts für die Bewerbung von Omicverse danken.
 > <p align="center"> <a href="https://mp.weixin.qq.com/s/egAnRfr3etccU_RsN-zIlg" target="_blank" rel="noreferrer"> <img src="../README.assets/image-20230701163953794.png" alt="linux" width="50" height="50"/> </a> <a href="https://zhuanlan.zhihu.com/c_1257815636945915904?page=3" target="_blank" rel="noreferrer"> <img src="../README.assets/WechatIMG688.png" alt="linux" width="50" height="50"/> </a> </p>
 
-## `8` [Zitation](https://doi.org/10.1038/s41467-024-50194-3)
+## `7` [Zitation](https://doi.org/10.1038/s41467-024-50194-3)
 
 Wenn Sie `omicverse` in Ihrer Arbeit verwenden, zitieren Sie bitte die `omicverse`-Publikation wie folgt:
 
@@ -345,7 +303,7 @@ Hier sind einige andere verwandte Pakete, die Sie gerne referenzieren können, w
 >
 > _imetaomics_ 6. November 2025. doi: [10.1002/imo2.70064](https://doi.org/10.1002/imo2.70064).
 
-## `9` [Sonstiges](#)
+## `8` [Sonstiges](#)
 
 Wenn Sie die Entwicklung unseres Projekts sponsern möchten, können Sie zur afdian-Website (https://ifdian.net/a/starlitnightly) gehen und uns sponsern.
 
