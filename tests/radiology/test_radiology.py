@@ -383,7 +383,7 @@ def test_band_flatfield_removes_shading(tmp_path):
 def test_measure_band_defect_gap_slice_and_reference(tmp_path):
     st = _defect_study(tmp_path)
     # first waypoint on intact band well above the defect, last on the bone surface
-    d = rad.measure_band_defect(st["Sag T1"], st["Sag STIR"], 2, [(2, 30), (70, 30), (139, 30)], search=2)
+    d = rad.measure_band_defect(st["Sag T1"], st["Sag STIR"], 2, [(2, 30), (70, 30), (139, 30)], search=2, pool=1)
     assert d["found"] and d["instance"] == 3                    # the slice that cuts the band squarely
     assert d["measurement_mm"] == pytest.approx(10.0, abs=2.5)  # rows 40-60 at 0.5 mm
     a, b = np.array(d["landmarks_xyz_mm"])
@@ -415,3 +415,10 @@ def test_render_outside_working_directory_warns(tmp_path, study, monkeypatch):
     uid = study["Sag T1"].uid
     with pytest.warns(UserWarning, match="outside the working directory"):
         rad.render_slices(study, [uid], instance=study["Sag T1"].instance_numbers[0], out=str(tmp_path / "x.png"))
+
+
+def test_measure_band_defect_pools_conspicuous_slices(tmp_path):
+    st = _defect_study(tmp_path)
+    d = rad.measure_band_defect(st["Sag T1"], st["Sag STIR"], 3, [(2, 30), (70, 30), (139, 30)], search=2, pool=3)
+    assert d["found"] and d["measurement_mm"] == pytest.approx(10.0, abs=3.0)
+    assert len(d["slices"]) == 5

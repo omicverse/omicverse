@@ -12,9 +12,10 @@ made single-profile thresholds unreliable on real studies:
   pixel is divided by the local bright-tissue envelope (fat / marrow within a
   few millimetres), which leaves band darkness on a common 0–1 scale;
 * **which slice** — a band a few millimetres thick is cut squarely by one or
-  two slices; neighbours graze it and blur the defect. The slice is chosen as
-  the one on which the traced band is most conspicuous (darkest against its
-  surroundings), not the median of all neighbours;
+  two slices; neighbours graze it and blur the defect. The slices on which the
+  traced band is most conspicuous (darkest against its surroundings) are
+  measured and the median of those is reported, not the median of all
+  neighbours;
 * **where the defect ends** — the two stumps of a torn tendon differ (one is
   usually thickened and darker), so each end is placed where the abnormality
   falls half-way back to the level of *its own* side (two-sided half-maximum),
@@ -159,7 +160,7 @@ def _profile(anat: DicomSeries, fluid: DicomSeries, i: int, wp, n: np.ndarray, *
               "d['measurement_mm'], d['reference_distance_mm'], d['landmarks_xyz_mm']"],
 )
 def measure_band_defect(anat: DicomSeries, fluid: DicomSeries, instance: int,
-                        waypoints: Sequence[Tuple[float, float]], *, search: int = 4,
+                        waypoints: Sequence[Tuple[float, float]], *, search: int = 2, pool: int = 3,
                         near_xyz: Optional[Sequence[float]] = None, corridor_mm: float = 6.0,
                         stiffness: float = 0.5, band_mm: float = 2.0, envelope_mm: float = 12.0,
                         smooth_mm: float = 2.5, screen: float = 1.5, level: float = 0.5,
@@ -180,10 +181,13 @@ def measure_band_defect(anat: DicomSeries, fluid: DicomSeries, instance: int,
         ``(row, col)`` pixels along the structure: the first on intact band
         beyond the defect, the last on the landmark the reference distance is
         measured to (e.g. where the structure attaches to bone).
-    search
-        Slices ``instance ± search`` are traced with the same waypoints; the
-        one on which the band is most conspicuous (lowest lower-quartile
-        normalised band signal) is measured. ``0`` measures ``instance`` only.
+    search, pool
+        Slices ``instance ± search`` are traced with the same waypoints and
+        ranked by how conspicuous the band is on them (lowest lower-quartile
+        normalised band signal); of the ``pool`` most conspicuous slices with
+        a defect, the one with the median defect length is reported (one
+        slice alone is noisy; grazing slices are left out). ``search=0``
+        measures ``instance`` only.
     near_xyz
         Optional patient point near the lesion (e.g. a survey location); when
         several runs qualify, the one closest to it is measured. Without it the
@@ -306,11 +310,17 @@ def measure_band_defect(anat: DicomSeries, fluid: DicomSeries, instance: int,
     traced = [r for r in per if "conspicuity" in r]
     if not traced:
         return {"found": False, "slices": per, "warnings": ["the band could not be traced on any slice"]}
-    best = min(traced, key=lambda r: r["conspicuity"])
+    ranked = sorted(traced, key=lambda r: r["conspicuity"])
+    found = [r for r in ranked[:max(1, pool)] if r.get("found")]
+    if found:
+        found = sorted(found, key=lambda r: r["measurement_mm"])
+        best = found[(len(found) - 1) // 2]
+    else:
+        best = ranked[0]
     res = dict(best)
     warn = []
     if not best.get("found"):
-        warn.append(f"no defect run on the most conspicuous slice {best['instance']}")
+        warn.append(f"no defect run on the {pool} most conspicuous slices")
     else:
         if best["beyond_defect_mm"] < 10.0:
             warn.append(f"the reference end lies only {best['beyond_defect_mm']} mm beyond the defect: check "
