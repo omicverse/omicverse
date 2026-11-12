@@ -437,6 +437,7 @@ def score_cluster_signatures(
     lineage_markers: Optional[Mapping[str, Sequence[str]]] = None,
     switch_rule: str = "specific",
     split_axis: str = "increment",
+    identifiable: str = "defining",
 ) -> pd.DataFrame:
     r"""Assign cluster labels from caller-defined marker signatures.
 
@@ -638,6 +639,11 @@ def score_cluster_signatures(
             defining-marker check also compares candidates on
             contrast-weighted evidence.  ``'none'`` keeps the winner
             (``review`` = ``resolved``).
+        identifiable: ``'defining'`` (default): with a ``defining`` mapping,
+            the presence test from background / zero also requires the label
+            to be testable on the panel — most of its defining markers
+            measured, or (none measured) its best marker a stand-out of the
+            cluster — as the ``'defining'`` presence does; ``'any'`` skips it.
         split_axis: ``'increment'`` (default): in non-polar contrast splits
             each child is scored on what it adds to its parent (its positive
             weights above the parent's), so markers shared with the parent do
@@ -731,10 +737,28 @@ def score_cluster_signatures(
         scores = scores - contrast * _contradiction(profile, cmap, signatures, stat,
                                                     skip=set(weak) | {rl})
     top = [l for l in signatures if l not in parents and l != rl and l not in weak]
+    def _identifiable(l, cl):
+        # a label is testable on this panel only if most of its defining
+        # markers are measured; one with no defining marker on the panel only
+        # where its best measured marker is a stand-out of the cluster
+        if not isinstance(defining, Mapping):
+            return True
+        pos = {m: w for m, w in signatures[l].items() if w > 0 and not m.startswith("pos:")}
+        need = {_canon(m): m for m in defining.get(l, []) if m in pos}
+        if need:
+            return 2 * sum(m in cmap for m in need.values()) > len(need)
+        on = {m: w for m, w in pos.items() if m in cmap}
+        if not on:
+            return False
+        best = max(on, key=on.get)
+        return profile.at[cl, f"z:{cmap[best]}"] >= (defining_check[1] if defining_check else 1.5)
+
     def _pres(l, cl):
         if defining is None or pfrom != "defining":
             v = _presence_bg(profile, cmap, signatures[l], cl, weighted_presence,
                              pfrom == "background")
+            if identifiable == "defining" and not _identifiable(l, cl):
+                v = 0.0
         else:
             v = _presence(profile, cmap, signatures[l], cl,
                           defining.get(l) if isinstance(defining, Mapping) else defining,

@@ -465,3 +465,17 @@ def test_single_marker_conflict_keeps_winner_when_other_is_incoherent():
     r = cs.score_cluster_signatures(p, sigs, parents={"MO_c": "MO"}, defining=d)
     assert r.at["x", "alt_label"] == "S" and r.at["x", "alt_lineage_z"] > r.at["x", "lineage_z"]
     assert r.at["x", "top_label"] == "MO" and str(r.at["x", "review"]).startswith("resolved: keep MO")
+
+
+def test_label_with_most_defining_markers_unmeasured_is_not_a_candidate():
+    # F is defined by f1 and f2; the panel measures only f2, which x carries
+    # alongside its own lineage marker (as with an exclusion label in play)
+    mk = ["f2", "g", "o"]
+    spec = {"x": dict(f2=0.8, g=0.7), "g1": dict(g=0.8), "o1": dict(o=0.8), "q": {}}
+    p = cs.cluster_marker_profile(_make(spec, mk), "cluster")
+    sigs = {"F": {"f1": 1.0, "f2": 0.8, "g": 0.4}, "G": {"g": 1.0}, "O": {"o": 1.0}}
+    d = {"F": ["f1", "f2"], "G": ["g"], "O": ["o"]}
+    r = cs.score_cluster_signatures(p, sigs, defining=d, residual_label="R")
+    assert r.at["x", "label"] == "G"
+    loose = cs.score_cluster_signatures(p, sigs, defining=d, residual_label="R", identifiable="any")
+    assert loose.at["x", "label"] == "F"
