@@ -77,10 +77,10 @@ OmicVerseはcondaまたはpypiを通じてインストールでき、最初に`p
 
 <picture>
   <source media="(prefers-color-scheme: dark)" srcset="../README.assets/feature_coverage_dark.png">
-  <img src="../README.assets/feature_coverage_light.png" width="90%" alt="Feature coverage of omicverse and ten other frameworks">
+  <img src="../README.assets/feature_coverage_light.png" width="90%" alt="Feature coverage of omicverse, the scverse ecosystem and ten other frameworks">
 </picture>
 
-49 項目の分析機能（逐一検証済み）における omicverse と他の 10 フレームワークの機能カバレッジ比較です。セルごとの根拠を含む完全な表、データフレームワーク、OmicVerse に含まれる公開ツールの一覧は[ドキュメント](https://omicverse.readthedocs.io/en/latest/Feature_coverage/)を参照してください。
+75 項目の分析機能（逐一検証済み）における omicverse、scverse エコシステムと他の 10 フレームワークの機能カバレッジ比較です。セルごとの根拠を含む完全な表、データフレームワーク、OmicVerse に含まれる公開ツールの一覧は[ドキュメント](https://omicverse.readthedocs.io/en/latest/Feature_coverage/)を参照してください。
 
 ## `4` [お問い合わせ](#)
 

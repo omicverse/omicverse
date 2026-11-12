@@ -81,10 +81,10 @@ OmicVerse可以通过conda或pypi安装，您需要首先安装`pytorch`。请�
 
 <picture>
   <source media="(prefers-color-scheme: dark)" srcset="../README.assets/feature_coverage_dark.png">
-  <img src="../README.assets/feature_coverage_light.png" width="90%" alt="Feature coverage of omicverse and ten other frameworks">
+  <img src="../README.assets/feature_coverage_light.png" width="90%" alt="Feature coverage of omicverse, the scverse ecosystem and ten other frameworks">
 </picture>
 
-omicverse 与另外十个框架在 49 项经逐项核对的分析功能上的覆盖对比。带逐格证据的完整功能表、数据框架以及 OmicVerse 收录的已发表工具清单见[文档](https://omicverse.readthedocs.io/en/latest/Feature_coverage/)。
+omicverse、scverse 生态与另外十个框架在 75 项经逐项核对的分析功能上的覆盖对比。带逐格证据的完整功能表、数据框架以及 OmicVerse 收录的已发表工具清单见[文档](https://omicverse.readthedocs.io/en/latest/Feature_coverage/)。
 
 ## `4` [联系方式](#)
 

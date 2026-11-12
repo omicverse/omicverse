@@ -77,10 +77,10 @@ OmicVerse는 conda 또는 pypi를 통해 설치할 수 있으며 먼저 `pytorch
 
 <picture>
   <source media="(prefers-color-scheme: dark)" srcset="../README.assets/feature_coverage_dark.png">
-  <img src="../README.assets/feature_coverage_light.png" width="90%" alt="Feature coverage of omicverse and ten other frameworks">
+  <img src="../README.assets/feature_coverage_light.png" width="90%" alt="Feature coverage of omicverse, the scverse ecosystem and ten other frameworks">
 </picture>
 
-검증된 49개 분석 기능에서 omicverse와 다른 10개 프레임워크의 기능 범위 비교입니다. 셀별 근거가 포함된 전체 표, 데이터 프레임워크, OmicVerse에 포함된 공개 도구 목록은 [문서](https://omicverse.readthedocs.io/en/latest/Feature_coverage/)에서 확인할 수 있습니다.
+검증된 75개 분석 기능에서 omicverse, scverse 생태계와 다른 10개 프레임워크의 기능 범위 비교입니다. 셀별 근거가 포함된 전체 표, 데이터 프레임워크, OmicVerse에 포함된 공개 도구 목록은 [문서](https://omicverse.readthedocs.io/en/latest/Feature_coverage/)에서 확인할 수 있습니다.
 
 ## `4` [연락처](#)
 

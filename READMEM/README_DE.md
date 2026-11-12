@@ -75,10 +75,10 @@ Agenten-Workflows – OpenClaw, der MCP-Server und die J.A.R.V.I.S.-Nachrichtenb
 
 <picture>
   <source media="(prefers-color-scheme: dark)" srcset="../README.assets/feature_coverage_dark.png">
-  <img src="../README.assets/feature_coverage_light.png" width="90%" alt="Feature coverage of omicverse and ten other frameworks">
+  <img src="../README.assets/feature_coverage_light.png" width="90%" alt="Feature coverage of omicverse, the scverse ecosystem and ten other frameworks">
 </picture>
 
-Funktionsumfang von omicverse im Vergleich zu zehn weiteren Frameworks über 49 geprüfte Analysefunktionen. Die vollständige Tabelle mit Belegen je Zelle, das Daten-Framework und die Liste der in OmicVerse enthaltenen publizierten Tools finden sich in der [Dokumentation](https://omicverse.readthedocs.io/en/latest/Feature_coverage/).
+Funktionsumfang von omicverse im Vergleich zum scverse-Ökosystem und zehn weiteren Frameworks über 75 geprüfte Analysefunktionen. Die vollständige Tabelle mit Belegen je Zelle, das Daten-Framework und die Liste der in OmicVerse enthaltenen publizierten Tools finden sich in der [Dokumentation](https://omicverse.readthedocs.io/en/latest/Feature_coverage/).
 
 ## `4` [Kontakt](#)
 
