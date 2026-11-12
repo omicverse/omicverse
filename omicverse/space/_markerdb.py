@@ -1101,8 +1101,11 @@ def markerdb_signatures(
         if not todo:
             return
         if not tok:
-            raise RuntimeError("OMICOS_USER_TOKEN is not set; the atlas marker endpoint needs "
-                               "an OmicOS account token")
+            raise RuntimeError(
+                "OMICOS_USER_TOKEN is not set; the atlas marker endpoint needs an OmicOS account "
+                "token (OmicOS kernels receive it at start; if it is missing the session has no "
+                "cloud credential). Report this as a blocker. Do NOT substitute marker signatures "
+                "written by hand or from memory: annotations built on them are not evidence-based.")
         chunks = [todo[i:i + 20] for i in range(0, len(todo), 20)]
 
         def fetch(chunk):
@@ -1111,7 +1114,17 @@ def markerdb_signatures(
                                 "include_negative": "true", "pmids_per_gene": 0},
                         headers={"Accept": "application/json", "Authorization": f"Bearer {tok}"},
                         timeout=timeout).get("templates", [])
-        for got in _pmap(fetch, chunks, min(workers, 4)):
+        try:
+            fetched = _pmap(fetch, chunks, min(workers, 4))
+        except Exception as e:
+            code = getattr(getattr(e, "response", None), "status_code", None)
+            if code in (401, 403):
+                raise RuntimeError(
+                    f"the atlas marker endpoint refused the OmicOS token (HTTP {code}). Report this "
+                    "as a blocker. Do NOT substitute marker signatures written by hand or from "
+                    "memory: annotations built on them are not evidence-based.") from e
+            raise
+        for got in fetched:
             for t in got:
                 tmpl_store[t["cell_name"]] = t
         for n in todo:

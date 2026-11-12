@@ -128,7 +128,7 @@ def test_missing_token_raises():
     try:
         mdb.markerdb_signatures(["alpha cell"], ["MA"], server_url="http://x")
     except RuntimeError as e:
-        assert "OMICOS_USER_TOKEN" in str(e)
+        assert "OMICOS_USER_TOKEN" in str(e) and "by hand" in str(e)
     else:
         raise AssertionError("expected RuntimeError")
 
