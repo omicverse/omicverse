@@ -77,10 +77,10 @@ Les workflows d’agents — OpenClaw, le serveur MCP et les bots de messagerie 
 
 <picture>
   <source media="(prefers-color-scheme: dark)" srcset="../README.assets/feature_coverage_dark.png">
-  <img src="../README.assets/feature_coverage_light.png" width="90%" alt="Feature coverage of omicverse and ten other frameworks">
+  <img src="../README.assets/feature_coverage_light.png" width="90%" alt="Feature coverage of omicverse, the scverse ecosystem and ten other frameworks">
 </picture>
 
-Couverture fonctionnelle d’omicverse comparée à dix autres frameworks sur 49 fonctions d’analyse vérifiées. Le tableau complet avec les preuves par cellule, le cadre de données et la liste des outils publiés intégrés à OmicVerse sont dans la [documentation](https://omicverse.readthedocs.io/en/latest/Feature_coverage/).
+Couverture fonctionnelle d’omicverse comparée à l’écosystème scverse et à dix autres frameworks sur 75 fonctions d’analyse vérifiées. Le tableau complet avec les preuves par cellule, le cadre de données et la liste des outils publiés intégrés à OmicVerse sont dans la [documentation](https://omicverse.readthedocs.io/en/latest/Feature_coverage/).
 
 ## `4` [Contact](#)
 

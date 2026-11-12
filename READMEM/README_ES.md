@@ -77,10 +77,10 @@ Los flujos de trabajo con agentes —OpenClaw, el servidor MCP y los bots de men
 
 <picture>
   <source media="(prefers-color-scheme: dark)" srcset="../README.assets/feature_coverage_dark.png">
-  <img src="../README.assets/feature_coverage_light.png" width="90%" alt="Feature coverage of omicverse and ten other frameworks">
+  <img src="../README.assets/feature_coverage_light.png" width="90%" alt="Feature coverage of omicverse, the scverse ecosystem and ten other frameworks">
 </picture>
 
-Cobertura de funciones de omicverse frente a otros diez frameworks en 49 funciones de análisis verificadas. La tabla completa con evidencia por celda, el marco de datos y la lista de herramientas publicadas incluidas en OmicVerse están en la [documentación](https://omicverse.readthedocs.io/en/latest/Feature_coverage/).
+Cobertura de funciones de omicverse frente al ecosistema scverse y otros diez frameworks en 75 funciones de análisis verificadas. La tabla completa con evidencia por celda, el marco de datos y la lista de herramientas publicadas incluidas en OmicVerse están en la [documentación](https://omicverse.readthedocs.io/en/latest/Feature_coverage/).
 
 ## `4` [Contacto](#)
 

@@ -102,10 +102,10 @@ Agent workflows â€” OpenClaw, the MCP server and the J.A.R.V.I.S. message bots â
 
 <picture>
   <source media="(prefers-color-scheme: dark)" srcset="README.assets/feature_coverage_dark.png">
-  <img src="README.assets/feature_coverage_light.png" width="90%" alt="Feature coverage of omicverse and ten other frameworks">
+  <img src="README.assets/feature_coverage_light.png" width="90%" alt="Feature coverage of omicverse, the scverse ecosystem and ten other frameworks">
 </picture>
 
-Feature coverage of omicverse and ten other frameworks over 49 audited analysis features. The full table with per-cell evidence, the data framework and the list of published tools included in OmicVerse are in the [documentation](https://omicverse.readthedocs.io/en/latest/Feature_coverage/).
+Feature coverage of omicverse, the scverse ecosystem and ten other frameworks over 75 audited analysis features. The full table with per-cell evidence, the data framework and the list of published tools included in OmicVerse are in the [documentation](https://omicverse.readthedocs.io/en/latest/Feature_coverage/).
 
 ## `4` [Contact](#)
 
