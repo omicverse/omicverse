@@ -79,3 +79,15 @@ def test_ledger_effects_and_checks():
 def test_recompute_check():
     r = recompute_group_test(20, 146.07, 65.66, 20, 69.75, 5.72, reported_F=26.8)
     assert r["matches"] and r["df"] == 38
+
+
+def test_apply_selection_rules():
+    from omicverse.tl._meta_analysis import apply_selection_rules
+    led = pd.DataFrame({
+        "study": ["a", "a", "a", "b", "b", "a"],
+        "family": ["sorting", "sorting", "fluency", "sorting", "fluency", "memory"],
+        "stat_class": ["errors", "categories", "Phonemic count ", "categories", "other variant", "recall"]})
+    rules = {"sorting": {"select": ["errors"], "fallback": {"categories": ["errors"]}},
+             "fluency": {"select": ["phonemic count", "semantic count"]}}
+    d = apply_selection_rules(led, rules)
+    assert list(d["decision"]) == ["keep", "exclude", "keep", "keep", "exclude", "exclude"]

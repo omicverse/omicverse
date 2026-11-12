@@ -32,7 +32,7 @@ import pandas as pd
 from .._registry import register_function
 
 __all__ = ["parse_mean_sd", "extract_group_stats", "group_comparisons", "pool_group_stats", "hedges_g",
-           "sd_from_summary", "recompute_group_test", "meta_effect_sizes"]
+           "sd_from_summary", "recompute_group_test", "meta_effect_sizes", "apply_selection_rules"]
 
 _NUM = r"[-−–]?\s?(?:\d{1,3}(?:,\d{3})+|\d+)?(?:[.,·]\d+)?"
 
@@ -611,3 +611,57 @@ def recompute_group_test(n1, m1, s1, n2, m2, s2, reported_t: Optional[float] = N
     elif reported_t is not None:
         match = bool(abs(abs(t) - abs(reported_t)) <= rtol * max(abs(reported_t), 1e-9))
     return {"t": t, "F": t * t, "p": p, "df": df, "matches": match}
+
+
+@register_function(
+    aliases=["应用测量选择规则", "apply measure selection rules", "meta-analysis admissibility rules",
+             "decide candidate comparisons"],
+    category="utils",
+    description="Decide every candidate comparison of a meta-analysis ledger mechanically from a written "
+                "rule table: each candidate carries (study, task family, statistic class); a family absent "
+                "from the rules is out of scope; a class listed in the family's 'select' is kept; a class "
+                "listed under 'fallback' is kept only when the same study reports none of its preferred "
+                "classes for that family; anything else is excluded. Returns decision + reason per row and "
+                "flags families / classes used inconsistently.",
+    examples=["rules = {'task family A': {'select': ['reaction time', 'errors'], 'quote': '...'},\n"
+              "         'task family B': {'select': ['score X'], 'fallback': {'score Y': ['score X']}}}",
+              "dec = ov.tl.apply_selection_rules(ledger, rules, study='doi')"],
+    related=["tl.extract_group_stats", "tl.meta_effect_sizes"],
+)
+def apply_selection_rules(ledger: pd.DataFrame, rules: dict, study: str = "study",
+                          family: str = "family", stat_class: str = "stat_class") -> pd.DataFrame:
+    """Return ``ledger`` with ``decision`` ('keep' / 'exclude') and ``reason`` columns.
+
+    ``rules`` maps a task family (or a comparison-measure family) to
+    ``{"select": [classes], "fallback": {class: [preferred classes]}, "quote": "..."}``.
+    Write the rule table from the method paper / instruction BEFORE deciding, with the quote
+    that names the classes; label each candidate's family and class from the article; then let
+    this function decide. Names are compared case-insensitively after stripping.
+    Rows whose family or class is empty are returned with decision 'undecided'.
+    """
+    norm = lambda x: re.sub(r"\s+", " ", str(x)).strip().casefold()
+    R = {norm(f): {"select": {norm(c) for c in r.get("select", [])},
+                   "fallback": {norm(c): {norm(p) for p in ps} for c, ps in (r.get("fallback") or {}).items()}}
+         for f, r in rules.items()}
+    df = ledger.copy()
+    fam = df[family].map(norm)
+    cls = df[stat_class].map(norm)
+    present = set(zip(df[study].map(norm), fam, cls))
+    dec, why = [], []
+    for s_, f_, c_ in zip(df[study].map(norm), fam, cls):
+        if not f_ or f_ == "nan" or not c_ or c_ == "nan":
+            dec.append("undecided"); why.append("family / class not labelled")
+        elif f_ not in R:
+            dec.append("exclude"); why.append(f"family '{f_}' not in the method's scope")
+        elif c_ in R[f_]["select"]:
+            dec.append("keep"); why.append(f"'{c_}' is a selected statistic of '{f_}'")
+        elif c_ in R[f_]["fallback"]:
+            pref = R[f_]["fallback"][c_]
+            if any((s_, f_, p) in present for p in pref):
+                dec.append("exclude"); why.append(f"fallback '{c_}' not used: study reports {sorted(pref)}")
+            else:
+                dec.append("keep"); why.append(f"fallback '{c_}' used: study reports none of {sorted(pref)}")
+        else:
+            dec.append("exclude"); why.append(f"'{c_}' is not a selected statistic of '{f_}'")
+    df["decision"], df["reason"] = dec, why
+    return df
