@@ -97,8 +97,14 @@ def identify_robust_genes(data: anndata.AnnData, percent_cells: float = 0.05) ->
     # OOM goes through chunked_identify_robust_genes in preprocess(); this
     # function only runs for regular AnnData.
     if issparse(data.X):
-        data.var["n_cells"] = data.X.getnnz(axis=0)
-        data._inplace_subset_var(data.var["n_cells"] > 0)
+        from ._qc import _fast_cut
+        if _fast_cut(data, None) is not None:
+            from .._backend import cpp_memory
+            data.var["n_cells"] = cpp_memory().stored_counts(data.X)  # threaded getnnz(axis=0)
+        else:
+            data.var["n_cells"] = data.X.getnnz(axis=0)
+        from ._qc import subset_inplace
+        subset_inplace(data, var=(data.var["n_cells"] > 0).values)
         data.var["percent_cells"] = (data.var["n_cells"] / data.shape[0]) * 100
         data.var["robust"] = data.var["percent_cells"] >= percent_cells
     else:
@@ -738,7 +744,13 @@ def preprocess(
         # Dask transforms below build new blocks instead of editing these)
         adata.layers['counts'] = adata.X
     else:
-        adata.layers['counts'] = adata.X.copy()
+        # In-memory CSR with backend='cpp': the counts layer is a threaded
+        # copy made after the robust-gene cut below (one copy instead of
+        # copying and then cutting X and counts separately).
+        from ._qc import _fast_cut
+        _defer_counts = _fast_cut(adata, backend) is not None
+        if not _defer_counts:
+            adata.layers['counts'] = adata.X.copy()
     
     
     print(f"{EMOJI['start']} [{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}] Running preprocessing in '{settings.mode}' mode...")
@@ -757,8 +769,13 @@ def preprocess(
         elif dask_X:
             _dask.subset_var(adata, adata.var['robust'].values)
         else:
-            adata = adata[:, adata.var['robust']]
+            # in place rather than a view: every access to a view's X re-slices
+            # the whole matrix
+            from ._qc import subset_inplace
+            subset_inplace(adata, var=adata.var['robust'].values, backend=backend)
         print(f"{EMOJI['done']} Robust gene identification completed successfully.")
+    if not (is_oom or dask_X) and _defer_counts:
+        adata.layers['counts'] = _fast_cut(adata, backend)(adata.X)
     method_list = mode.split('|')
     print(f"{Colors.CYAN}Begin size normalization: {method_list[0]} and HVGs selection {method_list[1]}{Colors.ENDC}")
     if exclude_highly_expressed is None:
@@ -1130,6 +1147,67 @@ def highly_variable_genes(
          viz=[{"function": "ov.pl.highly_variable_genes_scatter", "kwargs": {}}])
     return result
 
+def _dense_limit_gb():
+    import os
+    return float(os.environ.get("OV_SCALE_DENSE_LIMIT_GB", "32"))
+
+
+def _lazy_scale_applies(adata, backend, layers_add, kwargs):
+    """In-memory CSR X in a CPU mode with backend='cpp' (and anndataoom-fast
+    with ``scale(cols=)``): the scaled layer can stay implicit."""
+    from .._backend import resolve_backend
+    from ._qc import _is_oom
+    if (layers_add != 'scaled' or not kwargs.get('zero_center', True) or set(kwargs) - {'zero_center'}
+            or settings.mode not in ('cpu', 'cpu-gpu-mixed') or _is_oom(adata)
+            or resolve_backend(backend) != 'cpp'
+            or not (issparse(adata.X) and adata.X.format == 'csr')):
+        return False
+    from .._backend import cpp_memory
+    return hasattr(cpp_memory(), 'scale_stats')
+
+
+def _scale_lazy(adata, max_value):
+    """Keep the z-score statistics instead of the dense scaled matrix;
+    ``ov.pp.pca`` rebuilds the columns it needs (identical values)."""
+    from .._backend import cpp_memory
+    mean, std = cpp_memory().scale_stats(adata.X)
+    adata.var['mean'] = mean
+    adata.var['std'] = std
+    if 'scaled' in adata.layers:
+        del adata.layers['scaled']
+    adata.uns.pop('_scaled_implicit', None)
+    adata.uns.setdefault('status', {})['scaled'] = True
+    adata.uns.setdefault('status_args', {})['scaled'] = {
+        'implicit': 'X', 'max_value': max_value,
+        'shape': [int(adata.n_obs), int(adata.n_vars)], 'nnz': int(adata.X.nnz)}
+    gb = adata.n_obs * adata.n_vars * 8 / 1e9
+    print(f"{Colors.BLUE}    Scaled layer kept implicit (dense would be {gb:.0f} GB): "
+          f"adata.var['mean'/'std'] hold the statistics and ov.pp.pca builds the "
+          f"HVG columns from adata.X. Pass use_implicit_centering=False for a "
+          f"dense adata.layers['scaled'].{Colors.ENDC}")
+    add_reference(adata, 'scanpy', 'scaling with scanpy')
+    note(backend=f"omicverse({settings.mode}) · implicit")
+
+
+def _lazy_scaled_hvg(adata, layer):
+    """Dense HVG columns of the implicit scaled layer, or None."""
+    sa = adata.uns.get('status_args', {}).get('scaled', {})
+    if layer != 'scaled' or layer in adata.layers or not isinstance(sa, dict) \
+            or sa.get('implicit') != 'X':
+        return None, None
+    if list(sa.get('shape', [])) != [adata.n_obs, adata.n_vars] or \
+            int(sa.get('nnz', -1)) != int(adata.X.nnz):
+        raise ValueError("adata.X changed since ov.pp.scale (implicit scaled layer); "
+                         "run ov.pp.scale again.")
+    from .._backend import cpp_memory
+    hv = adata.var['highly_variable'] if 'highly_variable' in adata.var.columns else None
+    mask = np.asarray(hv, dtype=bool) if hv is not None else np.ones(adata.n_vars, dtype=bool)
+    Z = cpp_memory().scale(adata.X, max_value=sa.get('max_value'),
+                           mean=adata.var['mean'].values, std=adata.var['std'].values,
+                           cols=mask)[0]
+    return Z, mask
+
+
 @monitor
 @register_function(
     aliases=["标准化", "scale", "scaling", "标准化处理"],
@@ -1148,7 +1226,7 @@ def highly_variable_genes(
 )
 @tracked("scale", "ov.pp.scale")
 def scale(adata, max_value=10, layers_add='scaled', to_sparse=False,
-          use_implicit_centering=False, backend=None, **kwargs):
+          use_implicit_centering=None, backend=None, **kwargs):
     """
     Scale the input AnnData object.
 
@@ -1170,7 +1248,11 @@ def scale(adata, max_value=10, layers_add='scaled', to_sparse=False,
             60606 genes that is ~240 GB, the difference between OOM-killed and
             completing under a typical 256 GB per-process RSS cap. ``ov.pp.pca``
             densifies only the HVG-subset slice the SVD actually needs.
-            Default: False (preserves existing behavior). Ignored on the OOM
+            With ``backend='cpp'`` (default) the lazy form keeps only the
+            per-gene ``mean``/``std`` in ``adata.var`` (h5ad-writable) and
+            ``ov.pp.pca`` rebuilds exactly the HVG columns of the dense
+            result. Default ``None``: lazy when the dense matrix would exceed
+            32 GB (``OV_SCALE_DENSE_LIMIT_GB``), dense otherwise. Ignored on the OOM
             backend (which already uses a lazy ``ScaledBackedArray``) and on
             GPU mode.
         **kwargs: Additional arguments passed to scaling functions.
@@ -1213,6 +1295,13 @@ def scale(adata, max_value=10, layers_add='scaled', to_sparse=False,
     # (c) adata.X is sparse (the densification this avoids is exactly the
     # sparse zero-centering step). zero_center defaults True in kwargs.
     _zero_center = kwargs.get('zero_center', True)
+    from .._backend import resolve_backend
+    _lazy_cpp = _lazy_scale_applies(adata, backend, layers_add, kwargs)
+    if _lazy_cpp and (use_implicit_centering or (
+            use_implicit_centering is None
+            and adata.n_obs * adata.n_vars * 8 / 1e9 > _dense_limit_gb())):
+        _scale_lazy(adata, max_value)
+        return
     if (use_implicit_centering
             and (settings.mode == 'cpu' or settings.mode == 'cpu-gpu-mixed')
             and _zero_center
@@ -1534,6 +1623,32 @@ def pca(adata, n_pcs=50, layer='scaled',inplace=True,random_state=SEED_DEFAULT,b
     _has_implicit_scaled = (
         layer == 'scaled' and '_scaled_implicit' in adata.uns
     )
+    _Z, _zmask = _lazy_scaled_hvg(adata, layer)
+    if _Z is not None and settings.mode in ('cpu', 'cpu-gpu-mixed'):
+        # ov.pp.scale kept the scaled layer implicit: PCA on exactly the HVG
+        # columns of the dense scaled matrix, built from adata.X.
+        from ._pca import pca as _pca
+        key = f'{layer}|original'
+        tmp = anndata.AnnData(X=_Z)
+        if settings.mode == 'cpu-gpu-mixed' and kwargs.get("svd_solver", "auto") in (None, "auto"):
+            kwargs["svd_solver"] = "covariance_eigh"
+        _pca(tmp, layer=None, n_comps=n_pcs, use_gpu=settings.mode == 'cpu-gpu-mixed',
+             **({} if settings.mode == 'cpu-gpu-mixed' else {'backend': backend}), **kwargs)
+        del _Z
+        pcs = np.zeros((adata.n_vars, tmp.varm['PCs'].shape[1]), dtype=tmp.varm['PCs'].dtype)
+        pcs[_zmask] = tmp.varm['PCs']
+        adata.obsm['X_pca'] = tmp.obsm['X_pca']
+        adata.varm['PCs'] = pcs
+        adata.uns['pca'] = tmp.uns['pca']
+        adata.obsm[key + '|X_pca'] = adata.obsm['X_pca']
+        adata.varm[key + '|pca_loadings'] = adata.varm['PCs']
+        adata.uns[key + '|pca_var_ratios'] = adata.uns['pca']['variance_ratio']
+        adata.uns[key + '|cum_sum_eigenvalues'] = adata.uns['pca']['variance']
+        adata.uns.setdefault('status', {})['pca'] = True
+        adata.uns.setdefault('status_args', {})['pca'] = {'layer': layer, 'n_pcs': n_pcs}
+        add_reference(adata, 'scanpy', 'PCA with scanpy')
+        note(backend=f"omicverse({settings.mode}) · implicit scaled")
+        return None if inplace else adata
     if layer in adata.layers:
         X = adata.layers[layer]
         key = f'{layer}|original'

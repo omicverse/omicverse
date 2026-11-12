@@ -450,14 +450,33 @@ def log1p_sparse(x: CSBase, *, base: Number | None = None, copy: bool = False):
     x = check_array(
         x, accept_sparse=("csr", "csc"), dtype=(np.float64, np.float32), copy=copy
     )
+    d = x.data
+    if d.size >= 1 << 24 and d.flags.c_contiguous:
+        # large matrices: in place on all threads (the result replaces x.data
+        # anyway, so nothing else sees the intermediate)
+        from ._qc import threaded_chunks
+        scale = None if base is None else 1.0 / np.log(base)
+        def _part(a, b):
+            np.log1p(d[a:b], out=d[a:b])
+            if scale is not None:
+                np.multiply(d[a:b], scale, out=d[a:b])
+        threaded_chunks(_part, d.size)
+        return x
     x.data = _log1p(x.data, copy=False, base=base)
     return x
 
 
 
+from scipy.sparse import issparse as _sp_issparse
+
+
 def log1p_array(x: np.ndarray, *, base: Number | None = None, copy: bool = False):
     # Can force arrays to be np.ndarrays, but would be useful to not
     # X = check_array(X, dtype=(np.float64, np.float32), ensure_2d=False, copy=copy)
+    if _sp_issparse(x) and getattr(x, "format", None) in ("csr", "csc") and x.data.size >= 1 << 24:
+        # large sparse matrices: in place on all threads instead of np.log1p's
+        # deduplicate + copy of the whole matrix
+        return log1p_sparse(x, base=base, copy=copy)
     
     if copy:
         x = x.astype(float) if not np.issubdtype(x.dtype, np.floating) else x.copy()
