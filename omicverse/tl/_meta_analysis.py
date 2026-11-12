@@ -144,6 +144,8 @@ def _grid(table_html: str) -> List[List[str]]:
                 c_i += 1
             cs = int((re.search(r'colspan="?(\d+)', attrs) or [None, 1])[1])
             rs = int((re.search(r'rowspan="?(\d+)', attrs) or [None, 1])[1])
+            if c_i == 0 and cs > 1 and txt and re.search(r'center', attrs, re.I):
+                txt = "\x01" + txt          # a centred spanning label: top-level section
             for k in range(cs):
                 row.append(txt)
                 for d in range(1, rs):
@@ -164,11 +166,15 @@ def _is_num(s: str) -> bool:
 def _table_candidates(caption: str, grid: List[List[str]], table_id: str) -> List[dict]:
     if not grid:
         return []
+    top = [bool(r) and str(r[0]).startswith("\x01") for r in grid]
+    grid = [[str(c).replace("\x01", "") for c in r] for r in grid]
     ncol = len(grid[0])
     # header rows: leading rows with no numeric cell outside the first column
     h = 0
     def _section_like(row):
-        return bool(_clean(row[0])) and not any(_clean(c) for c in row[1:])
+        # only a label (a spanning section cell repeats the label in every column)
+        first = _clean(row[0])
+        return bool(first) and all(_clean(c) in ("", first) for c in row[1:])
 
     while h < len(grid) and h < 4 and not any(_is_num(c) for c in grid[h][1:]) \
             and not (h > 0 and _section_like(grid[h])):
@@ -206,21 +212,31 @@ def _table_candidates(caption: str, grid: List[List[str]], table_id: str) -> Lis
     out = []
     section: List[str] = []
     prev_data = False
-    for row in body:
+    styled = False
+    body_top = top[len(top) - len(body):] if msd_row is None else None
+    for bi, row in enumerate(body):
         cells = [_clean(c) for c in row]
+        is_top = bool(body_top[bi]) if body_top is not None else False
         label = " ".join(dict.fromkeys(c for c in cells[:nlab] if c))
         data = cells[nlab:]
-        if label and not any(data):
+        if label and all(d in ("", label) for d in data):
             # section header row (indentation is lost): after a data row it starts a sibling of
             # the innermost section, after another section row it nests under it
-            section = (section[:-1] + [label]) if prev_data else (section + [label])[-2:]
+            if is_top:
+                section, styled = [label], True
+            else:
+                section = (section[:-1] + [label]) if prev_data else (section + [label])[-3:]
             prev_data = False
             continue
         if not label:
             continue
         prev_data = True
         # the innermost section names the task; outer levels are ambiguous once indentation is lost
-        full = f"{section[-1]}: {label}" if section else label
+        # (unless the markup marks top-level sections, e.g. centred spanning cells)
+        if styled:
+            full = ": ".join(section + [label])
+        else:
+            full = f"{section[-1]}: {label}" if section else label
         c = nlab
         while c < ncol:
             cell = cells[c]
@@ -229,7 +245,7 @@ def _table_candidates(caption: str, grid: List[List[str]], table_id: str) -> Lis
             if pair is not None:
                 out.append({"table": table_id, "caption": caption, "row": full, "group": grp,
                             "n_header": _n_of(grp), "mean": pair[0], "sd": pair[1], "raw": cell,
-                            "layout": "cell"})
+                            "layout": "cell", "row_no": bi, "section": " > ".join(section)})
                 c += 1
                 continue
             if sub[c] and _M_HDR.match(sub[c]) and c + 1 < ncol and _SD_HDR.match(sub[c + 1] or ""):
@@ -237,7 +253,8 @@ def _table_candidates(caption: str, grid: List[List[str]], table_id: str) -> Lis
                 if m_ is not None and s_ is not None:
                     out.append({"table": table_id, "caption": caption, "row": full, "group": grp,
                                 "n_header": _n_of(grp), "mean": m_, "sd": s_,
-                                "raw": f"{cell} | {cells[c + 1]}", "layout": "M|SD columns"})
+                                "raw": f"{cell} | {cells[c + 1]}", "layout": "M|SD columns",
+                                "row_no": bi, "section": " > ".join(section)})
                 c += 2
                 continue
             c += 1
@@ -328,7 +345,9 @@ def extract_group_stats(source: Union[str, Path], kind: Optional[str] = None,
     include_text
         Also scan the running text (and PDF text lines) for in-text statistics.
 
-    Columns: ``table, caption, row, group, n_header, mean, sd, raw, layout, context``.
+    Columns: ``table, caption, section, row, group, n_header, mean, sd, raw, layout, row_no, context``
+    (``row`` = innermost section + row label; ``section`` = the section path, whose outer levels
+    are a best guess when the markup carries no indentation; ``row_no`` orders table rows).
     Every candidate still has to be *decided* (which group is case / control, whether the
     measure is admissible); the ledger only guarantees that nothing printed is overlooked.
     """
@@ -363,8 +382,8 @@ def extract_group_stats(source: Union[str, Path], kind: Optional[str] = None,
             rows += _text_candidates(plain, name)
     else:
         rows += _text_candidates(text, name)
-    led = pd.DataFrame(rows, columns=["table", "caption", "row", "group", "n_header", "mean", "sd", "raw",
-                                      "layout", "context"])
+    led = pd.DataFrame(rows, columns=["table", "caption", "section", "row", "group", "n_header", "mean", "sd",
+                                      "raw", "layout", "row_no", "context"])
     led.attrs["source"] = name
     return led
 
@@ -541,7 +560,10 @@ def group_comparisons(ledger: pd.DataFrame, case: str, control: str, n_map: Opti
     led["is_case"] = led["group"].astype(str).str.contains(case, flags=flags, regex=True)
     led["is_ctrl"] = led["group"].astype(str).str.contains(control, flags=flags, regex=True) & ~led["is_case"]
     out = []
-    for (t, r), g in led.groupby(["table", "row"], sort=False):
+    key = ["table", "row", "row_no"] if "row_no" in led else ["table", "row"]
+    led = led.assign(row_no=led["row_no"].fillna(-1)) if "row_no" in led else led
+    for kk, g in led.groupby(key, sort=False):
+        t, r = kk[0], kk[1]
         ca, co = g[g["is_case"]], g[g["is_ctrl"]]
         if ca.empty or co.empty or ca["n"].isna().any() or co["n"].isna().any():
             continue
