@@ -3,7 +3,7 @@ import pandas as pd
 from scipy.sparse import issparse
 from matplotlib.colors import cnames, is_color_like, ListedColormap, to_rgb
 from matplotlib import patheffects, rcParams
-import scanpy as sc
+from ..pl._scanpy_compat import zeileis_28 as _zeileis_28, default_102 as _default_102
 import anndata
 from collections.abc import Sequence as SequenceABC
 from typing import Union, Sequence
@@ -225,9 +225,9 @@ def adjust_palette(palette, length):
         not isinstance(palette, list) and len(palette.by_key()["color"]) < length
     ):
         if length <= 28:
-            palette = sc.pl.palettes.zeileis_28
-        elif length <= len(sc.pl.palettes.zeileis_102):  # 103 colors
-            palette = sc.pl.palettes.zeileis_102
+            palette = _zeileis_28
+        elif length <= len(_default_102):  # 103 colors
+            palette = _default_102
         else:
             palette = ["grey" for _ in range(length)]
             print("more than 103 colors would be required, initializing as 'grey'")
@@ -545,7 +545,7 @@ def set_colors_for_categorical_obs(adata, value_to_plot, palette=None):
     length = len(categories)
 
     if isinstance(palette, str) and "default" in palette:
-        palette = sc.pl.palettes.zeileis_28 if length <= 28 else sc.pl.palettes.zeileis_102
+        palette = _zeileis_28 if length <= 28 else _default_102
     if isinstance(palette, str) and palette in adata.uns:
         palette = (
             [adata.uns[palette][c] for c in categories]
@@ -646,9 +646,9 @@ def set_colors_for_categorical_obs(adata, value_to_plot, palette=None):
         # Else fall back to default palettes
         else:
             if length <= 28:
-                palette = sc.pl.palettes.zeileis_28
-            elif length <= len(sc.pl.palettes.zeileis_102):  # 103 colors
-                palette = sc.pl.palettes.zeileis_102
+                palette = _zeileis_28
+            elif length <= len(_default_102):  # 103 colors
+                palette = _default_102
             else:
                 palette = ["grey" for _ in range(length)]
                 print(

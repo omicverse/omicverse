@@ -1,4 +1,3 @@
-import scanpy as sc
 import pandas as pd
 import numpy as np
 import anndata as ad
@@ -301,7 +300,8 @@ class XDict(dict):
 
 def clean_batches(data):
     # Remove batch with less than 1000 cells
-    sc.pp.filter_cells(data, min_counts=5)
+    from ....pp import filter_cells
+    filter_cells(data, min_counts=5)
     remove_list = []
     for b in data.obs['batch'].value_counts().reset_index().iterrows():
         if b[1]['batch'] < 500:

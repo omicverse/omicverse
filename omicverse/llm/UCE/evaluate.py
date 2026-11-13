@@ -5,7 +5,7 @@ import warnings
 
 warnings.filterwarnings("ignore")
 
-import scanpy as sc
+import anndata
 from tqdm.auto import tqdm
 from torch import nn, Tensor
 
@@ -98,7 +98,7 @@ class AnndataProcessor:
                                        self.shapes_dict_path)
 
             if self.adata is None:
-                self.adata = sc.read(self.proc_h5_path)
+                self.adata = anndata.read_h5ad(self.proc_h5_path)
 
     def save_shapes_dict(self, name, num_cells, num_genes, shapes_dict_path):
         shapes_dict = {name: (num_cells, num_genes)}
