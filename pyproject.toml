@@ -117,6 +117,9 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
+# Optional moscot backend (roadmap #989).
+moscot = ["moscot>=0.5.2,<0.6"]
+
 # scanpy itself: no longer needed by omicverse's own code (vendored tools under
 # omicverse/external and third-party workflows may still use it).
 scanpy = [
