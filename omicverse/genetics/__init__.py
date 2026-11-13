@@ -95,6 +95,8 @@ Family haplotypes         ``two_phase_weights``, ``haplotype_frequencies``,
                           ``fit_haplotype_prior`` (covariate / group /
                           shared-family prior under biased sampling),
                           ``fit_crossover_intervals``, ``gamete_sequences``,
+                          ``gamete_distribution``,
+                          ``genotype_likelihood_arrays``,
                           ``confident_copy_calls``, ``compatible_diplotypes``,
                           ``structural_identifiability``,
                           ``simulate_family_cohort``, ``pedigree_core_source``
@@ -193,6 +195,8 @@ _LAZY_ATTRS: dict[str, tuple[str, str]] = {
     "HaplotypePrior":          ("._pedigree", "HaplotypePrior"),
     "fit_crossover_intervals": ("._pedigree", "fit_crossover_intervals"),
     "gamete_sequences":        ("._pedigree", "gamete_sequences"),
+    "gamete_distribution":     ("._pedigree", "gamete_distribution"),
+    "genotype_likelihood_arrays": ("._pedigree", "genotype_likelihood_arrays"),
     "confident_copy_calls":    ("._pedigree", "confident_copy_calls"),
     "compatible_diplotypes":   ("._pedigree", "compatible_diplotypes"),
     "structural_identifiability": ("._pedigree", "structural_identifiability"),

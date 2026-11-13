@@ -15,6 +15,8 @@ via :func:`pedigree_core_source`.
 ``fit_crossover_intervals``      no-crossover / per-interval crossover masses
                                  from phased parents + ordered transmissions.
 ``gamete_sequences``             transmitted sequences with <= k crossovers.
+``gamete_distribution``          their probabilities for any pair of sequences.
+``genotype_likelihood_arrays``   long assay rows -> per-sample arrays.
 ``confident_copy_calls``         hard copy-number constraints from
                                  genotype-likelihood triplets.
 ``compatible_diplotypes``        catalog diplotypes consistent with them.
@@ -33,7 +35,8 @@ from . import _pedigree_core as _core
 
 __all__ = [
     "two_phase_weights", "haplotype_frequencies", "fit_haplotype_prior", "HaplotypePrior",
-    "fit_crossover_intervals", "gamete_sequences", "confident_copy_calls",
+    "fit_crossover_intervals", "gamete_sequences", "gamete_distribution",
+    "genotype_likelihood_arrays", "confident_copy_calls",
     "compatible_diplotypes", "structural_identifiability", "simulate_family_cohort",
     "pedigree_core_source",
 ]
@@ -103,6 +106,29 @@ gamete_sequences = register_function(
     examples=["g = ov.genetics.gamete_sequences('0110', '1011', max_crossovers=1)"],
     related=["ov.genetics.structural_identifiability"],
 )(_core.gamete_sequences)
+
+gamete_distribution = register_function(
+    aliases=["gamete_distribution", "transmission probabilities", "offspring haplotype distribution",
+             "配子分布", "传递概率"],
+    category="genetics",
+    description="Probability of every sequence a parent transmits in one meiosis (start homologue 1/2, "
+                "no crossover or one crossover per interval with given masses), for any pair of "
+                "sequences -- including sequences outside a haplotype catalog. Basis for state-"
+                "conditional offspring risks and transmission likelihoods.",
+    examples=["seqs, p = ov.genetics.gamete_distribution(h1, h2, rec['no_crossover'], rec['interval_masses'])"],
+    related=["ov.genetics.fit_crossover_intervals", "ov.genetics.gamete_sequences"],
+)(_core.gamete_distribution)
+
+genotype_likelihood_arrays = register_function(
+    aliases=["genotype_likelihood_arrays", "assay likelihood table to arrays", "基因型似然矩阵"],
+    category="genetics",
+    description="Convert long-format genotype-likelihood rows (sample, locus, call status, likelihoods "
+                "of copy number 0/1/2) into per-sample (n_loci, 3) arrays plus a called mask, in a "
+                "given locus order; uncalled loci are NaN.",
+    examples=["lik = ov.genetics.genotype_likelihood_arrays(df.sample_id, df.locus_id, df.assay_status, "
+              "df.likelihood_0, df.likelihood_1, df.likelihood_2, loci_order)"],
+    related=["ov.genetics.confident_copy_calls", "ov.genetics.structural_identifiability"],
+)(_core.genotype_likelihood_arrays)
 
 confident_copy_calls = register_function(
     aliases=["confident_copy_calls", "high-confidence genotype calls", "hard genotype constraints",

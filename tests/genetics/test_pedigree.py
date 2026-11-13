@@ -191,3 +191,39 @@ def test_core_source_is_standalone(tmp_path):
     mod = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(mod)
     assert mod.structural_identifiability(["00", "11"], np.array([0, 0]), np.array([2, 2]))[0] == "IDENTIFIABLE"
+
+
+def test_gamete_distribution():
+    seqs, p = pc.gamete_distribution("000", "111", 0.6, [0.3, 0.1])
+    d = dict(zip(seqs, p))
+    assert d["000"] == pytest.approx(0.3) and d["111"] == pytest.approx(0.3)
+    assert d["011"] == pytest.approx(0.15) and d["100"] == pytest.approx(0.15)
+    assert d["001"] == pytest.approx(0.05) and d["110"] == pytest.approx(0.05)
+    assert p.sum() == pytest.approx(1.0)
+    # identical homologues: everything merges; sequences outside any catalog work
+    seqs, p = pc.gamete_distribution("0101", "0101", 0.5, [0.2, 0.2, 0.1])
+    assert seqs == ["0101"] and p[0] == pytest.approx(1.0)
+    # consistent with the EM model of fit_crossover_intervals
+    sim_rng = np.random.default_rng(0)
+    m = np.array([0.5, 0.2, 0.2, 0.1])
+    pairs, trans = [], []
+    for _ in range(4000):
+        h1, h2 = "0000", "1111"
+        seqs, p = pc.gamete_distribution(h1, h2, m[0], m[1:])
+        trans.append(seqs[sim_rng.choice(len(seqs), p=p)])
+        pairs.append((h1, h2))
+    rec = pc.fit_crossover_intervals(pairs, trans, concentrations=(0.01,))
+    assert rec["no_crossover"] == pytest.approx(0.5, abs=0.03)
+    assert np.allclose(rec["interval_masses"], m[1:], atol=0.03)
+
+
+def test_genotype_likelihood_arrays():
+    rows = [("s1", "L1", "CALLED", "0.9", "0.1", "0"), ("s1", "L2", "NO_CALL", "", "", ""),
+            ("c1", "L2", "CALLED", "0", "0.2", "0.8")]
+    out = pc.genotype_likelihood_arrays(*zip(*rows), loci_order=["L1", "L2"])
+    lik, called = out["s1"]
+    assert called.tolist() == [True, False] and np.isnan(lik[1]).all()
+    lik, called = out["c1"]
+    assert called.tolist() == [False, True] and lik[1].tolist() == [0.0, 0.2, 0.8]
+    cc = pc.confident_copy_calls(lik, called, min_probability=0.72, min_ratio=3.0)
+    assert cc.tolist() == [-1, 2]

@@ -31,12 +31,16 @@ Population haplotypes
 Meiosis
     ``gamete_sequences``             transmitted sequences with at most k
                                      crossovers.
+    ``gamete_distribution``          probability of each transmitted sequence
+                                     (any pair of sequences, <= 1 crossover).
     ``fit_crossover_intervals``      EM estimate of the no-crossover mass and
                                      per-interval single-crossover masses
                                      from phased parents + ordered
                                      transmissions (ambiguous origins
                                      marginalised).
 Structural certificates
+    ``genotype_likelihood_arrays``   long-format assay rows -> per-sample
+                                     (n_loci, 3) likelihood arrays.
     ``confident_copy_calls``         per-locus hard copy-number constraints
                                      from genotype-likelihood triplets.
     ``compatible_diplotypes``        catalog diplotypes matching constraints.
@@ -62,6 +66,8 @@ __all__ = [
     "fit_haplotype_prior",
     "HaplotypePrior",
     "gamete_sequences",
+    "gamete_distribution",
+    "genotype_likelihood_arrays",
     "fit_crossover_intervals",
     "confident_copy_calls",
     "compatible_diplotypes",
@@ -763,6 +769,61 @@ def gamete_sequences(hap_1: str, hap_2: str, max_crossovers: int = 1) -> List[st
     return sorted(out)
 
 
+def gamete_distribution(hap_1: str, hap_2: str, no_crossover: float, interval_masses) -> Tuple[List[str], np.ndarray]:
+    """Probability of every transmitted sequence of one meiosis (<= 1 crossover).
+
+    The meiosis starts on either homologue with probability 1/2, has no
+    crossover with mass ``no_crossover`` or one crossover in interval j
+    (between loci j and j+1) with mass ``interval_masses[j]``. Works for any
+    pair of sequences (inside or outside a catalog). Returns
+    ``(sequences, probabilities)`` with duplicates merged; probabilities sum
+    to ``no_crossover + sum(interval_masses)`` (normally 1).
+    """
+    m = np.asarray(interval_masses, dtype=float)
+    L = len(hap_1)
+    if len(m) != L - 1:
+        raise ValueError("interval_masses must have n_loci - 1 entries")
+    out: Dict[str, float] = {}
+    out[hap_1] = out.get(hap_1, 0.0) + 0.5 * no_crossover
+    out[hap_2] = out.get(hap_2, 0.0) + 0.5 * no_crossover
+    for j in range(1, L):
+        for seq in (hap_1[:j] + hap_2[j:], hap_2[:j] + hap_1[j:]):
+            out[seq] = out.get(seq, 0.0) + 0.5 * m[j - 1]
+    seqs = sorted(out)
+    return seqs, np.array([out[q] for q in seqs])
+
+
+def genotype_likelihood_arrays(sample_ids, locus_ids, status, lik0, lik1, lik2, loci_order,
+                               called_value: str = "CALLED") -> Dict[str, Tuple[np.ndarray, np.ndarray]]:
+    """Long-format genotype-likelihood rows -> per-sample (n_loci, 3) arrays.
+
+    One row per (sample, locus); ``status == called_value`` marks a called
+    locus, anything else (e.g. NO_CALL) is uncalled with NaN likelihoods.
+    Returns ``{sample_id: (likelihood (L, 3), called (L,) bool)}`` in
+    ``loci_order``; loci without a row are uncalled. Build ONE dict over every
+    assay table (parents and children) so each person is looked up by id.
+    """
+    pos = {l: i for i, l in enumerate(loci_order)}
+    L = len(pos)
+    out: Dict[str, Tuple[np.ndarray, np.ndarray]] = {}
+    for sid, loc, st, a, b, c in zip(sample_ids, locus_ids, status, lik0, lik1, lik2):
+        if sid not in out:
+            out[sid] = (np.full((L, 3), np.nan), np.zeros(L, dtype=bool))
+        i = pos.get(loc)
+        if i is None:
+            continue
+        if str(st) == called_value:
+            vals = []
+            for v in (a, b, c):
+                try:
+                    vals.append(float(v))
+                except (TypeError, ValueError):
+                    vals.append(np.nan)
+            out[sid][0][i] = vals
+            out[sid][1][i] = bool(np.all(np.isfinite(vals)))
+    return out
+
+
 def fit_crossover_intervals(parent_pairs: Sequence[Tuple[str, str]], transmitted: Sequence[str],
                             family_ids: Optional[Sequence] = None, *,
                             concentrations: Sequence[float] = (0.01, 0.05, 0.2, 1.0),
@@ -922,12 +983,31 @@ def structural_identifiability(catalog: Sequence[str], maternal_calls, paternal_
         return label, min(count, stop_at) if stop_at else count
 
     # For each child: code of every paternal-diplotype gamete projected on the
-    # child's constrained loci; a maternal gamete gm requires the paternal
-    # gamete to equal (copy - gm) on those loci.
+    # child's constrained loci (n_pat, n_gametes); a maternal gamete gm
+    # requires the paternal gamete to equal (copy - gm) on those loci.
+    # necessary condition per parent: every child can receive one of its
+    # gametes (copy - gamete in {0, 1} on the child's constrained loci)
+    def can_transmit(pair):
+        g = gametes(pair)
+        for loci, vals in kids:
+            need = vals[None, :] - g[:, loci]
+            if not np.any(np.all((need >= 0) & (need <= 1), axis=1)):
+                return False
+        return True
+
+    mat = [m for m in mat if can_transmit(m)]
+    pat = [p for p in pat if can_transmit(p)]
+    if not mat or not pat:
+        out = ("AMBIGUOUS", 0)
+        return out + ([],) if return_states else out
+    pat_gam = [gametes(p) for p in pat]
+    n_g = max(len(g) for g in pat_gam)
     pat_codes = []
     for loci, vals in kids:
         weights = (1 << np.arange(len(loci))).astype(np.int64)
-        codes = [set((gametes(p)[:, loci].astype(np.int64) @ weights).tolist()) for p in pat]
+        codes = np.full((len(pat), n_g), -1, dtype=np.int64)
+        for j, g in enumerate(pat_gam):
+            codes[j, :len(g)] = g[:, loci].astype(np.int64) @ weights
         pat_codes.append((loci, vals, weights, codes))
     for m in mat:
         gm = gametes(m)
@@ -935,13 +1015,12 @@ def structural_identifiability(catalog: Sequence[str], maternal_calls, paternal_
         for loci, vals, weights, codes in pat_codes:
             need = vals[None, :] - gm[:, loci]
             valid = np.all((need >= 0) & (need <= 1), axis=1)
-            req = set((need[valid].astype(np.int64) @ weights).tolist())
-            if not req:
+            if not valid.any():
                 feasible[:] = False
                 break
-            for j in np.flatnonzero(feasible):
-                if codes[j].isdisjoint(req):
-                    feasible[j] = False
+            req = np.unique(need[valid].astype(np.int64) @ weights)
+            idx = np.flatnonzero(feasible)
+            feasible[idx] = np.isin(codes[idx], req).any(axis=1)
             if not feasible.any():
                 break
         for j in np.flatnonzero(feasible):
