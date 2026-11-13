@@ -35,7 +35,8 @@ from ._clinical_audit import (load_clinical_tables, infer_clinical_schema, audit
                               drug_sex_reference)
 from ._meta_analysis import (parse_mean_sd, extract_group_stats, group_comparisons, pool_group_stats,
                              hedges_g, sd_from_summary, recompute_group_test, meta_effect_sizes,
-                             apply_selection_rules, comparison_workbook)
+                             apply_selection_rules, comparison_workbook, format_workbook,
+                             method_measure_statements)
 
 __all__ = ["cross_species_align", "bonsai", "bandpass_filter", "channel_qc_table",
            "bridged_channel_pairs", "erp_channel_outliers",
@@ -52,4 +53,5 @@ __all__ = ["cross_species_align", "bonsai", "bandpass_filter", "channel_qc_table
            "rank_models_for_transfer", "dependence_components", "transfer_ranking_source",
            "load_clinical_tables", "infer_clinical_schema", "audit_clinical_tables", "drug_sex_reference",
            "parse_mean_sd", "extract_group_stats", "group_comparisons", "pool_group_stats", "hedges_g",
-           "sd_from_summary", "recompute_group_test", "meta_effect_sizes", "apply_selection_rules", "comparison_workbook"]
+           "sd_from_summary", "recompute_group_test", "meta_effect_sizes", "apply_selection_rules", "comparison_workbook",
+           "format_workbook", "method_measure_statements"]

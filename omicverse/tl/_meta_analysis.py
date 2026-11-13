@@ -33,7 +33,7 @@ from .._registry import register_function
 
 __all__ = ["parse_mean_sd", "extract_group_stats", "group_comparisons", "pool_group_stats", "hedges_g",
            "sd_from_summary", "recompute_group_test", "meta_effect_sizes", "apply_selection_rules",
-           "comparison_workbook"]
+           "comparison_workbook", "format_workbook", "method_measure_statements"]
 
 _NUM = r"[-−–]?\s?(?:\d{1,3}(?:,\d{3})+|\d+)?(?:[.,·]\d+)?"
 
@@ -697,7 +697,7 @@ _CONTROL_DEFAULT = r"control|healthy|\bHC\b|\bNC\b|\bCTL\b|comparison|non[- ]?\w
 )
 def comparison_workbook(sources: dict, case: Union[str, dict], control: Union[str, dict] = _CONTROL_DEFAULT,
                         exclude: Union[None, str, dict] = None, n_map: Optional[dict] = None,
-                        include_text: bool = True) -> pd.DataFrame:
+                        include_text: bool = True, verbose: bool = True) -> pd.DataFrame:
     """Return the workbook: one row per (study, table row / text statistic, control group).
 
     ``sources`` maps a study id (e.g. the DOI) to one path or a list of paths (XML / HTML / PDF /
@@ -738,4 +738,83 @@ def comparison_workbook(sources: dict, case: Union[str, dict], control: Union[st
     wb = pd.concat(frames, ignore_index=True)
     wb["family"] = ""
     wb["stat_class"] = ""
+    if verbose:
+        print(format_workbook(wb))
     return wb
+
+
+def _fmt(n, m, s_):
+    n_ = "n=?" if pd.isna(n) else f"n={n:g}"
+    return f"{n_} {m:.4g} ({s_:.4g})" if pd.notna(m) else f"{n_} pooled?"
+
+
+def format_workbook(wb: pd.DataFrame, max_label: int = 70) -> str:
+    """Compact text listing of a comparison workbook, one line per comparison, grouped by study:
+    ``[index] row | case n mean (sd) | control n mean (sd) | d``; rows with unknown n are marked."""
+    lines = []
+    for sid, g in wb.groupby("study", sort=False):
+        unk = int(g["n_case"].isna().sum() + g["n_control"].isna().sum())
+        lines.append(f"== {sid}: {len(g)} comparisons" + (f", {unk} group sizes unknown (fill n)" if unk else ""))
+        for i, r in g.iterrows():
+            lab = str(r["row"])[-max_label:]
+            d = "" if pd.isna(r.get("d")) else f" | d={r['d']:.3f}"
+            lines.append(f"  [{i}] {lab} | {r['case_groups']} {_fmt(r['n_case'], r['mean_case'], r['sd_case'])}"
+                         f" | {r['control_group']} {_fmt(r['n_control'], r['mean_control'], r['sd_control'])}{d}")
+    return "\n".join(lines)
+
+
+_MEASURE_PAT = re.compile(
+    r"(dependent (measure|variable)s?|primary (outcome|measure)|outcome measures?|(the )?measures? (is|are|was|were)"
+    r"|were (coded|included|analy[sz]ed|computed|combined|averaged|excluded)|was (coded|used|included|analy[sz]ed)"
+    r"|only when|if (no|not) |rather than|instead of|composite|analy[sz]ed (individually|separately|together)"
+    r"|effect sizes? (was|were) (computed|calculated)|pooled|subgroups?|direction|sign)", re.I)
+
+
+@register_function(
+    aliases=["方法学测量选择语句", "method measure statements", "extract measure selection rules from method paper"],
+    category="utils",
+    description="List the sentences of a method paper (meta-analysis / systematic review) that define what is "
+                "coded: dependent / outcome measures per task, fallbacks ('only when', 'instead of'), "
+                "composites, inclusion / exclusion, effect-size computation and pooling -- each with the "
+                "section heading it sits under, so a measure-selection rule table can be written from the "
+                "method's own words without reading the whole paper.",
+    examples=["st = ov.tl.method_measure_statements('/app/data/method_paper.xml'); print(st.to_string())"],
+    related=["tl.apply_selection_rules", "tl.comparison_workbook"],
+)
+def method_measure_statements(source: Union[str, Path], extra_pattern: Optional[str] = None) -> pd.DataFrame:
+    """Return ``section, sentence`` for every measure-defining sentence (tables and references removed)."""
+    p = Path(str(source)) if len(str(source)) < 4096 else None
+    text = p.read_text(errors="ignore") if (p is not None and p.exists()) else str(source)
+    if p is not None and p.exists() and p.suffix.lower() == ".pdf":
+        from pypdf import PdfReader
+        text = "\n".join((pg.extract_text() or "") for pg in PdfReader(str(p)).pages)
+    text = re.sub(r"<table-wrap\b.*?</table-wrap>|<table\b.*?</table>|<ref-list\b.*?</ref-list>"
+                  r"|<script\b.*?</script>|<style\b.*?</style>", " ", text, flags=re.S | re.I)
+    blocks: List[Tuple[str, str]] = []
+    if re.search(r"<(p|title|h[1-6])\b", text, re.I):
+        sec = ""
+        for m in re.finditer(r"<(title|h[1-6])\b[^>]*>(.*?)</\1>|<p\b[^>]*>(.*?)</p>", text, re.S | re.I):
+            if m.group(1):
+                sec = _strip_tags(m.group(2))[:120]
+            else:
+                blocks.append((sec, _strip_tags(m.group(3))))
+    else:
+        sec = ""
+        for para in re.split(r"\n\s*\n", text):
+            para = re.sub(r"\s+", " ", para).strip()
+            if 0 < len(para) < 80 and not para.endswith("."):
+                sec = para
+            elif para:
+                blocks.append((sec, para))
+    pat = re.compile(_MEASURE_PAT.pattern + (f"|{extra_pattern}" if extra_pattern else ""), re.I)
+    rows = []
+    for sec, para in blocks:
+        sents = re.split(r"(?<=[.;])\s+(?=[A-Z(])", para)
+        for i, sent in enumerate(sents):
+            if 25 <= len(sent) <= 800 and pat.search(sent):
+                # a sentence that refers back ("Dependent measures are ...", "These tasks ...") is
+                # shown with the sentence before it, which names the task
+                if i > 0 and re.match(r"(the|these|this|it|its|each|both|dependent|such|they)\b", sent, re.I):
+                    sent = sents[i - 1].strip() + " " + sent.strip()
+                rows.append({"section": sec, "sentence": sent.strip()})
+    return pd.DataFrame(rows, columns=["section", "sentence"]).drop_duplicates()

@@ -106,3 +106,17 @@ def test_comparison_workbook(tmp_path):
     # in-text comparison is kept with unknown n so it can be completed by hand
     txt = wb[wb["layout"] == "text"]
     assert len(txt) == 1 and np.isnan(txt["n_case"].iloc[0])
+
+
+def test_method_measure_statements_and_format():
+    from omicverse.tl._meta_analysis import comparison_workbook, format_workbook, method_measure_statements
+    html = ("<html><h2>Shifting</h2><p>In the sorting task participants sort cards. The dependent measure was "
+            "perseverative errors (when reported), or categories (when not reported). Unrelated sentence here "
+            "about history of the test.</p><h2>Fluency</h2><p>Semantic and phonemic fluency tasks were analyzed "
+            "individually.</p></html>")
+    st = method_measure_statements(html)
+    assert len(st) == 2 and set(st["section"]) == {"Shifting", "Fluency"}
+    assert st["sentence"].iloc[0].startswith("In the sorting task")      # antecedent kept
+    wb = comparison_workbook({"s1": _JATS}, case=r"depress|MDD|patients", verbose=False)
+    txt = format_workbook(wb)
+    assert "== s1:" in txt and "n=?" in txt
