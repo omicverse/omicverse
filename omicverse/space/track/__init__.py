@@ -46,11 +46,11 @@ from ._track import detections_table, track_cells, close_gaps, close_merge_gaps
 from ._mitosis import mitosis_signal, detect_mitoses, refine_divisions, prune_divisions, insert_mitoses, adopt_orphans, consensus_divisions
 from ._lineage import lineage_tables, lineage_json, OUTCOMES
 from ._pipeline import reconstruct_lineage, repair_tree
-from ._flow import (frame_overlaps, build_tracklets, tracklet_table, flow_track,
+from ._flow import (frame_overlaps, mask_thickness, build_tracklets, tracklet_table, flow_track,
                     flow_lineage_tables, track_lineage)
 
 __all__ = ["read_movie", "segment_movie", "detections_table", "track_cells", "close_gaps", "close_merge_gaps",
            "mitosis_signal", "detect_mitoses", "refine_divisions", "prune_divisions", "insert_mitoses", "adopt_orphans", "consensus_divisions", "lineage_tables",
            "reconstruct_lineage", "repair_tree", "lineage_json", "OUTCOMES",
-           "frame_overlaps", "build_tracklets", "tracklet_table", "flow_track",
+           "frame_overlaps", "mask_thickness", "build_tracklets", "tracklet_table", "flow_track",
            "flow_lineage_tables", "track_lineage"]
