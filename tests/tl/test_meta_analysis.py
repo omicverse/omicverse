@@ -256,3 +256,15 @@ def test_coding_table_statements():
     sent = list(st["sentence"])
     assert "For the Word test, the dependent measures are % correct, reaction time, delayed accuracy." in sent
     assert any(x.startswith("For the B test") for x in sent)
+
+
+def test_writer_refuses_edited_statistics(tmp_path):
+    from omicverse.tl._meta_selection import write_study_effects, _stats_key
+    prop = pd.DataFrame({"study": ["s"], "row": ["a"], "n_case": [20], "mean_case": [1.0], "sd_case": [1.0],
+                         "n_control": [20], "mean_control": [0.5], "sd_control": [1.0],
+                         "proposed": ["keep"], "decision": ["keep"]})
+    prop["stats_key"] = [_stats_key(r) for _, r in prop.iterrows()]
+    write_study_effects(prop, str(tmp_path / "o.csv"))
+    prop.loc[0, "mean_control"] = 0.7
+    with pytest.raises(ValueError):
+        write_study_effects(prop, str(tmp_path / "o.csv"))

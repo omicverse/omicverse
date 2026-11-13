@@ -748,6 +748,7 @@ def reconstruct_study_effects(sources: dict, method_source: Union[str, Path], ca
     prop = _aggregate_vs_subgroups(prop, stexts, excl_sents)
     prop = _check_reported_effects(prop, stexts)
     prop["proposed"] = prop["decision"]
+    prop["stats_key"] = [_stats_key(r) for _, r in prop.iterrows()]
     kept = prop[(prop["decision"] == "keep")]
     kept = kept[kept[["n_case", "mean_case", "sd_case", "n_control", "mean_control", "sd_control"]].notna().all(axis=1)]
     eff = meta_effect_sizes(kept, case="case", control="control") if len(kept) else kept
@@ -866,6 +867,15 @@ def write_study_effects(prop: pd.DataFrame, path: str, case_label: str = "case",
         for i in changed:
             print(f"override [{i}] {prop.at[i, 'row']}: {prop.at[i, 'proposed']} -> {prop.at[i, 'decision']} "
                   f"({overrides[i][:100]})")
+    if "stats_key" in prop:
+        edited = [i for i in prop.index[prop["decision"] == "keep"]
+                  if isinstance(prop.at[i, "stats_key"], str) and prop.at[i, "stats_key"] != _stats_key(prop.loc[i])]
+        if edited:
+            raise ValueError(
+                f"rows {edited}: statistics differ from what reconstruct_study_effects read from the article. Values "
+                f"are never edited by hand: wrong group sizes -> call reconstruct_study_effects again with n_map for "
+                f"that study; a misprint -> the function recovers it from the article's own reported effect size or "
+                f"leaves the row out.")
     kept = prop[prop["decision"] == "keep"]
     if extra_rows is not None and len(extra_rows):
         kept = pd.concat([kept, extra_rows], ignore_index=True)
@@ -1182,3 +1192,11 @@ def _recover_mean(r, reported, sp):
             if pd_ and (rd_.startswith(pd_[:2]) and len(pd_) >= 2) and abs(val - r[col]) > 0.5 * sp:
                 cands.append((col, round(val, 6), v))
     return cands[0] if len(cands) == 1 else None
+
+
+def _stats_key(r) -> str:
+    vals = []
+    for c in ("n_case", "mean_case", "sd_case", "n_control", "mean_control", "sd_control"):
+        v = r.get(c) if hasattr(r, "get") else r[c]
+        vals.append("nan" if v is None or (isinstance(v, float) and math.isnan(v)) else f"{float(v):.6g}")
+    return "|".join(vals)
