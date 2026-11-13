@@ -119,6 +119,7 @@ from ._sccaf import SCCAF_assessment,plot_roc,SCCAF_optimize_all,color_long
 from ._multimap import TFIDF_LSI,Wrapper,Integration,Batch
 from ._perturbation import assign_guides, mixscape, perturbation_distance
 from ._cellvote import get_cluster_celltype,CellVote,cellvote_consensus_score
+from ._lemur import lemur
 from ._deg_ct import DCT,DEG
 from ._lazy_function import lazy
 from ._lazy_report import generate_scRNA_report
@@ -358,6 +359,7 @@ __all__ = [
     'assign_guides',
     'mixscape',
     'perturbation_distance',
+    'lemur',
     'perturbation_effect',
     'cell_fate_perturbation',
     'velocity_effect',
