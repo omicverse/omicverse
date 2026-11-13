@@ -9,7 +9,9 @@ models for transfer to new environments (:func:`rank_models_for_transfer`),
 quantitative susceptibility mapping from multi-echo gradient-echo MRI
 (:func:`qsm_reconstruct` and its steps) and open-set individual
 re-identification from images (:func:`reid_embed`, :func:`reid_local_verify`,
-:func:`reid_open_set_cluster`).
+:func:`reid_open_set_cluster`) and per-survey species-set prediction from
+presence-absence / presence-only data (:func:`sdm_community_pipeline` and its
+steps).
 """
 from ._cross_species import cross_species_align
 from ._bonsai import bonsai
@@ -28,6 +30,10 @@ from ._qsm import (qsm_load_multi_echo, qsm_save_nifti, qsm_brain_mask, qsm_unwr
                    qsm_reconstruct, qsm_dipole_kernel, qsm_forward_field, qsm_numerical_phantom)
 from ._transfer_ranking import (rank_models_for_transfer, dependence_components,
                                 transfer_ranking_source)
+from ._sdm import (sdm_sample_f1, sdm_decode_sets, sdm_sets_to_strings, sdm_spatial_holdout,
+                   sdm_neighbor_composition, sdm_presence_only_histogram, sdm_cube_summary,
+                   sdm_read_tensor_dir, sdm_standardize, sdm_fit_mlp, sdm_fuse,
+                   sdm_community_pipeline)
 
 __all__ = ["cross_species_align", "bonsai", "bandpass_filter", "channel_qc_table",
            "bridged_channel_pairs", "erp_channel_outliers",
@@ -41,4 +47,8 @@ __all__ = ["cross_species_align", "bonsai", "bandpass_filter", "channel_qc_table
            "qsm_load_multi_echo", "qsm_save_nifti", "qsm_brain_mask", "qsm_unwrap_phase",
            "qsm_multi_echo_field", "qsm_background_removal", "qsm_dipole_inversion",
            "qsm_reconstruct", "qsm_dipole_kernel", "qsm_forward_field", "qsm_numerical_phantom",
-           "rank_models_for_transfer", "dependence_components", "transfer_ranking_source"]
+           "rank_models_for_transfer", "dependence_components", "transfer_ranking_source",
+           "sdm_sample_f1", "sdm_decode_sets", "sdm_sets_to_strings", "sdm_spatial_holdout",
+           "sdm_neighbor_composition", "sdm_presence_only_histogram", "sdm_cube_summary",
+           "sdm_read_tensor_dir", "sdm_standardize", "sdm_fit_mlp", "sdm_fuse",
+           "sdm_community_pipeline"]
