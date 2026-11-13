@@ -33,7 +33,7 @@ from ._transfer_ranking import (rank_models_for_transfer, dependence_components,
 from ._smear_morph import (smear_measure, smear_stain_vectors, smear_field_features,
                            two_axis_classifier_fit, two_axis_classifier_predict,
                            group_holdout_two_axis, species_balanced_recall, group_laplace_prior,
-                           smear_morphometry_source)
+                           smear_morphometry_source, smear_fit_predictor, smear_export_predictor)
 
 __all__ = ["cross_species_align", "bonsai", "bandpass_filter", "channel_qc_table",
            "bridged_channel_pairs", "erp_channel_outliers",
@@ -50,4 +50,5 @@ __all__ = ["cross_species_align", "bonsai", "bandpass_filter", "channel_qc_table
            "rank_models_for_transfer", "dependence_components", "transfer_ranking_source",
            "smear_measure", "smear_stain_vectors", "smear_field_features",
            "two_axis_classifier_fit", "two_axis_classifier_predict", "group_holdout_two_axis",
-           "species_balanced_recall", "group_laplace_prior", "smear_morphometry_source"]
+           "species_balanced_recall", "group_laplace_prior", "smear_morphometry_source",
+           "smear_fit_predictor", "smear_export_predictor"]

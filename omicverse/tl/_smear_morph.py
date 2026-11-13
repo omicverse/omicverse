@@ -17,6 +17,8 @@ predictor can embed verbatim, see :func:`smear_morphometry_source`):
 ``species_balanced_recall``     per-class recall averaged over held-out groups.
 ``group_laplace_prior``         P(outcome | context) counted over groups.
 ``smear_morphometry_source``    the core's source text for a portable predictor.
+``smear_fit_predictor``         tables -> measured, leave-one-group-out validated, fitted model.
+``smear_export_predictor``      write predict.py + core + model (+ offline self-check).
 """
 from __future__ import annotations
 
@@ -28,7 +30,8 @@ from . import _smear_morph_core as _core
 
 __all__ = ["smear_measure", "smear_stain_vectors", "smear_field_features",
            "two_axis_classifier_fit", "two_axis_classifier_predict", "group_holdout_two_axis",
-           "species_balanced_recall", "group_laplace_prior", "smear_morphometry_source"]
+           "species_balanced_recall", "group_laplace_prior", "smear_morphometry_source",
+           "smear_fit_predictor", "smear_export_predictor"]
 
 
 @register_function(
@@ -185,3 +188,130 @@ def smear_morphometry_source(path: Optional[Union[str, Path]] = None) -> str:
     if path is not None:
         Path(path).write_text(text, encoding="utf-8")
     return text
+
+
+@register_function(
+    aliases=["涂片分类器训练", "smear fit predictor", "fit field classifier from tables",
+             "train gram call model", "leave-species-out fit"],
+    category="utils",
+    description="One call from the labelled tables to a fitted two-axis field classifier: measure every "
+                "boxed object (smear_measure), join field labels and groups, report leave-one-group-out "
+                "per-class species-balanced recall, then fit on all groups with the library defaults. "
+                "Returns (model, report). Export it with smear_export_predictor.",
+    requires={}, produces={}, auto_fix="none",
+    examples=["model, rep = ov.tl.smear_fit_predictor(fields, objs, labels, label_col='culture_class', "
+              "group_col='group_id', label_axes=axes, positive_stain='pos', root=data, n_jobs=4)"],
+)
+def smear_fit_predictor(fields, objects, labels, *, label_col, group_col, label_axes, positive_stain,
+                        root=None, field_id="field_id", image_col="image_path", um_col="um_per_px",
+                        object_id="organism_id", box_cols=("x_min", "y_min", "x_max", "y_max"),
+                        n_jobs=1, validate=True):
+    """Measure, validate leave-one-group-out and fit the two-axis classifier with defaults."""
+    import numpy as np
+    _, X, vec = _core.measure_box_tables(fields, objects, root=root, field_id=field_id,
+                                         image_col=image_col, um_col=um_col, object_id=object_id,
+                                         box_cols=box_cols, n_jobs=n_jobs)
+    Xl = X.merge(labels[[field_id, label_col, group_col]], on=field_id, how="inner")
+    feats = [c for c in X.columns if c != field_id]
+    y, g = Xl[label_col].to_numpy(object), Xl[group_col].to_numpy(object)
+    report = {"n_fields": int(len(Xl)), "n_groups": int(len(np.unique(g))), "dye_vectors": vec.tolist()}
+    if validate:
+        oof = _core.group_holdout_two_axis(Xl[feats], y, g, label_axes=label_axes,
+                                           positive_stain=positive_stain)
+        per, macro = _core.species_balanced_recall(y, oof, g)
+        report.update({"logo_species_balanced_recall": per, "logo_macro": macro,
+                       "logo_predictions": dict(zip(Xl[field_id], oof))})
+    model = _core.fit_two_axis_classifier(Xl[feats], y, g, label_axes, positive_stain=positive_stain)
+    model["table_columns"] = {"field_id": field_id, "image_col": image_col, "um_col": um_col,
+                              "object_id": object_id, "box_cols": list(box_cols)}
+    return model, report
+
+
+_NO_OV = (
+    "import sys, runpy\n"
+    "class _Block:\n"
+    "    def find_spec(self, name, path=None, target=None):\n"
+    "        if name == 'omicverse' or name.startswith('omicverse.'):\n"
+    "            raise ImportError('omicverse is not available to the exported predictor')\n"
+    "sys.meta_path.insert(0, _Block())\n"
+    "sys.argv = ['predict.py'] + sys.argv[1:]\n"
+    "runpy.run_path('predict.py', run_name='__main__')\n"
+)
+
+
+@register_function(
+    aliases=["导出离线预测器", "smear export predictor", "write predict.py", "portable submission",
+             "offline predictor bundle"],
+    category="utils",
+    description="Write a complete offline predictor for a fitted two-axis smear model into a directory: "
+                "predict.py (--input-dir / --output-dir; no scoring code to edit), smear_core.py "
+                "(numpy/scipy/skimage/sklearn only), model.pkl and predictor_config.json (table, column and "
+                "output names only). With check_input_dir it copies the bundle, runs it with omicverse "
+                "imports blocked, and reports coverage, finiteness, label set and runtime.",
+    requires={}, produces={}, auto_fix="none",
+    examples=["ov.tl.smear_export_predictor(model, '/root/submission', check_input_dir='/root/data')"],
+)
+def smear_export_predictor(model, submission_dir, *, fields_table="fields.csv",
+                           objects_table="organisms.csv", field_output="field_calls.csv",
+                           field_out_id="field_id", field_out_label="field_class",
+                           object_output="organism_measurements.csv", object_out_id="organism_id",
+                           object_out_cols=None, n_jobs=4, check_input_dir=None, python=None,
+                           time_limit=None):
+    """Write predict.py + smear_core.py + model.pkl + predictor_config.json; optionally self-check."""
+    import json
+    import os
+    import shutil
+    import subprocess
+    import sys
+    import tempfile
+    import time
+    import pandas as pd
+    os.makedirs(submission_dir, exist_ok=True)
+    tc = model.get("table_columns", {})
+    cfg = {"fields_table": fields_table, "objects_table": objects_table,
+           "field_id": tc.get("field_id", "field_id"), "image_col": tc.get("image_col", "image_path"),
+           "um_col": tc.get("um_col", "um_per_px"), "object_id": tc.get("object_id", "organism_id"),
+           "box_cols": tc.get("box_cols", ["x_min", "y_min", "x_max", "y_max"]),
+           "field_output": field_output, "field_out_id": field_out_id, "field_out_label": field_out_label,
+           "object_output": object_output, "object_out_id": object_out_id,
+           "object_out_cols": object_out_cols or {"long": "long_axis_um", "short": "short_axis_um",
+                                                  "stain": "stain_index"},
+           "n_jobs": int(n_jobs)}
+    smear_morphometry_source(os.path.join(submission_dir, "smear_core.py"))
+    with open(os.path.join(submission_dir, "predict.py"), "w") as fh:
+        fh.write(_core.PREDICT_PY)
+    with open(os.path.join(submission_dir, "predictor_config.json"), "w") as fh:
+        json.dump(cfg, fh, indent=1)
+    _core.save_predictor(model, os.path.join(submission_dir, "model.pkl"))
+    result = {"files": sorted(os.listdir(submission_dir)), "config": cfg}
+    if check_input_dir is None:
+        return result
+    tmp = tempfile.mkdtemp(prefix="smear-check-")
+    bundle = os.path.join(tmp, "submission")
+    shutil.copytree(submission_dir, bundle, ignore=shutil.ignore_patterns("__pycache__"))
+    out = os.path.join(tmp, "out")
+    env = dict(os.environ, PYTHONDONTWRITEBYTECODE="1")
+    t0 = time.time()
+    proc = subprocess.run([python or sys.executable, "-c", _NO_OV, "--input-dir", str(check_input_dir),
+                           "--output-dir", out], cwd=bundle, env=env, capture_output=True, text=True)
+    result["check_seconds"] = round(time.time() - t0, 1)
+    result["check_returncode"] = proc.returncode
+    if proc.returncode != 0:
+        result["check_stderr"] = proc.stderr[-3000:]
+        raise RuntimeError("exported predictor failed:\n" + proc.stderr[-3000:])
+    f_in = pd.read_csv(os.path.join(check_input_dir, fields_table))
+    o_in = pd.read_csv(os.path.join(check_input_dir, objects_table))
+    f_out = pd.read_csv(os.path.join(out, field_output))
+    o_out = pd.read_csv(os.path.join(out, object_output))
+    vals = o_out[list(cfg["object_out_cols"].values())].to_numpy(float)
+    import numpy as np
+    result.update({
+        "fields_covered": bool(set(f_in[cfg["field_id"]]) == set(f_out[field_out_id])),
+        "objects_covered": bool(set(o_in[cfg["object_id"]]) == set(o_out[object_out_id])),
+        "all_finite": bool(np.isfinite(vals).all()),
+        "labels_emitted": sorted(f_out[field_out_label].astype(str).unique().tolist()),
+    })
+    if time_limit is not None:
+        result["within_time_limit"] = bool(result["check_seconds"] <= time_limit)
+    shutil.rmtree(tmp, ignore_errors=True)
+    return result

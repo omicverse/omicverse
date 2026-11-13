@@ -132,3 +132,41 @@ def test_measure_box_tables_roundtrip(tmp_path):
                                         stain_vectors=np.vstack([VIOLET, PINK]))
     assert list(o.organism_id) == list(objs.organism_id)
     assert f.shape[0] == 1 and "cell_aspect_q50" in f.columns
+
+
+def test_fit_and_export_predictor_runs_without_omicverse(tmp_path):
+    import json
+    from PIL import Image
+    import omicverse as ov
+    rng = np.random.default_rng(4)
+    specs = [("A_round", "round", "v")] * 3 + [("A_rod", "rod", "v")] * 3 + [("B_rod", "rod", "p")] * 3
+    data = tmp_path / "data"
+    (data / "fields").mkdir(parents=True)
+    frows, orows, lrows = [], [], []
+    for gi, (lab, shape, dye) in enumerate(specs):
+        for k in range(2):
+            fid = f"f{gi}_{k}"
+            img, boxes = _field(rng, shape, dye)
+            Image.fromarray(img.astype(np.uint8)).save(data / "fields" / f"{fid}.png")
+            frows.append({"field_id": fid, "image_path": f"fields/{fid}.png", "um_per_px": 0.1})
+            lrows.append({"field_id": fid, "culture_class": lab, "group_id": f"g{gi}"})
+            for j, b in enumerate(boxes):
+                orows.append({"organism_id": f"{fid}_o{j}", "field_id": fid, "x_min": b[0],
+                              "y_min": b[1], "x_max": b[2], "y_max": b[3]})
+    fields, objs, labels = pd.DataFrame(frows), pd.DataFrame(orows), pd.DataFrame(lrows)
+    fields.to_csv(data / "fields.csv", index=False)
+    objs.to_csv(data / "organisms.csv", index=False)
+    axes = {"A_round": ("round", "A"), "A_rod": ("rod", "A"), "B_rod": ("rod", "B"),
+            "B_round": ("round", "B")}
+    model, rep = ov.tl.smear_fit_predictor(fields, objs, labels, label_col="culture_class",
+                                           group_col="group_id", label_axes=axes,
+                                           positive_stain="A", root=str(data))
+    assert rep["n_groups"] == 9 and "logo_species_balanced_recall" in rep
+    res = ov.tl.smear_export_predictor(model, tmp_path / "sub", check_input_dir=str(data),
+                                       n_jobs=1, time_limit=600)
+    assert res["check_returncode"] == 0
+    assert res["fields_covered"] and res["objects_covered"] and res["all_finite"]
+    assert set(res["labels_emitted"]) <= {"A_round", "A_rod", "B_rod"}
+    assert "two_axis" not in (tmp_path / "sub" / "predict.py").read_text()
+    cfg = json.loads((tmp_path / "sub" / "predictor_config.json").read_text())
+    assert cfg["object_out_cols"]["stain"] == "stain_index"
