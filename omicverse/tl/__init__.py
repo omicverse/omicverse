@@ -9,7 +9,9 @@ models for transfer to new environments (:func:`rank_models_for_transfer`),
 quantitative susceptibility mapping from multi-echo gradient-echo MRI
 (:func:`qsm_reconstruct` and its steps) and open-set individual
 re-identification from images (:func:`reid_embed`, :func:`reid_local_verify`,
-:func:`reid_open_set_cluster`).
+:func:`reid_open_set_cluster`), and morphometry of boxed objects in stained
+bright-field smears with shape-vs-stain field calls that transfer to unseen
+groups (:func:`smear_measure`, :func:`two_axis_classifier_fit`).
 """
 from ._cross_species import cross_species_align
 from ._bonsai import bonsai
@@ -28,6 +30,10 @@ from ._qsm import (qsm_load_multi_echo, qsm_save_nifti, qsm_brain_mask, qsm_unwr
                    qsm_reconstruct, qsm_dipole_kernel, qsm_forward_field, qsm_numerical_phantom)
 from ._transfer_ranking import (rank_models_for_transfer, dependence_components,
                                 transfer_ranking_source)
+from ._smear_morph import (smear_measure, smear_stain_vectors, smear_field_features,
+                           two_axis_classifier_fit, two_axis_classifier_predict,
+                           group_holdout_two_axis, species_balanced_recall, group_laplace_prior,
+                           smear_morphometry_source)
 
 __all__ = ["cross_species_align", "bonsai", "bandpass_filter", "channel_qc_table",
            "bridged_channel_pairs", "erp_channel_outliers",
@@ -41,4 +47,7 @@ __all__ = ["cross_species_align", "bonsai", "bandpass_filter", "channel_qc_table
            "qsm_load_multi_echo", "qsm_save_nifti", "qsm_brain_mask", "qsm_unwrap_phase",
            "qsm_multi_echo_field", "qsm_background_removal", "qsm_dipole_inversion",
            "qsm_reconstruct", "qsm_dipole_kernel", "qsm_forward_field", "qsm_numerical_phantom",
-           "rank_models_for_transfer", "dependence_components", "transfer_ranking_source"]
+           "rank_models_for_transfer", "dependence_components", "transfer_ranking_source",
+           "smear_measure", "smear_stain_vectors", "smear_field_features",
+           "two_axis_classifier_fit", "two_axis_classifier_predict", "group_holdout_two_axis",
+           "species_balanced_recall", "group_laplace_prior", "smear_morphometry_source"]
