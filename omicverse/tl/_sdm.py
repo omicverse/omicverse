@@ -203,7 +203,8 @@ def sdm_sets_to_strings(ranking: np.ndarray, sizes: np.ndarray, labels: Sequence
 def sdm_spatial_holdout(lat, lon, *, groups=None, scheme: str = "cells", cell_km: float = 10.0,
                         block_km: float = 100.0, fraction: float = 0.08,
                         buffer_km: Optional[float] = None, min_group: int = 100,
-                        max_val: Optional[int] = None, seed: int = 0
+                        max_val: Optional[int] = None, seed: int = 0,
+                        skip_groups: Optional[Sequence] = None
                         ) -> Tuple[np.ndarray, np.ndarray, np.ndarray]:
     """Blocked split.
 
@@ -213,14 +214,22 @@ def sdm_spatial_holdout(lat, lon, *, groups=None, scheme: str = "cells", cell_km
     scheme='groups' : hold out whole groups (not the largest one), drawn at random among
                       groups with at least ``min_group`` rows until ``fraction`` of the rows is
                       held out (buffer default ``cell_km``).  Weights ~ group_size**-0.5 so
-                      one big held-out group does not decide everything.
+                      one big held-out group does not decide everything.  Groups listed in
+                      ``skip_groups`` (e.g. those of earlier folds) are drawn only if no other
+                      eligible group is left, so repeated calls give disjoint folds.
     scheme='blocks' : hold out ``fraction`` of ``block_km`` blocks (buffer default ``cell_km``).
     """
     rng = np.random.default_rng(seed)
     lat = np.asarray(lat, float)
     lon = np.asarray(lon, float)
     n = len(lat)
-    g = np.zeros(n, int) if groups is None else pd.factorize(pd.Series(groups).astype(str))[0]
+    if groups is None:
+        g = np.zeros(n, int)
+        skip_codes = set()
+    else:
+        g, uniq = pd.factorize(pd.Series(groups).astype(str))
+        skip = set(str(v) for v in (skip_groups or ()))
+        skip_codes = {i for i, u in enumerate(uniq) if u in skip}
     if scheme == "groups" and len(np.unique(g)) < 3:
         scheme = "blocks"
     if scheme == "cells":
@@ -238,7 +247,8 @@ def sdm_spatial_holdout(lat, lon, *, groups=None, scheme: str = "cells", cell_km
         cand = [k for k in sizes.index[1:] if sizes[k] >= min_group]
         if not cand:
             cand = list(sizes.index[1:])
-        order = rng.permutation(cand)
+        fresh = [k for k in cand if k not in skip_codes]
+        order = list(rng.permutation(fresh)) + list(rng.permutation([k for k in cand if k in skip_codes]))
         held = np.zeros(n, bool)
         for k in order:
             if held.sum() >= fraction * n:
@@ -660,9 +670,21 @@ def sdm_fuse(base: np.ndarray, sources: Sequence[np.ndarray] = (), weights: Sequ
     return np.clip(G, 0, 1).astype(np.float32)
 
 
-def _tune(base_by_ckpt, sources, truth, weights, rich=None, grid=(0, .1, .2, .3, .4, .5),
-          mass_grid=(0.8, 0.9, 1.0, 1.1, 1.25), kmax=128):
-    """Coordinate search of checkpoint, source weights and mass scale on validation."""
+def _checkpoint_candidates(hist):
+    """Single checkpoints and averages of the last 2..all checkpoints (keys = epoch tuples)."""
+    eps = sorted(hist)
+    cand = {(e,): hist[e] for e in eps}
+    for j in range(len(eps) - 1):
+        key = tuple(eps[j:])
+        cand[key] = np.mean([hist[e] for e in key], axis=0)
+    return cand
+
+
+def _tune(base_by_ckpt, sources, truth, weights, rich=None,
+          grid=tuple(np.round(np.arange(0, .55, .05), 2)),
+          mass_grid=(0.5, 0.6, 0.7, 0.8, 0.9, 1.0, 1.1, 1.25), kmax=128):
+    """Coordinate search of checkpoint (or checkpoint average), source weights and mass
+    scale on validation."""
     w8 = np.asarray(weights, float)
 
     def score(P, ms=1.0):
@@ -675,24 +697,26 @@ def _tune(base_by_ckpt, sources, truth, weights, rich=None, grid=(0, .1, .2, .3,
         if best is None or sc > best["score"]:
             best = dict(score=sc, epoch=ep, weights=[0.0] * len(sources), mass_scale=1.0)
     P0 = base_by_ckpt[best["epoch"]]
+    best["plugin_only_score"] = best["score"]
     ws = [0.0] * len(sources)
+    ms = 1.0
     for _ in range(2):
         for j in range(len(sources)):
             for g in grid:
                 trial = list(ws)
-                trial[j] = g
+                trial[j] = float(g)
                 if sum(trial) >= 0.9:
                     continue
-                sc = score(sdm_fuse(P0, sources, trial))
+                sc = score(sdm_fuse(P0, sources, trial), ms)
                 if sc > best["score"] + 1e-5:
                     best.update(score=sc, weights=list(trial))
                     ws = list(trial)
-    Pf = sdm_fuse(P0, sources, ws)
-    for ms in mass_grid:
-        sc = score(Pf, ms)
-        if sc > best["score"] + 1e-5:
-            best.update(score=sc, mass_scale=ms)
-    best["plugin_only_score"] = score(P0)
+        Pf = sdm_fuse(P0, sources, ws)
+        for m_ in mass_grid:
+            sc = score(Pf, m_)
+            if sc > best["score"] + 1e-5:
+                best.update(score=sc, mass_scale=m_)
+                ms = m_
     return best
 
 
@@ -727,11 +751,12 @@ def sdm_community_pipeline(train_lat, train_lon, Y, query_lat, query_lon, *,
                            embedding: Optional[np.ndarray] = None,
                            groups=None, query_regime=None,
                            po: Optional[Tuple] = None, species_ids=None,
-                           epochs: int = 12, hidden: int = 2048, final_seeds: Sequence[int] = (0, 1),
+                           epochs: int = 12, hidden: int = 2048, final_seeds: Sequence[int] = (0, 1, 2),
                            po_svd_dim: int = 128, po_k: int = 512, use_po_offset: bool = True,
                            near_cell_km: float = 10.0, near_fraction: float = 0.08,
                            far_fraction: float = 0.1, far_buffer_km: float = 10.0,
                            max_val: int = 6000, validate: Sequence[str] = ("near", "far"),
+                           far_folds: int = 3,
                            kmax: int = 128, n_threads: int = 4, seed: int = 0,
                            log: Optional[Callable[[str], None]] = _print) -> Dict:
     """Predict a species set for every query survey.
@@ -754,6 +779,8 @@ def sdm_community_pipeline(train_lat, train_lon, Y, query_lat, query_lon, *,
         (negative = not modelled).  Used for a PO-neighbourhood SVD embedding (covariates) and
         a per-species occurrence offset in the network.
     final_seeds : seeds averaged in the final refit on all training surveys.
+    far_folds : number of disjoint group holdouts pooled for the 'far' decisions (which
+        groups are held out changes the far score a lot; one draw is not enough).
 
     Returns dict: ``predictions`` (m strings, ascending ids; needs ``species_ids``),
     ``ranking``, ``sizes``, ``prob`` (m, S float16), ``regime``, ``report`` (text),
@@ -827,36 +854,63 @@ def sdm_community_pipeline(train_lat, train_lon, Y, query_lat, query_lon, *,
             decisions[reg] = default
             continue
         scheme = "cells" if reg == "near" else ("groups" if g_train is not None else "blocks")
-        try:
-            fit, val, w = sdm_spatial_holdout(tl_lat[train], tl_lon[train], groups=g_train, scheme=scheme,
-                                              cell_km=near_cell_km if reg == "near" else far_buffer_km,
-                                              fraction=near_fraction if reg == "near" else far_fraction,
-                                              buffer_km=None if reg == "near" else far_buffer_km,
-                                              max_val=max_val, seed=seed)
-        except ValueError as e:
-            report.append(f"[{reg}] validation skipped: {e}")
+        n_folds = 1 if reg == "near" else max(1, int(far_folds))
+        t0 = time.time()
+        pooled_hist, pooled_src, pooled_truth, pooled_w = {}, None, [], []
+        held_groups: List = []
+        n_fit_tot = n_val_tot = 0
+        names = []
+        for fold in range(n_folds):
+            try:
+                fit, val, w = sdm_spatial_holdout(tl_lat[train], tl_lon[train], groups=g_train, scheme=scheme,
+                                                  cell_km=near_cell_km if reg == "near" else far_buffer_km,
+                                                  fraction=near_fraction if reg == "near" else far_fraction,
+                                                  buffer_km=None if reg == "near" else far_buffer_km,
+                                                  max_val=max_val // n_folds if n_folds > 1 else max_val,
+                                                  seed=seed + fold, skip_groups=held_groups)
+            except ValueError as e:
+                report.append(f"[{reg}] fold {fold} validation skipped: {e}")
+                continue
+            if g_train is not None:
+                held_groups += list(pd.unique(pd.Series(g_train[val]).astype(str)))
+            _log(log, f"[{reg}] validation fold {fold + 1}/{n_folds}: scheme={scheme} fit={len(fit)} val={len(val)}"
+                      + (f" held-out groups {sorted(set(pd.Series(g_train[val]).astype(str)))}" if reg == "far" and g_train is not None else ""))
+            Xv = sdm_standardize(blocks, fit_rows=fit)   # scaling from the fit rows only
+            net, hist = sdm_fit_mlp(Xv, Y, fit, epochs=epochs, hidden=hidden, seeds=(seed + fold,),
+                                    offset=offset, checkpoints=ckpts, eval_rows=val,
+                                    n_threads=n_threads, log=log)
+            del net
+            src, names = sources_for(fit, val)
+            for ep, P in hist.items():
+                pooled_hist.setdefault(ep, []).append(P)
+            pooled_src = [[s_] for s_ in src] if pooled_src is None else [a_ + [s_] for a_, s_ in zip(pooled_src, src)]
+            pooled_truth.append(Y[val])
+            pooled_w.append(w)
+            n_fit_tot += len(fit)
+            n_val_tot += len(val)
+        if not pooled_truth:
             decisions[reg] = default
             continue
-        t0 = time.time()
-        _log(log, f"[{reg}] validation: scheme={scheme} fit={len(fit)} val={len(val)}")
-        Xv = sdm_standardize(blocks, fit_rows=fit)   # scaling from the fit rows only
-        net, hist = sdm_fit_mlp(Xv, Y, fit, epochs=epochs, hidden=hidden, seeds=(seed,), offset=offset,
-                                checkpoints=ckpts, eval_rows=val, n_threads=n_threads, log=log)
-        src, names = sources_for(fit, val)
-        best = _tune(hist, src, Y[val], w, kmax=kmax)
+        hist = {ep: np.concatenate(v) for ep, v in pooled_hist.items()}
+        src = [np.concatenate(v) for v in pooled_src]
+        best = _tune(_checkpoint_candidates(hist), src, sparse.vstack(pooled_truth).tocsr(),
+                     np.concatenate(pooled_w), kmax=kmax)
         best["sources"] = names
         best["validated"] = True
         best["scheme"] = scheme
-        best["n_fit"], best["n_val"] = int(len(fit)), int(len(val))
+        best["folds"] = len(pooled_truth)
+        best["n_fit"], best["n_val"] = int(n_fit_tot), int(n_val_tot)
         decisions[reg] = best
-        report.append(f"[{reg}] {scheme} holdout fit={len(fit)} val={len(val)}: best epoch {best['epoch']}, "
+        report.append(f"[{reg}] {scheme} holdout x{len(pooled_truth)} fold(s), val={n_val_tot}"
+                      + (f", held-out groups {sorted(set(held_groups))}" if reg == "far" and held_groups else "")
+                      + f": checkpoint epoch(s) {list(best['epoch'])}, "
                       f"fusion {dict(zip(names, best['weights']))}, mass x{best['mass_scale']}, "
                       f"validation F1 {best['score']:.4f} (network+plug-in only {best['plugin_only_score']:.4f}) "
                       f"[{time.time() - t0:.0f}s]")
-        del net
 
     # final refit on all training surveys
-    used = [decisions[r]["epoch"] for r in ("near", "far") if (regime == r).any()]
+    used = [e for r in ("near", "far") if (regime == r).any()
+            for e in np.atleast_1d(decisions[r]["epoch"])]
     final_epochs = int(max(used)) if used else epochs
     t0 = time.time()
     eps_needed = sorted(set(used)) or [final_epochs]
@@ -874,7 +928,8 @@ def sdm_community_pipeline(train_lat, train_lon, Y, query_lat, query_lon, *,
         if not len(rows):
             continue
         dec = decisions[reg]
-        base = hist[dec["epoch"]] if dec["epoch"] in hist else hist[max(hist)]
+        key = [e for e in np.atleast_1d(dec["epoch"]) if e in hist] or [max(hist)]
+        base = np.mean([hist[e] for e in key], axis=0)
         wts = dec["weights"] if dec["weights"] is not None else [0.0] * len(src)
         Pr = sdm_fuse(base[rows], [s_[rows] for s_ in src], wts)
         r, s = sdm_decode_sets(Pr, mass_scale=dec["mass_scale"], kmax=kmax)

@@ -141,3 +141,13 @@ def test_pipeline_learns_niches_on_synthetic_landscape():
     s0 = res["predictions"][0].split()
     assert s0 == sorted(s0, key=int) and all(100 <= int(v) < 140 for v in s0)
     assert "near" in res["decisions"] and "report" in res
+
+
+def test_group_holdout_folds_are_disjoint_with_skip_groups():
+    lat, lon, _, _, _, groups = _landscape(n_groups=8)
+    _, v1, _ = sdm.sdm_spatial_holdout(lat, lon, groups=groups, scheme="groups", fraction=.12,
+                                       min_group=10, seed=0)
+    g1 = set(groups[v1].astype(str))
+    _, v2, _ = sdm.sdm_spatial_holdout(lat, lon, groups=groups, scheme="groups", fraction=.12,
+                                       min_group=10, seed=0, skip_groups=sorted(g1))
+    assert not g1 & set(groups[v2].astype(str))
