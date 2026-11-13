@@ -760,7 +760,7 @@ def group_laplace_prior(context, outcome, groups, outcomes=None, alpha=1.0):
 def fit_two_axis_classifier(X, labels, groups, label_axes, feature_names=None,
                             shape_columns=None, stain_columns=None, positive_stain=None,
                             shape_estimator="random_forest", stain_C=0.1,
-                            prior_alpha=1.0, seed=0):
+                            prior_alpha=1.0, calibrate="group", seed=0):
     """Field classifier that keeps morphology and stain as separate evidence.
 
     label_axes : {label: (shape_value, stain_value)}; ``stain_value`` None for
@@ -776,7 +776,13 @@ def fit_two_axis_classifier(X, labels, groups, label_axes, feature_names=None,
     Prediction (``predict_two_axis``) scores every *seen* label by
     P(shape | x) * P(stain | shape, x) and takes the argmax; labels never seen in
     training are not emitted (their stain outcome falls to the seen label of
-    the same stain value with the most probable shape)."""
+    the same stain value with the most probable shape).
+
+    calibrate : ``"group"`` (default) rescales the stain log likelihood ratio by
+        a one-variable balanced logistic fit on its leave-one-group-out values,
+        so its confidence is what it earns on groups it never saw (a model that
+        separates development slides perfectly is otherwise overconfident on
+        new ones and overrides the shape prior); ``None`` keeps the raw logit."""
     from sklearn.linear_model import LogisticRegression
     from sklearn.preprocessing import StandardScaler
     if hasattr(X, "columns"):
@@ -810,6 +816,28 @@ def fit_two_axis_classifier(X, labels, groups, label_axes, feature_names=None,
     scaler = StandardScaler().fit(Xc)
     lr = LogisticRegression(C=stain_C, max_iter=5000)
     lr.fit(scaler.transform(Xc), t, sample_weight=balanced_weights(t, groups[has]))
+    calib = (1.0, 0.0)
+    gs = groups[has]
+    if calibrate == "group" and len(np.unique(gs)) >= 3:
+        from sklearn.base import clone
+        oof = np.full(len(t), np.nan)
+        for g in np.unique(gs):
+            te = gs == g
+            if len(np.unique(t[~te])) < 2:
+                continue
+            Xtr, med = _impute(X[has][~te][:, cidx])
+            sc_g = StandardScaler().fit(Xtr)
+            lr_g = clone(lr).fit(sc_g.transform(Xtr), t[~te],
+                                 sample_weight=balanced_weights(t[~te], gs[~te]))
+            Xte, _ = _impute(X[has][te][:, cidx], med)
+            oof[te] = lr_g.decision_function(sc_g.transform(Xte))
+        ok = np.isfinite(oof)
+        if ok.sum() >= 10 and len(np.unique(t[ok])) == 2:
+            cal = LogisticRegression(C=1e4, max_iter=5000)
+            cal.fit(oof[ok, None], t[ok], sample_weight=balanced_weights(t[ok], gs[ok]))
+            a = float(cal.coef_[0, 0])
+            if a > 0:
+                calib = (a, float(cal.intercept_[0]))
     prior = group_laplace_prior(shape_y[has], stain_y[has], groups[has], outcomes=stain_values,
                                 alpha=prior_alpha)
     seen = sorted(set(labels.tolist()))
@@ -817,6 +845,7 @@ def fit_two_axis_classifier(X, labels, groups, label_axes, feature_names=None,
             "shape_index": sidx, "shape_impute": smed, "shape_model": shape_model,
             "stain_index": cidx, "stain_impute": cmed, "stain_scaler": scaler, "stain_model": lr,
             "positive_stain": pos, "stain_values": stain_values, "prior": prior,
+            "stain_calibration": calib,
             "feature_names": names}
 
 
@@ -833,6 +862,8 @@ def predict_two_axis(model, X, return_scores=False):
     shape_classes = [str(c) for c in model["shape_model"].classes_]
     Xc, _ = _impute(X[:, model["stain_index"]], model["stain_impute"])
     llr = model["stain_model"].decision_function(model["stain_scaler"].transform(Xc))
+    a, b = model.get("stain_calibration", (1.0, 0.0))
+    llr = a * llr + b
     pos = model["positive_stain"]
     neg = [v for v in model["stain_values"] if v != pos][0]
     seen = model["seen_labels"]
@@ -872,7 +903,7 @@ def predict_two_axis(model, X, return_scores=False):
     return labels
 
 
-def group_holdout_two_axis(X, labels, groups, **kw):
+def group_holdout_two_axis(X, labels, groups, **kw):  # noqa: D401
     """Leave-one-group-out predictions of ``fit_two_axis_classifier``."""
     labels = np.asarray(labels, dtype=object)
     groups = np.asarray(groups, dtype=object)
