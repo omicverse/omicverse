@@ -99,3 +99,64 @@ def test_deliverable_written(tmp_path):
     d = pd.read_csv(p, dtype=str)
     assert list(d.columns) == ["table", "_row_id"]
     assert len(d) == f.drop_duplicates(["table", "row_id"]).shape[0]
+
+
+def _synthea_like(seed=0, n=60):
+    """Event-table cohort: patients with birth / death dates, visits, observations, medications."""
+    rng = np.random.default_rng(seed)
+    pats, encs, obs, meds = [], [], [], []
+    for i in range(n):
+        pid = f"p{i}"
+        sex = "F" if i % 2 else "M"
+        birth = pd.Timestamp("1950-01-01") + pd.Timedelta(days=int(rng.integers(0, 15000)))
+        death = birth + pd.Timedelta(days=30000) if i % 5 == 0 else None
+        pats.append([f"P{i}", pid, str(birth.date()), "" if death is None else str(death.date()), sex,
+                     "a" if i % 3 else "b"])
+        for k in range(8):
+            t = birth + pd.Timedelta(days=3000 + 1000 * k)
+            if death is not None and t > death:
+                break
+            eid = f"e{i}_{k}"
+            encs.append([f"E{i}_{k}", eid, pid, str(t), str(t + pd.Timedelta(hours=1)), "checkup"])
+            s = float(rng.normal(120, 8)); d_ = float(s - rng.normal(40, 5))
+            obs.append([f"O{i}_{k}a", pid, eid, str(t), "SYS", f"{s:.0f}", "mmHg"])
+            obs.append([f"O{i}_{k}b", pid, eid, str(t), "DIA", f"{d_:.0f}", "mmHg"])
+            obs.append([f"O{i}_{k}c", pid, eid, str(t), "ANS", "a" if i % 3 else "b", ""])
+            obs.append([f"O{i}_{k}d", pid, eid, str(t), "FEM" if sex == "F" else "MAL", "1", "{#}"])
+            bc, dp = float(rng.uniform(1, 50)), int(rng.integers(1, 20))
+            meds.append([f"M{i}_{k}", pid, eid, str(t), "", "drug", f"{bc:.2f}", str(dp), f"{bc * dp:.2f}"])
+        if death is not None:     # a death-certification visit after death is a source convention
+            t = death + pd.Timedelta(days=1)
+            encs.append([f"E{i}_d", f"e{i}_d", pid, str(t), str(t), "certification"])
+    T = {"patients": pd.DataFrame(pats, columns=["_row_id", "patient_id", "birthdate", "deathdate", "gender", "race"]),
+         "encounters": pd.DataFrame(encs, columns=["_row_id", "encounter_id", "patient_id", "start", "stop", "code"]),
+         "observations": pd.DataFrame(obs, columns=["_row_id", "patient_id", "encounter_id", "date", "code", "value", "units"]),
+         "medications": pd.DataFrame(meds, columns=["_row_id", "patient_id", "encounter_id", "start", "stop", "code",
+                                                    "base_cost", "dispenses", "total_cost"])}
+    return T
+
+
+def test_event_rules():
+    T = _synthea_like()
+    obs, encs, meds, pats = T["observations"], T["encounters"], T["medications"], T["patients"]
+    i_sys = obs.index[obs.code == "SYS"][3]; i_dia = obs.index[obs.code == "DIA"][3]
+    obs.loc[i_sys, "value"], obs.loc[i_dia, "value"] = obs.loc[i_dia, "value"], obs.loc[i_sys, "value"]  # swap
+    meds.loc[meds.index[5], "total_cost"] = "9999.99"                                                     # arithmetic
+    p0 = pats.index[pats.deathdate != ""][0]
+    pid0 = pats.loc[p0, "patient_id"]
+    e_late = encs[encs.patient_id == pid0].iloc[0].copy()
+    e_late["_row_id"], e_late["encounter_id"], e_late["start"] = "ELATE", "elate", "2200-01-01 10:00:00"
+    T["encounters"] = encs = pd.concat([encs, e_late.to_frame().T], ignore_index=True)                    # after death
+    o = obs.index[(obs.code == "ANS") & (obs.patient_id == "p7")]
+    obs.loc[o, "value"] = "b" if pats.loc[7, "race"] == "a" else "a"                                    # race vs answers
+    j = obs.index[(obs.code == "FEM")][0]
+    T["observations"] = obs = pd.concat([obs, obs.loc[[j]].assign(_row_id="DUP")], ignore_index=True)     # exact dup
+    f = audit_clinical_tables(T, external_reference=False, verbose=False)
+    fl = _flags(f)
+    assert ("observations", obs.loc[i_sys, "_row_id"]) in fl or ("observations", obs.loc[i_dia, "_row_id"]) in fl
+    assert ("medications", meds.loc[meds.index[5], "_row_id"]) in fl
+    assert ("encounters", "ELATE") in fl
+    assert ("patients", pats.loc[7, "_row_id"]) in fl
+    assert ("observations", "DUP") in fl
+    # the routine after-death certification visits are not flagged
+    assert not any(t == "encounters" and r.startswith("E") and r.endswith("_d") for t, r in fl)

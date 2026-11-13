@@ -212,10 +212,45 @@ def infer_clinical_schema(tables: Mapping[str, pd.DataFrame], overrides: Optiona
                 tp.append((a, b))
         if tp:
             pairs[n] = tp
+    if demo:
+        D = tables[demo["table"]]
+        demo.setdefault("birth", _first(list(D.columns), [r"birth_?date", r"dob", r"date_?of_?birth", r"birth_?datetime"]))
+        demo.setdefault("death", _first(list(D.columns), [r"death_?date", r"dod", r"date_?of_?death", r"death_?datetime",
+                                                          r"deceased_?date"]))
+        cats = []
+        for c in D.columns:
+            if c in (row_id, subject, demo.get("sex"), demo.get("age"), demo.get("birth"), demo.get("death")):
+                continue
+            nun = D[c].astype(str).nunique()
+            if 2 <= nun <= 30 and not re.search(r"(id|date|time|year|zip|postal|address|name)$", c.lower()):
+                cats.append(c)
+        demo.setdefault("categories", cats)
+    # event tables: subject + a date / time column; visit tables: an id unique there and repeated elsewhere
+    events, visits = {}, {}
+    for n, df in tables.items():
+        cols = list(df.columns)
+        if subject not in cols or (demo and n == demo["table"]) or n in dicts:
+            continue
+        t0 = _first(cols, [r"charttime", r"start(time|_?date|_?datetime)?", r"admittime", r"intime", r"date",
+                           r"(event|obs|observation|service|visit)_?(date|time|datetime)", r"datetime", r"time"])
+        if not t0:
+            continue
+        t1 = _first(cols, [r"stop(time)?", r"end(time|_?date)?", r"dischtime", r"outtime"])
+        events[n] = {"time": t0, "end": t1,
+                     "item": _first(cols, [r"itemid", r"code", r"item_?id", r"concept_?id"]),
+                     "label": _first(cols, [r"description", r"label", r"drug", r"name"])}
+    for n, df in tables.items():
+        for c in df.columns:
+            if c in (row_id, subject) or not re.search(r"(^|_)(id|key)$", c.lower()) or not df[c].is_unique:
+                continue
+            users = [m for m, d2 in tables.items() if m != n and c in d2.columns]
+            if users and subject in df.columns and n in events:
+                visits[n] = {"key": c, "start": events[n]["time"], "end": events[n]["end"], "users": users}
     schema = {"row_id": row_id, "subject": subject, "demographics": demo, "measurements": meas,
-              "dictionaries": dicts, "prescriptions": rx, "time_pairs": pairs}
+              "dictionaries": dicts, "prescriptions": rx, "time_pairs": pairs, "events": events,
+              "visits": visits}
     for k, v in overrides.items():
-        if k in ("measurements", "dictionaries", "prescriptions", "time_pairs") and isinstance(v, dict):
+        if k in ("measurements", "dictionaries", "prescriptions", "time_pairs", "events", "visits") and isinstance(v, dict):
             schema[k].update(v)
         else:
             schema[k] = v
@@ -464,11 +499,14 @@ def audit_clinical_tables(
 
         # unit label vs the item's own modal unit
         if on("unit_label") and m.get("unit"):
-            u = w[(w["unit"] != "") & (w["unit"].str.lower() != "nan")]
+            u = w[(w["unit"] != "") & (w["unit"].str.lower() != "nan") & w["v"].notna()]
             cnt = u.groupby("item")["unit"].transform("size")
             modal = u.groupby("item")["unit"].agg(lambda s: s.value_counts().idxmax())
-            share = u.groupby(["item", "unit"])["unit"].transform("size") / cnt
-            odd = u[(cnt >= min_item_rows) & (u["unit"] != u["item"].map(modal)) & (share < rare_unit_share)]
+            n_same = u.groupby(["item", "unit"])["unit"].transform("size")
+            share = n_same / cnt
+            # a slip is a handful of rows; a unit used by dozens of rows is a second convention
+            odd = u[(cnt >= min_item_rows) & (u["unit"] != u["item"].map(modal)) & (share < rare_unit_share)
+                    & ((n_same <= 3) | (share < 0.002))]
             F.add(tn, odd["rid"], "impossible_value", "unit_label", tn + "|unit|" + odd["rid"],
                   1 - share.loc[odd.index],
                   "unit '" + odd["unit"] + "' vs usual '" + odd["item"].map(modal) + "' for item "
@@ -500,6 +538,16 @@ def audit_clinical_tables(
                   "value " + hit["v"].astype(str) + " robust z=" + z.loc[hit.index].round(1).astype(str)
                   + " for item " + hit["item"] + " " + hit["item"].map(labels).fillna(""))
             log(f"  {tn}: item_extreme {len(hit)}")
+
+        if on("percent_bound") and not x.empty and m.get("unit"):
+            pc = x[x["unit"].str.strip() == "%"]
+            if len(pc):
+                n_over = (pc["v"] > 100).groupby(pc["item"]).transform("sum")
+                n_all = pc.groupby("item")["v"].transform("size")
+                hit = pc[(pc["v"] > 100) & (n_over <= np.maximum(1, 0.005 * n_all))]
+                F.add(tn, hit["rid"], "impossible_value", "percent_bound", tn + "|pct|" + hit["rid"], 1.0,
+                      "percentage " + hit["v"].astype(str) + " > 100 for item " + hit["item"])
+                log(f"  {tn}: percent_bound {len(hit)}")
 
         if on("sign_flip") and not x.empty:
             nonneg = x.groupby("item")["v"].transform(lambda s: (s >= 0).mean())
@@ -552,7 +600,11 @@ def audit_clinical_tables(
                 if "spec" in k:
                     z_ = z_[(z_["spec"] != "") & (z_["spec"].str.lower() != "nan")]
                 nun = z_.groupby(k)["v"].transform("nunique")
-                d = z_[nun > 1]
+                # items for which disagreeing same-instant rows are routine are a source convention
+                gk = z_.assign(_c=nun > 1).drop_duplicates(k)
+                conv_rate = gk.groupby("item")["_c"].mean()
+                conv = set(conv_rate[(conv_rate > 0.05) & (gk.groupby("item")["_c"].sum() >= 3)].index)
+                d = z_[(nun > 1) & ~z_["item"].isin(conv)]
                 clus = tn + "|dup|" + d[k].astype(str).agg("|".join, axis=1)
                 rng = d.groupby(k)["v"].transform(lambda s: (s.max() - s.min()) / max(abs(s).max(), 1e-12))
                 F.add(tn, d["rid"], "inconsistency", "duplicate_conflict", clus, rng,
@@ -724,6 +776,8 @@ def audit_clinical_tables(
             if on("sex_only_item"):
                 srcs = [(tn, m["item"]) for tn, m in schema["measurements"].items()]
                 srcs += [(tn, r["drug"]) for tn, r in schema["prescriptions"].items()]
+                srcs += [(tn, e["item"]) for tn, e in schema.get("events", {}).items()
+                         if e.get("item") and (tn, e["item"]) not in srcs]
                 for tn, col in srcs:
                     df = tables[tn]
                     vals = df[col].astype(str)
@@ -738,7 +792,11 @@ def audit_clinical_tables(
                         if c not in ct:
                             ct[c] = 0
                     # one-sex items: >= 5 patients of one sex, at most one of the other
-                    cand = ct[((ct["M"] >= 5) & (ct["F"] <= 1)) | ((ct["F"] >= 5) & (ct["M"] <= 1))]
+                    # minority allowance: one patient, or 5 % of the majority (the minority may be
+                    # exactly the patients whose recorded sex is wrong)
+                    allow_m = np.where(ct["F"] >= 8, np.maximum(2, np.floor(0.1 * ct["F"])), 1)
+                    allow_f = np.where(ct["M"] >= 8, np.maximum(2, np.floor(0.1 * ct["M"])), 1)
+                    cand = ct[((ct["M"] >= 5) & (ct["F"] <= allow_f)) | ((ct["F"] >= 5) & (ct["M"] <= allow_m))]
                     imp = pd.Series(np.where(cand["M"] > cand["F"], "M", "F"), index=cand.index)
                     hit = b[b["it"].isin(imp.index)].copy()
                     hit["implied"] = hit["it"].map(imp)
@@ -844,6 +902,7 @@ def audit_clinical_tables(
                           f"(range of the others {a.drop(i).min():g}-{a.drop(i).max():g})")
                 log(f"  demographics: {len(flag_idx)} isolated ages")
 
+    _event_rules(tables, schema, F, on, log, isolation)
     out = F.frame()
     summ = (out.groupby(["family", "rule"]).agg(rows=("row_id", "nunique"), clusters=("cluster", "nunique"))
             if len(out) else pd.DataFrame())
@@ -853,13 +912,315 @@ def audit_clinical_tables(
     if out_path is not None:
         Path(out_path).parent.mkdir(parents=True, exist_ok=True)
         flags.rename(columns={"row_id": out_id_column or rid or "row_id"}).to_csv(out_path, index=False)
+        from ._meta_selection import record_deliverable
+        record_deliverable(out_path, "omicverse.tl.audit_clinical_tables", rows=len(flags))
     if verbose and len(out):
         log(summ.to_string())
         log(f"  total distinct flagged rows: {len(flags)}"
-            + (f" -> written to {out_path}" if out_path is not None else ""))
+            + (f" -> written to {out_path} (fingerprinted: finish with ov.tl.verify_deliverable('{out_path}'), "
+               f"which must say 'unchanged')" if out_path is not None else ""))
         log("  Deliver ALL of these rows. Every rule already requires a second signature (isolation, a "
             "power-of-ten / unit relation, a disagreeing record of the same event, or the patient's "
             "other records); small disagreements (duplicates 10-50 % apart, a lab vs chart value 1.3x "
             "off) are the typical data-entry errors. Post-filtering by your own thresholds loses "
             "incidents; add rows from extra checks if you like, never remove these.")
     return out
+
+
+def _dt(s: pd.Series) -> pd.Series:
+    x = s.astype(str).str.strip().str.replace("T", " ", regex=False).str.replace("Z", "", regex=False)
+    return pd.to_datetime(x.where(x != ""), errors="coerce")
+
+
+def _event_rules(tables, schema, F, on, log, isolation):
+    """Rules over event tables (subject + date): life-span, visit consistency, exact duplicates,
+    demographic answers vs. recorded demographics, arithmetic relations."""
+    rid, subj = schema["row_id"], schema["subject"]
+    demo = schema.get("demographics") or {}
+    events = schema.get("events", {})
+    visits = schema.get("visits", {})
+    P = tables[demo["table"]] if demo.get("table") else None
+
+    # ---- exact duplicate rows (all columns but the row id)
+    if on("exact_duplicate"):
+        for tn, df in tables.items():
+            body = [c for c in df.columns if c != rid]
+            if len(body) < 3 or len(df) < 2:
+                continue
+            d = df[df.duplicated(body, keep="first")]
+            if 0 < len(d) <= 0.01 * len(df):
+                F.add(tn, d[rid], "inconsistency", "exact_duplicate", tn + "|xdup|" + d[rid].astype(str), 1.0,
+                      "byte-identical copy of another row")
+                log(f"  {tn}: exact_duplicate {len(d)}")
+
+    # ---- life span: events after death / before birth; birth date contradicted by events
+    if P is not None and (demo.get("death") or demo.get("birth")):
+        birth = _dt(P[demo["birth"]]) if demo.get("birth") else pd.Series(pd.NaT, index=P.index)
+        death = _dt(P[demo["death"]]) if demo.get("death") else pd.Series(pd.NaT, index=P.index)
+        birth.index = death.index = P[subj].astype(str)
+        firsts, lasts = [], []
+        conv_visits = set()
+        # visit types that routinely happen after death (certification, autopsy ...) are conventions
+        for vn, v in visits.items():
+            V = tables[vn]
+            it = events[vn].get("item") or events[vn].get("label")
+            if not it or not demo.get("death"):
+                continue
+            d = _dt(V[v["start"]])
+            dd = V[subj].astype(str).map(death)
+            aft = dd.notna() & (d.dt.normalize() > dd.dt.normalize())
+            dead = V[dd.notna()]
+            rate = aft[dd.notna()].groupby(dead[it]).mean()
+            npat = V[aft].groupby(it)[subj].nunique()
+            conv_types = set(rate[(rate >= 0.5)].index) & set(npat[npat >= 2].index)
+            conv_visits |= set(V.loc[V[it].isin(conv_types), v["key"]].astype(str))
+        vkeys = {v["key"] for v in visits.values()}
+        for tn, e in events.items():
+            df = tables[tn]
+            d = _dt(df[e["time"]])
+            sid = df[subj].astype(str)
+            firsts.append(d.groupby(sid).min())
+            lasts.append(d.groupby(sid).max())
+            dd, bd = sid.map(death), sid.map(birth)
+            inconv = pd.Series(False, index=df.index)
+            for k in vkeys & set(df.columns):
+                inconv |= df[k].astype(str).isin(conv_visits)
+            it = e.get("item")
+            if on("after_death") and demo.get("death"):
+                aft = dd.notna() & d.notna() & (d.dt.normalize() > dd.dt.normalize()) & ~inconv
+                # per-item convention (an item recorded after death for most dead patients)
+                if it and aft.any():
+                    dead = dd.notna()
+                    rate = aft[dead].groupby(df.loc[dead, it]).mean()
+                    conv_items = set(rate[rate >= 0.5].index)
+                    aft &= ~df[it].isin(conv_items)
+                if aft.sum() and aft.mean() <= 0.05:
+                    hit = df[aft]
+                    F.add(tn, hit[rid], "impossible_value", "after_death", tn + "|death|" + sid[aft], 1.0,
+                          "dated " + d[aft].astype(str) + " after the patient's death " + dd[aft].astype(str))
+                    log(f"  {tn}: after_death {int(aft.sum())}")
+            if on("before_birth") and demo.get("birth"):
+                bef = bd.notna() & d.notna() & (d.dt.normalize() < bd.dt.normalize())
+                if bef.sum() and bef.mean() <= 0.05:
+                    hit = df[bef]
+                    F.add(tn, hit[rid], "impossible_value", "before_birth", tn + "|birth|" + hit[rid].astype(str),
+                          1.0, "dated " + d[bef].astype(str) + " before the patient's birth " + bd[bef].astype(str))
+                    log(f"  {tn}: before_birth {int(bef.sum())}")
+        if on("birth_vs_events") and demo.get("birth") and firsts:
+            first = pd.concat(firsts, axis=1).min(axis=1)
+            last = pd.concat(lasts, axis=1).max(axis=1)
+            b = birth
+            # the birth date itself is wrong when MOST of the patient's records precede it
+            nb = {}
+            for tn, e in events.items():
+                df = tables[tn]
+                d = _dt(df[e["time"]])
+                sid = df[subj].astype(str)
+                bef = (d < sid.map(b))
+                g = bef.groupby(sid).agg(["sum", "size"])
+                nb[tn] = g
+            bad = (pd.concat([g["sum"] for g in nb.values()]).groupby(level=0).sum() if nb else None)
+            many_before = set(bad[(bad >= 3)].index) if bad is not None else set()
+            ages = ((last - b.reindex(last.index)).dt.days / 365.25).dropna()
+            iso = set()
+            if len(ages) >= 10:
+                a = ages.sort_values()
+                vals = a.values
+                typical = np.median(np.diff(np.unique(np.round(vals, 2)))) if a.nunique() > 2 else 0.0
+                k = min(6, len(vals) - 2)
+                hi_gap, hi_next = vals[-1] - vals[-2], np.max(np.diff(vals[-1 - k:-1]))
+                if typical > 0 and hi_gap >= isolation * typical and hi_gap >= 2 * hi_next:
+                    iso.add(a.index[-1])
+            for s_ in many_before | iso:
+                r_ = P.loc[P[subj].astype(str) == s_, rid]
+                why = ("most of the patient's records precede the recorded birth date" if s_ in many_before else
+                       f"age at last record {ages.get(s_, np.nan):.0f} y is isolated from the cohort")
+                F.add(demo["table"], r_, "demographic_conflict", "birth_vs_events", "birth|" + s_, 1.0, why)
+            log(f"  demographics: birth date contradicted for {len(many_before | iso)} patients")
+
+    # ---- visits: rows outside their visit's time window or of another patient
+    for vn, v in visits.items():
+        V = tables[vn]
+        key = v["key"]
+        vs = _dt(V[v["start"]])
+        ve = _dt(V[v["end"]]) if v.get("end") else vs
+        vs.index = ve.index = V[key].astype(str)
+        vsub = pd.Series(V[subj].astype(str).values, index=V[key].astype(str))
+        for tn in v["users"]:
+            if tn not in events or tn == vn:
+                continue
+            df = tables[tn]
+            k_ = df[key].astype(str)
+            has = k_.isin(vsub.index)
+            if on("visit_subject") and subj in df.columns:
+                mis = has & (k_.map(vsub) != df[subj].astype(str))
+                if 0 < mis.sum() <= 0.01 * len(df):
+                    hit = df[mis]
+                    F.add(tn, hit[rid], "inconsistency", "visit_subject", tn + "|vsub|" + hit[rid].astype(str), 1.0,
+                          "the row's patient differs from its visit's patient")
+                    log(f"  {tn}: visit_subject {int(mis.sum())}")
+            if on("outside_visit"):
+                d = _dt(df[events[tn]["time"]])
+                lag_lo = (d - k_.map(vs)).dt.total_seconds() / 86400
+                lag_hi = (d - k_.map(ve).fillna(k_.map(vs))).dt.total_seconds() / 86400
+                ok = has & d.notna()
+                if ok.sum() < 20:
+                    continue
+                # tolerance learned from the data: how far rows usually sit outside their visit
+                lo_tol = max(1.0, -float(np.nanquantile(lag_lo[ok], 0.001)) * 1.5)
+                hi_tol = max(1.0, float(np.nanquantile(lag_hi[ok], 0.999)) * 1.5)
+                # results may be filed after a visit; nothing can be recorded before it started
+                out_ = ok & (lag_lo < -lo_tol)
+                if 0 < out_.sum() <= 0.01 * len(df):
+                    hit = df[out_]
+                    F.add(tn, hit[rid], "inconsistency", "outside_visit", tn + "|vwin|" + hit[rid].astype(str), 1.0,
+                          "dated outside its visit's time window (by " + lag_lo[out_].round(1).astype(str) + " d)")
+                    log(f"  {tn}: outside_visit {int(out_.sum())}")
+
+    # ---- recorded demographic categories vs the patient's own answers recorded as items
+    if on("demographic_answer") and P is not None:
+        sub_cat = {c: pd.Series(P[c].astype(str).str.strip().str.lower().values, index=P[subj].astype(str))
+                   for c in (demo.get("categories") or []) + ([demo["sex"]] if demo.get("sex") else [])}
+        for tn, m in schema["measurements"].items():
+            df = tables[tn]
+            it, val = m["item"], (m.get("text") or m["value"])
+            if val not in df.columns:
+                val = m["value"]
+            txt = df[val].astype(str).str.strip().str.lower()
+            nonnum = _num(df[val]).isna() & (txt != "")
+            if not nonnum.any():
+                continue
+            sub = df[nonnum]
+            for col, cat in sub_cat.items():
+                for item_id, g in sub.groupby(it):
+                    sids = g[subj].astype(str)
+                    if sids.nunique() < 20:
+                        continue
+                    ans = txt.loc[g.index]
+                    # the answer's category: learned as the recorded category most patients with
+                    # that answer have (a mapping from the data, no vocabulary table)
+                    rec = sids.map(cat)
+                    ct = pd.crosstab(ans, rec)
+                    if ct.shape[0] < 2 or ct.shape[0] > 30:
+                        continue
+                    mapping = ct.idxmax(axis=1)
+                    purity = (ct.max(axis=1).sum() / ct.values.sum())
+                    base = ct.sum(axis=0).max() / ct.values.sum()
+                    # the answers must explain the recorded category far beyond its majority class
+                    lift = (purity - base) / max(1 - base, 1e-9)
+                    if purity < 0.95 or lift < 0.8 or mapping.nunique() < 2:
+                        continue
+                    per = pd.DataFrame({"s": sids, "a": ans.map(mapping)}).groupby("s")["a"].agg(
+                        lambda x: x.value_counts().index[0] if x.value_counts().iloc[0] >= 0.6 * len(x) else None)
+                    per = per.dropna()
+                    bad = per[per != per.index.map(cat)]
+                    if len(bad) and len(bad) <= 0.05 * len(per):
+                        for s_ in bad.index:
+                            r_ = P.loc[P[subj].astype(str) == s_, rid]
+                            F.add(demo["table"], r_, "demographic_conflict", "demographic_answer", f"dem|{col}|{s_}",
+                                  1.0, f"recorded {col} '{cat.get(s_)}' contradicts the patient's own answers "
+                                       f"to item {item_id} ('{bad[s_]}')")
+                        log(f"  demographics: {col} contradicted by answers to item {item_id} for {len(bad)} patients")
+
+    # ---- arithmetic relations discovered from the data
+    if on("arithmetic"):
+        _arithmetic_rules(tables, schema, F, log)
+
+
+def _arithmetic_rules(tables, schema, F, log, min_rows: int = 50):
+    rid, subj = schema["row_id"], schema["subject"]
+    # (a) wide: numeric columns of one table with c = a * b (or a / b) on almost every row
+    for tn, df in tables.items():
+        numc = []
+        for c in df.columns:
+            if c == rid or re.search(r"(id|code|key)$", c.lower()):
+                continue
+            smp = df[c].astype(str).head(500)
+            if smp.str.fullmatch(r"\s*-?\d+(\.\d+)?([eE][-+]?\d+)?\s*").mean() < 0.9:
+                continue
+            xc = _num(df[c])
+            if xc.notna().mean() > 0.9 and xc.nunique() > 10:
+                numc.append(c)
+        if len(numc) < 3 or len(numc) > 12:
+            continue
+        X = {c: _num(df[c]) for c in numc}
+        for c in numc:
+            for a in numc:
+                for b in numc:
+                    if len({a, b, c}) < 3 or a > b:
+                        continue
+                    for op in ("mul", "div"):
+                        pred = X[a] * X[b] if op == "mul" else X[a] / X[b].replace(0, np.nan)
+                        ok = pred.notna() & X[c].notna() & (X[c].abs() > 0)
+                        if ok.sum() < min_rows:
+                            continue
+                        rel = ((X[c] - pred).abs() / X[c].abs().clip(lower=1e-9))[ok]
+                        if (rel < 0.01).mean() < 0.95:
+                            continue
+                        bad = ok & ((X[c] - pred).abs() > 0.01 * X[c].abs().clip(lower=1))
+                        if 0 < bad.sum() <= 0.01 * len(df):
+                            hit = df[bad]
+                            F.add(tn, hit[rid], "inconsistency", "arithmetic", tn + "|arith|" + hit[rid].astype(str),
+                                  1.0, f"{c} != {a} {'*' if op == 'mul' else '/'} {b}, a relation that holds on "
+                                       f"{(rel < 0.01).mean():.1%} of rows")
+                            log(f"  {tn}: arithmetic {c}={a}{'*' if op == 'mul' else '/'}{b}: {int(bad.sum())}")
+    # (b) long: items recorded together (same patient and instant)
+    for tn, m in schema["measurements"].items():
+        if not m.get("time"):
+            continue
+        df = tables[tn]
+        w = pd.DataFrame({"rid": df[rid].astype(str), "s": df[subj].astype(str), "t": df[m["time"]].astype(str),
+                          "it": df[m["item"]].astype(str), "v": _num(df[m["value"]])}).dropna(subset=["v"])
+        w = w.drop_duplicates(["s", "t", "it"], keep=False)
+        top = w["it"].value_counts()
+        top = list(top[top >= 200].index[:25])
+        w = w[w["it"].isin(top)]
+        units = {}
+        if m.get("unit"):
+            uu = pd.DataFrame({"it": df[m["item"]].astype(str), "u": df[m["unit"]].astype(str)})
+            units = uu[uu["it"].isin(top)].groupby("it")["u"].agg(lambda x: x.value_counts().index[0]).to_dict()
+        V = w.pivot_table(index=["s", "t"], columns="it", values="v", aggfunc="first")
+        R = w.pivot_table(index=["s", "t"], columns="it", values="rid", aggfunc="first")
+        cols = list(V.columns)
+        # ordered pairs: a > b on (almost) every co-recorded instant
+        for a in cols:
+            for b in cols:
+                if a == b:
+                    continue
+                ok = V[a].notna() & V[b].notna()
+                if ok.sum() < min_rows:
+                    continue
+                gt = (V.loc[ok, a] > V.loc[ok, b]).mean()
+                same_unit = units.get(a) is not None and units.get(a) == units.get(b)
+                if gt >= 0.995 and same_unit and (V.loc[ok, a] / V.loc[ok, b].replace(0, np.nan)).median() < 10:
+                    bad = ok & (V[a] <= V[b])
+                    if 0 < bad.sum():
+                        ids = list(R.loc[bad, a]) + list(R.loc[bad, b])
+                        F.add(tn, ids, "inconsistency", "ordered_pair", [f"{tn}|ord|{x}" for x in
+                              list(R.loc[bad, a]) * 2], 1.0, f"item {a} <= item {b}, while {a} > {b} at "
+                              f"{gt:.1%} of shared instants")
+                        log(f"  {tn}: ordered_pair {a}>{b}: {int(bad.sum())}")
+        # products: log c = log k + p log a + q log b, constant across instants
+        L = np.log(V.where(V > 0))
+        for c in cols:
+            for i_, a in enumerate(cols):
+                for b in cols[i_ + 1:]:
+                    if c in (a, b):
+                        continue
+                    ok = L[c].notna() & L[a].notna() & L[b].notna()
+                    if ok.sum() < min_rows:
+                        continue
+                    for p_ in (1, -1, 2, -2):
+                        for q_ in (1, -1, 2, -2):
+                            res = (L[c] - p_ * L[a] - q_ * L[b])[ok]
+                            med = res.median()
+                            mad = (res - med).abs().median()
+                            if mad > 0.005:
+                                continue
+                            dev = (L[c] - p_ * L[a] - q_ * L[b] - med).abs()
+                            bad = ok & (dev > 0.05)
+                            if 0 < bad.sum() <= 0.02 * ok.sum():
+                                F.add(tn, R.loc[bad, c], "inconsistency", "arithmetic",
+                                      [f"{tn}|prod|{x}" for x in R.loc[bad, c]], 1.0,
+                                      f"item {c} != k * {a}^{p_} * {b}^{q_} (holds on the other instants)")
+                                log(f"  {tn}: arithmetic {c}~{a}^{p_}*{b}^{q_}: {int(bad.sum())}")
