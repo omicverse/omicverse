@@ -30,7 +30,6 @@ classifiers = [
 dependencies = [
     
     'numpy>=1.23',
-    'scanpy>=1.9',
     'pandas>=1.5, <3.0.0',
     'matplotlib>3.6',
     'scikit-learn>=1.2',
@@ -109,10 +108,20 @@ dependencies = [
     'anndataoom>=0.1.9,<1.0',
     # natural sort order for cluster labels (Louvain / DPT ports)
     'natsort',
+    # imported directly by omicverse (formerly installed through scanpy, which is
+    # now optional): positional-argument shims, UMAP fuzzy graph / layout, NN-descent
+    'legacy-api-wrap',
+    'umap-learn>=0.5',
+    'pynndescent',
     'dask[array]',
 ]
 
 [project.optional-dependencies]
+# scanpy itself: no longer needed by omicverse's own code (vendored tools under
+# omicverse/external and third-party workflows may still use it).
+scanpy = [
+    "scanpy>=1.9",
+]
 # Spatial flow network learning; GEMs are supplied separately.
 commot = [
     "torch>=2.0,<3",
@@ -144,6 +153,7 @@ cytometry-full = [
     "pytometry>=0.1.4",
 ]
 full = [
+  "scanpy>=1.9",
   "dynamo-release<=1.5.3",
   "squidpy",
   "s3fs>=2023.1.0",  # pin to avoid ancient s3fs pulled by squidpy→spatialdata→ome-zarr chain
