@@ -56,13 +56,17 @@ _RESIDENT_FRACTION = 0.5
 # small helpers
 # ---------------------------------------------------------------------------
 def resolve_device(device="auto") -> torch.device:
-    if isinstance(device, torch.device):
-        return device
+    """``'auto'`` -> CUDA if available; CUDA devices always carry an index."""
+    if isinstance(device, int):
+        device = f"cuda:{device}"
     if device in (None, "auto"):
-        return torch.device("cuda" if torch.cuda.is_available() else "cpu")
+        device = "cuda" if torch.cuda.is_available() else "cpu"
     if device == "gpu":
         device = "cuda"
-    return torch.device(device)
+    device = torch.device(device)
+    if device.type == "cuda" and device.index is None:
+        device = torch.device("cuda", torch.cuda.current_device())
+    return device
 
 
 def _read_threads() -> int:
@@ -78,7 +82,8 @@ def is_oom(adata) -> bool:
 
 
 def is_dask_array(X) -> bool:
-    return type(X).__module__.split(".")[0] == "dask"
+    """Dask arrays, including anndata's ``DaskArrayView``."""
+    return any(c.__module__.split(".")[0] == "dask" for c in type(X).__mro__)
 
 
 def gene_selection(var, genes) -> np.ndarray | None:
@@ -241,35 +246,41 @@ def compact_rows(indptr_host, indices, data, keep_rows_host, col_map, device):
     ``col_map`` (int32 tensor on the device, -1 = drop) of a raw CSR block whose
     ``indices`` / ``data`` already live on the device.  Explicit zeros are
     dropped.  Returns (indptr, lens, indices, data, lens_host) of the kept rows.
-    """
+    Temporaries are 1-4 bytes per stored value (no per-value row index)."""
     indptr_host = np.asarray(indptr_host, dtype=np.int64)
-    r = len(indptr_host) - 1
-    nnz = int(indptr_host[-1] - indptr_host[0])
+    indptr_host = indptr_host - indptr_host[0]
+    nnz = int(indptr_host[-1])
     lens_raw = np.diff(indptr_host)
+    keep = None if keep_rows_host is None or keep_rows_host.all() else \
+        np.ascontiguousarray(keep_rows_host, dtype=bool)
+    lens_kept = lens_raw if keep is None else lens_raw[keep]
+
+    def out(ind, dat, lh):
+        lh = np.ascontiguousarray(lh, dtype=np.int64)
+        lens = torch.from_numpy(lh).to(device)
+        if ind.dtype != torch.int32:
+            ind = ind.to(torch.int32)
+        return torch.cumsum(lens, 0) - lens, lens, ind, dat, lh
+
     if nnz == 0:
-        lh = lens_raw[keep_rows_host] if keep_rows_host is not None else lens_raw
-        z = torch.zeros(len(lh), dtype=torch.long, device=device)
-        return z, z, indices[:0], data[:0], lh.astype(np.int64)
-    row = torch.repeat_interleave(torch.arange(r, device=device),
-                                  torch.from_numpy(lens_raw).to(device), output_size=nnz)
+        return out(indices[:0], data[:0], lens_kept)
     mask = data != 0
     if col_map is not None:
-        newcol = col_map[indices.long()]
+        newcol = col_map.index_select(0, indices if indices.dtype in (torch.int32, torch.int64)
+                                      else indices.long())
         mask &= newcol >= 0
         indices = newcol
-    if keep_rows_host is not None:
-        mask &= torch.from_numpy(np.ascontiguousarray(keep_rows_host)).to(device)[row]
-    row = row[mask]
-    indices = indices[mask]
-    data = data[mask]
-    lens_all = torch.bincount(row, minlength=r)
-    if keep_rows_host is not None:
-        lens_all = lens_all[torch.from_numpy(np.flatnonzero(keep_rows_host)).to(device)]
-    lens_host = lens_all.cpu().numpy().astype(np.int64)
-    lens = torch.from_numpy(lens_host).to(device)
-    indptr = torch.cumsum(lens, 0) - lens
-    return indptr, lens, indices.to(torch.int32) if indices.dtype != torch.int32 else indices, \
-        data, lens_host
+    if keep is not None:
+        mask &= torch.repeat_interleave(torch.from_numpy(keep).to(device),
+                                        torch.from_numpy(lens_raw).to(device), output_size=nnz)
+    if bool(mask.all()):
+        return out(indices, data, lens_kept)
+    cs = torch.cumsum(mask, 0, dtype=torch.int32 if nnz < 2**31 - 1 else torch.int64)
+    cs = torch.cat([cs.new_zeros(1), cs])
+    ip = torch.from_numpy(indptr_host).to(device)
+    lens_all = (cs[ip[1:]] - cs[ip[:-1]]).cpu().numpy()
+    lh = lens_all if keep is None else lens_all[keep]
+    return out(indices[mask], data[mask], lh)
 
 
 class _Stage:
@@ -287,7 +298,7 @@ class _Stage:
     def ensure(self, n: int):
         if self.data.shape[0] >= n:
             return
-        n = int(n * 1.25) + 1024
+        n = int(n * 1.25) + 1024 if self.pinned else int(n)
         if self.pinned:
             self._td = torch.empty(n, dtype=torch.float32, pin_memory=True)
             self._ti = torch.empty(n, dtype=torch.int32, pin_memory=True)
@@ -311,9 +322,11 @@ class _Stage:
             ev.record(stream)
             self.event = ev
             return i, d
-        # CPU training: copy out so the stage can be refilled immediately
-        return (torch.from_numpy(self.indices[:nnz].copy()),
-                torch.from_numpy(self.data[:nnz].copy()))
+        # CPU training: hand the arrays over (no copy); the next load allocates anew
+        i, d = torch.from_numpy(self.indices[:nnz]), torch.from_numpy(self.data[:nnz])
+        self.data = np.zeros(0, np.float32)
+        self.indices = np.zeros(0, np.int32)
+        return i, d
 
 
 # ---------------------------------------------------------------------------
