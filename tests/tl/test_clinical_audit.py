@@ -89,3 +89,13 @@ def test_injected_errors_are_found():
     sex = f[f["rule"] == "sex_vs_records"]
     assert sex["cluster"].nunique() == 1
     assert (f["cluster"] == sex["cluster"].iloc[0]).sum() > 1
+
+
+def test_deliverable_written(tmp_path):
+    T = _cohort()
+    T["labevents"].loc[T["labevents"].index[T["labevents"].itemid == "A"][5], "valuenum"] = "100.0"
+    p = tmp_path / "sub" / "flagged.csv"
+    f = audit_clinical_tables(T, external_reference=False, verbose=False, out=str(p))
+    d = pd.read_csv(p, dtype=str)
+    assert list(d.columns) == ["table", "_row_id"]
+    assert len(d) == f.drop_duplicates(["table", "row_id"]).shape[0]

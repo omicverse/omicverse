@@ -396,6 +396,8 @@ def audit_clinical_tables(
     pair_min_n: int = 20,
     pair_min_agree: float = 0.9,
     min_sex_evidence: int = 3,
+    out: Optional[str] = None,
+    out_id_column: Optional[str] = None,
     verbose: bool = True,
 ) -> pd.DataFrame:
     """Run every rule family and return the findings table.
@@ -420,6 +422,10 @@ def audit_clinical_tables(
         at least ``pair_min_agree`` of them are equal.
     min_sex_evidence
         Minimum number of sex-informative rows before a patient's recorded sex is judged.
+    out, out_id_column
+        Optional path of the deliverable: the distinct ``(table, row id)`` pairs are written
+        there as CSV with columns ``table`` and ``out_id_column`` (default: the schema's row-id
+        column name).
 
     Returns
     -------
@@ -428,6 +434,7 @@ def audit_clinical_tables(
     ``schema`` and ``summary`` (per-rule row and cluster counts). Deliver
     ``drop_duplicates(['table', 'row_id'])``.
     """
+    out_path = out
     schema = schema or infer_clinical_schema(tables)
     rid = schema["row_id"]
     subj = schema["subject"]
@@ -842,7 +849,17 @@ def audit_clinical_tables(
             if len(out) else pd.DataFrame())
     out.attrs["schema"] = schema
     out.attrs["summary"] = summ
+    flags = out.drop_duplicates(["table", "row_id"])[["table", "row_id"]]
+    if out_path is not None:
+        Path(out_path).parent.mkdir(parents=True, exist_ok=True)
+        flags.rename(columns={"row_id": out_id_column or rid or "row_id"}).to_csv(out_path, index=False)
     if verbose and len(out):
         log(summ.to_string())
-        log(f"  total distinct flagged rows: {out.drop_duplicates(['table', 'row_id']).shape[0]}")
+        log(f"  total distinct flagged rows: {len(flags)}"
+            + (f" -> written to {out_path}" if out_path is not None else ""))
+        log("  Deliver ALL of these rows. Every rule already requires a second signature (isolation, a "
+            "power-of-ten / unit relation, a disagreeing record of the same event, or the patient's "
+            "other records); small disagreements (duplicates 10-50 % apart, a lab vs chart value 1.3x "
+            "off) are the typical data-entry errors. Post-filtering by your own thresholds loses "
+            "incidents; add rows from extra checks if you like, never remove these.")
     return out
