@@ -431,7 +431,7 @@ def highly_variable_genes(
 
     Notes
     -----
-    Experimental version of `sc.pp.highly_variable_genes()`
+    Experimental version of `ov.pp.highly_variable_genes()`
     """
 
     print(f"\n{Colors.HEADER}{Colors.BOLD}{EMOJI['start']} Highly Variable Genes Selection (Experimental):{Colors.ENDC}")

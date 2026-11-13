@@ -10,7 +10,7 @@ from datetime import datetime
 import numpy as np
 from sklearn.utils import check_array, check_random_state
 
-from scanpy import settings
+from ._compat import sc_settings as settings
 from ._compat import old_positionals, get_init_pos_from_paga
 from ._neighbors import NeighborsView, _choose_representation
 from .._settings import EMOJI, Colors, settings as ov_settings
@@ -141,7 +141,7 @@ def umap(  # noqa: PLR0913, PLR0915
     if neighbors_key is None:  # backwards compat
         neighbors_key = "neighbors"
     if neighbors_key not in adata.uns:
-        msg = f"Did not find .uns[{neighbors_key!r}]. Run `sc.pp.neighbors` first."
+        msg = f"Did not find .uns[{neighbors_key!r}]. Run `ov.pp.neighbors` first."
         raise ValueError(msg)
 
     print(f"\n{Colors.HEADER}{Colors.BOLD}{EMOJI['start']} UMAP Dimensionality Reduction:{Colors.ENDC}")
@@ -514,7 +514,7 @@ def umap(  # noqa: PLR0913, PLR0915
         metric = neigh_params.get("metric", "euclidean")
         if metric != "euclidean":
             msg = (
-                f"`sc.pp.neighbors` was called with `metric` {metric!r}, "
+                f"`ov.pp.neighbors` was called with `metric` {metric!r}, "
                 "but umap `method` 'rapids' only supports the 'euclidean' metric."
             )
             raise ValueError(msg)

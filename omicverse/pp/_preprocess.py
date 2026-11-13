@@ -8,7 +8,6 @@ import anndata
 import numpy as np
 import pandas as pd
 import skmisc.loess as sl
-import scanpy as sc
 import time 
 import warnings
 
@@ -1021,7 +1020,7 @@ def normalize_pearson_residuals(
         Return a new AnnData instead of modifying in place (only when
         ``inplace=True``).
     **kwargs
-        Forwarded to ``scanpy.experimental.pp.normalize_pearson_residuals``.
+        Forwarded to ``omicverse.pp.experimental.normalize_pearson_residuals``.
 
     Returns
     -------
@@ -1045,7 +1044,10 @@ def normalize_pearson_residuals(
             adata, theta=theta, clip=clip, layer=layer, inplace=inplace,
         )
         return None
-    sc.experimental.pp.normalize_pearson_residuals(
+    from .experimental._normalization import (
+        normalize_pearson_residuals as _normalize_pearson_residuals,
+    )
+    return _normalize_pearson_residuals(
         adata, theta=theta, clip=clip, check_values=check_values,
         layer=layer, inplace=inplace, copy=copy, **kwargs,
     )
@@ -1422,8 +1424,8 @@ def regress(adata, *, keys: Optional[List[str]] = None, layer=None, n_jobs=8, **
     n_jobs
         Parallel jobs for the CPU regressor. Default ``8``.
     **kwargs
-        Extra options forwarded to ``scanpy.pp.regress_out`` on CPU
-        (e.g. ``copy``). Ignored when the GPU backend
+        Extra options forwarded to the native CPU regressor
+        (``omicverse.pp._regress.regress_out``). Ignored when the GPU backend
         (``rapids_singlecell``) is active.
 
     Returns
@@ -1465,10 +1467,9 @@ def regress(adata, *, keys: Optional[List[str]] = None, layer=None, n_jobs=8, **
         add_reference(adata, 'scanpy', 'regressing out covariates with scanpy')
         return
     if settings.mode == 'cpu' or settings.mode == 'cpu-gpu-mixed':
-        kwargs.setdefault("copy", True)
-        adata_mock = sc.pp.regress_out(adata, keys, **kwargs)
-        adata.layers['regressed'] = adata_mock.X.copy()
-        del adata_mock
+        kwargs.pop("copy", None)
+        from ._regress import regress_out as _regress_out
+        adata.layers['regressed'] = _regress_out(adata, keys, inplace=False, **kwargs)
     else:
         import rapids_singlecell as rsc
         # NOTE: GPU path only forwards ``keys`` and ``inplace=False``;
@@ -1669,21 +1670,12 @@ def pca(adata, n_pcs=50, layer='scaled',inplace=True,random_state=SEED_DEFAULT,b
         adata.uns[key + '|pca_var_ratios'] = adata.uns['pca']['variance_ratio']
         adata.uns[key + '|cum_sum_eigenvalues'] = adata.uns['pca']['variance']
     elif settings.mode == 'cpu':
-        if sc.__version__ <'1.10':
-            adata_mock=sc.AnnData(adata.layers[layer],obs=adata.obs,var=adata.var)
-            sc.pp.pca(adata_mock, n_comps=n_pcs, random_state=random_state)
-            adata.obsm[key + '|X_pca'] = adata_mock.obsm['X_pca']
-            adata.varm[key + '|pca_loadings'] = adata_mock.varm['PCs']
-            adata.uns[key + '|pca_var_ratios'] = adata_mock.uns['pca']['variance_ratio']
-            adata.uns[key + '|cum_sum_eigenvalues'] = adata_mock.uns['pca']['variance']
-        else:
-            from ._pca import pca as _pca
-            _pca(adata, layer=layer,n_comps=n_pcs,use_gpu=False,backend=backend,**kwargs)
-            #print(res)
-            adata.obsm[key + '|X_pca'] = adata.obsm['X_pca']
-            adata.varm[key + '|pca_loadings'] = adata.varm['PCs']
-            adata.uns[key + '|pca_var_ratios'] = adata.uns['pca']['variance_ratio']
-            adata.uns[key + '|cum_sum_eigenvalues'] = adata.uns['pca']['variance']
+        from ._pca import pca as _pca
+        _pca(adata, layer=layer,n_comps=n_pcs,use_gpu=False,backend=backend,**kwargs)
+        adata.obsm[key + '|X_pca'] = adata.obsm['X_pca']
+        adata.varm[key + '|pca_loadings'] = adata.varm['PCs']
+        adata.uns[key + '|pca_var_ratios'] = adata.uns['pca']['variance_ratio']
+        adata.uns[key + '|cum_sum_eigenvalues'] = adata.uns['pca']['variance']
     elif settings.mode == 'cpu-gpu-mixed':
         print(f"{EMOJI['gpu']} Using GPU to calculate PCA...")
         print_gpu_usage_color()
@@ -2179,7 +2171,10 @@ def louvain(
         Return a new AnnData instead of modifying in place.
     **kwargs
         Forwarded to the underlying backend
-        (``scanpy.tl.louvain`` or ``rapids_singlecell.tl.louvain``).
+        (``omicverse.pp._louvain.louvain`` -- a scanpy-compatible port using the
+        ``louvain`` package if installed, else ``igraph.community_multilevel``
+        -- or
+        ``rapids_singlecell.tl.louvain``).
 
     Notes
     -----
@@ -2235,10 +2230,11 @@ def louvain(
         leiden(adata, key_added=key_added, **safe_kwargs)
         return
     if settings.mode == 'cpu':
-        print(f"{EMOJI['cpu']} Using Scanpy CPU Louvain...")
-        sc.tl.louvain(adata, **kwargs)
-        add_reference(adata, 'louvain', 'Louvain clustering with scanpy')
-        note(backend=f"omicverse({settings.mode}) · scanpy")
+        from . import _louvain as _lv_mod
+        _lv_mod.louvain(adata, **kwargs)
+        print(f"{EMOJI['cpu']} Louvain clustering (CPU, backend: {_lv_mod.LAST_BACKEND})")
+        add_reference(adata, 'louvain', 'Louvain clustering')
+        note(backend=f"omicverse({settings.mode}) · {_lv_mod.LAST_BACKEND}")
     else:
         print(f"{EMOJI['gpu']} Using RAPIDS GPU to calculate Louvain...")
         import rapids_singlecell as rsc
@@ -2444,7 +2440,8 @@ def score_genes_cell_cycle(adata,species='human',s_genes=None, g2m_genes=None):
               'Mki67', 'Pimreg', 'Ccnb2', 'Tpx2', 'Hjurp', 'Anln', 'Kif2c',
                'Cenpe', 'Gtse1', 'Kif23', 'Cdc20', 'Ube2c', 'Cenpf', 'Cenpa',
                 'Hmmr', 'Ctcf', 'Psrc1', 'Cdc25c', 'Nek2', 'Gas2l3', 'G2e3']
-    sc.tl.score_genes_cell_cycle(adata, s_genes=s_genes, g2m_genes=g2m_genes)
+    from ._score_genes import score_genes_cell_cycle as _score_cc
+    _score_cc(adata, s_genes=s_genes, g2m_genes=g2m_genes)
     if 'status' not in adata.uns.keys():
         adata.uns['status'] = {}
     if 'status_args' not in adata.uns.keys():
