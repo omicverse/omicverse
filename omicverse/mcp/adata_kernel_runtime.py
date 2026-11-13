@@ -105,10 +105,10 @@ class AdataKernelRuntime:
         snapshot_path = self._runtime_dir / f"{adata_id}.sync.h5ad"
         self._store.persist_adata(adata_id, path=str(snapshot_path))
         code = (
-            "import scanpy as sc\n"
+            "import anndata as _ov_ad\n"
             "OV_MCP_ADATA = globals().setdefault('OV_MCP_ADATA', {})\n"
             "OV_MCP_META = globals().setdefault('OV_MCP_META', {})\n"
-            f"OV_MCP_ADATA[{json.dumps(adata_id)}] = sc.read_h5ad({json.dumps(str(snapshot_path))})\n"
+            f"OV_MCP_ADATA[{json.dumps(adata_id)}] = _ov_ad.read_h5ad({json.dumps(str(snapshot_path))})\n"
             f"OV_MCP_META[{json.dumps(adata_id)}] = {{'revision': {current_revision}}}\n"
         )
         exec_._execute_code_in_kernel(code, exec_.current_session["kernel_client"])
