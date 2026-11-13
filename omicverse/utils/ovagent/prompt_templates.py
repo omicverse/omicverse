@@ -205,7 +205,7 @@ GUIDELINES = (
     "a different approach\n"
     "- Use run_snippet() for exploration (won't modify data)\n"
     "- Use execute_code() for actual processing (modifies data)\n"
-    "- Available packages: ov (omicverse), sc (scanpy), np (numpy), pd (pandas), "
+    "- Available packages: ov (omicverse), np (numpy), pd (pandas), "
     "matplotlib, seaborn, scipy, sklearn\n"
     "- All OmicVerse functions are called via ov.* (e.g. ov.pp.preprocess, "
     "ov.pp.scale)\n"
@@ -250,7 +250,7 @@ SUBAGENT_BASES: Dict[str, str] = {
         "4. Data quality indicators (sparsity, mito%, batch columns, "
         "cell type annotations)\n"
         "5. Potential issues or recommendations\n\n"
-        "Available packages: ov (omicverse), sc (scanpy), np (numpy), pd (pandas)\n\n"
+        "Available packages: ov (omicverse), np (numpy), pd (pandas)\n\n"
         "Call finish() with a comprehensive summary when done."
     ),
     "plan": (
@@ -335,7 +335,7 @@ def build_subagent_engine(agent_type: str) -> PromptTemplateEngine:
             PromptOverlay(
                 "packages",
                 (
-                    "Available packages: ov (omicverse), sc (scanpy), "
+                    "Available packages: ov (omicverse), "
                     "np (numpy), pd (pandas), matplotlib, seaborn, scipy, sklearn\n"
                     "All OmicVerse functions are called via ov.* "
                     "(e.g. ov.pp.preprocess, ov.pp.scale)"

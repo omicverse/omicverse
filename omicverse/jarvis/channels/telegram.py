@@ -1697,8 +1697,8 @@ def _register_handlers(app: Any, sm: Any, ac: AccessControl, verbose: bool) -> N
             tg_file = await context.bot.get_file(doc.file_id)
             dest    = str(session.workspace_dir / "current.h5ad")
             await tg_file.download_to_drive(dest)
-            import scanpy as sc
-            session.adata = sc.read_h5ad(dest)
+            import anndata
+            session.adata = anndata.read_h5ad(dest)
             a = session.adata
             await update.message.reply_text(
                 f"✅  加载成功\n{_fmt._DIV}\n"

@@ -16,7 +16,8 @@ os
 scipy
 pytorch
 einops
-scanpy
+anndata
+omicverse
 local_attention
 ```
 

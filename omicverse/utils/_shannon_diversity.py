@@ -37,10 +37,9 @@ def shannon_diversity(
         
     Examples:
         >>> import omicverse as ov
-        >>> import scanpy as sc
         >>> 
         >>> # Load data
-        >>> adata = sc.datasets.pbmc3k_processed()
+        >>> adata = ov.datasets.pbmc3k(processed=True)
         >>> 
         >>> # Add mock condition groups
         >>> adata.obs['condition'] = np.random.choice(['Control', 'Treatment'], adata.n_obs)
