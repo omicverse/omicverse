@@ -176,6 +176,11 @@ def test_write_study_effects_guard(tmp_path):
                               overrides={1: "the method names only the other statistic for this task"})
     assert list(out.columns) == ["doi", "task", "n_mdd", "mean_mdd", "sd_mdd", "n_control", "mean_control",
                                  "sd_control", "d"] and len(out) == 1
+    with pytest.raises(ValueError):          # a hand-built table without proposals
+        write_study_effects(prop.drop(columns=["proposed"]), str(tmp_path / "o.csv"))
+    with pytest.raises(ValueError):          # hand rows for a study the function read
+        write_study_effects(prop, str(tmp_path / "o.csv"), extra_rows=prop.iloc[:1].drop(columns=["proposed"]),
+                            overrides={1: "the method names only the other statistic for this task"})
 
 
 def test_deliverable_fingerprint(tmp_path, monkeypatch):

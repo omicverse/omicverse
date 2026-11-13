@@ -668,6 +668,16 @@ def write_study_effects(prop: pd.DataFrame, path: str, case_label: str = "case",
     n_control, mean_control, sd_control``), appended after the kept rows.
     """
     overrides = overrides or {}
+    if "proposed" not in prop:
+        raise ValueError("write_study_effects takes the `prop` table returned by reconstruct_study_effects (it "
+                         "carries the proposed decisions); comparisons transcribed by hand go in extra_rows, and "
+                         "only for studies the function could not read")
+    if extra_rows is not None and len(extra_rows):
+        read = set(prop.loc[prop["proposed"].notna(), "study"].astype(str))
+        clash = sorted(set(extra_rows["study"].astype(str)) & read)
+        if clash:
+            raise ValueError(f"extra_rows for studies the function already read: {clash}. Their rows and "
+                             f"decisions come from the proposals; do not transcribe them by hand")
     if "proposed" in prop:
         unresolved = prop.index[prop["decision"] == "review"].tolist()
         if unresolved:
