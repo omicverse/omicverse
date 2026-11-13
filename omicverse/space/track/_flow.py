@@ -356,23 +356,26 @@ def _solve(tl, links, *, n_frames, frame_shape, diam, mit, count_costs, c_app, c
     ia, ib = L[:, 0].astype(int), L[:, 1].astype(int)
     li, idx = np.arange(nl), np.arange(n)
     one, none = np.ones(n), -np.ones(n)
-    # starts: inflow + appear = cells;  ends: outflow + disappear = cells + divide
+    # starts: inflow + appear = cells;  ends: outflow + disappear = cells + divide;
+    # two cells need a mask; a division needs a cell; a dividing end loses no cell
+    # (daughters do not vanish at birth): disappear + 3 * divide <= 3
     r = [ib, idx, idx, idx, n + ia, n + idx, n + idx, n + idx, n + idx,
-         2 * n + idx, 2 * n + idx, 3 * n + idx, 3 * n + idx]
+         2 * n + idx, 2 * n + idx, 3 * n + idx, 3 * n + idx, 4 * n + idx, 4 * n + idx]
     c = [li, o_a + idx, o_u1 + idx, o_u2 + idx, li, o_b + idx, o_u1 + idx, o_u2 + idx, o_d + idx,
-         o_u2 + idx, o_u1 + idx, o_d + idx, o_u1 + idx]
-    v = [np.ones(nl), one, none, none, np.ones(nl), one, none, none, none, one, none, one, none]
+         o_u2 + idx, o_u1 + idx, o_d + idx, o_u1 + idx, o_b + idx, o_d + idx]
+    v = [np.ones(nl), one, none, none, np.ones(nl), one, none, none, none, one, none, one, none,
+         one, 3 * one]
     ne = len(exclusive)
     if ne:   # each entry: tracklets of which at most one may divide
         for k, group in enumerate(exclusive):
             g = np.asarray(sorted(group), int)
-            r.append(np.full(len(g), 4 * n + k))
+            r.append(np.full(len(g), 5 * n + k))
             c.append(o_d + g)
             v.append(np.ones(len(g)))
     A = coo_matrix((np.concatenate(v), (np.concatenate(r), np.concatenate(c))),
-                   shape=(4 * n + ne, nv)).tocsr()
-    lo = np.concatenate([np.zeros(2 * n), np.full(2 * n + ne, -np.inf)])
-    hi = np.concatenate([np.zeros(4 * n), np.ones(ne)])
+                   shape=(5 * n + ne, nv)).tocsr()
+    lo = np.concatenate([np.zeros(2 * n), np.full(3 * n + ne, -np.inf)])
+    hi = np.concatenate([np.zeros(4 * n), np.full(n, 3.0), np.ones(ne)])
     res = milp(cost, constraints=LinearConstraint(A, lo, hi), integrality=np.ones(nv),
                bounds=Bounds(0, ub), options=dict(disp=False, time_limit=time_limit,
                                                   mip_rel_gap=mip_gap))
