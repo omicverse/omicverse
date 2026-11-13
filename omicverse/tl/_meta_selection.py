@@ -47,12 +47,13 @@ from .._registry import register_function
 from ._meta_analysis import (comparison_workbook, extract_group_stats, meta_effect_sizes,
                              method_measure_statements, _strip_tags, _CONTROL_DEFAULT)
 
-__all__ = ["abbreviation_map", "propose_selection", "reconstruct_study_effects", "write_study_effects"]
+__all__ = ["abbreviation_map", "propose_selection", "reconstruct_study_effects", "write_study_effects",
+           "record_deliverable", "verify_deliverable"]
 
 _STOP = set("""a an the of and or in on for to with by from as at is are was were be been this that these
 those which who it its their than then also both each either per vs versus into within across between
 after before during over under not no all any most more less other such only one two three first second
-mean means sd s.d se n m total score scores raw t task tasks test tests trial trials condition conditions
+mean means sd s.d se n m total score scores raw t task tasks test tests condition conditions
 measure measures number numbers percent percentage participant participants subject subjects group groups
 control controls patient patients study studies analysis analyzed reported report reporting value values
 used using use k p d effect size sizes composite individually included include includes including
@@ -328,7 +329,7 @@ def propose_selection(wb: pd.DataFrame, statements: pd.DataFrame, abbreviations:
                     if cand and cand[0][0] > 0:
                         j0 = cand[0][1]
                         m0 = st.at[j0, "measures"]["pref"]
-                        clear = len(cand) < 2 or cand[0][0] >= 1.3 * cand[1][0]
+                        clear = len(cand) < 2 or cand[0][0] >= 1.1 * cand[1][0]
                         if strong[j0] and clear and rtypes & m0["types"]:
                             dec0 = "keep"
                             why = (f"task inferred from the article text (measure row without a task name): "
@@ -418,6 +419,11 @@ def propose_selection(wb: pd.DataFrame, statements: pd.DataFrame, abbreviations:
             dec, why = "fallback", f"fallback measure ({meas['fallback']['text'][:80]})"
         elif not rtypes and not mwords:
             dec, why = "keep", "the task's single score"
+        elif not meas["pref"]["types"] and not meas["pref"]["quals"] and rtypes and not mwords - {"section", "part"}:
+            desc = " ".join(x for x in (st.at[j, "context"], st.at[j, "context_after"]) if x)[:220]
+            dec, why = "review", ("the method codes this task but names no measure for it: keep the statistics of "
+                                  "the condition the method describes as the task's critical condition "
+                                  f"(method text: {desc})")
         else:
             dec, why = "exclude", f"statistic not among the method's measures for this task ({meas['pref']['text'][:80]})"
         if dec in ("keep", "fallback") and cov < min_coverage:
@@ -441,8 +447,8 @@ def propose_selection(wb: pd.DataFrame, statements: pd.DataFrame, abbreviations:
                  else pd.Series("", index=df.index))
         acc = df["measure_type"].str.contains("accuracy", na=False)
         for i in df.index[df["decision"].isin(["keep", "review"]) & pct & acc]:
-            same = ((sid == sid[i]) & ((df["statement"] == df.at[i, "statement"]) | (df["statement"] == ""))
-                    & acc & ~pct & (inner == inner[i]) & df["decision"].isin(["keep", "review"]))
+            same = ((sid == sid[i]) & acc & ~pct & (inner == inner[i]) & (df["source"] == df.at[i, "source"]
+                    if "source" in df else True) & df["decision"].isin(["keep", "review"]))
             if same.any():
                 df.at[i, "decision"] = "exclude"
                 df.at[i, "reason"] = "percentage of an accuracy/error measure while counts are reported (counts coded)"
@@ -465,7 +471,7 @@ def reconstruct_study_effects(sources: dict, method_source: Union[str, Path], ca
                               n_map: Optional[dict] = None, prefer_counts: bool = True,
                               out_dir: Optional[str] = None, out: Optional[str] = None,
                               case_label: str = "case", out_columns: Optional[Sequence[str]] = None,
-                              verbose: bool = True):
+                              fetch_missing: bool = True, verbose: bool = True):
     """Return ``(proposals, effects)``.
 
     ``proposals``: every workbook row with family, measure, decision (keep / exclude / review),
@@ -477,15 +483,38 @@ def reconstruct_study_effects(sources: dict, method_source: Union[str, Path], ca
     groups not matched, unknown n). ``out_dir``: also write ``proposals.csv`` there. ``out``: write
     the deliverable (the ``keep`` rows, via :func:`write_study_effects`, columns renamed with
     ``case_label`` and ordered as ``out_columns``) -- rewrite it with :func:`write_study_effects`
-    after resolving the review rows, never by hand. Review the ``review`` rows (and spot-check
+    after resolving the review rows, never by hand. ``fetch_missing``: for a study (keyed by its
+    DOI) whose files are PDF only or yield no comparison, try to download a full text with real
+    tables (Europe PMC JATS XML, then the publisher page via doi.org) next to its files and use it;
+    PDF tables printed column by column are parsed as well. Review the ``review`` rows (and spot-check
     the others) against the articles; change a decision in ``proposals`` and recompute with
     ``meta_effect_sizes(proposals[proposals.decision == 'keep'], case='case')``.
     """
+    sources = {k: ([v] if isinstance(v, (str, Path)) else list(v)) for k, v in sources.items()}
+    if fetch_missing:
+        for sid, paths in sources.items():
+            if not re.match(r"10\.\d{4,9}/\S+", str(sid)):
+                continue
+            pdf_only = all(str(p).lower().endswith(".pdf") for p in paths)
+            nstat = 0
+            if not pdf_only:
+                for pth in paths:
+                    try:
+                        nstat += int((extract_group_stats(pth)["layout"] != "text").sum())
+                    except Exception:
+                        pass
+            if pdf_only or nstat == 0:
+                got = _fetch_fulltext(str(sid), Path(str(paths[0])).parent if paths else Path("."))
+                if got:
+                    if verbose:
+                        print(f"[{sid}] fetched a full text with tables: {got}")
+                    sources[sid] = [got] + paths
     kw = {} if control is None else {"control": control}
     if case is None:
         case = r"."          # every group that is not a control group is a case group
     # group sizes printed in one place of an article (a table header) apply to the same group
     # named elsewhere in it (another table, the running text)
+    user_n = set(n_map or {})
     n_map = {k: dict(v) for k, v in (n_map or {}).items()}
     for sid, paths in sources.items():
         found = {}
@@ -503,6 +532,30 @@ def reconstruct_study_effects(sources: dict, method_source: Union[str, Path], ca
         if auto:
             n_map[sid] = {**auto, **n_map.get(sid, {})}
     wb = comparison_workbook(sources, case=case, exclude=exclude, n_map=n_map, verbose=False, **kw)
+    # studies whose tables print no group sizes at all: take them from the text ("Forty-four
+    # patients ... and 44 healthy comparison subjects"), reported in the summary
+    inferred_n = {}
+    if len(wb):
+        for sid, g in wb.groupby("study"):
+            if g["n_case"].notna().any() or g["n_control"].notna().any() or sid in user_n:
+                continue
+            txt = ""
+            for pth in sources[sid]:
+                try:
+                    txt += _strip_tags(Path(str(pth)).read_text(errors="ignore")) if not str(pth).lower().endswith(
+                        ".pdf") else ""
+                except Exception:
+                    pass
+            nc, nk = _sample_sizes_from_text(txt)
+            if nc and nk:
+                cg = {c.strip() for x in g["case_groups"].astype(str) for c in x.split(" + ")}
+                kg = set(g["control_group"].astype(str))
+                n_map[sid] = {**n_map.get(sid, {}),
+                              **{rf"(?:^|[\]\s(]){re.escape(c)}\b": nc for c in cg},
+                              **{rf"(?:^|[\]\s(]){re.escape(c)}\b": nk for c in kg}}
+                inferred_n[sid] = (nc, nk)
+        if inferred_n:
+            wb = comparison_workbook(sources, case=case, exclude=exclude, n_map=n_map, verbose=False, **kw)
     if wb.empty:
         wb = pd.DataFrame(columns=["study", "source", "table", "section", "row", "layout", "case_groups",
                                    "case_subgroups", "control_group", "n_case", "mean_case", "sd_case",
@@ -550,13 +603,16 @@ def reconstruct_study_effects(sources: dict, method_source: Union[str, Path], ca
             groups.update(led.loc[led["layout"] != "text", "group"].astype(str))
         g = prop[prop["study"] == sid] if len(prop) else prop
         msgs = []
-        if all(str(p).lower().endswith(".pdf") for p in paths):
-            msgs.append("PDF only: tables are often unreadable -- get the XML / HTML full text or transcribe")
+        if all(str(p).lower().endswith(".pdf") for p in paths) and not len(g):
+            msgs.append("PDF only and no table could be read: get the XML / HTML full text and pass it")
         if nstat and not len(g):
             msgs.append(f"{nstat} statistics found but no case-vs-control pair: group names are "
                         f"{[k for k, _ in groups.most_common(8)]} -- pass case / control for this study")
         if not nstat:
             msgs.append("no statistics found in the file(s): wrong file, or a format to transcribe by hand")
+        if sid in inferred_n:
+            msgs.append(f"group sizes taken from the text: case {inferred_n[sid][0]}, control {inferred_n[sid][1]} "
+                        f"(check against the participants section)")
         if len(g) and (g["n_case"].isna() | g["n_control"].isna()).any():
             msgs.append("some rows have n=? (sizes not printed for these groups): add them via n_map only if "
                         "the article gives sizes for exactly these groups")
@@ -575,10 +631,16 @@ def reconstruct_study_effects(sources: dict, method_source: Union[str, Path], ca
         print("\nPER-STUDY CHECK (fix every 'action' and call again before reviewing):")
         print(summ.to_string(index=False))
         if out:
-            print(f"DELIVERABLE written to {out} from the keep rows. After deciding the review rows (and any "
-                  f"hand-transcribed article, as extra_rows) rewrite it ONLY with ov.tl.write_study_effects(prop, "
-                  f"'{out}', case_label='{case_label}', columns=..., extra_rows=...). Do not add, drop or edit rows "
-                  f"by hand: exclusions follow the method's sentences.")
+            nrev = int((prop.decision == "review").sum())
+            todo = [a for a in summ["action"] if a] if len(summ) else []
+            if nrev == 0 and not todo:
+                print(f"FINAL: the deliverable {out} is complete and final. Do not edit it; finish with "
+                      f"ov.tl.verify_deliverable('{out}') (must say 'unchanged').")
+            else:
+                print(f"DELIVERABLE written to {out} from the keep rows. Remaining: {nrev} review rows"
+                      + (f", {len(todo)} per-study actions" if todo else "") + ". Resolve them, then rewrite ONLY "
+                      f"with ov.tl.write_study_effects(prop, '{out}', case_label='{case_label}', columns=...) and "
+                      f"finish with ov.tl.verify_deliverable('{out}'). Never add, drop or edit rows by hand.")
         print(f"keep {int((prop.decision == 'keep').sum())}, review {int((prop.decision == 'review').sum())}, "
               f"exclude {int((prop.decision == 'exclude').sum())}; rows with unknown n are not in the effects "
               f"until n_map supplies them")
@@ -642,5 +704,140 @@ def write_study_effects(prop: pd.DataFrame, path: str, case_label: str = "case",
         out = out[list(columns)]
     Path(path).parent.mkdir(parents=True, exist_ok=True)
     out.to_csv(path, index=False)
-    print(f"wrote {len(out)} rows to {path}")
+    record_deliverable(path, "omicverse.tl.write_study_effects", rows=len(out))
+    print(f"wrote {len(out)} rows to {path} (fingerprint recorded; verify with ov.tl.verify_deliverable)")
     return out
+
+
+def _prov_file(path) -> Path:
+    import hashlib
+    import os
+    root = Path(os.environ.get("OV_PROVENANCE_DIR", "/tmp/ov_provenance"))
+    key = hashlib.sha1(str(Path(path).resolve()).encode()).hexdigest()[:16]
+    return root / f"{key}.json"
+
+
+@register_function(
+    aliases=["记录交付物指纹", "record deliverable fingerprint"],
+    category="utils",
+    description="Record the sha256 fingerprint of a deliverable written by a function (in $OV_PROVENANCE_DIR, "
+                "default /tmp/ov_provenance; nothing is added next to the deliverable), so later hand edits "
+                "can be detected by verify_deliverable / check_deliverables.py.",
+    examples=["ov.tl.record_deliverable('/app/results/out.csv', 'my_function')"],
+    related=["tl.verify_deliverable"],
+)
+def record_deliverable(path, producer: str, **info) -> dict:
+    """Write ``{path, sha256, producer, ...}`` for ``path``; returns the record."""
+    import hashlib
+    import json
+    import time
+    rec = {"path": str(Path(path).resolve()), "sha256": hashlib.sha256(Path(path).read_bytes()).hexdigest(),
+           "producer": producer, "time": time.strftime("%Y-%m-%dT%H:%M:%S"), **info}
+    f = _prov_file(path)
+    f.parent.mkdir(parents=True, exist_ok=True)
+    f.write_text(json.dumps(rec, indent=1))
+    return rec
+
+
+@register_function(
+    aliases=["校验交付物指纹", "verify deliverable fingerprint", "was the deliverable hand-modified"],
+    category="utils",
+    description="Check that a deliverable is byte-identical to what its producing function wrote "
+                "(sha256 recorded by record_deliverable). Returns {'status': 'unchanged' | 'modified' | "
+                "'unrecorded', ...}.",
+    examples=["ov.tl.verify_deliverable('/app/results/out.csv')"],
+    related=["tl.record_deliverable", "tl.write_study_effects"],
+)
+def verify_deliverable(path) -> dict:
+    import hashlib
+    import json
+    f = _prov_file(path)
+    if not f.exists():
+        return {"status": "unrecorded", "path": str(path)}
+    rec = json.loads(f.read_text())
+    now = hashlib.sha256(Path(path).read_bytes()).hexdigest() if Path(path).exists() else None
+    status = "unchanged" if now == rec["sha256"] else "modified"
+    msg = ("file is exactly what " + rec["producer"] + " wrote" if status == "unchanged" else
+           "file was changed after " + rec["producer"] + " wrote it: rewrite it with that function "
+           "(hand edits bypass the method's decisions)")
+    print(f"{path}: {status} -- {msg}")
+    return {**rec, "status": status, "message": msg}
+
+
+def _fetch_fulltext(doi: str, dest: Path, timeout: float = 60.0) -> Optional[str]:
+    """Europe PMC JATS XML, else the publisher's HTML via doi.org, accepted only when it contains
+    tables and names the DOI. Returns the saved path or None (offline / not found)."""
+    import json
+    import urllib.parse
+    import urllib.request
+    ua = {"User-Agent": "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) "
+                        "Chrome/124.0 Safari/537.36", "Accept": "text/html,application/xhtml+xml,*/*"}
+    safe = re.sub(r"[^\w.-]", "_", doi)
+
+    def get(url):
+        req = urllib.request.Request(url, headers=ua)
+        with urllib.request.urlopen(req, timeout=timeout) as r:
+            return r.read().decode("utf-8", "ignore")
+    try:
+        q = urllib.parse.quote(f"DOI:{doi}")
+        res = json.loads(get(f"https://www.ebi.ac.uk/europepmc/webservices/rest/search?query={q}"
+                             f"&format=json&resultType=core"))["resultList"]["result"]
+        pmcid = next((r.get("pmcid") for r in res if r.get("pmcid")), None)
+        if pmcid:
+            for url in (f"https://www.ebi.ac.uk/europepmc/webservices/rest/{pmcid}/fullTextXML",
+                        f"https://pmc.ncbi.nlm.nih.gov/articles/{pmcid}/"):
+                try:
+                    txt = get(url)
+                except Exception:
+                    continue
+                if "<table" in txt:
+                    f = dest / f"{safe}.{'xml' if url.endswith('XML') else 'html'}"
+                    f.write_text(txt)
+                    return str(f)
+    except Exception:
+        pass
+    try:
+        txt = get(f"https://doi.org/{doi}")
+        if "<table" in txt and doi.lower() in txt.lower():
+            f = dest / f"{safe}.publisher.html"
+            f.write_text(txt)
+            return str(f)
+    except Exception:
+        pass
+    return None
+
+
+_NUMWORDS = {w: i for i, w in enumerate(
+    "zero one two three four five six seven eight nine ten eleven twelve thirteen fourteen fifteen sixteen "
+    "seventeen eighteen nineteen twenty".split())}
+_TENS = {"twenty": 20, "thirty": 30, "forty": 40, "fifty": 50, "sixty": 60, "seventy": 70, "eighty": 80,
+         "ninety": 90}
+
+
+def _num_word(w: str) -> Optional[int]:
+    w = w.lower().strip()
+    if w.isdigit():
+        return int(w)
+    if w in _NUMWORDS:
+        return _NUMWORDS[w]
+    parts = re.split(r"[- ]", w)
+    if parts[0] in _TENS:
+        return _TENS[parts[0]] + (_NUMWORDS.get(parts[1], 0) if len(parts) > 1 else 0)
+    return None
+
+
+def _sample_sizes_from_text(text: str):
+    """First case and control sample sizes stated in prose; (None, None) when ambiguous."""
+    nw = r"(\d{1,4}|(?:twenty|thirty|forty|fifty|sixty|seventy|eighty|ninety)(?:[- ](?:one|two|three|four|five|six|seven|eight|nine))?|(?:ten|eleven|twelve|thirteen|fourteen|fifteen|sixteen|seventeen|eighteen|nineteen))"
+    pat = re.compile(nw + r"\s+((?:[\w-]+\s+){0,6}?)(patients|subjects|participants|individuals|volunteers|controls)\b",
+                     re.I)
+    case_n, ctrl_n = [], []
+    for m in pat.finditer(text):
+        n = _num_word(m.group(1))
+        if not n or n < 3:
+            continue
+        ctx = (m.group(2) + " " + m.group(3)).lower()
+        (ctrl_n if re.search(r"healthy|control|comparison|non-?\w+ed\b", ctx) else case_n).append(n)
+    if case_n and ctrl_n:
+        return case_n[0], ctrl_n[0]
+    return None, None

@@ -176,3 +176,28 @@ def test_write_study_effects_guard(tmp_path):
                               overrides={1: "the method names only the other statistic for this task"})
     assert list(out.columns) == ["doi", "task", "n_mdd", "mean_mdd", "sd_mdd", "n_control", "mean_control",
                                  "sd_control", "d"] and len(out) == 1
+
+
+def test_deliverable_fingerprint(tmp_path, monkeypatch):
+    from omicverse.tl._meta_selection import record_deliverable, verify_deliverable
+    monkeypatch.setenv("OV_PROVENANCE_DIR", str(tmp_path / "prov"))
+    f = tmp_path / "o.csv"
+    f.write_text("x\n1\n")
+    record_deliverable(f, "fn")
+    assert verify_deliverable(f)["status"] == "unchanged"
+    f.write_text("x\n1\n2\n")
+    assert verify_deliverable(f)["status"] == "modified"
+
+
+def test_pdf_column_tables():
+    from omicverse.tl._meta_analysis import _pdf_column_tables
+    txt = "\n".join([
+        "Table 2.",
+        "Patients n = 10   Controls n = 12   mean SD mean SD F",
+        "Sorting task :     Time (s)     Errors     Naming words",
+        "  12.5 3 7", "  2.5 1 2", "  10.1 1.5 9", "  2.1 0.5 1.5", "  9.8 4.1 3.3"])
+    rows = _pdf_column_tables(txt, "x")
+    got = {(r["row"], r["group"]): (r["mean"], r["sd"]) for r in rows}
+    assert got[("Sorting task: Time (s)", "Patients (n = 10)")] == (12.5, 2.5)
+    assert got[("Sorting task: Errors", "Controls (n = 12)")] == (1.5, 0.5)
+    assert len(rows) == 6

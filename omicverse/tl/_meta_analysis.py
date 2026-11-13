@@ -320,6 +320,115 @@ def _text_candidates(text: str, source: str) -> List[dict]:
     return out
 
 
+_NUMTOK = re.compile(r"^[-−–]?\d*[.,]?\d+$")
+_GROUP_HDR = re.compile(r"([A-Z][A-Za-z][\w '/-]{0,40}?)\s*\(?\s*[nN]\s*=\s*(\d+)\s*\)?")
+
+
+def _split_labels(seg: str, k: int) -> Tuple[List[str], List[List[str]]]:
+    """Split a run-together label segment into ``k`` leaf labels (+ the section path of each)."""
+    parts = [x.strip() for x in re.split(r"\s{3,}", seg) if x.strip()]
+    if len(parts) < k:
+        parts = [x.strip() for x in re.split(r"\s{2,}", seg) if x.strip()]
+    if len(parts) < k:
+        return [], []
+    # drop section-like labels until k leaves remain, most section-like first
+    from ._meta_selection import _types   # local import (shared vocabulary)
+
+    def rank(i):
+        x = parts[i]
+        nxt = parts[i + 1] if i + 1 < len(parts) else ""
+        if x.endswith(":"):
+            return 0
+        if i == 0:
+            return 1
+        if x[:1].isupper() and nxt[:1].islower():
+            return 2
+        if len(x.split()) == 1 and not _types(x):
+            return 3
+        if not _types(x):
+            return 4
+        return 9
+    is_sec = [False] * len(parts)
+    while sum(not v for v in is_sec) > k:
+        cand = [(rank(i), i) for i in range(len(parts)) if not is_sec[i] and rank(i) < 9]
+        if not cand:
+            return [], []
+        is_sec[min(cand)[1]] = True
+    leaves, paths, sec = [], [], []
+    for x, sct in zip(parts, is_sec):
+        if sct:
+            # a new top-level section (first or colon-less after leaves) replaces; colon ones nest
+            sec = (sec[:1] + [x.rstrip(" :")]) if (x.endswith(":") and sec) else [x.rstrip(" :")]
+        else:
+            leaves.append(x)
+            paths.append(list(sec))
+    return leaves, paths
+
+
+def _pdf_column_tables(text: str, source: str) -> List[dict]:
+    """Tables that PDF text extraction emits column by column: a block of run-together row labels,
+    then one text line per table COLUMN (all means of group 1, all SDs of group 1, ...). Group names
+    and sizes come from the nearest preceding header ('<Group> n = 20 ... mean SD mean SD')."""
+    lines = text.split("\n")
+    out = []
+    groups: List[Tuple[str, int]] = []
+    tcount = 0
+    i = 0
+    while i < len(lines):
+        ln = lines[i]
+        hdr = _GROUP_HDR.findall(ln)
+        if len(hdr) >= 2:
+            groups = [(g.strip(), int(n)) for g, n in hdr]
+            tcount += 1
+        toks = ln.split()
+        is_num = len(toks) >= 2 and all(_NUMTOK.match(t) for t in toks)
+        if is_num and groups:
+            # collect consecutive numeric lines of equal length
+            block = [toks]
+            j = i + 1
+            while j < len(lines):
+                t2 = lines[j].split()
+                if len(t2) == len(toks) and all(_NUMTOK.match(t) for t in t2):
+                    block.append(t2); j += 1
+                else:
+                    break
+            k = len(toks)
+            if len(block) >= 2 * len(groups):
+                # the label segment is the text right before the block (after the last block / header)
+                seg = lines[i - 1] if i > 0 else ""
+                for hg, _ in groups:
+                    seg = seg.split(hg)[-1] if hg in seg else seg
+                # labels start after the last statistic of the previous block / header line
+                stat = r"(?:[<≤>]?[-−]?\d*[.,]?\d+\*?|\[\d+,\s*\d+\]|n\s*=\s*\d+)"
+                m_last = None
+                for m_last in re.finditer(stat + r"(?=\s{2,}|\s*$)", seg):
+                    pass
+                if m_last is not None:
+                    seg = seg[m_last.end():]
+                hdrw = r"(?:mean|means|SD|s\.d\.|t|df|p|F|MANOVA|ANOVA|ANCOVA|Student['’]s t test)"
+                seg = re.sub(rf"^\s*(?:{hdrw}\s+)*", "", seg)
+                seg = re.sub(rf"(?:\s+{hdrw})*\s*$", "", seg)
+                leaves, paths = _split_labels(seg, k)
+                if leaves:
+                    for c in range(k):
+                        for gi, (g, n) in enumerate(groups):
+                            m_ = _to_float(block[2 * gi][c])
+                            s_ = _to_float(block[2 * gi + 1][c])
+                            if m_ is None or s_ is None:
+                                continue
+                            path = paths[c]
+                            out.append({"table": f"{source}:pdf-table{tcount}", "caption": "",
+                                        "section": " > ".join(path),
+                                        "row": (f"{path[-1]}: {leaves[c]}" if path else leaves[c]),
+                                        "group": f"{g} (n = {n})", "n_header": n, "mean": m_, "sd": s_,
+                                        "raw": " | ".join(b[c] for b in block), "layout": "pdf columns",
+                                        "row_no": c, "context": seg[:200]})
+            i = j
+            continue
+        i += 1
+    return out
+
+
 @register_function(
     aliases=["提取组统计量", "提取均值标准差", "meta-analysis data extraction", "extract group statistics",
              "extract mean SD from article tables", "candidate ledger for meta-analysis"],
@@ -382,6 +491,8 @@ def extract_group_stats(source: Union[str, Path], kind: Optional[str] = None,
             plain = "\n".join(_strip_tags(x) for x in paras) if paras else _strip_tags(body)
             rows += _text_candidates(plain, name)
     else:
+        if kind == "pdf":
+            rows += _pdf_column_tables(text, name)
         rows += _text_candidates(text, name)
     led = pd.DataFrame(rows, columns=["table", "caption", "section", "row", "group", "n_header", "mean", "sd",
                                       "raw", "layout", "row_no", "context"])
