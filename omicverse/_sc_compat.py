@@ -11,6 +11,7 @@ omicverse code so call sites keep their behaviour without importing scanpy.
 
 from __future__ import annotations
 
+from contextlib import contextmanager
 from typing import Optional, Sequence, Union
 
 import numpy as np
@@ -38,12 +39,30 @@ def pca_X(adata, n_comps: Optional[int] = None, *, svd_solver: Optional[str] = N
          svd_solver=svd_solver, random_state=random_state, **kwargs)
 
 
+@contextmanager
+def _cpu_mode():
+    """Run on the CPU path whatever ``ov.settings.mode`` is.
+
+    These helpers stand in for scanpy calls, which always ran on the CPU; the
+    public ``ov.pp`` functions dispatch on the session mode (torch / RAPIDS
+    paths take other arguments, e.g. no ``flavor`` for the torch Leiden).
+    """
+    from ._settings import settings
+    old = settings.mode
+    settings.mode = "cpu"
+    try:
+        yield
+    finally:
+        settings.mode = old
+
+
 def neighbors(adata, n_neighbors: int = 15, *, use_rep=None, n_pcs=None,
               random_state=0, **kwargs):
     """``sc.pp.neighbors`` with scanpy defaults (umap connectivities)."""
     from .pp import neighbors as _neighbors
-    _neighbors(adata, n_neighbors=n_neighbors, use_rep=use_rep, n_pcs=n_pcs,
-               random_state=random_state, method="umap", **kwargs)
+    with _cpu_mode():
+        _neighbors(adata, n_neighbors=n_neighbors, use_rep=use_rep, n_pcs=n_pcs,
+                   random_state=random_state, method="umap", **kwargs)
 
 
 def leiden(adata, resolution: float = 1.0, *, key_added: str = "leiden",
@@ -56,16 +75,18 @@ def leiden(adata, resolution: float = 1.0, *, key_added: str = "leiden",
     when anndataoom-fast is available).
     """
     from .pp import leiden as _leiden
-    _leiden(adata, resolution=resolution, random_state=random_state,
-            key_added=key_added, flavor=flavor, n_iterations=n_iterations,
-            **kwargs)
+    with _cpu_mode():
+        _leiden(adata, resolution=resolution, random_state=random_state,
+                key_added=key_added, flavor=flavor, n_iterations=n_iterations,
+                **kwargs)
 
 
 def umap(adata, **kwargs):
     """``sc.tl.umap`` (min_dist=0.5, spread=1, random_state=0)."""
     from .pp import umap as _umap
     kwargs.setdefault("random_state", 0)
-    _umap(adata, **kwargs)
+    with _cpu_mode():
+        _umap(adata, **kwargs)
 
 
 def _n_vars_used(adata, use_raw: Optional[bool], layer: Optional[str]) -> int:
