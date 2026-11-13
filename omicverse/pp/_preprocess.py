@@ -2316,7 +2316,13 @@ def leiden(
         # A length-1 list/tuple (seen from agent-generated code, issue #877)
         # would crash the torch GPU path; use the scalar.
         resolution = resolution[0]
-    if settings.mode == 'cpu':
+    # flavor / n_iterations / directed are arguments of the CPU (scanpy-style)
+    # implementation only; the torch and RAPIDS paths reject them.
+    cpu_only = sorted(k for k in ("flavor", "n_iterations", "directed") if k in kwargs)
+    if settings.mode != 'cpu' and cpu_only:
+        print(f"{EMOJI['cpu']} {', '.join(cpu_only)} given: using the CPU Leiden "
+              f"(mode {settings.mode!r}).")
+    if settings.mode == 'cpu' or cpu_only:
         print(f"{EMOJI['cpu']} Using Scanpy CPU Leiden...")
         from ._leiden import leiden as _leiden
         _leiden(adata, resolution=resolution, random_state=random_state,

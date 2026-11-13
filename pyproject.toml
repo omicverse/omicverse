@@ -102,7 +102,7 @@ dependencies = [
     # Multithreaded C++ kernels behind the default backend='cpp' (QC, normalize,
     # HVG, scale, PCA, neighbors, UMAP, Leiden, COSG); backend='python' or a
     # missing install falls back to the original code.
-    'anndataoom-fast>=0.1.5',
+    'anndataoom-fast>=0.1.6',
     # ov.read(path, storage='disk'): AnnDataOOM in the CPU modes, Dask row
     # blocks in GPU mode.
     'anndataoom>=0.1.9,<1.0',
