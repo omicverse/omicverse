@@ -7,10 +7,11 @@ import os
 
 import anndata
 import numpy as np
-import scanpy as sc
 
 from .._settings import add_reference, settings
 from ..pp import (
+    leiden,
+    louvain,
     mde,
     neighbors,
     pca,
@@ -150,57 +151,29 @@ def lazy_step_pca(adata, output_path=None, **pca_kwargs):
     """
     print("🔧 Step 4/10: Principal Component Analysis")
 
-    if sc.__version__ >= "1.11.0":
-        if "layer" not in pca_kwargs:
-            pca_kwargs["layer"] = "scaled"
-        if "n_pcs" not in pca_kwargs:
-            pca_kwargs["n_pcs"] = 50
-        if "use_highly_variable" not in pca_kwargs:
-            pca_kwargs["use_highly_variable"] = True
+    if "layer" not in pca_kwargs:
+        pca_kwargs["layer"] = "scaled"
+    if "n_pcs" not in pca_kwargs:
+        pca_kwargs["n_pcs"] = 50
+    if "use_highly_variable" not in pca_kwargs:
+        pca_kwargs["use_highly_variable"] = True
 
-        if ("highly_variable" not in adata.var.columns) and (
-            "highly_variable_features" in adata.var.columns
-        ):
-            adata.var["highly_variable"] = adata.var[
-                "highly_variable_features"
-            ].tolist()
+    if ("highly_variable" not in adata.var.columns) and (
+        "highly_variable_features" in adata.var.columns
+    ):
+        adata.var["highly_variable"] = adata.var[
+            "highly_variable_features"
+        ].tolist()
 
-        print(
-            f"🔧 PCA parameters:\n"
-            f"   layer: {pca_kwargs['layer']}\n"
-            f"   n_pcs: {pca_kwargs['n_pcs']}\n"
-            f"   use_highly_variable: {pca_kwargs['use_highly_variable']}\n"
-        )
+    print(
+        f"🔧 PCA parameters:\n"
+        f"   layer: {pca_kwargs['layer']}\n"
+        f"   n_pcs: {pca_kwargs['n_pcs']}\n"
+        f"   use_highly_variable: {pca_kwargs['use_highly_variable']}\n"
+    )
 
-        pca(adata, **pca_kwargs)
-        adata.obsm["X_pca"] = adata.obsm["scaled|original|X_pca"]
-    else:
-        print("❌ The version of scanpy is lower than 1.11.0, using sc.pp.pca")
-        if "layer" not in pca_kwargs:
-            pca_kwargs["layer"] = "scaled"
-        if "n_comps" not in pca_kwargs:
-            pca_kwargs["n_comps"] = 50
-        if "use_highly_variable" not in pca_kwargs:
-            pca_kwargs["use_highly_variable"] = True
-
-        if ("highly_variable" not in adata.var.columns) and (
-            "highly_variable_features" in adata.var.columns
-        ):
-            adata.var["highly_variable"] = adata.var[
-                "highly_variable_features"
-            ].tolist()
-
-        print(
-            f"🔧 PCA parameters:\n"
-            f"   layer: {pca_kwargs['layer']}\n"
-            f"   n_comps: {pca_kwargs['n_comps']}\n"
-            f"   use_highly_variable: {pca_kwargs['use_highly_variable']}\n"
-        )
-
-        sc.pp.pca(adata, **pca_kwargs)
-        print(
-            "    If you want to use GPU mode, please update scanpy to 1.11.0 or higher"
-        )
+    pca(adata, **pca_kwargs)
+    adata.obsm["X_pca"] = adata.obsm["scaled|original|X_pca"]
 
     if output_path:
         print(f"💾 Saving PCA result to {output_path}")
@@ -464,7 +437,7 @@ def lazy_step_clustering(adata, output_path=None, max_iterations=10):
 
     # Pre-clustering
     print("🔧 Pre-clustering with Leiden...")
-    sc.tl.leiden(adata, resolution=1.5, key_added="leiden_r1.5")
+    leiden(adata, resolution=1.5, key_added="leiden_r1.5", random_state=0, backend='python')
     adata.obs["L1_result_smooth"] = adata.obs["leiden_r1.5"]
 
     # Automatic clustering with SCCAF
@@ -503,10 +476,10 @@ def lazy_step_clustering(adata, output_path=None, max_iterations=10):
 
     # Additional clustering resolutions
     print("🔧 Computing additional clustering resolutions...")
-    sc.tl.leiden(adata, resolution=1, key_added="leiden_clusters_L1")
-    sc.tl.louvain(adata, resolution=1, key_added="louvain_clusters_L1")
-    sc.tl.leiden(adata, resolution=0.5, key_added="leiden_clusters_L2")
-    sc.tl.louvain(adata, resolution=0.5, key_added="louvain_clusters_L2")
+    leiden(adata, resolution=1, key_added="leiden_clusters_L1", random_state=0, backend='python')
+    louvain(adata, resolution=1, key_added="louvain_clusters_L1")
+    leiden(adata, resolution=0.5, key_added="leiden_clusters_L2", random_state=0, backend='python')
+    louvain(adata, resolution=0.5, key_added="louvain_clusters_L2")
 
     if output_path:
         print(f"💾 Saving clustering result to {output_path}")
@@ -561,7 +534,7 @@ def lazy_step_by_step_guide():
     import omicverse as ov
 
     # Load your data
-    adata = sc.read_h5ad('your_data.h5ad')
+    adata = ov.read('your_data.h5ad')
 
     # Step 1: Quality Control
     adata = ov.single.lazy_step_qc(adata, sample_key='batch',

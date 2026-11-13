@@ -789,18 +789,18 @@ class GeneformerModel(SCLLMBase):
         hvg = kwargs.get('highly_variable_genes', False)
         
         if normalize_total:
-            import scanpy as sc
-            sc.pp.normalize_total(adata_processed, target_sum=1e4)
+            from omicverse.pp import normalize_total as _normalize_total
+            _normalize_total(adata_processed, target_sum=1e4)
             SCLLMOutput.status(f"Normalized total counts", "loaded")
         
         if log1p:
-            import scanpy as sc
-            sc.pp.log1p(adata_processed)
+            from omicverse.pp import log1p as _log1p
+            _log1p(adata_processed)
             SCLLMOutput.status(f"Applied log1p transformation", "loaded")
         
         if hvg:
-            import scanpy as sc
-            sc.pp.highly_variable_genes(adata_processed)
+            from omicverse.pp import highly_variable_genes as _hvg
+            _hvg(adata_processed)
             adata_processed = adata_processed[:, adata_processed.var.highly_variable].copy()
             SCLLMOutput.status(f"Selected {adata_processed.n_vars} highly variable genes", "loaded")
         

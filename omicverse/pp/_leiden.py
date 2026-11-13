@@ -93,9 +93,9 @@ class _RNGIgraph:
             self._rng = np.random.RandomState(random_state)
 
     def getrandbits(self, k: int) -> int:
-        # Generate a random integer using the RandomState
-        max_val = (1 << k)
-        return self._rng.randint(0, max_val)
+        # Same draw as scanpy's _RNGIgraph, so flavor='igraph' labels match scanpy
+        # for the same seed (randint(0, 2**k) consumed the stream differently).
+        return self._rng.tomaxint() & ((1 << k) - 1)
 
     def randint(self, a: int, b: int) -> int:
         return self._rng.randint(a, b + 1)
@@ -223,12 +223,13 @@ def leiden(  # noqa: PLR0912, PLR0913, PLR0915
     adjacency: "CSBase" | None = None,
     directed: bool | None = None,
     use_weights: bool = True,
-    n_iterations: int = -1,
+    n_iterations: int | None = None,
     partition_type: type[MutableVertexPartition] | None = None,
     neighbors_key: str | None = None,
     obsp: str | None = None,
     copy: bool = False,
-    flavor: Literal["leidenalg", "igraph", None] = None,
+    flavor: Literal["brisc", "leidenalg", "leidenalg_exact", "igraph", None] = None,
+    backend: str | None = None,
     **clustering_args,
 ) -> AnnData | None:
     """Cluster cells into subgroups :cite:p:`Traag2019`.
@@ -267,7 +268,9 @@ def leiden(  # noqa: PLR0912, PLR0913, PLR0915
         How many iterations of the Leiden clustering algorithm to perform.
         Positive values above 2 define the total number of iterations to perform,
         -1 has the algorithm run until it reaches its optimal clustering.
-        2 is faster and the default for underlying packages.
+        Defaults to 2 with ``backend='cpp'`` and to -1 with ``backend='python'``.
+        Not used by ``flavor='brisc'``, which runs one full Leiden pass
+        (local moving, refinement and aggregation until no further merges).
     partition_type
         Type of partition to use.
         Defaults to :class:`~leidenalg.RBConfigurationVertexPartition`.
@@ -285,7 +288,15 @@ def leiden(  # noqa: PLR0912, PLR0913, PLR0915
     copy
         Whether to copy `adata` or modify it inplace.
     flavor
-        Which package's implementation to use.
+        Which implementation to use. With ``backend='cpp'`` the default is
+        ``'brisc'``: a C++ port of brisc's Leiden (same RB-configuration
+        objective, ~4x faster than leidenalg, but different partitions);
+        ``'leidenalg'``/``'leidenalg_exact'`` run an exact C++ port of
+        leidenalg (identical partitions to the Python backend). With
+        ``backend='python'`` the default is ``'leidenalg'``.
+    backend
+        ``'cpp'`` (default, :mod:`anndataoom_fast`) or ``'python'``; see
+        ``ov.settings.backend``.
     **clustering_args
         Any further arguments to pass to :func:`~leidenalg.find_partition` (which in turn passes arguments to the `partition_type`)
         or :meth:`igraph.Graph.community_leiden` from `igraph`.
@@ -303,6 +314,28 @@ def leiden(  # noqa: PLR0912, PLR0913, PLR0915
         and `n_iterations`.
 
     """
+    from .._backend import resolve_backend
+    _backend = resolve_backend(backend)
+    if flavor is None and _backend == "cpp":
+        # brisc's Leiden only optimises the RB-configuration objective; with a
+        # custom partition type or extra leidenalg arguments keep leidenalg.
+        if partition_type is None and not clustering_args:
+            flavor = "brisc"
+        else:
+            flavor = "leidenalg"
+    if n_iterations is None:
+        n_iterations = 2 if _backend == "cpp" else -1
+    if flavor == "brisc":
+        if _backend != "cpp":
+            raise ValueError("flavor='brisc' needs backend='cpp' (anndataoom-fast).")
+        if partition_type is not None or clustering_args:
+            raise ValueError("flavor='brisc' only supports the RB-configuration objective; "
+                             "do not pass partition_type or extra clustering arguments.")
+    exact = flavor == "leidenalg_exact"
+    if exact:
+        if _backend != "cpp":
+            raise ValueError("flavor='leidenalg_exact' needs backend='cpp' (anndataoom-fast).")
+        flavor = "leidenalg"
     if flavor is None:
         flavor = "leidenalg"
         msg = (
@@ -311,13 +344,17 @@ def leiden(  # noqa: PLR0912, PLR0913, PLR0915
             "`directed` must also be `False` to work with igraph's implementation."
         )
         warn_once(msg, FutureWarning, stacklevel=2)
-    if flavor not in {"igraph", "leidenalg"}:
+    if flavor not in {"igraph", "leidenalg", "brisc"}:
         msg = (
-            f"flavor must be either 'igraph' or 'leidenalg', but {flavor!r} was passed"
+            "flavor must be 'brisc', 'leidenalg', 'leidenalg_exact' or 'igraph', "
+            f"but {flavor!r} was passed"
         )
         raise ValueError(msg)
-    ensure_igraph()
-    if flavor == "igraph":
+    if flavor != "brisc":
+        ensure_igraph()
+    if flavor == "brisc":
+        pass
+    elif flavor == "igraph":
         if directed:
             msg = "Cannot use igraph's leiden implementation with a directed graph."
             raise ValueError(msg)
@@ -350,61 +387,89 @@ def leiden(  # noqa: PLR0912, PLR0913, PLR0915
     # as this allows for the accounting of a None resolution
     # (in the case of a partition variant that doesn't take it on input)
     clustering_args["n_iterations"] = n_iterations
-    if flavor == "leidenalg":
-        if resolution is not None:
-            clustering_args["resolution_parameter"] = resolution
-        directed = True if directed is None else directed
-        g = get_igraph_from_adjacency(adjacency, directed=directed)
-        if partition_type is None:
-            partition_type = leidenalg.RBConfigurationVertexPartition
-        if use_weights:
-            clustering_args["weights"] = np.array(g.es["weight"]).astype(np.float64)
-        clustering_args["seed"] = random_state
-        part = leidenalg.find_partition(g, partition_type, **clustering_args)
-    else:
-        g = get_igraph_from_adjacency(adjacency, directed=False)
-        if use_weights:
-            clustering_args["weights"] = "weight"
-        if resolution is not None:
-            clustering_args["resolution"] = resolution
-        clustering_args.setdefault("objective_function", "modularity")
-        with set_igraph_random_state(random_state):
-            part = g.community_leiden(**clustering_args)
-    # store output into adata.obs
-    groups = np.array(part.membership)
-    if restrict_to is not None:
-        if key_added == "leiden":
-            key_added += "_R"
-        groups = rename_groups(
-            adata,
-            key_added=key_added,
-            restrict_key=restrict_key,
-            restrict_categories=restrict_categories,
-            restrict_indices=restrict_indices,
-            groups=groups,
-        )
-    labels = groups.astype("U")
-    lab_np = np.asarray(labels)
-    cats = natsorted(map(str, np.unique(lab_np)))
-    try:
-        adata.obs[key_added] = pd.Categorical(values=lab_np.astype("U"), categories=cats)
-    except Exception:
-        adata.obs[key_added] = labels
-    # Ensure a canonical 'leiden' column exists for downstream tools that expect it
-    if key_added != "leiden" and "leiden" not in adata.obs.columns:
-        try:
-            adata.obs["leiden"] = adata.obs[key_added]
-        except Exception:
-            # Fall back to a plain array if categorical copy fails
-            adata.obs["leiden"] = pd.Categorical(values=lab_np.astype("U"), categories=cats)
-
-    # store information on the clustering parameters
-    adata.uns[key_added] = {}
-    adata.uns[key_added]["params"] = dict(
-        resolution=resolution,
-        random_state=random_state,
-        n_iterations=n_iterations,
+    multi = isinstance(resolution, (list, tuple, np.ndarray))
+    resolutions = [float(r) for r in resolution] if multi else [resolution]
+    use_cpp = (
+        _backend == "cpp"
+        and flavor == "leidenalg"
+        and (partition_type is None or partition_type is leidenalg.RBConfigurationVertexPartition)
+        and set(clustering_args) <= {"n_iterations"}
+        and isinstance(random_state, (int, np.integer))
+        and all(r is not None for r in resolutions)
     )
+    if flavor == "brisc":
+        # C++ port of brisc's Leiden; resolutions run in parallel, labels do not
+        # depend on the number of threads.
+        import anndataoom_fast as _aof
+        memberships = _aof.leiden_brisc_multi(
+            adjacency, resolutions,
+            random_state=int(random_state) if isinstance(random_state, (int, np.integer)) else 0)
+    elif use_cpp:
+        # Exact C++ port of leidenalg (same partition), several resolutions in parallel.
+        import anndataoom_fast as _aof
+        _directed = True if directed is None else directed
+        memberships = _aof.leiden_multi(
+            adjacency, resolutions, random_state=int(random_state), directed=_directed,
+            n_iterations=n_iterations, use_weights=use_weights)
+    else:
+        memberships = []
+        for _res in resolutions:
+            _args = dict(clustering_args)
+            if flavor == "leidenalg":
+                if _res is not None:
+                    _args["resolution_parameter"] = _res
+                directed = True if directed is None else directed
+                g = get_igraph_from_adjacency(adjacency, directed=directed)
+                if partition_type is None:
+                    partition_type = leidenalg.RBConfigurationVertexPartition
+                if use_weights:
+                    _args["weights"] = np.array(g.es["weight"]).astype(np.float64)
+                _args["seed"] = random_state
+                part = leidenalg.find_partition(g, partition_type, **_args)
+            else:
+                g = get_igraph_from_adjacency(adjacency, directed=False)
+                if use_weights:
+                    _args["weights"] = "weight"
+                if _res is not None:
+                    _args["resolution"] = _res
+                _args.setdefault("objective_function", "modularity")
+                with set_igraph_random_state(random_state):
+                    part = g.community_leiden(**_args)
+            memberships.append(np.array(part.membership))
+
+    base_key = key_added
+    for _res, groups in zip(resolutions, memberships):
+        key_added = f"{base_key}_{_res}" if multi else base_key
+        groups = np.asarray(groups)
+        if restrict_to is not None:
+            if key_added == "leiden":
+                key_added += "_R"
+            groups = rename_groups(
+                adata,
+                key_added=key_added,
+                restrict_key=restrict_key,
+                restrict_categories=restrict_categories,
+                restrict_indices=restrict_indices,
+                groups=groups,
+            )
+        labels = groups.astype("U")
+        lab_np = np.asarray(labels)
+        cats = natsorted(map(str, np.unique(lab_np)))
+        try:
+            adata.obs[key_added] = pd.Categorical(values=lab_np.astype("U"), categories=cats)
+        except Exception:
+            adata.obs[key_added] = labels
+        if key_added != "leiden" and "leiden" not in adata.obs.columns:
+            try:
+                adata.obs["leiden"] = adata.obs[key_added]
+            except Exception:
+                adata.obs["leiden"] = pd.Categorical(values=lab_np.astype("U"), categories=cats)
+        adata.uns[key_added] = {}
+        adata.uns[key_added]["params"] = dict(
+            resolution=_res,
+            random_state=random_state,
+            n_iterations=n_iterations,
+        )
     info(
         "    finished",
         time=start,

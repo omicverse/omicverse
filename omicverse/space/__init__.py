@@ -38,10 +38,9 @@ Utility functions:
 
 Examples:
     >>> import omicverse as ov
-    >>> import scanpy as sc
     >>> 
     >>> # Load spatial data
-    >>> adata = sc.read_visium('path/to/visium/data')
+    >>> adata = ov.io.read_visium('path/to/visium/data')
     >>> 
     >>> # Identify spatial domains
     >>> ov.space.pySTAGATE(adata, n_domains=7, radius=50)
@@ -61,6 +60,7 @@ Examples:
 
 from .._optional import bind_optional_symbols
 
+from .._moscot import moscot_alignment, moscot_mapping
 from ._tangram import Tangram
 from ._spatrio import CellMap,CellLoc
 from ._stt import STT
@@ -79,6 +79,7 @@ from ._neighborhood import (
     var_by_distance,
 )
 from ._cast import CAST
+from ._novae import novae
 from ._cellcharter import cellcharter
 from ._tools import *
 from ._commot import create_communication_anndata,update_classification_from_database
@@ -87,6 +88,11 @@ from ._ccc import run_ccc
 from ..single._ccc_cytosignal import run_cytosignal
 from ._tissue_zones import nmf_tissue_zones, TissueZones
 from ._deconvolution import Deconvolution,calculate_gene_signature
+from ._cluster_signature import cluster_marker_profile, score_cluster_signatures, cluster_neighbor_composition
+from ._markerdb import markerdb_signatures, panel_gene_map
+from ._cluster_labels import write_cluster_labels, audit_cluster_labels
+from ._boundary import territory_mask, signed_distance_map, boundary_distance_profile, labels_at_points
+from ._spatial_summary import pooled_distance_summary, compare_groups, mann_whitney_u
 from ._split import split_balance, split_purify, split_reassign_residuals, split_spatial_score
 from ._spata2 import (
     spata2_extract_variables,
@@ -143,6 +149,22 @@ from . import histo  # noqa: E402,F401
 
 __all__ = [
     'histo',
+
+    # Cluster-level marker statistics / signature scoring
+    'cluster_marker_profile',
+    'score_cluster_signatures',
+    'cluster_neighbor_composition',
+    'markerdb_signatures',
+    'write_cluster_labels',
+    'audit_cluster_labels',
+    'panel_gene_map',
+    'territory_mask',
+    'signed_distance_map',
+    'boundary_distance_profile',
+    'labels_at_points',
+    'pooled_distance_summary',
+    'compare_groups',
+    'mann_whitney_u',
 
     # Spatial clustering and domains
     'pySTAGATE',

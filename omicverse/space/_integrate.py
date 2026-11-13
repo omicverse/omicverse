@@ -381,11 +381,10 @@ class pySTAligner(object):
             Adam optimizer for training
 
     Examples:
-        >>> import scanpy as sc
         >>> import omicverse as ov
         >>> # Load data
-        >>> adata1 = sc.read_visium(...)
-        >>> adata2 = sc.read_visium(...)
+        >>> adata1 = ov.io.read_visium(...)
+        >>> adata2 = ov.io.read_visium(...)
         >>> # Construct spatial networks
         >>> ov.space.Cal_Spatial_Net(adata1, rad_cutoff=100)
         >>> ov.space.Cal_Spatial_Net(adata2, rad_cutoff=100)

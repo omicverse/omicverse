@@ -6,8 +6,8 @@ from typing import Mapping
 import matplotlib.pyplot as plt
 import networkx as nx
 import numpy as np
+import anndata
 import pandas as pd
-import scanpy as sc
 import seaborn as sns
 import tqdm
 from sklearn.metrics.pairwise import cosine_similarity
@@ -35,14 +35,16 @@ class GeneEmbedding(object):
         return embedding
 
     def get_adata(self, resolution=20):
-        mat = np.array(self.vector)
-        np.savetxt(".tmp.txt", mat)
-        gdata = sc.read_text(".tmp.txt")
-        os.remove(".tmp.txt")
+        from ....pp import neighbors
+        from ....utils._compat import leiden_like_scanpy, umap_like_scanpy as umap
+
+        # Same matrix the former text round trip produced (float32 AnnData).
+        mat = np.array(self.vector, dtype=np.float32)
+        gdata = anndata.AnnData(mat)
         gdata.obs.index = self.genes
-        sc.pp.neighbors(gdata, use_rep="X")
-        sc.tl.leiden(gdata, resolution=resolution)
-        sc.tl.umap(gdata)
+        neighbors(gdata, use_rep="X")
+        leiden_like_scanpy(gdata, resolution=resolution)
+        umap(gdata)
         return gdata
 
     def plot_similarities(self, gene, n_genes=10, save=None):
@@ -68,11 +70,16 @@ class GeneEmbedding(object):
         for gene in labels:
             _labels.append(gene)
         gdata.obs["Metagene {}".format(mg)] = highlight
+        from ....pl import embedding
+
         _, ax = plt.subplots(1, 1, figsize=(8, 6))
-        sc.pl.umap(gdata, alpha=0.5, show=False, size=100, ax=ax)
+        embedding(gdata, basis="X_umap", alpha=0.5, show=False, size=100, ax=ax,
+                  frameon=True)
         sub = gdata[gdata.obs["Metagene {}".format(mg)] != "_Other"]
-        sc.pl.umap(
+        embedding(
             sub,
+            basis="X_umap",
+            frameon=True,
             color="Metagene {}".format(mg),
             title=title,
             size=200,
@@ -129,9 +136,11 @@ class GeneEmbedding(object):
             plt.savefig(plot)
 
     def score_metagenes(self, adata, metagenes):
+        from ....pp import score_genes
+
         for p, genes in metagenes.items():
             try:
-                sc.tl.score_genes(adata, score_name=str(p) + "_SCORE", gene_list=genes)
+                score_genes(adata, score_name=str(p) + "_SCORE", gene_list=genes)
                 scores = np.array(adata.obs[str(p) + "_SCORE"].tolist()).reshape(-1, 1)
                 scaler = MinMaxScaler()
                 scores = scaler.fit_transform(scores)

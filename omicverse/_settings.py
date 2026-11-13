@@ -9,6 +9,11 @@ class omicverseConfig:
         # Preferred torch device (e.g. ``'cuda:1'``) when the user pins one via
         # ``cpu_gpu_mixed_init(devices=...)``; ``None`` means auto-detect.
         self.device = None
+        # Compute backend for the CPU workflow (qc, preprocess, scale, pca,
+        # neighbors, leiden, umap, find_markers): 'cpp' uses the multithreaded
+        # anndataoom-fast kernels when installed, 'python' the reference code.
+        # Each of those functions also accepts ``backend=`` to override this.
+        self.backend = 'cpp'
         from .utils._analytics_sender import send_analytics_full_silent
         import datetime
         test_id_full = f"FULL-{datetime.datetime.now().strftime('%Y%m%d-%H%M%S')}"
@@ -40,7 +45,7 @@ class omicverseConfig:
         ],
         related=["settings.cpu_init", "settings.cpu_gpu_mixed_init", "pp.anndata_to_GPU"]
     )
-    def gpu_init(self,managed_memory=True,pool_allocator=True,devices=0):
+    def gpu_init(self,managed_memory=True,pool_allocator=True,devices=0,dask=False):
         r"""Initialize GPU mode with RAPIDS for accelerated single-cell analysis.
 
         Parameters
@@ -51,6 +56,12 @@ class omicverseConfig:
             Enable RMM memory pool allocator for faster repeated GPU allocations.
         devices:int|list[int], optional
             CUDA device index (or indices) to register in RMM.
+        dask:bool, optional
+            Also start a ``dask_cuda.LocalCUDACluster`` with one worker per
+            device in ``devices`` (all visible GPUs when ``devices`` is a
+            single index) and a client, so AnnData read with
+            ``ov.read(..., storage='disk')`` is streamed to every GPU. The
+            client is kept in ``ov.settings.dask_client``.
 
         Returns
         -------
@@ -63,9 +74,10 @@ class omicverseConfig:
             >>> ov.settings.gpu_init()
             >>> # Custom GPU initialization
             >>> ov.settings.gpu_init(managed_memory=False, pool_allocator=True)
+            >>> # Chunked mode on four GPUs
+            >>> ov.settings.gpu_init(devices=[0, 1, 2, 3], dask=True)
         """
 
-        import scanpy as sc
         import cupy as cp
 
         import time
@@ -80,6 +92,12 @@ class omicverseConfig:
             devices=devices,  # GPU device IDs to register. By default registers only GPU 0.
         )
         cp.cuda.set_allocator(rmm_cupy_allocator)
+        if dask:
+            from .pp._dask import start_cluster
+            self.dask_client = start_cluster(
+                devices if isinstance(devices, (list, tuple)) else None,
+                managed_memory=managed_memory, pool_allocator=pool_allocator)
+            print(f'Dask GPU cluster: {self.dask_client.dashboard_link}')
         print('GPU mode activated')
         self.mode = 'gpu'
     

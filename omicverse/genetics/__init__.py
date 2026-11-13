@@ -58,6 +58,11 @@ Synthetic data            ``simulate_gwas_study`` — one coherent cohort
                           known ground truth, for tutorials / tests
 GWAS core (no backend)    ``gwas_qc``, ``gwas_association``,
                           ``genomic_inflation``
+Trait determinants        ``trait_determinants`` (conditional +
+                          effect-modifier-aware ranking of the features
+                          driving a binary trait), ``effect_modifier_scan``,
+                          ``transfer_trait_predict`` (unlabelled trait from
+                          pooled related traits)
 Pipeline helpers          ``sample_qc_metrics``, ``scan_cis_genes``,
                           ``genotype_pca``, ``clump_loci``, ``grade_loci``,
                           ``prune_by_distance``, ``make_coloc_dataset``,
@@ -79,6 +84,13 @@ Single-cell relevance     ``disease_relevance_score``, ``score_downstream``
 Heritability / LDSC       ``heritability``, ``genetic_correlation``,
                           ``partitioned_heritability``, ``ldsc_cell_type``,
                           ``munge_sumstats``
+Sequencing sample QC      ``snp_allele_counts``, ``bam_read_summary``,
+                          ``sample_genotype_concordance``,
+                          ``resolve_sample_relationships``,
+                          ``estimate_cross_sample_contamination``,
+                          ``tumor_normal_allelic_imbalance``,
+                          ``tumor_in_normal_shift``,
+                          ``tumor_normal_batch_qc``
 TWAS                      ``twas`` (spredixcan / smultixcan / predixcan),
                           ``load_twas_model``, ``make_twas_covariance``
 Plotting                  ``manhattan``, ``qqplot``, ``regional_plot``,
@@ -125,6 +137,10 @@ _LAZY_ATTRS: dict[str, tuple[str, str]] = {
     "gwas_qc":                   ("._gwas", "gwas_qc"),
     "gwas_association":          ("._gwas", "gwas_association"),
     "genomic_inflation":         ("._gwas", "genomic_inflation"),
+    # Genotype -> binary trait determinants / related-trait transfer
+    "effect_modifier_scan":      ("._determinants", "effect_modifier_scan"),
+    "trait_determinants":        ("._determinants", "trait_determinants"),
+    "transfer_trait_predict":    ("._determinants", "transfer_trait_predict"),
     # eQTL mapping
     "eqtl_map":                  ("._eqtl", "eqtl_map"),
     # Fine-mapping
@@ -154,6 +170,15 @@ _LAZY_ATTRS: dict[str, tuple[str, str]] = {
     "twas":                      ("._twas", "twas"),
     "load_twas_model":           ("._twas", "load_twas_model"),
     "make_twas_covariance":      ("._twas", "make_twas_covariance"),
+    # Sample-level genetic QC from aligned reads (identity / contamination / tumour-normal)
+    "snp_allele_counts":       ("._sample_qc", "snp_allele_counts"),
+    "bam_read_summary":        ("._sample_qc", "bam_read_summary"),
+    "sample_genotype_concordance": ("._sample_qc", "sample_genotype_concordance"),
+    "resolve_sample_relationships": ("._sample_qc", "resolve_sample_relationships"),
+    "estimate_cross_sample_contamination": ("._sample_qc", "estimate_cross_sample_contamination"),
+    "tumor_normal_allelic_imbalance": ("._sample_qc", "tumor_normal_allelic_imbalance"),
+    "tumor_in_normal_shift":   ("._sample_qc", "tumor_in_normal_shift"),
+    "tumor_normal_batch_qc":   ("._sample_qc", "tumor_normal_batch_qc"),
     # gsMap — spatial GWAS mapping
     "gsmap":                     ("._gsmap", "gsmap"),
     # Plotting
@@ -180,6 +205,7 @@ _REGISTRY_SUBMODULES = (
     "._simulate",
     "._utils",
     "._gwas",
+    "._determinants",
     "._eqtl",
     "._finemap",
     "._coloc",
@@ -188,6 +214,7 @@ _REGISTRY_SUBMODULES = (
     "._ldsc",
     "._twas",
     "._gsmap",
+    "._sample_qc",
     ".plotting",
 )
 

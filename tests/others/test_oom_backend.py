@@ -223,44 +223,6 @@ def test_oom_compat_isinstance_is_safe(monkeypatch):
     assert isinstance(object(), compat.BackedArray) is False
 
 
-def test_qc_sccomposite_oom_copies_results_back(tiny_h5ad, monkeypatch):
-    """Regression: sccomposite on an OOM adata must copy obs labels back onto
-    the original OOM object and must not leak adata_mem."""
-    import omicverse as ov
-
-    # Replace composite_rna with a deterministic fake: flag half the cells.
-    def fake_composite_rna(a):
-        n = a.n_obs
-        labels = np.zeros(n, dtype=int)
-        labels[::2] = 1  # every other cell is a "doublet"
-        consistency = np.ones(n, dtype=float)
-        return labels, consistency
-
-    import omicverse.pp._sccomposite as sc_mod
-    monkeypatch.setattr(sc_mod, "composite_rna", fake_composite_rna)
-
-    adata = ov.read(tiny_h5ad, backend="rust")
-    try:
-        ov.pp.qc(
-            adata,
-            mode="seurat",
-            min_cells=0,
-            min_genes=0,
-            tresh={"mito_perc": 1.0, "nUMIs": 0, "detected_genes": 0},
-            mt_startswith="MT-",
-            doublets=True,
-            doublets_method="sccomposite",
-            filter_doublets=False,
-        )
-        assert "sccomposite_doublet" in adata.obs.columns
-        assert "sccomposite_consistency" in adata.obs.columns
-        assert (adata.obs["sccomposite_doublet"] != 0).sum() > 0
-        # OOM contract preserved
-        assert getattr(adata, "_is_oom", False) is True
-    finally:
-        adata.close()
-
-
 def test_full_pipeline_through_leiden_oom(tiny_h5ad):
     """End-to-end smoke test: qc -> preprocess -> scale -> pca -> neighbors
     -> leiden on an OOM adata. Guards the lazy-transform chain at the

@@ -1005,9 +1005,9 @@ Your task is to review this code and provide feedback:
    - ALWAYS wrap HVG in try/except with fallback:
    ```python
    try:
-       sc.pp.highly_variable_genes(adata, flavor='seurat_v3', n_top_genes=2000)
+       ov.pp.highly_variable_genes(adata, flavor='seurat_v3', n_top_genes=2000)
    except ValueError:
-       sc.pp.highly_variable_genes(adata, flavor='seurat', n_top_genes=2000)
+       ov.pp.highly_variable_genes(adata, flavor='seurat', n_top_genes=2000)
    ```
    - For batch-aware HVG with small batches, prefer `flavor='cell_ranger'` or `flavor='seurat'`
 

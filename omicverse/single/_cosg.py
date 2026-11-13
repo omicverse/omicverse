@@ -1,5 +1,4 @@
 from anndata import AnnData
-import scanpy as sc
 import numpy as np
 import pandas as pd
 from scipy import sparse
@@ -395,7 +394,8 @@ def cosg(
     layer: Optional[str] = None,
     reference: str = 'rest',    
 
-    copy:bool=False
+    copy:bool=False,
+    backend: Optional[str] = None,
 ):
     r"""Identify cluster-specific marker genes with COSG.
 
@@ -436,6 +436,16 @@ def cosg(
 
     """
     
+    from .._backend import resolve_backend
+    if resolve_backend(backend) == 'cpp' and groups == 'all' and reference == 'rest':
+        # One multithreaded pass of per-group sums replaces the transpose,
+        # normalisation and sparse product; scores are identical.
+        from anndataoom_fast._omicverse import ov_cosg
+        return ov_cosg(adata, groupby=groupby, groups=groups, mu=mu,
+                       remove_lowly_expressed=remove_lowly_expressed,
+                       expressed_pct=expressed_pct, n_genes_user=n_genes_user,
+                       key_added=key_added, calculate_logfoldchanges=calculate_logfoldchanges,
+                       use_raw=use_raw, layer=layer, reference=reference, copy=copy)
     adata = adata.copy() if copy else adata
         
     if layer is not None:

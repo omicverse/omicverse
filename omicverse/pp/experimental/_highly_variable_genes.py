@@ -139,7 +139,10 @@ def _highly_variable_pearson_residuals(
     layer: str | None = None,
     subset: bool = False,
     inplace: bool = True,
+    backend: str | None = None,
 ) -> pd.DataFrame | None:
+    from ..._backend import resolve_backend
+    _cpp = resolve_backend(backend) == 'cpp'
     view_to_actual(adata)
     X = _get_obs_rep(adata, layer=layer)
     is_rust = _is_rust_backend(adata)
@@ -169,21 +172,37 @@ def _highly_variable_pearson_residuals(
 
     # Get pearson residuals for each batch separately
     residual_gene_vars = []
+    # In-memory CSR with backend='cpp': cut the batch / non-zero genes on all
+    # threads (and only when something is dropped) instead of slicing views.
+    _cut = None
+    if _cpp and not is_rust:
+        from .._qc import _fast_cut
+        _cut = _fast_cut(adata, backend)
+        _X_all = _get_obs_rep(adata, layer=layer) if _cut is not None else None
+        if _cut is not None and not (sp_sparse.issparse(_X_all) and _X_all.format == 'csr'):
+            _cut = None
     for batch in np.unique(batch_info):
-        if is_rust:
-            adata_subset_prefilter = adata.subset(obs_indices=np.where(batch_info == batch)[0],inplace=False)
+        if _cut is not None:
+            from ..._backend import cpp_memory
+            _rows = batch_info == batch
+            X_batch_prefilter = _X_all if _rows.all() else _cut(_X_all, _rows, None)
+            nonzero_genes = cpp_memory().gene_sums(X_batch_prefilter)[0] != 0
+            X_batch = X_batch_prefilter if nonzero_genes.all() else \
+                _cut(X_batch_prefilter, None, nonzero_genes)
         else:
-            adata_subset_prefilter = adata[batch_info == batch]
-        #  adata_subset_prefilter = adata[batch_info == batch]
-        X_batch_prefilter = _get_obs_rep(adata_subset_prefilter, layer=layer)
-        if is_rust:
-            X_batch_prefilter = X_batch_prefilter[:]
-        # Filter out zero genes
-        nonzero_genes = np.ravel(X_batch_prefilter.sum(axis=0)) != 0
-        adata_subset = adata_subset_prefilter[:, nonzero_genes]
-        X_batch = _get_obs_rep(adata_subset, layer=layer)
-        if is_rust:
-            X_batch = X_batch[:]
+            if is_rust:
+                adata_subset_prefilter = adata.subset(obs_indices=np.where(batch_info == batch)[0],inplace=False)
+            else:
+                adata_subset_prefilter = adata[batch_info == batch]
+            X_batch_prefilter = _get_obs_rep(adata_subset_prefilter, layer=layer)
+            if is_rust:
+                X_batch_prefilter = X_batch_prefilter[:]
+            # Filter out zero genes
+            nonzero_genes = np.ravel(X_batch_prefilter.sum(axis=0)) != 0
+            adata_subset = adata_subset_prefilter[:, nonzero_genes]
+            X_batch = _get_obs_rep(adata_subset, layer=layer)
+            if is_rust:
+                X_batch = X_batch[:]
         # Prepare clipping
         if clip is None:
             n = X_batch.shape[0]
@@ -192,7 +211,11 @@ def _highly_variable_pearson_residuals(
             msg = "Pearson residuals require `clip>=0` or `clip=None`."
             raise ValueError(msg)
 
-        if sp_sparse.issparse(X_batch):
+        _batch_csr = X_batch if (_cpp and sp_sparse.issparse(X_batch)
+                                 and getattr(X_batch, 'format', None) == 'csr') else None
+        if _batch_csr is not None:
+            calculate_res = None
+        elif sp_sparse.issparse(X_batch):
             X_batch = X_batch.tocsc()
             X_batch.eliminate_zeros()
             calculate_res = partial(
@@ -221,7 +244,17 @@ def _highly_variable_pearson_residuals(
         if _pre is not None and (_pre.get("n_obs") != X_batch.shape[0]
                                   or _pre.get("n_vars") != X_batch.shape[1]):
             _pre = None  # stale (e.g. obs/var subset between normalize + HVG)
-        if _pre is not None:
+        if _batch_csr is not None:
+            # Multithreaded C++ kernel: cost proportional to the stored entries
+            # (zeros enter in closed form) instead of genes x cells.
+            from ..._backend import cpp_memory
+            _kw = {}
+            if _pre is not None:
+                _kw = dict(sums_genes=_pre["sums_genes"], sums_cells=_pre["sums_cells"],
+                           sum_total=_pre.get("sum_total"))
+            residual_gene_var = cpp_memory().pearson_residual_variance(
+                _batch_csr, theta=float(theta), clip=float(clip), **_kw)
+        elif _pre is not None:
             sums_genes = np.asarray(_pre["sums_genes"], dtype=np.float64)
             sums_cells = np.asarray(_pre["sums_cells"], dtype=np.float64)
             sum_total = float(
@@ -232,15 +265,16 @@ def _highly_variable_pearson_residuals(
             sums_cells = np.array(X_batch.sum(axis=1)).ravel()
             sum_total = np.sum(sums_genes)
 
-        residual_gene_var = calculate_res(
-            sums_genes=sums_genes,
-            sums_cells=sums_cells,
-            sum_total=np.float64(sum_total),
-            clip=np.float64(clip),
-            theta=np.float64(theta),
-            n_genes=X_batch.shape[1],
-            n_cells=X_batch.shape[0],
-        )
+        if calculate_res is not None:
+            residual_gene_var = calculate_res(
+                sums_genes=sums_genes,
+                sums_cells=sums_cells,
+                sum_total=np.float64(sum_total),
+                clip=np.float64(clip),
+                theta=np.float64(theta),
+                n_genes=X_batch.shape[1],
+                n_cells=X_batch.shape[0],
+            )
 
         # Add 0 values for genes that were filtered out
         unmasked_residual_gene_var = np.zeros(len(nonzero_genes))
@@ -346,6 +380,7 @@ def highly_variable_genes(
     layer: str | None = None,
     subset: bool = False,
     inplace: bool = True,
+    backend: str | None = None,
 ) -> pd.DataFrame | None:
     """\
     Select highly variable genes using analytic Pearson residuals :cite:p:`Lause2021`.
@@ -396,7 +431,7 @@ def highly_variable_genes(
 
     Notes
     -----
-    Experimental version of `sc.pp.highly_variable_genes()`
+    Experimental version of `ov.pp.highly_variable_genes()`
     """
 
     print(f"\n{Colors.HEADER}{Colors.BOLD}{EMOJI['start']} Highly Variable Genes Selection (Experimental):{Colors.ENDC}")
@@ -435,6 +470,7 @@ def highly_variable_genes(
             subset=subset,
             check_values=check_values,
             inplace=inplace,
+            backend=backend,
         )
     else:
         msg = "This is an experimental API and only `flavor=pearson_residuals` is available."

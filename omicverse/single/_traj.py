@@ -1,4 +1,3 @@
-import scanpy as sc
 import pandas as pd
 import anndata
 import numpy as np
@@ -223,8 +222,9 @@ class TrajInfer(object):
             ms_data = palantir["determine_multiscale_space"](self.adata)
             imputed_X = palantir["run_magic_imputation"](self.adata)
 
-            sc.tl.rank_genes_groups(self.adata, groupby=self.groupby, 
-                        method='t-test',use_rep=self.use_rep,)
+            from ._sc_compat import rank_genes_groups, rank_genes_groups_df
+            rank_genes_groups(self.adata, groupby=self.groupby,
+                        method='t-test')
             cosg(self.adata, key_added=f'{self.groupby}_cosg', groupby=self.groupby)
             
             ## terminal cells calculation
@@ -233,7 +233,7 @@ class TrajInfer(object):
             else:
                 terminal_index=[]
                 for t in self.terminal:
-                    gene=sc.get.rank_genes_groups_df(self.adata, group=t, key=f'{self.groupby}_cosg')['names'][0]
+                    gene=rank_genes_groups_df(self.adata, group=t, key=f'{self.groupby}_cosg')['names'][0]
                     terminal_index.append(self.adata[self.adata.obs[self.groupby]==t].to_df()[gene].sort_values().index[-1])
                 
                 terminal_states = pd.Series(
@@ -243,7 +243,7 @@ class TrajInfer(object):
             
             ## origin cells calculation
             origin_cell=self.origin
-            gene=sc.get.rank_genes_groups_df(self.adata, group=origin_cell, key=f'{self.groupby}_cosg')['names'][0]
+            gene=rank_genes_groups_df(self.adata, group=origin_cell, key=f'{self.groupby}_cosg')['names'][0]
             origin_cell_index=self.adata[self.adata.obs[self.groupby]==origin_cell].to_df()[gene].sort_values().index[-1]
             
             start_cell = origin_cell_index
@@ -256,20 +256,18 @@ class TrajInfer(object):
             add_reference(self.adata,'Palantir','trajectory inference with Palantir')
             return pr_res
         elif method=='diffusion_map':
-            sc.pp.neighbors(self.adata, n_neighbors=self.n_neighbors, n_pcs=self.n_comps,
+            from ..pp import neighbors, diffmap, draw_graph, dpt
+            neighbors(self.adata, n_neighbors=self.n_neighbors, n_pcs=self.n_comps,
                use_rep=self.use_rep)
-            sc.tl.diffmap(self.adata)
-            sc.pp.neighbors(self.adata, n_neighbors=self.n_neighbors, use_rep='X_diffmap')
-            sc.tl.draw_graph(self.adata)
+            diffmap(self.adata)
+            neighbors(self.adata, n_neighbors=self.n_neighbors, use_rep='X_diffmap')
+            draw_graph(self.adata)
             self.adata.uns['iroot'] = np.flatnonzero(self.adata.obs[self.groupby]  == self.origin)[0]
-            sc.tl.dpt(self.adata)
-            sc.pp.neighbors(self.adata, n_neighbors=self.n_neighbors, n_pcs=self.n_comps,
+            dpt(self.adata)
+            neighbors(self.adata, n_neighbors=self.n_neighbors, n_pcs=self.n_comps,
                use_rep=self.use_rep)
             add_reference(self.adata,'diffusion_map','trajectory inference with diffusion map')
         elif method=='slingshot':
-            #sc.pp.neighbors(self.adata, n_neighbors=self.n_neighbors, n_pcs=self.n_comps,
-            #   use_rep=self.use_rep)
-            #sc.tl.umap(self.adata)
             from ._pyslingshot import Slingshot
             slingshot = Slingshot(self.adata, 
                       celltype_key=self.groupby, 
@@ -477,7 +475,10 @@ class TrajInfer(object):
             # Differentiation potential ranked by gene-count correlate (Gulati 2020).
             # Backend: pycytotrace — `pip install omicverse[trajectory]`
             import pycytotrace
-            counts, _ = self._dense_counts()
+            counts, gene_names = self._dense_counts()
+            # Preserve gene labels for ERCC filtering and result provenance.
+            kwargs.setdefault('gene_names', gene_names)
+            kwargs.setdefault('cell_names', list(self.adata.obs_names))
             # pycytotrace expects genes × cells, like R upstream.
             res = pycytotrace.cytotrace_run(counts.T, **kwargs)
             stem = np.asarray(getattr(res, 'cytotrace', res), dtype=float)
@@ -1078,7 +1079,7 @@ def diffmap_fle(
     """
     Compute diffusion map first, then build ForceAtlas2-based FLE embedding.
     
-    This function first computes diffusion maps using scanpy and then applies the optimized
+    This function first computes diffusion maps and then applies the optimized
     ForceAtlas2 algorithm on the diffusion map coordinates to create a force-directed layout.
     
     Parameters
@@ -1137,15 +1138,15 @@ def diffmap_fle(
     --------
     >>> diffmap_fle(adata, use_gpu=True)
     """
-    # Step 1: Compute diffusion map using scanpy
-    import scanpy as sc
-    
+    # Step 1: Compute diffusion map
+    from ..pp import neighbors, diffmap
+
     print("Computing neighbors for diffusion map...")
-    sc.pp.neighbors(adata, n_neighbors=n_neighbors, n_pcs=n_pcs, 
+    neighbors(adata, n_neighbors=n_neighbors, n_pcs=n_pcs,
                    use_rep=use_rep, random_state=random_state)
-    
+
     print(f"Computing diffusion map with {n_comps} components...")
-    sc.tl.diffmap(adata, n_comps=n_comps)
+    diffmap(adata, n_comps=n_comps)
     
     # Store the diffusion map connectivity matrix for FLE
     W_diffmap = adata.obsp['connectivities']

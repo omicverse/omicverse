@@ -48,8 +48,8 @@ from typing import Literal
 
 import loompy as lp
 import numpy as np
+import anndata
 import pandas as pd
-import scanpy as sc
 import scipy.sparse as sp
 from datasets import Dataset
 from tqdm import tqdm
@@ -206,7 +206,7 @@ def sum_ensembl_ids(
         Returns adata object with deduplicated Ensembl IDs.
         """
 
-        data = sc.read_h5ad(str(data_directory))
+        data = anndata.read_h5ad(str(data_directory))
 
         if use_h5ad_index:
             data.var["ensembl_id"] = list(data.var.index)
@@ -284,10 +284,10 @@ def sum_ensembl_ids(
             processed_genes = pd.concat(processed_genes, axis=0)
             var_df = pd.DataFrame({"ensembl_id_collapsed": processed_genes.columns})
             var_df.index = processed_genes.columns
-            processed_genes = sc.AnnData(X=processed_genes, obs=data.obs, var=var_df)
+            processed_genes = anndata.AnnData(X=processed_genes, obs=data.obs, var=var_df)
 
             data_dedup = data[:, ~data.var.index.isin(dup_genes)]  # Deduplicated data
-            data_dedup = sc.concat([data_dedup, processed_genes], axis=1)
+            data_dedup = anndata.concat([data_dedup, processed_genes], axis=1)
             data_dedup.obs = data.obs
             return data_dedup
 

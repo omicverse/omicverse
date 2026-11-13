@@ -180,7 +180,7 @@ def score_downstream(
         ``'group'`` (cell-group enrichment / heterogeneity), ``'corr'``
         (covariate correlation), or ``'gene'`` (gene-level association).
         ``analysis='group'`` needs a precomputed neighbour graph — run
-        ``sc.pp.neighbors(adata)`` before calling it.
+        ``ov.pp.neighbors(adata)`` before calling it.
     group_cols
         For ``analysis='group'``: the ``adata.obs`` columns defining the
         cell groups.

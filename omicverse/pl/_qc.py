@@ -171,7 +171,7 @@ def qc(
     if not resolved:
         raise ValueError(
             "No QC metrics found in adata.obs. Run ov.pp.qc_metrics(adata) "
-            "(or ov.pp.qc / sc.pp.calculate_qc_metrics) first."
+            "(or ov.pp.qc / ov.pp.calculate_qc_metrics) first."
         )
     tresh = tresh or {}
     groups = None

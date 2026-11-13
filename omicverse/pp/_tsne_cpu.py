@@ -14,7 +14,7 @@ The implementation follows scanpy's own thin-wrapper pattern:
 - build a ``sklearn.manifold.TSNE`` estimator
 - ``fit_transform`` and write back ``adata.obsm[key_added]`` /
   ``adata.uns[key_added]`` keeping scanpy's storage layout so
-  downstream plots (``sc.pl.tsne`` / ``ov.pl.embedding(basis='X_tsne')``)
+  downstream plots (``ov.pl.embedding(basis='X_tsne')``)
   keep working unchanged.
 """
 from __future__ import annotations

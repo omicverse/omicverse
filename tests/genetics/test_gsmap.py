@@ -7,7 +7,7 @@ from scipy import sparse
 
 
 def _run_plot_top_genes(monkeypatch, tmp_path, matrix):
-    import scanpy as sc
+    import omicverse.pp as ov_pp  # gsmap normalises with ov.pp (no scanpy)
 
     from omicverse.external.gsmap import diagnosis
     from omicverse.genetics._gsmap import _gsmap_runner
@@ -18,8 +18,8 @@ def _run_plot_top_genes(monkeypatch, tmp_path, matrix):
         var=pd.DataFrame(index=["g1"]),
     )
     calls = []
-    monkeypatch.setattr(sc.pp, "normalize_total", lambda *args, **kwargs: calls.append("normalize"))
-    monkeypatch.setattr(sc.pp, "log1p", lambda *args, **kwargs: calls.append("log1p"))
+    monkeypatch.setattr(ov_pp, "normalize_total", lambda *args, **kwargs: calls.append("normalize"))
+    monkeypatch.setattr(ov_pp, "log1p", lambda *args, **kwargs: calls.append("log1p"))
     monkeypatch.setattr(
         diagnosis,
         "load_gene_diagnostic_info",
@@ -58,7 +58,7 @@ def test_plot_top_genes_normalizes_sparse_counts(monkeypatch, tmp_path):
 
 
 def test_plot_manhattan_normalizes_sparse_counts(monkeypatch, tmp_path):
-    import scanpy as sc
+    import omicverse.pp as ov_pp  # gsmap normalises with ov.pp (no scanpy)
 
     from omicverse.external.gsmap import _manhattan_plot, _regression_read, diagnosis
     from omicverse.genetics._gsmap import _gsmap_runner
@@ -69,8 +69,8 @@ def test_plot_manhattan_normalizes_sparse_counts(monkeypatch, tmp_path):
         var=pd.DataFrame(index=["g1"]),
     )
     calls = []
-    monkeypatch.setattr(sc.pp, "normalize_total", lambda *args, **kwargs: calls.append("normalize"))
-    monkeypatch.setattr(sc.pp, "log1p", lambda *args, **kwargs: calls.append("log1p"))
+    monkeypatch.setattr(ov_pp, "normalize_total", lambda *args, **kwargs: calls.append("normalize"))
+    monkeypatch.setattr(ov_pp, "log1p", lambda *args, **kwargs: calls.append("log1p"))
     monkeypatch.setattr(
         diagnosis,
         "load_gene_diagnostic_info",

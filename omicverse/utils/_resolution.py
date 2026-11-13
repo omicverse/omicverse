@@ -1,13 +1,18 @@
 import pandas as pd
 import numpy as np
-import scanpy as sc
 from anndata import AnnData
 from typing import Optional, List, Tuple, Dict, Union
+from ._compat import leiden_like_scanpy as _leiden
 import matplotlib.pyplot as plt
 import seaborn as sns
 from sklearn.metrics import silhouette_score, adjusted_rand_score
 from sklearn.cluster import KMeans
 import warnings
+
+
+def _louvain(adata, **kwargs):
+    from ..pp import louvain
+    return louvain(adata, **kwargs)
 
 
 def optimal_resolution(
@@ -51,11 +56,10 @@ def optimal_resolution(
         
     Examples:
         >>> import omicverse as ov
-        >>> import scanpy as sc
         >>> 
         >>> # Load and preprocess data
-        >>> adata = sc.datasets.pbmc3k_processed()
-        >>> sc.pp.neighbors(adata, n_neighbors=10, n_pcs=40)
+        >>> adata = ov.datasets.pbmc3k(processed=True)
+        >>> ov.pp.neighbors(adata, n_neighbors=10, n_pcs=40)
         >>> 
         >>> # Find optimal resolution
         >>> optimal_res = ov.utils.optimal_resolution(
@@ -70,7 +74,7 @@ def optimal_resolution(
     
     # Check if neighbors graph exists
     if 'neighbors' not in adata_work.uns:
-        raise ValueError("Neighbors graph not found. Run sc.pp.neighbors() first.")
+        raise ValueError("Neighbors graph not found. Run ov.pp.neighbors() first.")
     
     # Generate resolution values to test
     if resolution_range[0] >= resolution_range[1]:
@@ -84,9 +88,9 @@ def optimal_resolution(
     for res in resolutions:
         # Perform clustering
         if clustering_method == 'leiden':
-            sc.tl.leiden(adata_work, resolution=res, random_state=random_state, key_added='temp_clusters')
+            _leiden(adata_work, resolution=res, random_state=random_state, key_added='temp_clusters')
         elif clustering_method == 'louvain':
-            sc.tl.louvain(adata_work, resolution=res, random_state=random_state, key_added='temp_clusters')
+            _louvain(adata_work, resolution=res, random_state=random_state, key_added='temp_clusters')
         else:
             raise ValueError("clustering_method must be 'leiden' or 'louvain'")
         
@@ -136,7 +140,7 @@ def optimal_resolution(
             try:
                 if clustering_method == 'leiden':
                     # Calculate modularity for leiden clustering
-                    modularity = sc.tl.leiden(
+                    modularity = _leiden(
                         adata_work, 
                         resolution=res, 
                         random_state=random_state, 
@@ -208,11 +212,11 @@ def optimal_resolution(
     if clustering_method == 'leiden':
         if key_added is None:
             key_added = f'leiden_optimal_res_{optimal_res:.2f}'
-        sc.tl.leiden(adata_work, resolution=optimal_res, random_state=random_state, key_added=key_added)
+        _leiden(adata_work, resolution=optimal_res, random_state=random_state, key_added=key_added)
     else:
         if key_added is None:
             key_added = f'louvain_optimal_res_{optimal_res:.2f}'
-        sc.tl.louvain(adata_work, resolution=optimal_res, random_state=random_state, key_added=key_added)
+        _louvain(adata_work, resolution=optimal_res, random_state=random_state, key_added=key_added)
     
     # Store results in adata
     adata_work.uns['optimal_resolution_results'] = results_df
@@ -380,7 +384,7 @@ def resolution_stability_analysis(
     
     # Check if neighbors graph exists
     if 'neighbors' not in adata.uns:
-        raise ValueError("Neighbors graph not found. Run sc.pp.neighbors() first.")
+        raise ValueError("Neighbors graph not found. Run ov.pp.neighbors() first.")
     
     resolutions = np.linspace(resolution_range[0], resolution_range[1], n_resolutions)
     stability_results = []
@@ -394,9 +398,9 @@ def resolution_stability_analysis(
             
             # Perform clustering
             if clustering_method == 'leiden':
-                sc.tl.leiden(adata, resolution=res, random_state=current_seed, key_added='temp_stability')
+                _leiden(adata, resolution=res, random_state=current_seed, key_added='temp_stability')
             else:
-                sc.tl.louvain(adata, resolution=res, random_state=current_seed, key_added='temp_stability')
+                _louvain(adata, resolution=res, random_state=current_seed, key_added='temp_stability')
             
             clusterings.append(adata.obs['temp_stability'].astype(int).values.copy())
             

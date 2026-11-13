@@ -40,9 +40,9 @@ CODE_QUALITY_RULES = (
     "- NEVER use .cat.categories - use .value_counts() instead\n"
     "- ALWAYS wrap HVG selection in try/except with fallback:\n"
     "  try:\n"
-    "      sc.pp.highly_variable_genes(adata, flavor='seurat_v3', n_top_genes=2000)\n"
+    "      ov.pp.highly_variable_genes(adata, flavor='seurat_v3', n_top_genes=2000)\n"
     "  except ValueError:\n"
-    "      sc.pp.highly_variable_genes(adata, flavor='seurat', n_top_genes=2000)\n"
+    "      ov.pp.highly_variable_genes(adata, flavor='seurat', n_top_genes=2000)\n"
     "- ALWAYS validate batch column before batch operations "
     "(check existence, fillna, astype('category'))\n"
 )
