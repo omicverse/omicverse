@@ -613,10 +613,12 @@ def reconstruct_study_effects(sources: dict, method_source: Union[str, Path], ca
     except Exception:
         _mtxt = str(method_source)
     excl_words = set()
-    for sent in re.split(r"(?<=[.;:])\s+", _strip_tags(_mtxt)):
+    excl_sents = []
+    for sent in re.split(r"(?<=[.])\s+", _strip_tags(_mtxt)):
         if re.search(r"\b(?:leave (?:them|it) out|left out|not part of|are excluded|is excluded|exclude[sd]? (?:them|those))\b",
                      sent, re.I) and re.search(r"\b(?:participants?|patients?|subjects?|subgroups?|groups?|sample)\b", sent, re.I):
             excl_words |= {w.lower() for w in re.findall(r"[A-Za-z]{4,}", sent)}
+            excl_sents.append(sent.strip())
     excl_words -= {w.lower() for w in re.findall(r"[A-Za-z]+", str(case_label))}
     excl_words -= {"participants", "participant", "patients", "subjects", "group", "groups", "subgroup", "subgroups",
                    "sample", "they", "them", "when", "were", "still", "part", "leave", "left", "remaining",
@@ -743,7 +745,7 @@ def reconstruct_study_effects(sources: dict, method_source: Union[str, Path], ca
     sab = {sid: abbreviation_map(t) for sid, t in stexts.items()}
     prop = propose_selection(wb, st, abbreviations=ab, prefer_counts=prefer_counts, study_abbreviations=sab,
                              study_texts=stexts)
-    prop = _aggregate_vs_subgroups(prop)
+    prop = _aggregate_vs_subgroups(prop, stexts, excl_sents)
     prop = _check_reported_effects(prop, stexts)
     prop["proposed"] = prop["decision"]
     kept = prop[(prop["decision"] == "keep")]
@@ -1088,10 +1090,18 @@ def _check_reported_effects(prop: pd.DataFrame, texts: Dict[str, str]) -> pd.Dat
                        (r.n_case + r.n_control - 2))
         d = (r.mean_case - r.mean_control) / sp if sp > 0 else float("nan")
         if np.isfinite(d) and min(min(abs(d - v), abs(abs(d) - abs(v))) for v in reported) > 1.0:
-            prop.at[i, "decision"] = "exclude"
-            prop.at[i, "reason"] = (f"printed statistics give d = {d:.2f} but the article reports d = "
-                                    f"{', '.join(f'{v:.2f}' for v in reported)} for this measure: likely a misprint "
-                                    f"(left out; recover it only from the article's own statistics)")
+            rec = _recover_mean(r, reported, sp)
+            if rec is not None:
+                col, val, dv = rec
+                prop.at[i, col] = val
+                prop.at[i, "reason"] = (f"printed {col.replace('_', ' ')} {r[col]:g} is a misprint (it gives d = {d:.2f}, "
+                                        f"the article reports d = {dv:.2f}); recovered {col.replace('_', ' ')} = {val:.4f} "
+                                        f"from the reported d and the pooled SD")
+            else:
+                prop.at[i, "decision"] = "exclude"
+                prop.at[i, "reason"] = (f"printed statistics give d = {d:.2f} but the article reports d = "
+                                        f"{', '.join(f'{v:.2f}' for v in reported)} for this measure: a misprint that "
+                                        f"cannot be recovered unambiguously (left out)")
     return prop
 
 
@@ -1102,7 +1112,8 @@ def _to_float_safe(x: str) -> Optional[float]:
         return None
 
 
-def _aggregate_vs_subgroups(prop: pd.DataFrame) -> pd.DataFrame:
+def _aggregate_vs_subgroups(prop: pd.DataFrame, texts: Optional[Dict[str, str]] = None,
+                            rules: Sequence[str] = ()) -> pd.DataFrame:
     """The same measure printed for an aggregate case column and for its subgroups: one row only.
     If the aggregate's n differs from the subgroups' total, the aggregate holds participants outside
     the reported subgroups (e.g. a subgroup the coding rules exclude) -> the pooled subgroups are kept."""
@@ -1122,10 +1133,17 @@ def _aggregate_vs_subgroups(prop: pd.DataFrame) -> pd.DataFrame:
             m0 = multi.iloc[0]
             for i, r in single.iterrows():
                 if pd.notna(r["n_case"]) and pd.notna(m0["n_case"]) and r["n_case"] > m0["n_case"]:
+                    delta = int(round(r["n_case"] - m0["n_case"]))
+                    ev = _sentence_with_count(_strip_tags((texts or {}).get(sid, "") or ""), delta)
+                    rule = next((x for x in rules), "")
                     prop.at[i, "decision"] = "exclude"
-                    prop.at[i, "reason"] = (f"aggregate case column (n={r['n_case']:g}) differs from the total of its "
-                                            f"reported subgroups (n={m0['n_case']:g}): it includes participants outside "
-                                            f"them; the pooled subgroups are used")
+                    prop.at[i, "reason"] = (f"aggregate case column (n={r['n_case']:g}) holds {delta} participants outside its "
+                                            f"reported subgroups (total {m0['n_case']:g}); the pooled subgroups are used"
+                                            + (f". Article: '{ev[:200]}'" if ev else "")
+                                            + (f". Rules: '{rule[:220]}'" if rule else ""))
+                    for j in multi.index:
+                        prop.at[j, "reason"] = ("pooled subgroups replace the aggregate column, which includes "
+                                                f"{delta} participants outside them" + (f" ('{ev[:120]}')" if ev else ""))
                 else:
                     # equal totals: the printed aggregate; larger subgroup totals: repeated measurements of
                     # the same participants (e.g. follow-up waves), not separate people
@@ -1134,3 +1152,33 @@ def _aggregate_vs_subgroups(prop: pd.DataFrame) -> pd.DataFrame:
                         prop.at[j, "reason"] = ("same participants as the printed aggregate column (subgroups total "
                                                 f"{m0['n_case']:g} vs {r['n_case']:g})")
     return prop
+
+
+_NUM_WORDS = {"two": 2, "three": 3, "four": 4, "five": 5, "six": 6, "seven": 7, "eight": 8, "nine": 9, "ten": 10,
+              "eleven": 11, "twelve": 12, "fifteen": 15, "twenty": 20, "thirty": 30, "forty": 40, "fifty": 50}
+
+
+def _sentence_with_count(text: str, n: int) -> str:
+    """First sentence of the article that states the count n of participants (digits or words)."""
+    words = [w for w, v in _NUM_WORDS.items() if v == n]
+    pat = re.compile(r"\b(?:%d%s)\b" % (n, "".join("|" + w for w in words)), re.I)
+    for sent in re.split(r"(?<=[.])\s+", text):
+        if pat.search(sent) and re.search(r"participants?|patients?|subjects?|individuals?|people|cases?", sent, re.I):
+            return sent.strip()
+    return ""
+
+
+def _digits(x: float) -> str:
+    return re.sub(r"[^0-9]", "", f"{abs(x):.4f}").lstrip("0")
+
+
+def _recover_mean(r, reported, sp):
+    """Which printed mean is the misprint, and its value from a reported d (case - control, pooled SD).
+    The recovered value must keep the printed digits (a dropped / shifted digit), else None."""
+    cands = []
+    for v in reported:
+        for col, val in (("mean_control", r.mean_case - v * sp), ("mean_case", r.mean_control + v * sp)):
+            pd_, rd_ = _digits(r[col]).rstrip("0"), _digits(val)
+            if pd_ and (rd_.startswith(pd_[:2]) and len(pd_) >= 2) and abs(val - r[col]) > 0.5 * sp:
+                cands.append((col, round(val, 6), v))
+    return cands[0] if len(cands) == 1 else None
