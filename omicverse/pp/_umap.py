@@ -176,7 +176,7 @@ def umap(  # noqa: PLR0913, PLR0915
         init_coords = adata.obsm[init_pos]
     elif isinstance(init_pos, str) and init_pos == "paga":
         init_coords = get_init_pos_from_paga(
-            adata, random_state=random_state_processed, neighbors_key=neighbors_key
+            adata, random_state=random_state, neighbors_key=neighbors_key
         )
     else:
         init_coords = init_pos  # Let umap handle it
