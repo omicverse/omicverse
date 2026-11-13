@@ -634,36 +634,72 @@ def recompute_group_test(n1, m1, s1, n2, m2, s2, reported_t: Optional[float] = N
                 "listed under 'fallback' is kept only when the same study reports none of its preferred "
                 "classes for that family; anything else is excluded. Returns decision + reason per row and "
                 "flags families / classes used inconsistently.",
-    examples=["rules = {'task family A': {'select': ['reaction time', 'errors'], 'quote': '...'},\n"
-              "         'task family B': {'select': ['score X'], 'fallback': {'score Y': ['score X']}}}",
+    examples=["rules = {'task A': {'pattern': r'task a|ta-test', 'select': {'reaction time': r'\\bRT\\b|latency',\n"
+              "                                                             'errors': r'error|commission|omission'}},\n"
+              "         'task B': {'pattern': r'task b', 'select': {'score X': r'score x'},\n"
+              "                    'fallback': {'score Y': ['score X']}, 'class_patterns': {'score Y': r'score y'}}}",
               "dec = ov.tl.apply_selection_rules(ledger, rules, study='doi')"],
     related=["tl.extract_group_stats", "tl.meta_effect_sizes"],
 )
 def apply_selection_rules(ledger: pd.DataFrame, rules: dict, study: str = "study",
-                          family: str = "family", stat_class: str = "stat_class") -> pd.DataFrame:
-    """Return ``ledger`` with ``decision`` ('keep' / 'exclude') and ``reason`` columns.
+                          family: str = "family", stat_class: str = "stat_class",
+                          text_cols: Sequence[str] = ("section", "row")) -> pd.DataFrame:
+    """Return ``ledger`` with ``family``, ``stat_class``, ``decision`` ('keep' / 'exclude') and
+    ``reason`` columns.
 
-    ``rules`` maps a task family (or a comparison-measure family) to
-    ``{"select": [classes], "fallback": {class: [preferred classes]}, "quote": "..."}``.
-    Write the rule table from the method paper / instruction BEFORE deciding, with the quote
-    that names the classes; label each candidate's family and class from the article; then let
-    this function decide. Names are compared case-insensitively after stripping.
-    Rows whose family or class is empty are returned with decision 'undecided'.
+    ``rules`` maps a task family (or a comparison-measure family) to::
+
+        {"pattern": r"<regex naming the task in a row / section>",          # optional
+         "select": {"<class>": r"<regex of the statistic in the row>", ...}  # or a list of names
+         "fallback": {"<class>": ["<preferred class>", ...]},                # optional
+         "class_patterns": {"<fallback class>": r"<regex>"},                 # regexes for fallbacks
+         "quote": "<the method's sentence>"}
+
+    Labelling: rows whose ``family`` / ``stat_class`` columns are filled keep their labels;
+    otherwise the family is the first rule whose ``pattern`` matches the row's text
+    (``text_cols`` joined) and the class the first selected / fallback class whose regex matches
+    it. Write the table from the method paper / instruction BEFORE deciding, then let this
+    function decide; review rows reported as unmatched. Decision: family absent -> out of scope;
+    class in ``select`` -> keep; class in ``fallback`` -> keep only when the same study reports
+    none of its preferred classes for that family; else exclude.
     """
     norm = lambda x: re.sub(r"\s+", " ", str(x)).strip().casefold()
-    R = {norm(f): {"select": {norm(c) for c in r.get("select", [])},
-                   "fallback": {norm(c): {norm(p) for p in ps} for c, ps in (r.get("fallback") or {}).items()}}
-         for f, r in rules.items()}
+    R = {}
+    for f, r in rules.items():
+        sel = r.get("select", [])
+        sel_pat = dict(sel) if isinstance(sel, dict) else {c: None for c in sel}
+        fb = r.get("fallback") or {}
+        cpat = dict(r.get("class_patterns") or {})
+        R[norm(f)] = {"pattern": r.get("pattern"),
+                      "select": {norm(c) for c in sel_pat},
+                      "fallback": {norm(c): {norm(p) for p in ps} for c, ps in fb.items()},
+                      "class_re": [(norm(c), pt) for c, pt in list(sel_pat.items()) + list(cpat.items()) if pt]}
     df = ledger.copy()
-    fam = df[family].map(norm)
-    cls = df[stat_class].map(norm)
-    present = set(zip(df[study].map(norm), fam, cls))
+    for c in (family, stat_class):
+        if c not in df:
+            df[c] = ""
+    text = df[[c for c in text_cols if c in df]].astype(str).agg(" ".join, axis=1) if any(
+        c in df for c in text_cols) else pd.Series("", index=df.index)
+    fam_l, cls_l = [], []
+    for i, t in text.items():
+        f_ = norm(df.at[i, family]) if pd.notna(df.at[i, family]) else ""
+        if f_ in ("", "nan"):
+            f_ = next((k for k, v in R.items() if v["pattern"] and re.search(v["pattern"], t, re.I)), "")
+        c_ = norm(df.at[i, stat_class]) if pd.notna(df.at[i, stat_class]) else ""
+        if c_ in ("", "nan") and f_ in R:
+            c_ = next((k for k, pt in R[f_]["class_re"] if re.search(pt, t, re.I)), "")
+        fam_l.append(f_)
+        cls_l.append(c_)
+    df[family], df[stat_class] = fam_l, cls_l
+    present = set(zip(df[study].map(norm), df[family], df[stat_class]))
     dec, why = [], []
-    for s_, f_, c_ in zip(df[study].map(norm), fam, cls):
-        if not f_ or f_ == "nan" or not c_ or c_ == "nan":
-            dec.append("undecided"); why.append("family / class not labelled")
+    for s_, f_, c_ in zip(df[study].map(norm), df[family], df[stat_class]):
+        if not f_:
+            dec.append("exclude"); why.append("no family of the rule table matches (out of scope, or label it)")
         elif f_ not in R:
             dec.append("exclude"); why.append(f"family '{f_}' not in the method's scope")
+        elif not c_:
+            dec.append("exclude"); why.append(f"no selected statistic of '{f_}' matches this row")
         elif c_ in R[f_]["select"]:
             dec.append("keep"); why.append(f"'{c_}' is a selected statistic of '{f_}'")
         elif c_ in R[f_]["fallback"]:
@@ -676,7 +712,6 @@ def apply_selection_rules(ledger: pd.DataFrame, rules: dict, study: str = "study
             dec.append("exclude"); why.append(f"'{c_}' is not a selected statistic of '{f_}'")
     df["decision"], df["reason"] = dec, why
     return df
-
 
 _CONTROL_DEFAULT = r"control|healthy|\bHC\b|\bNC\b|\bCTL\b|comparison|non[- ]?\w+"
 

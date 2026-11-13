@@ -120,3 +120,17 @@ def test_method_measure_statements_and_format():
     wb = comparison_workbook({"s1": _JATS}, case=r"depress|MDD|patients", verbose=False)
     txt = format_workbook(wb)
     assert "== s1:" in txt and "n=?" in txt
+
+
+def test_apply_selection_rules_regex_labelling():
+    from omicverse.tl._meta_analysis import apply_selection_rules
+    wb = pd.DataFrame({"study": ["a"] * 5 + ["b"],
+                       "section": ["Sorting task", "Sorting task", "", "Matching task", "Matching task", "Sorting"],
+                       "row": ["Errors (n)", "Categories", "Age (years)", "Latency 1", "Strategy score", "Categories"]})
+    rules = {"sorting": {"pattern": r"sorting", "select": {"errors": r"error"},
+                         "fallback": {"categories": ["errors"]}, "class_patterns": {"categories": r"categor"}},
+             "matching": {"pattern": r"matching", "select": {"reaction time": r"latency|\bRT\b",
+                                                             "accuracy": r"correct"}}}
+    d = apply_selection_rules(wb, rules)
+    assert list(d["decision"]) == ["keep", "exclude", "exclude", "keep", "exclude", "keep"]
+    assert d.loc[3, "stat_class"] == "reaction time" and d.loc[2, "family"] == ""
