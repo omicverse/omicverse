@@ -5,7 +5,6 @@ import torch.optim as optim
 from torch.utils.data import DataLoader, TensorDataset
 import numpy as np
 import pandas as pd
-import scanpy as sc
 import scipy
 
 from scipy.stats import norm
@@ -115,10 +114,12 @@ class scLTNN(object):
 
     def cal_paga(self,use_rep='X_pca',n_neighbors=15, n_pcs=50,resolution=1.0):
         print('......calculate paga')
-        sc.pp.neighbors(self.adata, n_neighbors=15, n_pcs=50,
+        from ..pp import neighbors, leiden
+        from ._sc_compat import paga
+        neighbors(self.adata, n_neighbors=15, n_pcs=50,
                use_rep=use_rep)
-        sc.tl.leiden(self.adata, resolution=resolution)
-        sc.tl.paga(self.adata, groups='leiden')
+        leiden(self.adata, resolution=resolution, random_state=0, backend='python')
+        paga(self.adata, groups='leiden')
 
     def cal_model_time(self):
         r"""
@@ -209,8 +210,9 @@ class scLTNN(object):
         
         #prev
         self.adata.uns['iroot'] = np.flatnonzero(self.adata.obs['leiden'].isin(self.leiden_start))[0]
-        sc.tl.diffmap(self.adata)
-        sc.tl.dpt(self.adata)
+        from ..pp import diffmap, dpt
+        diffmap(self.adata)
+        dpt(self.adata)
         self.adata.obs['dpt_pseudotime_p']=self.adata.obs['dpt_pseudotime'].values
 
         #middle
@@ -239,8 +241,8 @@ class scLTNN(object):
         #rev
         if rev==True:
             self.adata.uns['iroot'] = np.flatnonzero(self.adata.obs['leiden'].isin(self.leiden_end))[0]
-            sc.tl.diffmap(self.adata)
-            sc.tl.dpt(self.adata)
+            diffmap(self.adata)
+            dpt(self.adata)
             self.adata.obs['dpt_pseudotime_r']=np.max(self.adata.obs['dpt_pseudotime'].values)-self.adata.obs['dpt_pseudotime'].values
 
             self.adata.obs['dpt_pseudotime']=(self.adata.obs['dpt_pseudotime_p'].values+self.adata.obs['dpt_pseudotime_r'].values)/2
@@ -454,8 +456,9 @@ def find_related_gene(adata):
 
     """
     adata_copy=adata.copy()
-    sc.pp.filter_cells(adata_copy, min_genes=200)
-    sc.pp.filter_genes(adata_copy, min_cells=3)
+    from ..pp import filter_cells, filter_genes
+    filter_cells(adata_copy, min_genes=200)
+    filter_genes(adata_copy, min_cells=3)
     t1=np.array(adata_copy.obs['n_genes'].values)
     if len(adata_copy.var)%5000==0:
         len1=(len(adata_copy.var)//5000)
@@ -593,8 +596,9 @@ def find_related_gene(adata):
 
     """
     adata_copy=adata.copy()
-    sc.pp.filter_cells(adata_copy, min_genes=200)
-    sc.pp.filter_genes(adata_copy, min_cells=3)
+    from ..pp import filter_cells, filter_genes
+    filter_cells(adata_copy, min_genes=200)
+    filter_genes(adata_copy, min_cells=3)
     t1=np.array(adata_copy.obs['n_genes'].values)
     if len(adata_copy.var)%5000==0:
         len1=(len(adata_copy.var)//5000)
@@ -654,7 +658,8 @@ def plot_origin_tesmination(adata,basis,origin,tesmination,figsize=(4,4),**kwarg
     adata.uns['mao_name_colors'] = nw.map(mao_color)
     #return adata
     fig,ax=plt.subplots(figsize=figsize)
-    sc.pl.embedding(adata,basis=basis,show=False,ax=ax,color=['mao_name'],**kwargs)
+    from ..pl import embedding
+    embedding(adata,basis=basis,show=False,ax=ax,color=['mao_name'],**kwargs)
     #t.plot([0,10],[0,10])
 
     circle1_loc=adata[adata.obs['mao']=='-1'].obsm[basis].mean(axis=0)
@@ -807,8 +812,9 @@ def find_related_gene(adata):
 
     """
     adata_copy=adata.copy()
-    sc.pp.filter_cells(adata_copy, min_genes=200)
-    sc.pp.filter_genes(adata_copy, min_cells=3)
+    from ..pp import filter_cells, filter_genes
+    filter_cells(adata_copy, min_genes=200)
+    filter_genes(adata_copy, min_cells=3)
     t1=np.array(adata_copy.obs['n_genes'].values)
     if len(adata_copy.var)%5000==0:
         len1=(len(adata_copy.var)//5000)

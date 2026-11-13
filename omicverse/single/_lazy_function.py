@@ -1,4 +1,6 @@
 from ..pp import (
+    leiden,
+    louvain,
     qc,
     preprocess,
     scale,
@@ -8,7 +10,6 @@ from ..pp import (
     umap,
     tsne,
 )
-import scanpy as sc
 import numpy as np
 
 from .._settings import add_reference, settings
@@ -183,56 +184,26 @@ def lazy(
         or ("pca" in reforce_steps)
     ):
         print("❌ PCA step didn't start, we will start it now")
-        if sc.__version__ >= "1.11.0":
-            if pca_kwargs is None:
-                pca_kwargs = {
-                    "layer": "scaled",
-                    "n_pcs": 50,
-                    "use_highly_variable": True,
-                }
-            if ("highly_variable" not in adata.var.columns) and (
-                "highly_variable_features" in adata.var.columns
-            ):
-                adata.var["highly_variable"] = adata.var[
-                    "highly_variable_features"
-                ].tolist()
-            print(
-                f"🔧 The argument of PCA we set\n"
-                f"   layer: {pca_kwargs['layer']}\n"
-                f"   n_pcs: {pca_kwargs['n_pcs']}\n"
-                f"   use_highly_variable: {pca_kwargs['use_highly_variable']}\n"
-            )
-            pca(adata, **pca_kwargs)
-            adata.obsm["X_pca"] = adata.obsm["scaled|original|X_pca"]
-        else:
-            print(
-                "❌ The version of scanpy is lower than 1.11.0, we will use the old version of PCA function (sc.pp.pca)"
-            )
-            if pca_kwargs is None:
-                pca_kwargs = {
-                    "layer": "scaled",
-                    "n_comps": 50,
-                    "use_highly_variable": True,
-                }
-            if ("highly_variable" not in adata.var.columns) and (
-                "highly_variable_features" in adata.var.columns
-            ):
-                adata.var["highly_variable"] = adata.var[
-                    "highly_variable_features"
-                ].tolist()
-            print(
-                f"🔧 The argument of PCA we set\n"
-                f"   layer: {pca_kwargs['layer']}\n"
-                f"   n_comps: {pca_kwargs['n_comps']}\n"
-                f"   use_highly_variable: {pca_kwargs['use_highly_variable']}\n"
-            )
-            sc.pp.pca(adata, **pca_kwargs)
-            print(
-                "❌ The version of scanpy is lower than 1.11.0, GPU mode will not work, we will use CPU mode"
-            )
-            print(
-                "    If you want to use GPU mode, please update scanpy to 1.11.0 or higher"
-            )
+        if pca_kwargs is None:
+            pca_kwargs = {
+                "layer": "scaled",
+                "n_pcs": 50,
+                "use_highly_variable": True,
+            }
+        if ("highly_variable" not in adata.var.columns) and (
+            "highly_variable_features" in adata.var.columns
+        ):
+            adata.var["highly_variable"] = adata.var[
+                "highly_variable_features"
+            ].tolist()
+        print(
+            f"🔧 The argument of PCA we set\n"
+            f"   layer: {pca_kwargs['layer']}\n"
+            f"   n_pcs: {pca_kwargs['n_pcs']}\n"
+            f"   use_highly_variable: {pca_kwargs['use_highly_variable']}\n"
+        )
+        pca(adata, **pca_kwargs)
+        adata.obsm["X_pca"] = adata.obsm["scaled|original|X_pca"]
     else:
         print("✅ PCA step already finished, skipping it")
 
@@ -360,7 +331,7 @@ def lazy(
         umap(adata)
         # 预聚类
         print(f"Automatic clustering using leiden for preprocessed")
-        sc.tl.leiden(adata, resolution=1.5, key_added="leiden_r1.5")
+        leiden(adata, resolution=1.5, key_added="leiden_r1.5", random_state=0, backend='python')
         # self.adata.obs['L1_Round0'] = self.adata.obs['leiden_r1.5']
         adata.obs["L1_result_smooth"] = adata.obs["leiden_r1.5"]
         # 自动聚类
@@ -389,10 +360,10 @@ def lazy(
 
         # 获取最佳聚类
         adata.obs["best_clusters"] = adata.obs["L1_result_smooth"].copy()
-        sc.tl.leiden(adata, resolution=1, key_added="leiden_clusters_L1")
-        sc.tl.louvain(adata, resolution=1, key_added="louvain_clusters_L1")
-        sc.tl.leiden(adata, resolution=0.5, key_added="leiden_clusters_L2")
-        sc.tl.louvain(adata, resolution=0.5, key_added="louvain_clusters_L2")
+        leiden(adata, resolution=1, key_added="leiden_clusters_L1", random_state=0, backend='python')
+        louvain(adata, resolution=1, key_added="louvain_clusters_L1")
+        leiden(adata, resolution=0.5, key_added="leiden_clusters_L2", random_state=0, backend='python')
+        louvain(adata, resolution=0.5, key_added="louvain_clusters_L2")
     else:
         print("✅ Best Clusters step already finished, skipping it")
 

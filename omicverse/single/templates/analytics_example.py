@@ -5,7 +5,6 @@ OmicVerse 统计功能使用示例
 这个示例展示了如何在生成报告时启用或禁用统计功能。
 """
 
-import scanpy as sc
 import omicverse as ov
 import os
 
@@ -14,7 +13,7 @@ def example_with_analytics():
     print("📊 示例1：启用统计功能")
     
     # 假设我们有一个示例数据集
-    # adata = sc.datasets.pbmc68k_reduced()
+    # adata = ov.datasets.pbmc3k()
     
     # 生成报告时启用统计（默认行为）
     # ov.generate_scRNA_report(

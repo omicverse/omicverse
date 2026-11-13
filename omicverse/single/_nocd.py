@@ -1,7 +1,6 @@
 import matplotlib.pyplot as plt
 import numpy as np
 import pandas as pd
-import scanpy as sc
 import anndata
 import os
 import torch
@@ -60,7 +59,7 @@ class scnocd(object):
             self.adata.obsp['connectivities']
         except NameError:
             var_exists = False
-            print('......You need to calculate the neighbor by sc.pp.neighbors')
+            print('......You need to calculate the neighbor by ov.pp.neighbors')
             return None
         else:
             var_exists = True
@@ -69,7 +68,7 @@ class scnocd(object):
             self.adata.obs[clustertype]
         except NameError:
             var_exists = False
-            print('......You need to calculate the leiden by sc.tl.leiden or other clustertype')
+            print('......You need to calculate the leiden by ov.pp.leiden or other clustertype')
             return None
         else:
             var_exists = True
@@ -81,7 +80,8 @@ class scnocd(object):
             self.X=sp.csr_matrix(self.adata.raw.X)
         else:
             self.X=sp.csr_matrix(self.adata.obsm[self.use_rep])
-        sc.pp.neighbors(self.adata,use_rep=self.neighbor_rep)
+        from ..pp import neighbors, leiden
+        neighbors(self.adata,use_rep=self.neighbor_rep)
 
         self.A=self.adata.obsp['connectivities']
         self.clustertype=clustertype
@@ -93,7 +93,7 @@ class scnocd(object):
             self.K = self.Z_gt.shape[1]
         else:
             self.ground_truth=False
-            sc.tl.leiden(self.adata,key_added='tmp_leiden')
+            leiden(self.adata,key_added='tmp_leiden',random_state=0,backend='python')
             self.K = self.adata.obs['tmp_leiden'].nunique()
 
 
