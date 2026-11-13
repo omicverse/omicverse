@@ -107,6 +107,8 @@ dependencies = [
     # ov.read(path, storage='disk'): AnnDataOOM in the CPU modes, Dask row
     # blocks in GPU mode.
     'anndataoom>=0.1.9,<1.0',
+    # natural sort order for cluster labels (Louvain / DPT ports)
+    'natsort',
     'dask[array]',
 ]
 
