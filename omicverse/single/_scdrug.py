@@ -10,7 +10,6 @@ import time
 
 import numpy as np
 import pandas as pd
-import scanpy as sc
 import warnings
 from .._registry import register_function
 warnings.filterwarnings('ignore')
@@ -50,10 +49,11 @@ def autoResolution(adata,cpus=4):
         Updated AnnData, selected resolution, and silhouette-score table.
     """
     print("Automatically determine clustering resolution...")
+    from ..pp import louvain
     start = time.time()
     def subsample_clustering(adata, sample_n, subsample_n, resolution, subsample):
         subadata = adata[subsample]
-        sc.tl.louvain(subadata, resolution=resolution)
+        louvain(subadata, resolution=resolution)
         cluster = subadata.obs['louvain'].tolist()
         
         subsampling_n = np.zeros((sample_n, sample_n), dtype=bool)
@@ -94,7 +94,7 @@ def autoResolution(adata,cpus=4):
         distance = 1.0 - coclustering_n / subsampling_n
         np.fill_diagonal(distance, 0.0)
         
-        sc.tl.louvain(adata, resolution=r, key_added = 'louvain_r' + str(r))
+        louvain(adata, resolution=r, key_added = 'louvain_r' + str(r))
         silhouette_avg[str(r)] = silhouette_score(distance, adata.obs['louvain_r' + str(r)], metric="precomputed")
         if silhouette_avg[str(r)] > highest_sil:
             highest_sil = silhouette_avg[str(r)]
@@ -133,7 +133,8 @@ def writeGEP(adata_GEP,path):
 
     """
     print('Exporting GEP...')
-    sc.pp.normalize_total(adata_GEP, target_sum=1e6)
+    from ..pp import normalize_total
+    normalize_total(adata_GEP, target_sum=1e6)
     mat = adata_GEP.X.transpose()
     if type(mat) is not np.ndarray:
         mat = mat.toarray()

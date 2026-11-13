@@ -5,7 +5,6 @@ import warnings
 from typing import Any, Callable, Dict, Optional, Tuple
 
 from ..pp import scale,pca
-import scanpy as sc
 import numpy as np
 import anndata
 from .._settings import add_reference,settings
@@ -309,7 +308,8 @@ def batch_correction(adata:anndata.AnnData,batch_key:str,
         
     elif methods=='combat':
         adata2=adata.copy()
-        sc.pp.combat(adata2, key=batch_key,**kwargs)
+        from ._combat import combat
+        combat(adata2, key=batch_key,**kwargs)
         scale(adata2)
         pca(adata2,layer='scaled',n_pcs=n_pcs)
         adata2.obsm['X_combat']=adata2.obsm[use_rep].copy()

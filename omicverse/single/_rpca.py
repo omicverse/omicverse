@@ -645,7 +645,7 @@ def _select_integration_features(adata, batch_key, n_features=2000, layer=None):
     then ordered by how often they are variable across batches, breaking ties by
     summed rank — matching Seurat's selection semantics.
     """
-    import scanpy as sc
+    from ..pp import highly_variable_genes
     from collections import defaultdict
 
     batches = adata.obs[batch_key].astype(str).to_numpy()
@@ -657,11 +657,11 @@ def _select_integration_features(adata, batch_key, n_features=2000, layer=None):
         if layer is not None:
             sub.X = sub.layers[layer]
         try:
-            hvg = sc.pp.highly_variable_genes(
+            hvg = highly_variable_genes(
                 sub, n_top_genes=min(n_features, sub.n_vars),
                 flavor="seurat", inplace=False)
         except Exception:
-            hvg = sc.pp.highly_variable_genes(
+            hvg = highly_variable_genes(
                 sub, n_top_genes=min(n_features, sub.n_vars), inplace=False)
         sel = np.where(hvg["highly_variable"].to_numpy())[0]
         # rank by dispersion (higher = better = lower rank number)

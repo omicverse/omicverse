@@ -15,7 +15,7 @@ from itertools import permutations, product
 from typing import Optional
 import requests
 import os
-import scanpy as sc
+import anndata
 import zipfile
 from .._registry import register_function
 
@@ -67,7 +67,10 @@ def mouse_hsc_nestorowa16(fpath: Optional[str] = './data_cache/mouse_hsc_nestoro
         print('Load mouse_hsc_nestorowa16_v1.h5ad')
     else:
         print('Wrong data!')
-    adata = sc.read(fpath, backup_url=url, sparse=True, cache=True)
+    if not os.path.exists(fpath):
+        os.makedirs(os.path.dirname(fpath), exist_ok=True)
+        _download_from_url(url, Path(fpath))
+    adata = anndata.read_h5ad(fpath)
     adata.var_names_make_unique()
     return adata
 
@@ -423,7 +426,7 @@ class pyCEFCON(object):
         """
         Parameters
         ----------
-            input_expData (str or sc.AnnData or pd.DataFrame): input gene expression data. It can be the path to a csv file, an AnnData object, or a pandas dataframe. If the input is an AnnData object, the lineage name must be contained in AnnData.uns['lineages'], and the lineage information (can be the pseudotime, where non-NA data denotes cells in the lineage) must be contained in AnnData.obs. If no lineage information is detected, all cell expressions will be regarded as one lineage, which will be named 'all' by default.
+            input_expData (str or anndata.AnnData or pd.DataFrame): input gene expression data. It can be the path to a csv file, an AnnData object, or a pandas dataframe. If the input is an AnnData object, the lineage name must be contained in AnnData.uns['lineages'], and the lineage information (can be the pseudotime, where non-NA data denotes cells in the lineage) must be contained in AnnData.obs. If no lineage information is detected, all cell expressions will be regarded as one lineage, which will be named 'all' by default.
             input_priorNet (str or pd.DataFrame): input prior gene interaction network. It can be the path to a csv file or a pandas dataframe
             input_genesDE (str or pd.DataFrame): input gene differential expression score. It can be the path to a csv file or a pandas dataframe
             additional_edges_pct (float, optional): proportion of high co-expression interactions to be added (default: 0.01)
