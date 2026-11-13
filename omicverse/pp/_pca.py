@@ -670,6 +670,7 @@ def pca(  # noqa: PLR0912, PLR0913, PLR0915
     key_added: str | None = None,
     copy: bool = False,
     use_gpu: bool = False,
+    backend: str | None = None,
 ) -> AnnData | np.ndarray | CSBase | None:
     r"""Principal component analysis with GPU acceleration support.
 
@@ -840,7 +841,8 @@ def pca(  # noqa: PLR0912, PLR0913, PLR0915
         # back to the densifying legacy chunked Halko. anndataoom reads
         # `adata.var['highly_variable_features']` and column-subsets
         # internally when `use_highly_variable=True`.
-        from anndataoom import chunked_pca as _chunked_pca
+        from .._backend import oom_ops
+        _chunked_pca = oom_ops(backend).chunked_pca
         _layer = layer or "scaled"
         if _layer not in adata.layers:
             raise ValueError(
@@ -1288,12 +1290,20 @@ def pca(  # noqa: PLR0912, PLR0913, PLR0915
                     svd_solver = _handle_sklearn_args(
                         svd_solver, PCA, sparse=isinstance(X, CSBase)
                     )
-                    pca_ = PCA(
-                        n_components=n_comps,
-                        svd_solver=svd_solver,
-                        random_state=random_state,
-                    )
-                    X_pca = pca_.fit_transform(X)
+                    from .._backend import resolve_backend
+                    if (resolve_backend(backend) == "cpp" and svd_solver == "covariance_eigh"
+                            and not isinstance(X, CSBase)):
+                        # Same covariance_eigh steps; the eigendecomposition on
+                        # single-threaded LAPACK (fast and thread-count independent).
+                        from .._backend import cpp_memory
+                        X_pca, pca_ = cpp_memory().pca_covariance_eigh(X, n_comps)
+                    else:
+                        pca_ = PCA(
+                            n_components=n_comps,
+                            svd_solver=svd_solver,
+                            random_state=random_state,
+                        )
+                        X_pca = pca_.fit_transform(X)
             elif isinstance(X._meta, CSBase) or svd_solver == "covariance_eigh":
                 from ._dask import PCAEighDask
 
@@ -1313,7 +1323,8 @@ def pca(  # noqa: PLR0912, PLR0913, PLR0915
                     svd_solver=svd_solver,
                     random_state=random_state,
                 )
-            X_pca = pca_.fit_transform(X)
+            if isinstance(X, DaskArray):  # in-memory arrays were fitted above
+                X_pca = pca_.fit_transform(X)
     else:
         if isinstance(X, DaskArray):
             if isinstance(X._meta, CSBase):

@@ -132,54 +132,63 @@ def pseudobulk(
     n_cells, n_genes = X.shape
 
     # ---- profile key: (sample) or (sample, group) ---------------------------
-    sample = adata.obs[sample_col].astype(str).to_numpy()
-    if groups_col is None:
-        keys = pd.Index(sample)
-        key_frame = pd.DataFrame({sample_col: sample})
-    else:
-        group = adata.obs[groups_col].astype(str).to_numpy()
-        keys = pd.Index([f"{s}{chr(0)}{g}" for s, g in zip(sample, group)])
-        key_frame = pd.DataFrame({sample_col: sample, groups_col: group})
-
-    uniq, inv = np.unique(keys.to_numpy(), return_inverse=True)
+    # Profiles are the sorted unique (sample[, group]) tuples, encoded as ints.
+    key_cols = [sample_col] if groups_col is None else [sample_col, groups_col]
+    key_frame = pd.DataFrame({c: adata.obs[c].astype(str).to_numpy() for c in key_cols})
+    codes, levels = zip(*(pd.factorize(key_frame[c].to_numpy(), sort=True) for c in key_cols))
+    shape = [len(lev) for lev in levels]
+    uniq, inv = np.unique(np.ravel_multi_index(codes, shape), return_inverse=True)
     n_profiles = len(uniq)
+
+    profile_codes = np.unravel_index(uniq, shape)
+    labels = levels[0][profile_codes[0]]
+    for lev, code in zip(levels[1:], profile_codes[1:]):
+        labels = labels + " | " + lev[code]
+
+    # Cells grouped by profile (ascending cell index within each profile).
+    cell_order = np.argsort(inv, kind="stable")
+    counts = np.bincount(inv, minlength=n_profiles)
+    indptr = np.concatenate(([0], np.cumsum(counts)))
+    first_idx = cell_order[indptr[:-1]]
+    counts_per_profile = counts.astype(float)
 
     # ---- aggregate cell × gene → profile × gene -----------------------------
     # Sparse (n_profiles × n_cells) indicator P; P @ X aggregates.
-    cells = np.arange(n_cells)
-    counts_per_profile = np.bincount(inv, minlength=n_profiles).astype(float)
+    Pcount = sp.csr_matrix(
+        (np.ones(n_cells), cell_order, indptr), shape=(n_profiles, n_cells)
+    )
 
     if mode == "median":
         # Median needs a per-profile pass (no linear-algebra shortcut).
         Xd = X.toarray() if sp.issparse(X) else np.asarray(X)
+        Xd = Xd[cell_order]
         agg = np.vstack([
-            np.median(Xd[inv == p], axis=0) for p in range(n_profiles)
+            np.median(Xd[indptr[p]:indptr[p + 1]], axis=0) for p in range(n_profiles)
         ]).astype(dtype)
     else:
-        weight = np.ones(n_cells) if mode == "sum" else 1.0 / counts_per_profile[inv]
-        P = sp.csr_matrix((weight, (inv, cells)), shape=(n_profiles, n_cells))
+        if mode == "sum":
+            P = Pcount
+        else:
+            weight = 1.0 / counts_per_profile[inv[cell_order]]
+            P = sp.csr_matrix((weight, cell_order, indptr), shape=(n_profiles, n_cells))
         agg = P @ X
         agg = np.asarray(agg.todense() if sp.issparse(agg) else agg, dtype=dtype)
 
     # ---- QC: expressed-gene proportion per profile --------------------------
+    # Counts are integers, so float32 sums stay exact and halve the memory traffic.
     nz = (X != 0)
     if sp.issparse(nz):
-        nz = nz.astype(float)
+        nz = nz.astype(np.float32)
     else:
-        nz = np.asarray(nz, dtype=float)
-    Pcount = sp.csr_matrix((np.ones(n_cells), (inv, cells)), shape=(n_profiles, n_cells))
-    props = Pcount @ nz
+        nz = np.asarray(nz, dtype=np.float32)
+    props = Pcount.astype(np.float32) @ nz
     props = np.asarray(props.todense() if sp.issparse(props) else props, dtype=dtype)
     props /= counts_per_profile[:, None]          # → fraction of cells expressing
 
     psbulk_counts = np.asarray(agg.sum(axis=1)).ravel()
 
     # ---- assemble output AnnData --------------------------------------------
-    obs = pd.DataFrame(index=pd.Index(
-        [u.replace(chr(0), " | ") for u in uniq], name="pseudobulk"
-    ))
-    # First cell index of each profile — used to read constant obs columns.
-    first_idx = np.array([np.where(inv == p)[0][0] for p in range(n_profiles)])
+    obs = pd.DataFrame(index=pd.Index(labels, name="pseudobulk"))
     obs[sample_col] = key_frame[sample_col].to_numpy()[first_idx]
     if groups_col is not None:
         obs[groups_col] = key_frame[groups_col].to_numpy()[first_idx]
@@ -191,12 +200,8 @@ def pseudobulk(
         if col in (sample_col, groups_col):
             continue
         vals = adata.obs[col].astype(str).to_numpy()
-        constant = np.ones(n_profiles, dtype=bool)
         rep = vals[first_idx]
-        for p in range(n_profiles):
-            if not (vals[inv == p] == rep[p]).all():
-                constant[p] = False
-        if constant.all():
+        if (vals == rep[inv]).all():
             obs[col] = rep
 
     out = ad.AnnData(X=agg, obs=obs, var=adata.var.copy())

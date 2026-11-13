@@ -9,7 +9,6 @@ import anndata
 from tqdm import tqdm,trange
 import matplotlib.pyplot as plt
 import seaborn as sns
-import scanpy as sc
 from typing import Union,Tuple,Optional
 import matplotlib
 from .._settings import add_reference
@@ -843,7 +842,8 @@ class pyMOFAART(object):
             palette=pyomic_palette()
         fig, ax = plt.subplots(figsize=figsize)
         #factor1,factor2=4,6
-        sc.pl.embedding(
+        from ..pl import embedding
+        embedding(
             adata=adata,
             basis='X_mofa',
             color=cluster,
@@ -1176,23 +1176,24 @@ class pyMOFAART(object):
 
     def plot_top_feature_dotplot(self,view:str,cmap:str='bwr',n_genes:int=3,n_pcs:int=50)->list:
         """
-        Plot top marker features per factor as a Scanpy dotplot.
+        Plot top marker features per factor as a dotplot.
         
         Parameters
         ----------
         view : str
             View/modality name in the MOFA model.
         cmap : str
-            Colormap passed to Scanpy dotplot.
+            Colormap passed to :func:`omicverse.pl.rank_genes_groups_dotplot`.
         n_genes : int
             Number of top-ranked features per factor.
         n_pcs : int
-            Number of principal components used for factor dendrogram ordering.
+            Kept for backward compatibility; the dotplot computes its own
+            group dendrogram.
 
         Returns
         -------
         list
-            Plot handles returned by ``scanpy.pl.rank_genes_groups_dotplot``.
+            Plot handles returned by :func:`omicverse.pl.rank_genes_groups_dotplot`.
         """
 
         factor_w=pd.DataFrame()
@@ -1205,31 +1206,32 @@ class pyMOFAART(object):
         adata1=anndata.AnnData(pd.concat([factor_w,factor_w],axis=1).T)
         adata1.obs['Factor']=adata1.obs.index
         adata1.obs['Factor']=adata1.obs['Factor'].astype('category')
-        sc.tl.dendrogram(adata1, groupby='Factor', n_pcs=n_pcs)
-        sc.tl.rank_genes_groups(adata1, groupby='Factor', method='wilcoxon')
-        ax=sc.pl.rank_genes_groups_dotplot(adata1, n_genes=n_genes, 
+        from ._sc_compat import rank_genes_groups
+        from ..pl import rank_genes_groups_dotplot
+        rank_genes_groups(adata1, groupby='Factor', method='wilcoxon')
+        ax=rank_genes_groups_dotplot(adata1, groupby='Factor', n_genes=n_genes,
                                         cmap=cmap,show=False)
         return ax
     
     def plot_top_feature_heatmap(self,view:str,cmap:str='bwr',n_genes:int=3,n_pcs:int=50)->list:
         """
-        Plot top marker features per factor as a Scanpy matrix heatmap.
+        Plot top marker features per factor as a grouped mean-expression heatmap.
         
         Parameters
         ----------
         view : str
             View/modality name in the MOFA model.
         cmap : str
-            Colormap passed to Scanpy matrixplot.
+            Colormap passed to :func:`omicverse.pl.group_heatmap`.
         n_genes : int
             Number of top-ranked features per factor.
         n_pcs : int
-            Number of principal components used for factor dendrogram ordering.
+            Kept for backward compatibility (unused).
 
         Returns
         -------
         list
-            Plot handles returned by ``scanpy.pl.rank_genes_groups_matrixplot``.
+            Plot handles returned by :func:`omicverse.pl.group_heatmap`.
         """
 
         factor_w=pd.DataFrame()
@@ -1242,10 +1244,13 @@ class pyMOFAART(object):
         adata1=anndata.AnnData(pd.concat([factor_w,factor_w],axis=1).T)
         adata1.obs['Factor']=adata1.obs.index
         adata1.obs['Factor']=adata1.obs['Factor'].astype('category')
-        sc.tl.dendrogram(adata1, groupby='Factor', n_pcs=n_pcs)
-        sc.tl.rank_genes_groups(adata1, groupby='Factor', method='wilcoxon')
-        ax=sc.pl.rank_genes_groups_matrixplot(adata1, n_genes=n_genes, 
-                                        cmap=cmap,show=False)
+        from ._sc_compat import rank_genes_groups
+        from ._markers import get_markers
+        from ..pl import group_heatmap
+        rank_genes_groups(adata1, groupby='Factor', method='wilcoxon')
+        top = get_markers(adata1, n_genes=n_genes, return_type='dict')
+        ax=group_heatmap(adata1, var_names=top, groupby='Factor',
+                         cmap=cmap, show=False)
         return ax
     
     def get_top_feature(self,view:str,log2fc_min:int=3,pval_cutoff:float=0.1)->dict:

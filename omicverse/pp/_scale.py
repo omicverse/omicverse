@@ -229,6 +229,29 @@ def _axis_mul_or_truediv_sparse(
     if x.format == "csr":
         indices = x.indices
         indptr = x.indptr
+        if out is not None and row_scale and x.data.size >= 1 << 24:
+            # large CSR, per-row factor: fill the result row block by row block
+            # on all threads (same values and dtype as new_data_op)
+            d, ip, f = x.data, indptr, np.asarray(scaling_array)
+            try:  # one threaded C++ pass (anndataoom-fast), bit-identical
+                from anndataoom_fast.memory import scale_rows as _scale_rows
+            except ImportError:
+                _scale_rows = None
+            if _scale_rows is not None and d.dtype in (np.float32, np.float64) \
+                    and f.dtype in (np.float32, np.float64):
+                x.data = _scale_rows(x, f, divide=op is truediv)
+                return x
+            from ._qc import threaded_chunks
+            res = np.empty(d.size, dtype=np.result_type(d.dtype, f.dtype))
+            ufunc = np.true_divide if op is truediv else np.multiply
+
+            def _rows(r0, r1):
+                a, b = int(ip[r0]), int(ip[r1])
+                ufunc(d[a:b], np.repeat(f[r0:r1], np.diff(ip[r0:r1 + 1])), out=res[a:b])
+
+            threaded_chunks(_rows, x.shape[0], min_chunk=1 << 12)
+            x.data = res
+            return x
         if out is not None:
             x.data = new_data_op(x)
             return x

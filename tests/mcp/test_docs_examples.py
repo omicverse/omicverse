@@ -20,9 +20,10 @@ class TestDocsConsistency:
         for name in ("ov.list_tools", "ov.describe_tool", "ov.get_session", "ov.get_health"):
             assert name in quickstart
 
-    def test_cli_command_in_readme(self):
+    def test_readme_points_to_agent_docs(self):
+        """The README links to OmicClaw, which documents the MCP server and agents."""
         readme = (_PROJECT_ROOT / "README.md").read_text()
-        assert "python -m omicverse.mcp" in readme
+        assert "github.com/omicverse/omicclaw" in readme
 
     def test_cli_command_in_quickstart(self):
         quickstart = (_PROJECT_ROOT / "docs" / "mcp_quickstart.md").read_text()

@@ -311,18 +311,19 @@ class BulkTrajBlend(object):
         anndata.AnnData
             Generated AnnData after filtering noisy clusters.
         """
-        import scanpy as sc
+        from ..pp import highly_variable_genes as hvg
+        from .._sc_compat import scale_X, pca_X, neighbors, leiden
 
         generate_adata=self.vae_model.generate()
         self.generate_adata_raw=generate_adata.copy()
         generate_adata.raw = generate_adata
         if highly_variable_genes:
-            sc.pp.highly_variable_genes(generate_adata, min_mean=0.0125, max_mean=3, min_disp=0.5)
+            hvg(generate_adata, min_mean=0.0125, max_mean=3, min_disp=0.5)
             generate_adata = generate_adata[:, generate_adata.var.highly_variable]
-        sc.pp.scale(generate_adata, max_value=max_value)
-        sc.tl.pca(generate_adata, n_comps=n_comps, svd_solver=svd_solver)
-        sc.pp.neighbors(generate_adata, use_rep="X_pca")
-        sc.tl.leiden(generate_adata)
+        scale_X(generate_adata, max_value=max_value)
+        pca_X(generate_adata, n_comps=n_comps, svd_solver=svd_solver)
+        neighbors(generate_adata, use_rep="X_pca")
+        leiden(generate_adata)
         filter_leiden=list(generate_adata.obs['leiden'].value_counts()[generate_adata.obs['leiden'].value_counts()<leiden_size].index)
         generate_adata.uns['noisy_leiden']=filter_leiden
         print("The filter leiden is ",filter_leiden)

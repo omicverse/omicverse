@@ -170,7 +170,7 @@ SCHEMA_OVERRIDES: Dict[str, dict] = {
         "required": ["adata_id"],
         "additionalProperties": True,
     },
-    # read() — path is required, backend optional
+    # read() — path is required, storage optional
     "omicverse.utils._data.read": {
         "properties": {
             "path": {"type": "string", "description": "File path to read (h5ad, csv, tsv, txt)"},
@@ -186,10 +186,17 @@ SCHEMA_OVERRIDES: Dict[str, dict] = {
     "omicverse.io.single._read.read": {
         "properties": {
             "path": {"type": "string", "description": "File path to read (h5ad, csv, tsv, txt)"},
+            "storage": {
+                "type": "string",
+                "enum": ["memory", "disk"],
+                "default": "memory",
+                "description": "h5ad only: 'memory' loads X into RAM; 'disk' keeps it on "
+                               "disk (out-of-core on CPU, streamed blocks in GPU mode)",
+            },
             "backend": {
                 "type": "string",
                 "enum": ["python", "rust"],
-                "default": "python",
+                "description": "Deprecated alias: 'python' = storage='memory', 'rust' = 'disk'",
             },
         },
         "required": ["path"],

@@ -10,8 +10,6 @@ import numpy as np
 import pandas as pd
 import scipy
 from anndata import AnnData
-#from scanpy import read
-import scanpy as sc
 from .._anndata_compat import as_dtype as _as_dtype
 
 
@@ -131,6 +129,11 @@ def pancreas(file_path= "data/Pancreas/endocrinogenesis_day15.h5ad"):
     Returns `adata` object
     """
     url = f"{url_datadir}data/Pancreas/endocrinogenesis_day15.h5ad"
-    adata = sc.read(file_path, backup_url=url, sparse=True, cache=True)
+    import os
+    import anndata
+    if not os.path.exists(file_path):
+        from ..datasets._datasets import download_data
+        download_data(url, file_path=file_path, dir="")
+    adata = anndata.read_h5ad(file_path)
     adata.var_names_make_unique()
     return adata

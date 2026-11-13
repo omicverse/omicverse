@@ -1,5 +1,4 @@
 # Differential celltype abundance analysis using pertpy
-import scanpy as sc
 from anndata import AnnData
 import numpy as np
 from scipy.sparse import issparse
@@ -143,7 +142,8 @@ class DCT:
             from ._milo_dev import Milo
             self.model = Milo()
             self.mdata = self.model.load(adata)
-            sc.pp.neighbors(self.mdata["rna"], use_rep=use_rep, n_neighbors=150)
+            from ..pp import neighbors
+            neighbors(self.mdata["rna"], use_rep=use_rep, n_neighbors=150)
             self.model.make_nhoods(self.mdata["rna"], prop=0.1)
             self.mdata = self.model.count_nhoods(self.mdata, sample_col=sample_key)
         elif method == 'milo':
@@ -151,7 +151,8 @@ class DCT:
             import pertpy as pt
             self.model = pt.tl.Milo()
             self.mdata = self.model.load(adata)
-            sc.pp.neighbors(self.mdata["rna"], use_rep=use_rep, n_neighbors=150)
+            from ..pp import neighbors
+            neighbors(self.mdata["rna"], use_rep=use_rep, n_neighbors=150)
             self.model.make_nhoods(self.mdata["rna"], prop=0.1)
             self.mdata = self.model.count_nhoods(self.mdata, sample_col=sample_key)
         else:
@@ -396,13 +397,11 @@ class DEG:
         elif self.adata_test.shape[0] > max_cells:
             print(f"{EMOJI['warning']} Total cells: {self.adata_test.shape[0]} is too large, will be downsampled to {max_cells}")
             print(f"If you want to keep all cells, please set max_cells to None")
+            from ..pp import subsample
             try:
-                sc.pp.subsample(self.adata_test, n_obs=max_cells)
-            except:
-                try:
-                    sc.pp.sample(self.adata_test, n_obs=max_cells)
-                except:
-                    raise ValueError(f"Failed to downsample the data, please check the data")
+                subsample(self.adata_test, n_obs=max_cells)
+            except Exception as e:
+                raise ValueError(f"Failed to downsample the data, please check the data") from e
                 
 
   
@@ -411,10 +410,13 @@ class DEG:
             self.adata_test=self.adata_test[self.adata_test.obs[self.condition].isin([self.ctrl_group, self.test_group])]
 
             if is_all_integer(self.adata_test.X):
-                sc.pp.normalize_total(self.adata_test, inplace=True)
-                sc.pp.log1p(self.adata_test)
+                from ..pp import normalize_total, log1p
+                self.adata_test = self.adata_test.copy()
+                normalize_total(self.adata_test, inplace=True)
+                log1p(self.adata_test)
 
-            sc.tl.rank_genes_groups( 
+            from ._sc_compat import rank_genes_groups
+            rank_genes_groups(
                 self.adata_test,  
                 groupby=self.condition, 
                 groups=[self.test_group, self.ctrl_group], 
@@ -484,8 +486,9 @@ class DEG:
             Differential expression results in OmicVerse DEG format.
         """
         if self.method == 'wilcoxon' or self.method == 't-test':
+            from ._sc_compat import rank_genes_groups_df
             md_d = (
-                sc.get.rank_genes_groups_df(self.adata_test, group=self.test_group)
+                rank_genes_groups_df(self.adata_test, group=self.test_group)
                 .set_index("names", drop=False)
             )
             res=pd.DataFrame(index=md_d['names'].tolist())

@@ -24,6 +24,17 @@ from scipy import sparse
 def check_nonnegative_integers(X) -> bool:
     """Check if X contains only non-negative integers."""
     if sparse.issparse(X):
+        d = X.data
+        if d.size >= 1 << 24:
+            try:  # threaded C++ scan with early exit (anndataoom-fast)
+                from anndataoom_fast.memory import nonnegative_integers
+                return nonnegative_integers(d)
+            except ImportError:
+                pass
+            from ._qc import threaded_chunks
+            return all(threaded_chunks(
+                lambda a, b: bool(np.all(d[a:b] >= 0) and np.all(d[a:b] == np.floor(d[a:b]))),
+                d.size))
         return (
             np.all(X.data >= 0)
             and np.all(X.data == np.floor(X.data))

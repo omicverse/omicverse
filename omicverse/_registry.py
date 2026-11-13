@@ -1253,9 +1253,18 @@ def register_function(aliases: List[str],
             func._registry_info = registry_info
             return func
 
+        # AnnDataOOM guard: non-native functions receiving a disk-backed
+        # AnnDataOOM run on an in-memory copy and their results are copied
+        # back (see omicverse/_oom_guard.py; allow-list in _oom_native.py).
+        from ._oom_native import is_native as _oom_is_native
+
         @wraps(func)
         def wrapper(*args, **kwargs):
-            return func(*args, **kwargs)
+            first = kwargs['adata'] if 'adata' in kwargs else (args[0] if args else None)
+            if getattr(type(first), '_is_oom', False) is not True:
+                return func(*args, **kwargs)
+            from ._oom_guard import call as _oom_call
+            return _oom_call(func, args, kwargs, _oom_is_native(func))
 
         # Add registry info to function
         wrapper._registry_info = registry_info
