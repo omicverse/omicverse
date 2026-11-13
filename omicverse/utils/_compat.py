@@ -11,9 +11,51 @@ import numpy as np
 import scipy as sp
 from scipy.sparse.csgraph import minimum_spanning_tree
 
-__all__ = ["PAGA"]
+__all__ = ["PAGA", "leiden_like_scanpy", "umap_like_scanpy"]
 
 _AVAIL_MODELS = {"v1.0", "v1.2"}
+
+
+def leiden_like_scanpy(adata, resolution=1.0, *, random_state=0, **kwargs):
+    """Leiden clustering through ``ov.pp.leiden`` with scanpy's defaults.
+
+    Drop-in for ``scanpy.tl.leiden(adata, ...)``: in ``ov.settings.mode == 'cpu'``
+    the leidenalg objective with ``n_iterations=-1`` and ``random_state=0`` is
+    used (scanpy's defaults), so partitions match ``scanpy.tl.leiden``. In the GPU
+    modes ``ov.pp.leiden`` dispatches to its GPU backend as usual.
+    ``copy=True`` returns the clustered copy (``ov.pp.leiden`` itself always
+    works in place).
+    """
+    from .._settings import settings
+    from ..pp import leiden
+
+    copy = kwargs.pop("copy", False)
+    if copy:
+        adata = adata.copy()
+    if settings.mode == "cpu":
+        kwargs.setdefault("flavor", "leidenalg")
+        kwargs.setdefault("n_iterations", -1)
+    leiden(adata, resolution=resolution, random_state=random_state, **kwargs)
+    return adata if copy else None
+
+
+def umap_like_scanpy(adata, *, random_state=0, maxiter=None, **kwargs):
+    """UMAP through ``ov.pp.umap`` with scanpy's number of epochs.
+
+    Drop-in for ``scanpy.tl.umap(adata, ...)``. ``ov.pp.umap``'s CPU path
+    defaults to a short 10/20-epoch layout; scanpy optimises for 500 epochs
+    (<= 10,000 cells) or 200 epochs (larger data), so that is passed
+    explicitly unless ``maxiter`` is given. On the CPU the umap-learn layout
+    (``backend='python'``) is used, which reproduces scanpy's embedding
+    exactly; pass ``backend='cpp'`` for the faster multi-threaded layout.
+    """
+    from ..pp import umap
+
+    if maxiter is None:
+        n_obs = adata.n_obs
+        maxiter = 500 if n_obs <= 10000 else 200
+    kwargs.setdefault("backend", "python")
+    return umap(adata, random_state=random_state, maxiter=maxiter, **kwargs)
 
 
 def _get_igraph_from_adjacency(adjacency, *, directed: bool = False):

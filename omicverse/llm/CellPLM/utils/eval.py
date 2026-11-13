@@ -1,4 +1,3 @@
-import scanpy as sc
 import numpy as np
 import torch
 import torch.nn.functional as F
@@ -61,7 +60,7 @@ def clustering_eval(adata, cluster_key='leiden', label_key='cell_type'):
     from scib.metrics.ari import ari
     from scib.metrics.nmi import nmi
     print('Start building knn.')
-    sc.pp.neighbors(adata, use_rep='X_cellbert', method='rapids')
+    rsc.pp.neighbors(adata, use_rep='X_cellbert')
     best_ari = -1
     best_nmi = -1
     for res in range(1, 15, 1):
@@ -78,8 +77,9 @@ def clustering_eval(adata, cluster_key='leiden', label_key='cell_type'):
 def minimum_eval(adata):
     raise NotImplementedError("For simplicity, scib was removed from the dependency. Therefore currently the scib evaluation is not available.")
     import scib
+    import rapids_singlecell as rsc
     print('Start building knn.')
-    sc.pp.neighbors(adata, use_rep='X_cellbert', method='rapids')
+    rsc.pp.neighbors(adata, use_rep='X_cellbert')
     return scib.metrics.metrics(adata, adata, "batch", "cell_type", embed='X_cellbert', cluster_key="cluster",
                          #organism='human', ari_=True, nmi_=True, pcr_=True, graph_conn_=True)
     organism = 'human', graph_conn_ = True)

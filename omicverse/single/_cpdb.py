@@ -9,7 +9,6 @@ import pandas as pd
 import numpy as np
 import networkx as nx
 import matplotlib.patches as mpatches
-import scanpy as sc
 import matplotlib
 import anndata
 from .._registry import register_function
@@ -221,9 +220,11 @@ def cpdb_plot_network(adata:anndata.AnnData,interaction_edges:pd.DataFrame,
             type_color_all=dict(zip(adata.obs[celltype_key].cat.categories,adata.uns['{}_colors'.format(celltype_key)]))
         else:
             if len(adata.obs[celltype_key].cat.categories)>28:
-                type_color_all=dict(zip(adata.obs[celltype_key].cat.categories,sc.pl.palettes.default_102))
+                from ._sc_compat import palette_102
+                type_color_all=dict(zip(adata.obs[celltype_key].cat.categories,palette_102()))
             else:
-                type_color_all=dict(zip(adata.obs[celltype_key].cat.categories,sc.pl.palettes.zeileis_28))
+                from ._sc_compat import palette_28
+                type_color_all=dict(zip(adata.obs[celltype_key].cat.categories,palette_28()))
     
     #set G_nodes_dict
     nodes=[]
@@ -596,7 +597,8 @@ def cellphonedb_v5(adata,
     import shutil
     from pathlib import Path
     import pandas as pd
-    import scanpy as sc
+    from anndata import AnnData
+    from ..pp import filter_cells, filter_genes
 
     # Validate inputs
     if celltype_key not in adata.obs.columns:
@@ -629,8 +631,8 @@ def cellphonedb_v5(adata,
     print(f"   - After filtering: {adata_pp.shape[0]} cells, {adata_pp.shape[1]} genes")
     
     # Apply standard preprocessing
-    sc.pp.filter_cells(adata_pp, min_genes=min_genes)
-    sc.pp.filter_genes(adata_pp, min_cells=min_cells)
+    filter_cells(adata_pp, min_genes=min_genes)
+    filter_genes(adata_pp, min_cells=min_cells)
     
     print(f"   - After preprocessing: {adata_pp.shape[0]} cells, {adata_pp.shape[1]} genes")
     
@@ -656,7 +658,7 @@ def cellphonedb_v5(adata,
         # Step 4: Create temporary files for CellPhoneDB
         # Create counts file (AnnData format)
         counts_file = os.path.join(temp_dir, 'counts_matrix.h5ad')
-        adata_counts = sc.AnnData(
+        adata_counts = AnnData(
             X=adata_pp.X,
             obs=pd.DataFrame(index=adata_pp.obs.index),
             var=pd.DataFrame(index=adata_pp.var.index)
@@ -789,7 +791,7 @@ def format_cpdb_results(cpdb_results, separator='|'):
         AnnData formatted for CellChatViz-style plotting.
     """
     import pandas as pd
-    import scanpy as sc
+    from anndata import AnnData
     
     means_df = cpdb_results['means']
     
@@ -846,7 +848,7 @@ def format_cpdb_results(cpdb_results, separator='|'):
     # X matrix: cell pairs (obs) x L-R interactions (vars)
     X_data = means_df[pair_cols].T  # Transpose so pairs are observations
     
-    adata_cpdb = sc.AnnData(X=X_data)
+    adata_cpdb = AnnData(X=X_data)
     
     # Add layers
     adata_cpdb.layers['means'] = means_df[pair_cols].T
@@ -1175,7 +1177,8 @@ def run_cellphonedb_v5(adata,
     import tempfile
     import shutil
     import pandas as pd
-    import scanpy as sc
+    from anndata import AnnData
+    from ..pp import filter_cells, filter_genes
 
     method = _normalize_cpdb_method(method)
     degs_file_path = _validate_degs_file(method, degs_file_path)
@@ -1214,8 +1217,8 @@ def run_cellphonedb_v5(adata,
     print(f"   - After filtering: {adata_pp.shape[0]} cells, {adata_pp.shape[1]} genes")
     
     # Apply standard preprocessing
-    sc.pp.filter_cells(adata_pp, min_genes=min_genes)
-    sc.pp.filter_genes(adata_pp, min_cells=min_cells)
+    filter_cells(adata_pp, min_genes=min_genes)
+    filter_genes(adata_pp, min_cells=min_cells)
     
     print(f"   - After preprocessing: {adata_pp.shape[0]} cells, {adata_pp.shape[1]} genes")
     
@@ -1241,7 +1244,7 @@ def run_cellphonedb_v5(adata,
         # Step 5: Create temporary files for CellPhoneDB
         # Create counts file (AnnData format)
         counts_file = os.path.join(temp_dir, 'counts_matrix.h5ad')
-        adata_counts = sc.AnnData(
+        adata_counts = AnnData(
             X=adata_pp.X,
             obs=pd.DataFrame(index=adata_pp.obs.index),
             var=pd.DataFrame(index=adata_pp.var.index)

@@ -2,7 +2,6 @@ from .._settings import Colors
 import numpy as np
 import anndata as ad
 from anndata import AnnData
-import scanpy as sc
 from .._registry import register_function
 from ..report._provenance import tracked, note
 
@@ -84,7 +83,7 @@ class AnnotationRef(object):
             print(f"{Colors.WARNING}Please run `ov.pp.recover_counts` to recover the counts before concatenation{Colors.ENDC}")
         
         
-        self.adata_new=sc.concat(
+        self.adata_new=ad.concat(
             {'ref':self.adata_ref,
             'query':self.adata_query},
             label='integrate_batch'

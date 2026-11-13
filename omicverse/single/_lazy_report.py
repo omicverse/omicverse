@@ -3,7 +3,6 @@ import numpy as np
 from datetime import datetime
 import matplotlib.pyplot as plt
 import seaborn as sns
-import scanpy as sc
 import base64
 from io import BytesIO
 import warnings
@@ -232,7 +231,6 @@ def generate_scRNA_report(adata, output_path="scRNA_analysis_report.html",
     generator = HTMLReportGenerator(template_dir)
     
     # Set scanpy settings for clean plots
-    #sc.settings.set_figure_params(dpi=100, facecolor='white', figsize=(8, 6))
     plt.style.use('default')
 
     if sample_key is None:
@@ -283,10 +281,8 @@ def generate_scRNA_report(adata, output_path="scRNA_analysis_report.html",
     for mode in ["day", "night"]:
         # 设置绘图主题
         if mode == "night":
-            #sc.settings.set_figure_params(dpi=100)
             plt.style.use('dark_background')
         else:
-            #sc.settings.set_figure_params(dpi=100)
             plt.style.use('default')
         
         # 1. QC metrics violin plot
@@ -317,9 +313,9 @@ def generate_scRNA_report(adata, output_path="scRNA_analysis_report.html",
             # PCA scatter plot
             plt.subplot(1, 2, 2)
             if sample_key and sample_key in adata.obs:
-                sc.pl.pca(adata, color=sample_key, show=False, frameon=False)
+                embedding(adata, basis='X_pca', color=sample_key, ax=plt.gca(), show=False, frameon=False)
             else:
-                sc.pl.pca(adata, show=False, frameon=False)
+                embedding(adata, basis='X_pca', ax=plt.gca(), show=False, frameon=False)
             plt.title('PCA Visualization', fontsize=12)
             
             plt.tight_layout()
@@ -330,7 +326,7 @@ def generate_scRNA_report(adata, output_path="scRNA_analysis_report.html",
             fig, axes = plt.subplots(2, 3, figsize=(18, 12), facecolor=color_schemes[mode]["plot_bg"])
             
             # Original PCA
-            sc.pl.pca(adata, color=sample_key, ax=axes[0,0], show=False, frameon=False, title='Original PCA')
+            embedding(adata, basis='X_pca', color=sample_key, ax=axes[0,0], show=False, frameon=False, title='Original PCA')
             
             # Harmony UMAP
             embedding(adata, basis='X_umap_harmony', color=sample_key, ax=axes[0,1], 
@@ -342,7 +338,7 @@ def generate_scRNA_report(adata, output_path="scRNA_analysis_report.html",
             
             # Cell cycle visualization if available
             if 'phase' in adata.obs:
-                sc.pl.pca(adata, color='phase', ax=axes[1,0], show=False, frameon=False, title='Cell Cycle - PCA')
+                embedding(adata, basis='X_pca', color='phase', ax=axes[1,0], show=False, frameon=False, title='Cell Cycle - PCA')
                 embedding(adata, basis='X_umap_harmony', color='phase', ax=axes[1,1], 
                                show=False, frameon='small', title='Cell Cycle - Harmony UMAP')
                 embedding(adata, basis='X_umap_scVI', color='phase', ax=axes[1,2], 
@@ -356,7 +352,7 @@ def generate_scRNA_report(adata, output_path="scRNA_analysis_report.html",
             fig, axes = plt.subplots(2, 3, figsize=(18, 12), facecolor=color_schemes[mode]["plot_bg"])
             
             # Original PCA
-            sc.pl.pca(adata, color=sample_key, ax=axes[0,0], show=False, frameon=False, title='Original PCA')
+            embedding(adata, basis='X_pca', color=sample_key, ax=axes[0,0], show=False, frameon=False, title='Original PCA')
             
             # Harmony
             embedding(adata, basis='X_harmony', color=sample_key, ax=axes[0,1], 
@@ -368,7 +364,7 @@ def generate_scRNA_report(adata, output_path="scRNA_analysis_report.html",
             
             # Cell cycle visualization if available
             if 'phase' in adata.obs:
-                sc.pl.pca(adata, color='phase', ax=axes[1,0], show=False, frameon=False, title='Cell Cycle - PCA')
+                embedding(adata, basis='X_pca', color='phase', ax=axes[1,0], show=False, frameon=False, title='Cell Cycle - PCA')
                 embedding(adata, basis='X_harmony', color='phase', ax=axes[1,1], 
                                show=False, frameon='small', title='Cell Cycle - Harmony')
                 embedding(adata, basis='X_scVI', color='phase', ax=axes[1,2], 

@@ -10,7 +10,7 @@ from datetime import datetime
 import numpy as np
 from sklearn.utils import check_array, check_random_state
 
-from scanpy import settings
+from ._compat import sc_settings as settings
 from ._compat import old_positionals, get_init_pos_from_paga
 from ._neighbors import NeighborsView, _choose_representation
 from .._settings import EMOJI, Colors, settings as ov_settings
@@ -104,6 +104,7 @@ def umap(  # noqa: PLR0913, PLR0915
     key_added: str | None = None,
     neighbors_key: str = "neighbors",
     copy: bool = False,
+    backend: str | None = None,
 ) -> AnnData | None:
     r"""Embed the neighborhood graph using UMAP with multiple backend options.
 
@@ -116,7 +117,8 @@ def umap(  # noqa: PLR0913, PLR0915
         min_dist (float): Minimum distance between embedded points (default: 0.5)
         spread (float): Scale at which embedded points are spread out (default: 1.0)
         n_components (int): Number of dimensions for the embedding (default: 2)
-        maxiter (int): Number of optimization iterations (default: None)
+        maxiter (int): Number of optimization epochs (default: None = 500 up to
+            10,000 cells, 200 above, as umap-learn / scanpy)
         alpha (float): Initial learning rate for optimization (default: 1.0)
         gamma (float): Weighting for negative samples (default: 1.0)
         negative_sample_rate (int): Number of negative samples per positive sample (default: 5)
@@ -140,7 +142,7 @@ def umap(  # noqa: PLR0913, PLR0915
     if neighbors_key is None:  # backwards compat
         neighbors_key = "neighbors"
     if neighbors_key not in adata.uns:
-        msg = f"Did not find .uns[{neighbors_key!r}]. Run `sc.pp.neighbors` first."
+        msg = f"Did not find .uns[{neighbors_key!r}]. Run `ov.pp.neighbors` first."
         raise ValueError(msg)
 
     print(f"\n{Colors.HEADER}{Colors.BOLD}{EMOJI['start']} UMAP Dimensionality Reduction:{Colors.ENDC}")
@@ -174,7 +176,7 @@ def umap(  # noqa: PLR0913, PLR0915
         init_coords = adata.obsm[init_pos]
     elif isinstance(init_pos, str) and init_pos == "paga":
         init_coords = get_init_pos_from_paga(
-            adata, random_state=random_state_processed, neighbors_key=neighbors_key
+            adata, random_state=random_state, neighbors_key=neighbors_key
         )
     else:
         init_coords = init_pos  # Let umap handle it
@@ -194,28 +196,42 @@ def umap(  # noqa: PLR0913, PLR0915
         print(f"   {Colors.GREEN}{EMOJI['start']} Computing UMAP embedding (classic method)...{Colors.ENDC}")
         # the data matrix X is really only used for determining the number of connected components
         # for the init condition in the UMAP embedding
-        default_epochs = 10 if neighbors["connectivities"].shape[0] <= 10000 else 20
+        # umap-learn / scanpy defaults (500 epochs up to 10k cells, 200 above)
+        default_epochs = 500 if neighbors["connectivities"].shape[0] <= 10000 else 200
         n_epochs = default_epochs if maxiter is None else maxiter
-        with _lobpcg_for_large_spectral_init():
-            X_umap, _ = simplicial_set_embedding(
-                data=X,
-                graph=neighbors["connectivities"].tocoo(),
-                n_components=n_components,
-                initial_alpha=alpha,
-                a=a,
-                b=b,
-                gamma=gamma,
-                negative_sample_rate=negative_sample_rate,
-                n_epochs=n_epochs,
-                init=init_coords,
-                random_state=random_state_processed,
-                metric=neigh_params.get("metric", "euclidean"),
-                metric_kwds=neigh_params.get("metric_kwds", {}),
-                densmap=False,
-                densmap_kwds={},
-                output_dens=False,
-                verbose=settings.verbosity > 3,
+        from .._backend import resolve_backend
+        if resolve_backend(backend) == "cpp" and neigh_params.get("metric", "euclidean") == "euclidean":
+            # UMAP layout in C++: same objective, edge schedule and negative
+            # sampling as umap-learn, optimised on all threads; deterministic
+            # (same embedding for any thread count, controlled by random_state).
+            from anndataoom_fast._umap import simplicial_set_embedding as _sse_cpp
+            X_umap = _sse_cpp(
+                neighbors["connectivities"], n_components, a=a, b=b, n_epochs=n_epochs,
+                init=init_coords if init_coords is not None else "spectral",
+                random_state=random_state_processed, gamma=gamma, initial_alpha=alpha,
+                negative_sample_rate=negative_sample_rate, data=X, sgd="parallel",
             )
+        else:
+            with _lobpcg_for_large_spectral_init():
+                X_umap, _ = simplicial_set_embedding(
+                    data=X,
+                    graph=neighbors["connectivities"].tocoo(),
+                    n_components=n_components,
+                    initial_alpha=alpha,
+                    a=a,
+                    b=b,
+                    gamma=gamma,
+                    negative_sample_rate=negative_sample_rate,
+                    n_epochs=n_epochs,
+                    init=init_coords,
+                    random_state=random_state_processed,
+                    metric=neigh_params.get("metric", "euclidean"),
+                    metric_kwds=neigh_params.get("metric_kwds", {}),
+                    densmap=False,
+                    densmap_kwds={},
+                    output_dens=False,
+                    verbose=settings.verbosity > 3,
+                )
     elif method == "umap-gpu":
         # Non-parametric UMAP on the GPU (omicverse.utils.gpuex.umap). Same
         # fuzzy graph, spectral init (torch.lobpcg), a/b curve and edge-SGD
@@ -500,7 +516,7 @@ def umap(  # noqa: PLR0913, PLR0915
         metric = neigh_params.get("metric", "euclidean")
         if metric != "euclidean":
             msg = (
-                f"`sc.pp.neighbors` was called with `metric` {metric!r}, "
+                f"`ov.pp.neighbors` was called with `metric` {metric!r}, "
                 "but umap `method` 'rapids' only supports the 'euclidean' metric."
             )
             raise ValueError(msg)

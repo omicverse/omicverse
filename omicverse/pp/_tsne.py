@@ -6,7 +6,7 @@ from datetime import datetime
 
 from packaging.version import Version
 
-from scanpy import settings
+from ._compat import sc_settings as settings
 from ._compat import old_positionals
 from ._scale import raise_not_implemented_error_if_backed_type
 from ._neighbors import _choose_representation, _doc_params, doc_n_pcs, doc_use_rep
@@ -95,7 +95,7 @@ def tsne(  # noqa: PLR0913
         If `None`, the initial state is not reproducible.
     n_jobs
         Number of jobs for parallel computation.
-        `None` means using :attr:`scanpy._settings.ScanpyConfig.n_jobs`.
+        `None` means using ``1`` (scanpy's default ``settings.n_jobs``).
     key_added
         If not specified, the embedding is stored as
         :attr:`~anndata.AnnData.obsm`\ `['X_tsne']` and the the parameters in
