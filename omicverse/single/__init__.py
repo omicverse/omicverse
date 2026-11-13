@@ -359,6 +359,7 @@ __all__ = [
     'assign_guides',
     'mixscape',
     'perturbation_distance',
+    'lemur',
     'perturbation_effect',
     'cell_fate_perturbation',
     'velocity_effect',
