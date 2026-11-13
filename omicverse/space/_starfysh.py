@@ -25,10 +25,9 @@ class STARFYSH:
         - Spatial coordinates should be stored in adata.obsm['spatial']
 
     Examples:
-        >>> import scanpy as sc
         >>> import omicverse as ov
         >>> # Load spatial transcriptomics data
-        >>> adata = sc.read_h5ad('spatial_data.h5ad')
+        >>> adata = ov.read('spatial_data.h5ad')
         >>> # Initialize STARFYSH object
         >>> starfysh = ov.space.STARFYSH(adata)
     """

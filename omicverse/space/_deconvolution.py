@@ -1,6 +1,6 @@
 from .._settings import add_reference, EMOJI, Colors
 import numpy as np
-import scanpy as sc
+import anndata as ad
 import pandas as pd
 
 from .._registry import register_function
@@ -133,7 +133,7 @@ class Deconvolution(object):
             log1p_1e4_warning = True
         
         if log1p_1e4_warning:   
-            print(f"{Colors.WARNING}⚠️ 1e4 is the standardized target sum for `scanpy`{Colors.ENDC}")
+            print(f"{Colors.WARNING}⚠️ 1e4 is the standardized target sum for scRNA-seq log-normalisation{Colors.ENDC}")
 
         log1p_50_warning = False
         if self.adata_sc.X.max()<np.log1p(50*1e4):
@@ -467,7 +467,7 @@ class Deconvolution(object):
             abund = self.adata_sp.obsm['q05_cell_abundance_w_sf']
             self.adata_sp.obsm['prop_celltypes'] = abund.div(abund.sum(axis=1).clip(lower=1e-9), axis=0)
 
-            adata_cell2location=sc.AnnData(self.adata_sp.obsm['prop_celltypes'])
+            adata_cell2location=ad.AnnData(self.adata_sp.obsm['prop_celltypes'])
             adata_cell2location.var.index=self.adata_sp.uns["mod"]["factor_names"]
             adata_cell2location.var_names=self.adata_sp.uns["mod"]["factor_names"]
             
@@ -521,7 +521,7 @@ class Deconvolution(object):
             # Convert results to match omicverse API format
             # Create adata_cell2location from the deconvolution results
             proportions_df = self.adata_sp.obsm['flashdeconv']
-            adata_cell2location = sc.AnnData(proportions_df)
+            adata_cell2location = ad.AnnData(proportions_df)
             adata_cell2location.var_names = proportions_df.columns.tolist()
             adata_cell2location.obs_names = proportions_df.index.tolist()
 
@@ -545,7 +545,6 @@ class Deconvolution(object):
             self.method='starfysh'
 
             import torch
-            sc.settings.verbosity = 0
 
             starfysh_default_kwargs={
                 'n_repeats':3,
@@ -675,7 +674,7 @@ class Deconvolution(object):
                                                                             device=device)
 
                 def cell2proportion(adata):
-                    adata_plot=sc.AnnData(adata.X)
+                    adata_plot=ad.AnnData(adata.X)
                     adata_plot.obs=utils.extract_feature(adata, 'qc_m').obs.copy()
                     adata_plot.var=adata.var.copy()
                     adata_plot.obsm=adata.obsm.copy()
@@ -804,7 +803,7 @@ class Deconvolution(object):
                 weights, row_sum, out=np.zeros_like(weights), where=row_sum > 0
             )
 
-            adata_cell2location = sc.AnnData(proportions)
+            adata_cell2location = ad.AnnData(proportions)
             adata_cell2location.var_names = cell_type_names
             adata_cell2location.var.index = pd.Index(cell_type_names)
 
@@ -929,7 +928,7 @@ class Deconvolution(object):
         abund = self.adata_sp.obsm['q05_cell_abundance_w_sf']
         self.adata_sp.obsm['prop_celltypes'] = abund.div(abund.sum(axis=1).clip(lower=1e-9), axis=0)
 
-        adata_cell2location=sc.AnnData(self.adata_sp.obsm['prop_celltypes'])
+        adata_cell2location=ad.AnnData(self.adata_sp.obsm['prop_celltypes'])
         adata_cell2location.var.index=self.adata_sp.uns["mod"]["factor_names"]
         adata_cell2location.var_names=self.adata_sp.uns["mod"]["factor_names"]
         

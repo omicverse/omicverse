@@ -38,10 +38,9 @@ Utility functions:
 
 Examples:
     >>> import omicverse as ov
-    >>> import scanpy as sc
     >>> 
     >>> # Load spatial data
-    >>> adata = sc.read_visium('path/to/visium/data')
+    >>> adata = ov.io.read_visium('path/to/visium/data')
     >>> 
     >>> # Identify spatial domains
     >>> ov.space.pySTAGATE(adata, n_domains=7, radius=50)
