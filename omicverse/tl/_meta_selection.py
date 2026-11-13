@@ -44,8 +44,8 @@ import numpy as np
 import pandas as pd
 
 from .._registry import register_function
-from ._meta_analysis import (comparison_workbook, meta_effect_sizes, method_measure_statements,
-                             _strip_tags)
+from ._meta_analysis import (comparison_workbook, extract_group_stats, meta_effect_sizes,
+                             method_measure_statements, _strip_tags, _CONTROL_DEFAULT)
 
 __all__ = ["abbreviation_map", "propose_selection", "reconstruct_study_effects"]
 
@@ -448,7 +448,7 @@ def propose_selection(wb: pd.DataFrame, statements: pd.DataFrame, abbreviations:
               "prop[prop.decision == 'review']"],
     related=["tl.propose_selection", "tl.comparison_workbook", "tl.meta_effect_sizes"],
 )
-def reconstruct_study_effects(sources: dict, method_source: Union[str, Path], case, control=None, exclude=None,
+def reconstruct_study_effects(sources: dict, method_source: Union[str, Path], case=None, control=None, exclude=None,
                               n_map: Optional[dict] = None, prefer_counts: bool = True,
                               out_dir: Optional[str] = None, verbose: bool = True):
     """Return ``(proposals, effects)``.
@@ -456,12 +456,39 @@ def reconstruct_study_effects(sources: dict, method_source: Union[str, Path], ca
     ``proposals``: every workbook row with family, measure, decision (keep / exclude / review),
     reason and the method sentence used. ``effects``: :func:`meta_effect_sizes` of the ``keep``
     rows (columns ``n_case, mean_case, sd_case, n_control, mean_control, sd_control, d``).
-    ``out_dir``: also write ``proposals.csv`` there. Review the ``review`` rows (and spot-check
+    ``case=None`` treats every group that is not a control group as a case group (subgroups pooled;
+    use ``exclude`` for groups of another diagnosis). ``prop.attrs['study_summary']`` (also printed)
+    lists per study the statistics found, comparisons formed and the action needed (PDF only,
+    groups not matched, unknown n). ``out_dir``: also write ``proposals.csv`` there. Review the ``review`` rows (and spot-check
     the others) against the articles; change a decision in ``proposals`` and recompute with
     ``meta_effect_sizes(proposals[proposals.decision == 'keep'], case='case')``.
     """
     kw = {} if control is None else {"control": control}
+    if case is None:
+        case = r"."          # every group that is not a control group is a case group
+    # group sizes printed in one place of an article (a table header) apply to the same group
+    # named elsewhere in it (another table, the running text)
+    n_map = {k: dict(v) for k, v in (n_map or {}).items()}
+    for sid, paths in sources.items():
+        found = {}
+        for pth in ([paths] if isinstance(paths, (str, Path)) else paths):
+            try:
+                led = extract_group_stats(pth)
+            except Exception:
+                continue
+            for g_, nh in zip(led["group"].astype(str), led["n_header"]):
+                if pd.notna(nh):
+                    base = re.split(r"\(|\bn\s*=|\bN\s*=", g_)[0].strip(" :,")
+                    if 1 <= len(base) <= 40:
+                        found.setdefault(base, set()).add(int(nh))
+        auto = {rf"(?:^|[\]\s(]){re.escape(b)}\b": next(iter(v)) for b, v in found.items() if len(v) == 1}
+        if auto:
+            n_map[sid] = {**auto, **n_map.get(sid, {})}
     wb = comparison_workbook(sources, case=case, exclude=exclude, n_map=n_map, verbose=False, **kw)
+    if wb.empty:
+        wb = pd.DataFrame(columns=["study", "source", "table", "section", "row", "layout", "case_groups",
+                                   "case_subgroups", "control_group", "n_case", "mean_case", "sd_case",
+                                   "n_control", "mean_control", "sd_control", "d", "family", "stat_class"])
     st = method_measure_statements(method_source)
     mtext = Path(str(method_source)).read_text(errors="ignore")
     stexts: Dict[str, str] = {}
@@ -487,12 +514,44 @@ def reconstruct_study_effects(sources: dict, method_source: Union[str, Path], ca
     if out_dir:
         Path(out_dir).mkdir(parents=True, exist_ok=True)
         prop.drop(columns=["case_subgroups"], errors="ignore").to_csv(Path(out_dir) / "proposals.csv", index=False)
+    # per-study health check: statistics found vs comparisons formed
+    summ = []
+    for sid, paths in sources.items():
+        paths = [paths] if isinstance(paths, (str, Path)) else list(paths)
+        groups, nstat = Counter(), 0
+        for pth in paths:
+            try:
+                led = extract_group_stats(pth)
+            except Exception:
+                continue
+            nstat += len(led)
+            groups.update(led.loc[led["layout"] != "text", "group"].astype(str))
+        g = prop[prop["study"] == sid] if len(prop) else prop
+        msgs = []
+        if all(str(p).lower().endswith(".pdf") for p in paths):
+            msgs.append("PDF only: tables are often unreadable -- get the XML / HTML full text or transcribe")
+        if nstat and not len(g):
+            msgs.append(f"{nstat} statistics found but no case-vs-control pair: group names are "
+                        f"{[k for k, _ in groups.most_common(8)]} -- pass case / control for this study")
+        if not nstat:
+            msgs.append("no statistics found in the file(s): wrong file, or a format to transcribe by hand")
+        if len(g) and (g["n_case"].isna() | g["n_control"].isna()).any():
+            msgs.append("some rows have n=? (sizes not printed for these groups): add them via n_map only if "
+                        "the article gives sizes for exactly these groups")
+        summ.append({"study": sid, "statistics": nstat, "comparisons": len(g),
+                     "keep": int((g["decision"] == "keep").sum()) if len(g) else 0,
+                     "review": int((g["decision"] == "review").sum()) if len(g) else 0,
+                     "action": "; ".join(msgs)})
+    summ = pd.DataFrame(summ)
+    prop.attrs["study_summary"] = summ
     if verbose:
         for sid, g in prop.groupby("study", sort=False):
             print(f"== {sid}")
             for i, r in g.iterrows():
                 nn = "n=?" if pd.isna(r["n_case"]) or pd.isna(r["n_control"]) else f"{r['n_case']:g}/{r['n_control']:g}"
                 print(f"  [{i}] {r['decision']:7s} {str(r['row'])[-60:]} | {nn} | {r['reason'][:110]}")
+        print("\nPER-STUDY CHECK (fix every 'action' and call again before reviewing):")
+        print(summ.to_string(index=False))
         print(f"keep {int((prop.decision == 'keep').sum())}, review {int((prop.decision == 'review').sum())}, "
               f"exclude {int((prop.decision == 'exclude').sum())}; rows with unknown n are not in the effects "
               f"until n_map supplies them")
