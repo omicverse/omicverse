@@ -475,7 +475,10 @@ class TrajInfer(object):
             # Differentiation potential ranked by gene-count correlate (Gulati 2020).
             # Backend: pycytotrace — `pip install omicverse[trajectory]`
             import pycytotrace
-            counts, _ = self._dense_counts()
+            counts, gene_names = self._dense_counts()
+            # Preserve gene labels for ERCC filtering and result provenance.
+            kwargs.setdefault('gene_names', gene_names)
+            kwargs.setdefault('cell_names', list(self.adata.obs_names))
             # pycytotrace expects genes × cells, like R upstream.
             res = pycytotrace.cytotrace_run(counts.T, **kwargs)
             stem = np.asarray(getattr(res, 'cytotrace', res), dtype=float)
