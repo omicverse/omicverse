@@ -63,7 +63,7 @@ differences found observed showed compared higher lower greater average""".split
 
 _SPEED = r"\b(rt|rts|reaction|latenc\w*|response time\w*|time\w*|speed|ms|msec|millisecond\w*|second\w*|sec|duration|slow\w*)\b|\(s\)"
 _ACC = (r"\b(accura\w*|correct\w*|hits?|errors?|error rates?|omissions?|commissions?|false[- ]?alarms?|"
-        r"false a\.?|incorrect|mistakes?|misses|failures?)\b")
+        r"false a\.?|incorrect|mistakes?|misses|missing|failures?)\b")
 _PCT = r"%|\bpercent\w*|\bproportion|\brate\b"
 _MEASURE_CLAUSE = re.compile(
     r"(dependent (?:measure|variable)s?(?: reported)?(?: (?:is|are|was|were|include[sd]?))?|primary (?:dependent )?measures?"
@@ -130,6 +130,13 @@ def abbreviation_map(*texts: str) -> Dict[str, str]:
     gen: Dict[str, str] = {}
     for text in texts:
         t = _strip_tags(str(text))
+        # glossaries in table notes: "SCIP, Screen for ...; VLT-L, verbal learning test-learning; ..."
+        for m in re.finditer(r"(?:^|[;.:]\s*|\s)([A-Z][A-Za-z]*[A-Z][A-Za-z0-9/&-]{0,8}),\s+([A-Za-z][^;=.,]{3,80}?)(?=\s*[;.]|$)", t):
+            exp = m.group(2).strip()
+            if exp.split()[0][:1].lower() == m.group(1)[0].lower():
+                out.setdefault(m.group(1), exp)
+        for m in re.finditer(r"(?:^|[;.,]\s*|\s)([A-Z][A-Z0-9]{1,5})\s+[–—]\s+([A-Z][A-Za-z][^;–—]{2,60}?)(?=\s*;|\s*\.|$)", t):
+            out.setdefault(m.group(1), m.group(2).strip())
         for m in _ABBR_DEF.finditer(t):
             phrase, ab = m.group(1).split(), m.group(2)
             # keep the shortest tail of the phrase whose initials spell the abbreviation
@@ -198,6 +205,9 @@ def _parse_measures(stmt: str) -> dict:
     def summ(chunks):
         txt = " ".join(chunks)
         quals = set(_content(txt)) - {"time", "limit", "complete", "condition", "participant"}
+        # parts of a hyphenated qualifier ("no-cue") are not qualifiers on their own
+        for comp in re.findall(r"[A-Za-z]+(?:[/-][A-Za-z]+)+", txt):
+            quals -= {_stem(w.lower()) for w in re.split(r"[/-]", comp)}
         acr = {"".join(w[0] for w in _words(c) if w.lower() not in _STOP).lower() for c in re.split(r",| and ", txt)}
         return {"types": _types(txt), "quals": quals, "acronyms": {a for a in acr if len(a) >= 2}, "text": txt.strip()}
     return {"pref": summ(pref), "fallback": summ(fb) if fb else None}
@@ -266,6 +276,22 @@ def propose_selection(wb: pd.DataFrame, statements: pd.DataFrame, abbreviations:
         else:
             ctx_tok.append(prev_tok[j] | next_tok[j])
     strong = [bool(re.search(r"dependent|primary", x, re.I)) for x in st["sentence"]]
+    # coded test names (coding tables): all their words in a row identify the test outright
+    test_name_tok = []
+    for x in st["context"].fillna(""):
+        mm = re.match(r"\s*(.+?) is a coded test\.", str(x))
+        test_name_tok.append(set(_content(mm.group(1))) if mm else set())
+    # statements that EXCLUDE ("... are not admissible", "is not coded", "were excluded")
+    negative = [bool(re.search(r"\bnot\s+(?:admissible|coded|included|eligible|part of)|\bare excluded\b|"
+                               r"\binadmissible\b", x, re.I)) for x in st["sentence"]]
+    # task-name words of each statement: the sentence without its measure clause, plus context
+    task_tok, cur_id = [], []
+    for j, x in enumerate(st["sentence"]):
+        mt_ = st.at[j, "measures"]["pref"]["text"]
+        rest_ = set(_content(_expand(x.replace(mt_, " "), abbr)))
+        task_tok.append(rest_ | ctx_tok[j])
+        # identity words: the statement without the words only its measure clause uses
+        cur_id.append(cur_tok[j] - (set(_content(mt_)) - rest_))
     qual_tok = [m["pref"]["quals"] | (m["fallback"]["quals"] if m.get("fallback") else set())
                 | m["pref"]["acronyms"] for m in st["measures"]]
     df_ = Counter(t for a_, b_ in zip(cur_tok, ctx_tok) for t in (a_ | b_))
@@ -286,6 +312,7 @@ def propose_selection(wb: pd.DataFrame, statements: pd.DataFrame, abbreviations:
 
     df = wb.copy()
     rec = []
+    _art_cache: Dict[str, set] = {}
     for i in df.index:
         sec = str(df.at[i, "section"]) if "section" in df else ""
         inner = sec.split(">")[-1] if sec and sec != "nan" else ""
@@ -296,6 +323,12 @@ def propose_selection(wb: pd.DataFrame, statements: pd.DataFrame, abbreviations:
         if per_study and "study" in df:
             ab_i = {**abbr, **per_study.get(df.at[i, "study"], {})}
         rtypes = _types(_expand(row, ab_i))
+        art_toks = set()
+        if study_texts and "study" in df:
+            sid_ = df.at[i, "study"]
+            if sid_ not in _art_cache:
+                _art_cache[sid_] = set(_content(_strip_tags(study_texts.get(sid_, "") or "")[:400000]))
+            art_toks = _art_cache[sid_]
         # concepts: plain words, and abbreviations with their expansion words
         concepts = []
         caps = {t.lower() for t in re.findall(r"\b[A-Z]{2,}[A-Z0-9]*\b", lab)}
@@ -305,8 +338,11 @@ def propose_selection(wb: pd.DataFrame, statements: pd.DataFrame, abbreviations:
                 continue
             key = next((k for k in (tok, tok.split("-")[0]) if k in ab_i), None)
             if key and tok.upper() == tok:
-                concepts.append((tok.lower(), set(_content(ab_i[key])) or {tok.lower()}, True))
+                concepts.append((tok.lower(), set(_content(ab_i[key])) | {tok.lower()}, True))
         abbr_words = {c for c, _, _ in concepts}
+        for c in list(abbr_words):          # "VLT-L" also yields the words "vlt", "vltl"
+            parts_ = [x for x in re.split(r"[-/]", c) if x]
+            abbr_words |= set(parts_) | {"".join(parts_)} | {_stem(x) for x in parts_}
         for w in set(_content(lab)):
             if w not in abbr_words and not any(w in e for _, e, _ in concepts):
                 concepts.append((w, {w}, False))
@@ -341,10 +377,19 @@ def propose_selection(wb: pd.DataFrame, statements: pd.DataFrame, abbreviations:
         weight = lambda forms: max(idf(f) for f in forms)
 
         def frac(forms, pool):
-            return sum(hit(f, pool) for f in forms) / len(forms)
+            fs = [f for f in forms if f not in abbr_words] or list(forms)
+            return sum(hit(f, pool) for f in fs) / len(fs)
 
         best = None
+        lab_tok = set(_content(_expand(lab, ab_i)))
         for j in range(len(cur_tok)):
+            if test_name_tok[j] and test_name_tok[j] <= lab_tok and not negative[j]:
+                sc_ = 100.0 + len(test_name_tok[j])          # longest fully named test wins
+                if best is None or sc_ > best[0]:
+                    best = (sc_, j, 1.0, [])
+                continue
+            if best is not None and best[0] >= 100:
+                continue
             sc, cov_w, tot_w, unm = 0.0, 0.0, 0.0, []
             for name, forms, is_ab in concepts:
                 w_ = weight(forms)
@@ -352,16 +397,24 @@ def propose_selection(wb: pd.DataFrame, statements: pd.DataFrame, abbreviations:
                 tot_w += (0.1 if re.search(r"\d", lab.split(name.upper())[-1][:3] if name.upper() in lab else "")
                           else 0.3) * w_ if unknown_code else w_
                 need = (0.25 if len(forms) >= 4 else 0.5) if is_ab else 1.0
-                if frac(forms, cur_tok[j]) >= need:
-                    sc += w_; cov_w += w_
-                elif frac(forms, cur_tok[j] | ctx_tok[j]) >= need:
-                    sc += 0.6 * w_; cov_w += w_
+                f1 = 1.0 if (is_ab and name in cur_tok[j]) else frac(forms, cur_tok[j])
+                f2 = frac(forms, cur_tok[j] | ctx_tok[j])
+                # coded test names (coding tables) are exact: a partly matching abbreviation is partly covered
+                full = 1.0 if (not is_ab or not test_name_tok[j] or name in cur_tok[j] or name in ctx_tok[j]) else f2
+                if f1 >= need:
+                    sc += w_ * f1; cov_w += w_ * full
+                elif f2 >= need:
+                    sc += 0.6 * w_ * f2; cov_w += w_ * full
                 elif any(hit(f, qual_tok[j]) for f in forms):
                     cov_w += 0.3 * w_ if unknown_code else w_
                 else:
                     unm.append(name)
             sc *= 1.0 if strong[j] else 0.7
-            if sc > 0 and (best is None or sc > best[0]):
+            # the article's own subject breaks ties between similarly named tests of the method
+            if sc > 0 and art_toks:
+                extra = [idf(t) for t in cur_tok[j] if t in art_toks and not any(t in f for _, f, _ in concepts)]
+                sc += 0.25 * (max(extra) if extra else 0.0)
+            if sc > 0 and (best is None or sc > best[0]) and not (best is not None and best[0] >= 100):
                 best = (sc, j, cov_w / tot_w if tot_w else 0.0, unm)
         if best is None:
             rec.append(dict(family="", statement="", measure="", measure_type=",".join(sorted(rtypes)), coverage=0.0,
@@ -387,11 +440,43 @@ def propose_selection(wb: pd.DataFrame, statements: pd.DataFrame, abbreviations:
         codes = {c for c in codes if not hit(c, qual_tok[j])}
         mwords = ((set(unm) & set(_content(row))) | (codes & set(re.findall(r"[a-z0-9]+", row.lower())))) \
             - {"part", "section", "list", "block", "level"}
-        rowc = set(_content(re.sub(r"[-/]", " ", row))) | set(re.findall(r"[a-z]+", row.lower()))
+        # a hyphen-suffixed code ("VLT-L" = "verbal learning test-learning") names its measure in the suffix
+        row_x = row
+        for tok in re.findall(r"\b[A-Z][A-Za-z0-9]*-[A-Za-z0-9]+\b", row):
+            if tok in ab_i and "-" in ab_i[tok]:
+                row_x += " " + ab_i[tok].split("-")[-1]
+        rowc = set(_content(re.sub(r"[-/]", " ", row_x))) | set(re.findall(r"[a-z]+", row_x.lower()))
+
+        row_low = row.lower()
+        row_cmp = rowc | {a + b for a, b in zip(re.findall(r"[a-z]+", row_low), re.findall(r"[a-z]+", row_low)[1:])}
 
         def fits(m):
             if not m:
                 return False
+            mt = m["text"].lower()
+            if re.fullmatch(r"\s*(the\s+)?(total\s+)?scores?\s*", mt):
+                return True              # the coded test's score, whatever the article calls it
+            # numbered conditions the measure names ("part 3") must match the row's
+            conds = set(re.findall(r"\b(part|section|trial|block|list|condition|level|phase|session)\s*(\d+|[a-z])\b", mt))
+            rconds = set(re.findall(r"\b(part|section|trial|block|list|condition|level|phase|session)\s*(\d+|[a-z])\b", row_low))
+            if conds and rconds and not (conds & rconds):
+                return False
+            # a measure counting correct responses does not cover error / omission counts
+            if re.search(r"\bcorrect", mt) and not re.search(r"error|accura|incorrect", mt) and \
+                    re.search(r"error|omission|missing|incorrect|false|miss\b", row_low) and not re.search(r"\bcorrect", row_low):
+                return False
+            # condition qualifiers ("incongruent no-cue"): every condition part of the row must be one of them
+            cq = {q for q in m["quals"] if len(q) >= 4}
+            if len(cq) >= 2 and any(hit(q, row_cmp) for q in cq) and ": " in row:
+                for part in row.split(": "):
+                    if re.search(r"\b[A-Z]{2,}", part):
+                        continue                     # an abbreviated test name, not a condition
+                    pw = set(_content(part)) | {a + b for a, b in zip(re.findall(r"[a-z]+", part.lower()),
+                                                                     re.findall(r"[a-z]+", part.lower())[1:])}
+                    if not pw or any(hit(w, task_tok[j]) for w in set(_content(part))) or _types(part):
+                        continue
+                    if not any(hit(q, pw) for q in cq):
+                        return False
             if rtypes & m["types"]:
                 return True
             if not m["types"] and re.search(r"\bcorrect\b", row, re.I) and not re.search(_PCT, row):
@@ -401,6 +486,17 @@ def propose_selection(wb: pd.DataFrame, statements: pd.DataFrame, abbreviations:
             ac = {re.sub(r"[^a-z]", "", w.lower()) for w in re.findall(r"\b[A-Z]{2,5}\b", row)}
             return bool(ac & m["acronyms"])
 
+        if negative[j]:
+            rec.append(dict(family=fam, statement=stmt[:300], measure="", measure_type=",".join(sorted(rtypes)),
+                            coverage=round(cov, 2), decision="exclude",
+                            reason=f"the coding rules exclude it: {stmt[:160]}"))
+            continue
+        derived = re.search(r"\b(decrement|minus|difference score|change score|gain score)\b", row, re.I)
+        if derived and not re.search(re.escape(derived.group(1)), meas["pref"]["text"], re.I):
+            rec.append(dict(family=fam, statement=stmt[:300], measure=meas["pref"]["text"][:120],
+                            measure_type=",".join(sorted(rtypes)), coverage=round(cov, 2), decision="exclude",
+                            reason="a derived difference score (not one of the coded scores)"))
+            continue
         if "composite index" in rtypes:
             rec.append(dict(family=fam, statement=stmt[:300], measure=meas["pref"]["text"][:120],
                             measure_type=",".join(sorted(rtypes)), coverage=round(cov, 2), decision="exclude",
@@ -417,7 +513,7 @@ def propose_selection(wb: pd.DataFrame, statements: pd.DataFrame, abbreviations:
             dec, why = "keep", f"measure named by the method ({meas['pref']['text'][:80]})"
         elif meas.get("fallback") and fits(meas["fallback"]):
             dec, why = "fallback", f"fallback measure ({meas['fallback']['text'][:80]})"
-        elif not rtypes and not mwords:
+        elif not rtypes and not mwords and (not meas["pref"]["types"] or sc >= 100):
             dec, why = "keep", "the task's single score"
         elif not meas["pref"]["types"] and not meas["pref"]["quals"] and rtypes and not mwords - {"section", "part"}:
             desc = " ".join(x for x in (st.at[j, "context"], st.at[j, "context_after"]) if x)[:220]
@@ -471,7 +567,7 @@ def reconstruct_study_effects(sources: dict, method_source: Union[str, Path], ca
                               n_map: Optional[dict] = None, prefer_counts: bool = True,
                               out_dir: Optional[str] = None, out: Optional[str] = None,
                               case_label: str = "case", out_columns: Optional[Sequence[str]] = None,
-                              fetch_missing: bool = True, verbose: bool = True):
+                              fetch_missing: bool = True, correction: str = "approx", verbose: bool = True):
     """Return ``(proposals, effects)``.
 
     ``proposals``: every workbook row with family, measure, decision (keep / exclude / review),
@@ -510,27 +606,92 @@ def reconstruct_study_effects(sources: dict, method_source: Union[str, Path], ca
                         print(f"[{sid}] fetched a full text with tables: {got}")
                     sources[sid] = [got] + paths
     kw = {} if control is None else {"control": control}
-    if case is None:
-        case = r"."          # every group that is not a control group is a case group
-    # group sizes printed in one place of an article (a table header) apply to the same group
-    # named elsewhere in it (another table, the running text)
+    # groups the method / instruction leaves out ("participants still in the acute phase ... are not part
+    # of the case group: leave them out"): words of such sentences that name a group in an article
+    try:
+        _mtxt = Path(str(method_source)).read_text(errors="ignore") if len(str(method_source)) < 4096 else str(method_source)
+    except Exception:
+        _mtxt = str(method_source)
+    excl_words = set()
+    for sent in re.split(r"(?<=[.;:])\s+", _strip_tags(_mtxt)):
+        if re.search(r"\b(?:leave (?:them|it) out|left out|not part of|are excluded|is excluded|exclude[sd]? (?:them|those))\b",
+                     sent, re.I) and re.search(r"\b(?:participants?|patients?|subjects?|subgroups?|groups?|sample)\b", sent, re.I):
+            excl_words |= {w.lower() for w in re.findall(r"[A-Za-z]{4,}", sent)}
+    excl_words -= {w.lower() for w in re.findall(r"[A-Za-z]+", str(case_label))}
+    excl_words -= {"participants", "participant", "patients", "subjects", "group", "groups", "subgroup", "subgroups",
+                   "sample", "they", "them", "when", "were", "still", "part", "leave", "left", "remaining",
+                   "pool", "article", "reports", "separate", "excluded", "exclude", "tested", "test", "defines",
+                   "described", "classified", "early", "illness", "with", "from", "that", "this", "those", "other"}
+    auto_excl = r"\b(?:" + "|".join(sorted(map(re.escape, excl_words))) + r")\b" if excl_words else None
+    # columns that are not groups of people (norm-based expectations, test statistics) never pair
+    non_group = (r"\bexpected\b|\bpredicted\b|\bestimated\b|p[- ]?value|^\s*p\W*$|^\s*[tFz]\s*$|statistic|effect size"
+                 r"|^\s*(?:\[control\]\s*)?(?:all|total|overall|whole sample|full sample|entire sample)\b")
+    if auto_excl:
+        non_group = f"{non_group}|{auto_excl}"
+    if isinstance(exclude, dict):
+        exclude = {k: (f"(?:{exclude[k]})|{non_group}" if exclude.get(k) else non_group) for k in sources}
+    else:
+        exclude = f"(?:{exclude})|{non_group}" if exclude else non_group
+    # group sizes printed in one place of an article (a table header, an "N" row, the text
+    # "acute group (n = 15)") apply to the same group named elsewhere in it
     user_n = set(n_map or {})
     n_map = {k: dict(v) for k, v in (n_map or {}).items()}
+    case_by_study = {}
     for sid, paths in sources.items():
-        found = {}
+        found: Dict[str, set] = {}
+        names = set()
+        tab_sets = []
+        text = ""
         for pth in ([paths] if isinstance(paths, (str, Path)) else paths):
             try:
                 led = extract_group_stats(pth)
             except Exception:
                 continue
+            names |= set(led["group"].astype(str))
+            tab_sets.extend(set(tg["group"].astype(str)) for _, tg in led[led["layout"] != "text"].groupby("table"))
             for g_, nh in zip(led["group"].astype(str), led["n_header"]):
                 if pd.notna(nh):
                     base = re.split(r"\(|\bn\s*=|\bN\s*=", g_)[0].strip(" :,")
                     if 1 <= len(base) <= 40:
                         found.setdefault(base, set()).add(int(nh))
-        auto = {rf"(?:^|[\]\s(]){re.escape(b)}\b": next(iter(v)) for b, v in found.items() if len(v) == 1}
+            try:
+                if not str(pth).lower().endswith(".pdf"):
+                    text += " " + _strip_tags(Path(str(pth)).read_text(errors="ignore"))
+            except Exception:
+                pass
+        text_found: Dict[str, set] = {}
+        for name, n in _named_sizes_in_text(text):
+            text_found.setdefault(name, set()).add(n)
+        auto = {}
+        for g_ in names:
+            if re.search(r"\bn\s*=", g_, re.I):
+                continue
+            n_ = _match_group_size(g_, found)
+            if n_ is None:
+                n_ = _match_group_size(g_, text_found)
+            if n_ is not None:
+                auto[rf"^\s*(?:\[control\]\s*)?{re.escape(g_.strip())}\s*$"] = n_
+        auto.update({rf"(?:^|[\]\s(]){re.escape(b)}\b": next(iter(v)) for b, v in found.items() if len(v) == 1})
         if auto:
             n_map[sid] = {**auto, **n_map.get(sid, {})}
+        # the case group is the one the task names (case_label), when an article has such a column
+        if case is None and case_label and case_label != "case":
+            lab = re.escape(case_label)
+            ctl = control if isinstance(control, str) else _CONTROL_DEFAULT
+            exc = exclude.get(sid) if isinstance(exclude, dict) else exclude
+            keep_ = lambda g_: not (exc and re.search(exc, g_, re.I))
+            alts = [lab]
+            labelled = False
+            for gs in tab_sets:
+                kept = [g_ for g_ in gs if keep_(g_)]
+                if any(re.search(lab, g_, re.I) and not re.search(ctl, g_, re.I) for g_ in kept):
+                    labelled = True        # in this table only the label-named group is the case group
+                else:                      # a table of subgroups not named by the label: all are cases
+                    alts += [re.escape(g_.strip()) for g_ in kept if not re.search(ctl, g_, re.I)]
+            if labelled:
+                case_by_study[sid] = "|".join(dict.fromkeys(alts))
+    if case is None:
+        case = {sid: case_by_study.get(sid, r".") for sid in sources}   # else every non-control group
     wb = comparison_workbook(sources, case=case, exclude=exclude, n_map=n_map, verbose=False, **kw)
     # studies whose tables print no group sizes at all: take them from the text ("Forty-four
     # patients ... and 44 healthy comparison subjects"), reported in the summary
@@ -561,7 +722,10 @@ def reconstruct_study_effects(sources: dict, method_source: Union[str, Path], ca
                                    "case_subgroups", "control_group", "n_case", "mean_case", "sd_case",
                                    "n_control", "mean_control", "sd_control", "d", "family", "stat_class"])
     st = method_measure_statements(method_source)
-    mtext = Path(str(method_source)).read_text(errors="ignore")
+    try:
+        mtext = Path(str(method_source)).read_text(errors="ignore") if len(str(method_source)) < 4096 else str(method_source)
+    except Exception:
+        mtext = str(method_source)
     stexts: Dict[str, str] = {}
     for sid, paths in sources.items():
         parts = []
@@ -579,6 +743,9 @@ def reconstruct_study_effects(sources: dict, method_source: Union[str, Path], ca
     sab = {sid: abbreviation_map(t) for sid, t in stexts.items()}
     prop = propose_selection(wb, st, abbreviations=ab, prefer_counts=prefer_counts, study_abbreviations=sab,
                              study_texts=stexts)
+    prop = _aggregate_vs_subgroups(prop)
+    prop = _check_reported_effects(prop, stexts)
+    prop["proposed"] = prop["decision"]
     kept = prop[(prop["decision"] == "keep")]
     kept = kept[kept[["n_case", "mean_case", "sd_case", "n_control", "mean_control", "sd_control"]].notna().all(axis=1)]
     eff = meta_effect_sizes(kept, case="case", control="control") if len(kept) else kept
@@ -586,9 +753,10 @@ def reconstruct_study_effects(sources: dict, method_source: Union[str, Path], ca
         Path(out_dir).mkdir(parents=True, exist_ok=True)
         prop.drop(columns=["case_subgroups"], errors="ignore").to_csv(Path(out_dir) / "proposals.csv", index=False)
     if out:
+        prop.attrs["correction"] = correction
         write_study_effects(prop.assign(decision=prop["decision"].replace({"review": "exclude"}),
                                         proposed=prop["decision"].replace({"review": "exclude"})),
-                            out, case_label=case_label, columns=out_columns)
+                            out, case_label=case_label, columns=out_columns, correction=correction)
     # per-study health check: statistics found vs comparisons formed
     summ = []
     for sid, paths in sources.items():
@@ -610,6 +778,10 @@ def reconstruct_study_effects(sources: dict, method_source: Union[str, Path], ca
                         f"{[k for k, _ in groups.most_common(8)]} -- pass case / control for this study")
         if not nstat:
             msgs.append("no statistics found in the file(s): wrong file, or a format to transcribe by hand")
+        elif not len(g) or not (g["decision"] == "keep").any() if len(g) else True:
+            if not len(g):
+                msgs.append("no case-vs-control comparison found: if the article puts its group statistics in "
+                            "supplementary files, download them and add them to this study's file list")
         if sid in inferred_n:
             msgs.append(f"group sizes taken from the text: case {inferred_n[sid][0]}, control {inferred_n[sid][1]} "
                         f"(check against the participants section)")
@@ -661,7 +833,7 @@ def reconstruct_study_effects(sources: dict, method_source: Union[str, Path], ca
 def write_study_effects(prop: pd.DataFrame, path: str, case_label: str = "case", control_label: str = "control",
                         columns: Optional[Sequence[str]] = None, study_column: str = "doi",
                         task_column: str = "task", overrides: Optional[Dict] = None,
-                        extra_rows: Optional[pd.DataFrame] = None) -> pd.DataFrame:
+                        extra_rows: Optional[pd.DataFrame] = None, correction: Optional[str] = None) -> pd.DataFrame:
     """Write and return the delivered table.
 
     ``extra_rows``: comparisons transcribed by hand (columns ``study, row, n_case, mean_case, sd_case,
@@ -701,7 +873,9 @@ def write_study_effects(prop: pd.DataFrame, path: str, case_label: str = "case",
         print(f"skipped {len(miss)} kept rows with missing statistics (fill n via n_map): "
               f"{miss['row'].astype(str).str[-50:].tolist()}")
     kept = kept.dropna(subset=stat)
-    eff = meta_effect_sizes(kept, case="case", control="control")
+    if correction is None:
+        correction = prop.attrs.get("correction", "approx")
+    eff = meta_effect_sizes(kept, case="case", control="control", correction=correction)
     out = pd.DataFrame({study_column: eff["study"].values, task_column: eff["row"].astype(str).values})
     for c in stat:
         out[c.replace("_case", f"_{case_label}").replace("_control", f"_{control_label}")] = eff[c].values
@@ -851,3 +1025,112 @@ def _sample_sizes_from_text(text: str):
     if case_n and ctrl_n:
         return case_n[0], ctrl_n[0]
     return None, None
+
+
+def _norm_name(x: str) -> tuple:
+    toks = re.findall(r"[a-z0-9]+", str(x).lower().replace("-", " "))
+    return tuple(_stem(t) for t in toks if t not in {"the", "group", "groups", "subjects", "participants",
+                                                       "patients", "individuals", "with", "of", "n"})
+
+
+def _named_sizes_in_text(text: str):
+    """("acute COVID-19", 15) for every "<name> (n = 15)" / "<name>, n = 15" in prose."""
+    out = []
+    for m in re.finditer(r"([A-Za-z][\w\-/’' ]{1,40}?)\s*[(,]\s*[nN]\s*[=:]\s*(\d{1,5})\s*\)?", str(text)):
+        name = re.split(r"\b(?:in|of|and|with|were|was|the|as follows|follows|:)\b", m.group(1))[-1].strip(" ,:")
+        if 1 <= len(name) <= 40 and int(m.group(2)) >= 2:
+            out.append((name, int(m.group(2))))
+    return out
+
+
+def _match_group_size(group: str, found: Dict[str, set]) -> Optional[int]:
+    g = set(_norm_name(group))
+    if not g:
+        return None
+    exact = [v for k, v in found.items() if set(_norm_name(k)) == g and len(v) == 1]
+    if exact:
+        return next(iter(exact[0]))
+    sup = sorted(((len(set(_norm_name(k)) - g), v) for k, v in found.items()
+                  if g < set(_norm_name(k)) and len(v) == 1), key=lambda x: x[0])
+    if sup and (len(sup) == 1 or sup[0][0] < sup[1][0]):
+        return next(iter(sup[0][1]))
+    return None
+
+
+def _check_reported_effects(prop: pd.DataFrame, texts: Dict[str, str]) -> pd.DataFrame:
+    """A kept comparison whose printed statistics contradict the effect size the article itself reports
+    for that measure (a misprinted mean / SD) is excluded, with the reported value in the reason."""
+    stat = ["n_case", "mean_case", "sd_case", "n_control", "mean_control", "sd_control"]
+    for i in prop.index[(prop["decision"] == "keep") & prop[stat].notna().all(axis=1)]:
+        txt = _strip_tags(texts.get(prop.at[i, "study"], "") or "")
+        if not txt:
+            continue
+        row = str(prop.at[i, "row"]).split(": ")[-1]
+        keys = re.findall(r"\b[A-Z][A-Z0-9]{1,6}(?:-[A-Za-z0-9]+)?\b", row) or [" ".join(_words(row)[:3])]
+        keys = [k for k in keys if k.lower() not in ("sd", "se", "sem", "ms", "rt", "n")]
+        reported = []
+        for k in keys:
+            if len(k) < 2:
+                continue
+            for m in re.finditer(re.escape(k), txt, re.I):
+                win = txt[m.end():m.end() + 160]
+                nxt = re.search(r"\b[A-Z][A-Z0-9]{1,6}(?:-[A-Za-z0-9]+)?\s*:", win[3:])
+                if nxt:                                   # stop at the next measure's statistics
+                    win = win[:nxt.start() + 3]
+                for d in re.findall(r"\b(?:Cohen['’]s\s+)?d\s*=\s*([−–-]?\s*\d*\.\d+|[−–-]?\s*\d+)", win):
+                    v = _to_float_safe(d)
+                    if v is not None:
+                        reported.append(v)
+        if not reported:
+            continue
+        r = prop.loc[i]
+        sp = math.sqrt(((r.n_case - 1) * r.sd_case ** 2 + (r.n_control - 1) * r.sd_control ** 2) /
+                       (r.n_case + r.n_control - 2))
+        d = (r.mean_case - r.mean_control) / sp if sp > 0 else float("nan")
+        if np.isfinite(d) and min(min(abs(d - v), abs(abs(d) - abs(v))) for v in reported) > 1.0:
+            prop.at[i, "decision"] = "exclude"
+            prop.at[i, "reason"] = (f"printed statistics give d = {d:.2f} but the article reports d = "
+                                    f"{', '.join(f'{v:.2f}' for v in reported)} for this measure: likely a misprint "
+                                    f"(left out; recover it only from the article's own statistics)")
+    return prop
+
+
+def _to_float_safe(x: str) -> Optional[float]:
+    try:
+        return float(str(x).replace("−", "-").replace("–", "-").replace(" ", ""))
+    except ValueError:
+        return None
+
+
+def _aggregate_vs_subgroups(prop: pd.DataFrame) -> pd.DataFrame:
+    """The same measure printed for an aggregate case column and for its subgroups: one row only.
+    If the aggregate's n differs from the subgroups' total, the aggregate holds participants outside
+    the reported subgroups (e.g. a subgroup the coding rules exclude) -> the pooled subgroups are kept."""
+    if not len(prop):
+        return prop
+    norm = lambda x: re.sub(r"[^a-z0-9%]+", " ", str(x).lower()).strip()
+    keep = prop["decision"] == "keep"
+    for sid, g in prop[keep].groupby("study"):
+        g = g.assign(_nr=g["row"].map(norm))
+        for _, gg in g.groupby(["_nr", "mean_control", "sd_control"]):
+            if len(gg) < 2:
+                continue
+            multi = gg[gg["case_groups"].astype(str).str.contains(r" \+ ")]
+            single = gg[~gg.index.isin(multi.index)]
+            if multi.empty or single.empty:
+                continue
+            m0 = multi.iloc[0]
+            for i, r in single.iterrows():
+                if pd.notna(r["n_case"]) and pd.notna(m0["n_case"]) and r["n_case"] > m0["n_case"]:
+                    prop.at[i, "decision"] = "exclude"
+                    prop.at[i, "reason"] = (f"aggregate case column (n={r['n_case']:g}) differs from the total of its "
+                                            f"reported subgroups (n={m0['n_case']:g}): it includes participants outside "
+                                            f"them; the pooled subgroups are used")
+                else:
+                    # equal totals: the printed aggregate; larger subgroup totals: repeated measurements of
+                    # the same participants (e.g. follow-up waves), not separate people
+                    for j in multi.index:
+                        prop.at[j, "decision"] = "exclude"
+                        prop.at[j, "reason"] = ("same participants as the printed aggregate column (subgroups total "
+                                                f"{m0['n_case']:g} vs {r['n_case']:g})")
+    return prop

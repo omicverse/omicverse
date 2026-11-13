@@ -24,14 +24,14 @@ import io
 import math
 import re
 from pathlib import Path
-from typing import Iterable, List, Optional, Sequence, Tuple, Union
+from typing import Dict, Iterable, List, Optional, Sequence, Tuple, Union
 
 import numpy as np
 import pandas as pd
 
 from .._registry import register_function
 
-__all__ = ["parse_mean_sd", "extract_group_stats", "group_comparisons", "pool_group_stats", "hedges_g",
+__all__ = ["to_mean_sd", "parse_mean_sd", "extract_group_stats", "group_comparisons", "pool_group_stats", "hedges_g",
            "sd_from_summary", "recompute_group_test", "meta_effect_sizes", "apply_selection_rules",
            "comparison_workbook", "format_workbook", "method_measure_statements"]
 
@@ -58,10 +58,33 @@ def _to_float(tok: str) -> Optional[float]:
 
 _PAIR_PATTERNS = [
     # 12.3 (4.5) / 12.3(S.D.: 4.5) / 12.3 [4.5] / 12.3 (SD 4.5)
-    re.compile(r"^\s*(?P<m>" + _NUM + r")\s*[\(\[]\s*(?:s\.?\s*d\.?\s*[:=]?\s*)?(?P<s>" + _NUM + r")\s*[\)\]]\s*[*†‡§a-g]*\s*$", re.I),
+    re.compile(r"^\s*(?P<m>" + _NUM + r")\s*[\(\[]\s*(?:s\.?\s*[de]\.?\s*m?\.?\s*[:=]?\s*)?[+±]?\s*(?P<s>" + _NUM
+               + r")\s*[\)\]]\s*[*∗†‡§a-g]*\s*$", re.I),
     # 12.3 ± 4.5 / 12.3 +/- 4.5
-    re.compile(r"^\s*(?P<m>" + _NUM + r")\s*(?:±|\+/-|\+-|\+/−)\s*(?P<s>" + _NUM + r")\s*[*†‡§a-g]*\s*$"),
+    re.compile(r"^\s*(?P<m>" + _NUM + r")\s*(?:±|\+/-|\+-|\+/−)\s*(?P<s>" + _NUM + r")\s*[*∗†‡§a-g]*\s*$"),
 ]
+# median with a range / IQR: "54; 22–71", "54 (22–71)", "54 [22-71]"
+_MED_RANGE = re.compile(r"^\s*(?P<m>" + _NUM + r")\s*[;,]?\s*[\(\[]?\s*(?P<a>" + _NUM + r")\s*(?:–|-|—|to)\s*(?P<b>"
+                        + _NUM + r")\s*[\)\]]?\s*[*∗†‡§a-g]*\s*$")
+
+
+def _parse_median_range(cell) -> Optional[Tuple[float, float, float]]:
+    s = str(cell).replace("\xa0", " ").strip()
+    m = _MED_RANGE.match(s)
+    if not m:
+        return None
+    vals = [_to_float(m.group(k)) for k in ("m", "a", "b")]
+    if any(v is None for v in vals) or not (vals[1] <= vals[0] <= vals[2]):
+        return None
+    return tuple(vals)
+
+
+def _stat_kind(hint: str) -> Tuple[str, str]:
+    """('mean_sd' | 'mean_se', 'median_range' | 'median_iqr') declared by a caption / header text."""
+    h = str(hint)
+    se = bool(re.search(r"\bS\.?E\.?M?\b|standard error", h)) and not re.search(r"\bS\.?D\b|standard deviation", h)
+    iqr = bool(re.search(r"\bIQR\b|interquartile|25(th)?\s*[-–,]\s*75", h, re.I))
+    return ("mean_se" if se else "mean_sd"), ("median_iqr" if iqr else "median_range")
 
 
 @register_function(
@@ -98,7 +121,7 @@ _SD_HDR = re.compile(r"^\s*(sd|s\.d\.|std|std\.?\s*dev\.?|standard deviation|\(s
 def _clean(x) -> str:
     if x is None or (isinstance(x, float) and math.isnan(x)):
         return ""
-    s = re.sub(r"\s+", " ", str(x)).strip()
+    s = re.sub(r"\s+", " ", _ZW.sub("", str(x))).strip()
     return "" if s.lower().startswith("unnamed:") or s.lower() == "nan" else s
 
 
@@ -122,7 +145,11 @@ def _tables_from_markup(text: str) -> List[Tuple[str, str]]:
     return out
 
 
+_ZW = re.compile("[\u200b\u200c\u200d\u2060\ufeff]")
+
+
 def _strip_tags(s: str) -> str:
+    s = _ZW.sub("", s)
     s = re.sub(r"<[^>]+>", " ", s)
     s = s.replace("&lt;", "<").replace("&gt;", ">").replace("&amp;", "&").replace("&nbsp;", " ")
     return re.sub(r"\s+", " ", s).strip()
@@ -148,7 +175,8 @@ def _grid(table_html: str) -> List[List[str]]:
             if c_i == 0 and cs > 1 and txt and re.search(r'center', attrs, re.I):
                 txt = "\x01" + txt          # a centred spanning label: top-level section
             for k in range(cs):
-                row.append(txt)
+                # continuation cells of a column span are marked so a value is read once
+                row.append(txt if k == 0 or r_i == 0 or not txt else "\x02" + txt)
                 for d in range(1, rs):
                     carry[(r_i + d, c_i)] = txt
                 c_i += 1
@@ -161,14 +189,15 @@ def _grid(table_html: str) -> List[List[str]]:
 
 
 def _is_num(s: str) -> bool:
-    return _to_float(s) is not None or parse_mean_sd(s) is not None
+    return _to_float(s) is not None or parse_mean_sd(s) is not None or _parse_median_range(s) is not None
 
 
 def _table_candidates(caption: str, grid: List[List[str]], table_id: str) -> List[dict]:
     if not grid:
         return []
     top = [bool(r) and str(r[0]).startswith("\x01") for r in grid]
-    grid = [[str(c).replace("\x01", "") for c in r] for r in grid]
+    cont = [[str(c).startswith("\x02") for c in r] for r in grid]
+    grid = [[str(c).replace("\x01", "").replace("\x02", "") for c in r] for r in grid]
     ncol = len(grid[0])
     # header rows: leading rows with no numeric cell outside the first column
     h = 0
@@ -177,7 +206,11 @@ def _table_candidates(caption: str, grid: List[List[str]], table_id: str) -> Lis
         first = _clean(row[0])
         return bool(first) and all(_clean(c) in ("", first) for c in row[1:])
 
-    while h < len(grid) and h < 4 and not any(_is_num(c) for c in grid[h][1:]) \
+    def _datalike(c):
+        c = _clean(c)
+        return _is_num(c) or bool(re.fullmatch(r"[-−]?\d[\d.,;:%()\s/–-]*", c))
+
+    while h < len(grid) and h < 4 and not any(_datalike(c) for c in grid[h][1:]) \
             and not (h > 0 and _section_like(grid[h])):
         h += 1
     header = [" ".join(dict.fromkeys(_clean(grid[r][c]) for r in range(h) if _clean(grid[r][c])))
@@ -203,7 +236,7 @@ def _table_candidates(caption: str, grid: List[List[str]], table_id: str) -> Lis
     nlab = 0
     for c in range(ncol):
         vals = [_clean(r[c]) for r in body if _clean(r[c])]
-        if c > 0 and any(parse_mean_sd(v) is not None for v in vals):
+        if c > 0 and any(parse_mean_sd(v) is not None or _parse_median_range(v) is not None for v in vals):
             break
         if vals and sum(_is_num(v) for v in vals) / len(vals) < 0.5:
             nlab += 1
@@ -211,6 +244,30 @@ def _table_candidates(caption: str, grid: List[List[str]], table_id: str) -> Lis
             break
     nlab = max(nlab, 1)
     out = []
+    # what the cells hold: caption, header and the text-only body cells declare SE / median-range / IQR
+    hint = " ".join([caption] + header + [_clean(c) for r in body for c in r if _clean(c) and not _is_num(_clean(c))])
+    kind_ms, kind_med = _stat_kind(hint)
+    # orientation: groups as ROWS when the same row labels repeat under several section rows
+    lab_secs: Dict[str, set] = {}
+    cur = ""
+    for row in body:
+        cells_ = [_clean(c) for c in row]
+        lab_ = " ".join(dict.fromkeys(c for c in cells_[:nlab] if c))
+        if lab_ and all(d in ("", lab_) for d in cells_[nlab:]):
+            cur = lab_
+        elif lab_:
+            lab_secs.setdefault(lab_, set()).add(cur)
+    rep = [k for k, v in lab_secs.items() if len(v) >= 2]
+    transposed = len(rep) >= 2 and any(re.search(r"control|healthy|\bHC\b|comparison", k, re.I) for k in rep)
+    # a row of group sizes ("N | 120 | 30")
+    n_by_col: Dict[int, int] = {}
+    for row in body:
+        cells_ = [_clean(c) for c in row]
+        if re.fullmatch(r"(n|no\.?|number of (subjects|participants|patients)|sample size)\s*:?", cells_[0], re.I):
+            for c in range(nlab, ncol):
+                v = _to_float(cells_[c])
+                if v is not None and float(v).is_integer() and v >= 2:
+                    n_by_col[c] = int(v)
     section: List[str] = []
     prev_data = False
     styled = False
@@ -239,23 +296,51 @@ def _table_candidates(caption: str, grid: List[List[str]], table_id: str) -> Lis
         else:
             full = f"{section[-1]}: {label}" if section else label
         c = nlab
+        gi = len(grid) - len(body) + bi
+        rc = cont[gi] if gi < len(cont) and msd_row is None else [False] * ncol
+        used_hdr = {header[k] for k in range(nlab, ncol) if not rc[k] and k < len(header)}
         while c < ncol:
             cell = cells[c]
+            if rc[c]:
+                c += 1
+                continue
             grp = header[c] if c < len(header) else ""
+            # a value spanning several columns belongs to the spanned header no other value uses
+            span = [c] + [k for k in range(c + 1, ncol) if rc[k] and all(rc[q] for q in range(c + 1, k + 1))]
+            if len(span) > 1:
+                others = {header[k] for k in range(nlab, ncol) if k not in span and not rc[k]}
+                cand = [header[k] for k in span if header[k] not in others]
+                if cand:
+                    grp = cand[0]
+            row_lab, row_no = full, bi
+            if transposed:
+                grp = label
+                row_lab = f"{section[-1]}: {header[c]}" if section else header[c]
+                row_no = (tuple(section), c)
+            nh = _n_of(grp) if _n_of(grp) is not None else n_by_col.get(c)
             pair = parse_mean_sd(cell)
             if pair is not None:
-                out.append({"table": table_id, "caption": caption, "row": full, "group": grp,
-                            "n_header": _n_of(grp), "mean": pair[0], "sd": pair[1], "raw": cell,
-                            "layout": "cell", "row_no": bi, "section": " > ".join(section)})
+                out.append({"table": table_id, "caption": caption, "row": row_lab, "group": grp,
+                            "n_header": nh, "mean": pair[0], "sd": pair[1], "raw": cell,
+                            "layout": "cell", "row_no": row_no, "section": " > ".join(section),
+                            "stat": kind_ms})
+                c += 1
+                continue
+            med = _parse_median_range(cell)
+            if med is not None:
+                out.append({"table": table_id, "caption": caption, "row": row_lab, "group": grp,
+                            "n_header": nh, "mean": med[0], "sd": float("nan"), "lo": med[1], "hi": med[2],
+                            "raw": cell, "layout": "cell", "row_no": row_no, "section": " > ".join(section),
+                            "stat": kind_med})
                 c += 1
                 continue
             if sub[c] and _M_HDR.match(sub[c]) and c + 1 < ncol and _SD_HDR.match(sub[c + 1] or ""):
                 m_, s_ = _to_float(cell), _to_float(cells[c + 1])
                 if m_ is not None and s_ is not None:
                     out.append({"table": table_id, "caption": caption, "row": full, "group": grp,
-                                "n_header": _n_of(grp), "mean": m_, "sd": s_,
+                                "n_header": nh, "mean": m_, "sd": s_,
                                 "raw": f"{cell} | {cells[c + 1]}", "layout": "M|SD columns",
-                                "row_no": bi, "section": " > ".join(section)})
+                                "row_no": bi, "section": " > ".join(section), "stat": kind_ms})
                 c += 2
                 continue
             c += 1
@@ -314,6 +399,14 @@ def _text_candidates(text: str, source: str) -> List[dict]:
             grp_m = re.search(r"([A-Za-z][\w-]*(?:\s[A-Za-z][\w-]*)?)\s*[:=,]?\s*$", clause)
             group = grp_m.group(1) if grp_m else f"#{k + 1}"
             label = re.sub(r"\(\s*[^()]*$", "", clause).strip(" :,(|\t") or clause.strip()
+            # "... upon reaction time for Go responses (...) or for NoGo responses (...)": the second
+            # clause inherits the measure named in the first
+            if re.match(r"(for|in|on|of|at|during|with)\b", label, re.I) and out and \
+                    out[-1]["table"] == f"{source}:line{li + 1}":
+                prev = out[-1]["row"]
+                cut = list(re.finditer(r"\b(for|in|on|of|at|during|with)\b", prev, re.I))
+                if cut:
+                    label = (prev[:cut[-1].start()].rstrip() + " " + label).strip()
             out.append({"table": f"{source}:line{li + 1}", "caption": "", "row": label[-120:], "group": group,
                         "n_header": _n_of(ctx), "mean": a, "sd": b, "raw": raw, "layout": "text",
                         "context": ctx.strip()})
@@ -429,6 +522,115 @@ def _pdf_column_tables(text: str, source: str) -> List[dict]:
     return out
 
 
+_JUNK_LINE = re.compile(r"licen[cs]e|preprint|copyright|perpetuity|medrxiv|biorxiv|doi\.org|certified by peer", re.I)
+_NGRP = re.compile(r"\(\s*[nN]\s*=\s*(\d[\d,]*)\s*\)")
+
+
+def _pdf_stream_tables(text: str, source: str) -> List[dict]:
+    """Tables that PDF text extraction emits row by row with cells broken over lines.
+
+    A header names the groups with their sizes ("No COVID (n = 185) COVID (n = 181)"). Then either
+    every row is "<label> m (sd) m (sd) ..." -- one pair per group, possibly split across lines -- or
+    every row is "<label> v1 v2 ..." with a fixed set of columns per group that the header lists
+    ("M SD <other> ..." repeated per group)."""
+    out: List[dict] = []
+    hs = list(_NGRP.finditer(text))
+    i, tcount = 0, 0
+    while i < len(hs):
+        clus = [hs[i]]
+        while i + 1 < len(hs) and hs[i + 1].start() - clus[-1].end() < 250:
+            i += 1
+            clus.append(hs[i])
+        i += 1
+        if len(clus) < 2:
+            continue
+        tcount += 1
+        groups, prev = [], max(0, clus[0].start() - 120)
+        for m in clus:
+            seg = "\n".join(ln for ln in text[prev:m.start()].split("\n") if not _JUNK_LINE.search(ln))
+            seg = re.sub(r"\s+", " ", seg).strip()
+            seg = re.split(r"\)\s|\.\s|:\s", seg)[-1] if prev == max(0, clus[0].start() - 120) else seg
+            words = [w for w in seg.split() if not re.fullmatch(r"[\d.,%()]+|Measure|Variable|Characteristic", w)]
+            groups.append((" ".join(words[-5:]).strip(" ,;"), int(m.group(1).replace(",", ""))))
+            prev = m.end()
+        body_start = clus[-1].end()
+        nxt = re.search(r"\n\s*(?:Supplementary\s+)?Table\s+\d+[.:]|\(\s*[nN]\s*=\s*\d", text[body_start + 20:])
+        body = text[body_start: body_start + 20 + (nxt.start() if nxt else 8000)]
+        # the header continues with column titles up to the statistic names ("Mean (SD) T p ...")
+        hm = None
+        for hm in re.finditer(r"(?:Mean\s*\(\s*SD\s*\)|\bM\s+SD\b)[^\n]*\n", body[:800]):
+            pass
+        if hm is not None and not re.search(r"\d\s*\(\s*\d", body[:hm.start()]):
+            body = body[hm.end():]
+        k = len(groups)
+        lines = body.split("\n")
+        # flat mode: per-group column names listed in the header (M SD ... repeated)
+        head_toks = re.findall(r"[A-Za-z]+", body[:400])
+        m_pos = [q for q, t in enumerate(head_toks) if t in ("M", "Mean", "mean")]
+        flat = None
+        if len(m_pos) >= k >= 2 and "SD" in head_toks:
+            c = m_pos[1] - m_pos[0]
+            sd_off = head_toks.index("SD", m_pos[0]) - m_pos[0]
+            if 2 <= c <= 8 and 0 < sd_off < c:
+                flat = (c, sd_off)
+        pair = r"([-−]?\d*\.?\d+)\s*\(\s*([-−]?\d*\.?\d+)\s*\)"
+        section = ""
+        if flat:
+            c, sd_off = flat
+            num = r"[-−]?\d*\.?\d+"
+            pat = re.compile(r"(?:^|\s)([A-Z][A-Za-z0-9/&’'-]{0,30}(?:\s[A-Za-z][A-Za-z0-9/&’'-]{0,30}){0,3})\s+((?:" + num
+                             + r"\s+){" + str(k * c - 1) + "}" + num + ")(?=\s|$)")
+            hdr_words = set(head_toks[:m_pos[-1] + c])
+            for rn, m in enumerate(pat.finditer(re.sub(r"\s+", " ", body))):
+                vals = [_to_float(v) for v in m.group(2).split()]
+                lab_ = " ".join(w for w in m.group(1).split() if w not in hdr_words) or m.group(1)
+                for g, (gname, n) in enumerate(groups):
+                    mu, sd_ = vals[g * c], vals[g * c + sd_off]
+                    if mu is None or sd_ is None:
+                        continue
+                    out.append({"table": f"{source}:pdf-stream{tcount}", "caption": "", "section": "",
+                                "row": lab_, "group": f"{gname} (n = {n})", "n_header": n, "mean": mu,
+                                "sd": sd_, "raw": m.group(0).strip()[:200], "layout": "pdf rows",
+                                "row_no": rn, "context": ""})
+            continue
+        stream = "\n".join(ln for ln in lines if not _JUNK_LINE.search(ln))
+        pat = re.compile(r"(?m)^[ \t]*([^\n\d]*?[A-Za-z%’'()][^\n\d]*?)\s+" + r"\s*".join([pair] * k))
+        last_end = 0
+        path: List[str] = []
+        measure_word = re.compile(r"\b(mean|SD|s\.d\.|accuracy|correct|%|RT|score|reaction|time|errors?|n)\b|%|\(SD\)", re.I)
+        for rn, m in enumerate(pat.finditer(stream)):
+            # text lines between the previous row and this one: headings (task / condition names)
+            # and the first lines of a label broken over several lines
+            above = [ln.strip() for ln in stream[last_end:m.start()].split("\n") if ln.strip()]
+            above = [ln for ln in above if not re.search(r"\d[.,]\d|\(\s*\d|\d\s*\)|^\s*[\d.]+\s*$|[=<>]|"
+                                                         r"\b(?:T/U|F/H|GLM|p\s*$|df)\b", ln)
+                     and re.search(r"[A-Za-z]{2}", ln) and 1 < len(ln) < 80]
+            lab_lines, heads = [], []
+            for ln in reversed(above):          # trailing measure-like lines continue the label
+                if not heads and measure_word.search(ln):
+                    lab_lines.insert(0, ln)
+                else:
+                    heads.insert(0, ln)
+            if heads:
+                path = heads if len(heads) >= 2 or not path else path[:-1] + heads
+            last_end = m.end()
+            label = re.sub(r"\s+", " ", " ".join(lab_lines + [m.group(1)])).strip()
+            section = " > ".join(re.sub(r"\s+", " ", x) for x in path)
+            if path:
+                label_full = ": ".join([re.sub(r"\s+", " ", x) for x in path[-2:]] + [label])
+            else:
+                label_full = label
+            for g, (gname, n) in enumerate(groups):
+                mu, sd_ = _to_float(m.group(2 + 2 * g)), _to_float(m.group(3 + 2 * g))
+                if mu is None or sd_ is None:
+                    continue
+                out.append({"table": f"{source}:pdf-stream{tcount}", "caption": "", "section": section,
+                            "row": label_full, "group": f"{gname} (n = {n})",
+                            "n_header": n, "mean": mu, "sd": sd_, "raw": re.sub(r"\s+", " ", m.group(0))[:200],
+                            "layout": "pdf rows", "row_no": rn, "context": ""})
+    return out
+
+
 @register_function(
     aliases=["提取组统计量", "提取均值标准差", "meta-analysis data extraction", "extract group statistics",
              "extract mean SD from article tables", "candidate ledger for meta-analysis"],
@@ -493,9 +695,11 @@ def extract_group_stats(source: Union[str, Path], kind: Optional[str] = None,
     else:
         if kind == "pdf":
             rows += _pdf_column_tables(text, name)
+            rows += _pdf_stream_tables(text, name)
         rows += _text_candidates(text, name)
     led = pd.DataFrame(rows, columns=["table", "caption", "section", "row", "group", "n_header", "mean", "sd",
-                                      "raw", "layout", "row_no", "context"])
+                                      "raw", "layout", "row_no", "context", "stat", "lo", "hi"])
+    led["stat"] = led["stat"].fillna("mean_sd")
     led.attrs["source"] = name
     return led
 
@@ -669,15 +873,29 @@ def group_comparisons(ledger: pd.DataFrame, case: str, control: str, n_map: Opti
         return nh
 
     led["n"] = pd.to_numeric(pd.Series([_n(g, nh) for g, nh in zip(led["group"], led["n_header"])], index=led.index), errors="coerce")
+    # printed summary statistics -> mean / SD (SE, median + range / IQR), with each group's n
+    if "stat" in led:
+        conv = [to_mean_sd(k, n, m, sd_, lo, hi) for k, n, m, sd_, lo, hi in
+                zip(led["stat"].fillna("mean_sd"), led["n"], led["mean"], led["sd"],
+                    led["lo"] if "lo" in led else [np.nan] * len(led), led["hi"] if "hi" in led else [np.nan] * len(led))]
+        led["mean"] = [c[0] for c in conv]
+        led["sd"] = [c[1] for c in conv]
     # control wins for names matching both patterns ("non-depressed", "healthy non-patients")
     led["is_ctrl"] = led["group"].astype(str).str.contains(control, flags=flags, regex=True)
     led["is_case"] = led["group"].astype(str).str.contains(case, flags=flags, regex=True) & ~led["is_ctrl"]
     out = []
     key = ["table", "row", "row_no"] if "row_no" in led else ["table", "row"]
     led = led.assign(row_no=led["row_no"].fillna(-1)) if "row_no" in led else led
+    norm_row = lambda x: re.sub(r"[^a-z0-9%]+", " ", ": ".join(str(x).split(": ")[-2:]).lower()).strip()
+    ctrl_rows = led[led["is_ctrl"]].assign(_nr=lambda d: d["row"].map(norm_row))
     for kk, g in led.groupby(key, sort=False):
         t, r = kk[0], kk[1]
         ca, co = g[g["is_case"]], g[g["is_ctrl"]]
+        if not ca.empty and co.empty:
+            # a table of case subgroups only: the control is printed for the same measure elsewhere
+            other = ctrl_rows[(ctrl_rows["_nr"] == norm_row(r)) & (ctrl_rows["table"] != t)]
+            if len(other):
+                co = other.drop(columns=["_nr"]).iloc[[0]]
         if ca.empty or co.empty:
             continue
         if ca["n"].isna().any():
@@ -689,8 +907,10 @@ def group_comparisons(ledger: pd.DataFrame, case: str, control: str, n_map: Opti
             N, M, S = pool_group_stats(ca["n"].astype(float), ca["mean"], ca["sd"])
         else:
             N, M, S = float(ca["n"].iloc[0]), float(ca["mean"].iloc[0]), float(ca["sd"].iloc[0])
+        stats_ = ",".join(sorted(set(g["stat"].fillna("mean_sd")))) if "stat" in g else "mean_sd"
         for _, c in co.iterrows():
             out.append({"table": t, "section": g["section"].iloc[0] if "section" in g else "", "row": r,
+                        "printed": stats_,
                         "layout": g["layout"].iloc[0], "case_groups": " + ".join(ca["group"].astype(str)),
                         "case_subgroups": [(None if pd.isna(a) else float(a), float(b), float(c_))
                                            for a, b, c_ in zip(ca["n"], ca["mean"], ca["sd"])],
@@ -703,6 +923,39 @@ def group_comparisons(ledger: pd.DataFrame, case: str, control: str, n_map: Opti
         res["d"] = hedges_g(res["n_case"], res["mean_case"], res["sd_case"], res["n_control"],
                             res["mean_control"], res["sd_control"])["g"].values
     return res
+
+
+@register_function(
+    aliases=["汇总统计量转均值标准差", "SE to SD", "median range to mean SD", "Hozo", "Wan IQR conversion"],
+    category="utils",
+    description="Convert a printed group summary to mean and SD: mean (SE) -> SD = SE sqrt(n); median with "
+                "range -> Hozo et al. 2005 (mean (a+2m+b)/4 for n <= 25 else m; SD from the range with the "
+                "n <= 15 / <= 70 / > 70 rules); median with IQR -> Wan et al. 2014 (mean (q1+m+q3)/3, SD = "
+                "(q3-q1)/1.35). kind: mean_sd | mean_se | median_range | median_iqr.",
+    examples=["ov.tl.to_mean_sd('median_range', 120, 54, None, 22, 71)"],
+    related=["tl.group_comparisons", "tl.sd_from_summary"],
+)
+def to_mean_sd(kind: str, n, mean, sd=None, lo=None, hi=None) -> Tuple[float, float]:
+    """Return ``(mean, sd)``; NaN where n is needed but unknown."""
+    nan = float("nan")
+    n = float(n) if n is not None and not (isinstance(n, float) and math.isnan(n)) else nan
+    if kind in (None, "mean_sd") or (isinstance(kind, float)):
+        return float(mean), (float(sd) if sd is not None else nan)
+    if kind == "mean_se":
+        return float(mean), (float(sd) * math.sqrt(n) if not math.isnan(n) else nan)
+    m, a, b = float(mean), float(lo), float(hi)
+    if kind == "median_iqr":
+        return (a + m + b) / 3.0, (b - a) / 1.35
+    if math.isnan(n):
+        return nan, nan
+    mu = (a + 2 * m + b) / 4.0 if n <= 25 else m
+    if n <= 15:
+        sdv = math.sqrt(((a - 2 * m + b) ** 2 / 4.0 + (b - a) ** 2) / 12.0)
+    elif n <= 70:
+        sdv = (b - a) / 4.0
+    else:
+        sdv = (b - a) / 6.0
+    return mu, sdv
 
 
 @register_function(
@@ -824,7 +1077,7 @@ def apply_selection_rules(ledger: pd.DataFrame, rules: dict, study: str = "study
     df["decision"], df["reason"] = dec, why
     return df
 
-_CONTROL_DEFAULT = r"control|healthy|\bHC\b|\bNC\b|\bCTL\b|comparison|non[- ]?\w+"
+_CONTROL_DEFAULT = r"control|healthy|\bHC\b|\bNC\b|\bCTL\b|comparison|non[- ]?\w+|\bno\s+\w+|\bnorm(?:ative)?\b"
 
 
 @register_function(
@@ -935,8 +1188,10 @@ def method_measure_statements(source: Union[str, Path], extra_pattern: Optional[
     if p is not None and p.exists() and p.suffix.lower() == ".pdf":
         from pypdf import PdfReader
         text = "\n".join((pg.extract_text() or "") for pg in PdfReader(str(p)).pages)
+    table_rows = _coding_table_statements(text)
     text = re.sub(r"<table-wrap\b.*?</table-wrap>|<table\b.*?</table>|<ref-list\b.*?</ref-list>"
                   r"|<script\b.*?</script>|<style\b.*?</style>", " ", text, flags=re.S | re.I)
+    text = re.sub(r"(?m)^\s*\|.*\|\s*$", " ", text)          # markdown tables handled above
     blocks: List[Tuple[str, str]] = []
     if re.search(r"<(p|title|h[1-6])\b", text, re.I):
         sec = ""
@@ -963,4 +1218,55 @@ def method_measure_statements(source: Union[str, Path], extra_pattern: Optional[
                 rows.append({"section": sec, "sentence": sent.strip(),
                              "context": sents[i - 1].strip() if i > 0 else "",
                              "context_after": sents[i + 1].strip() if i + 1 < len(sents) else ""})
-    return pd.DataFrame(rows, columns=["section", "sentence", "context", "context_after"]).drop_duplicates()
+    return pd.DataFrame(table_rows + rows,
+                        columns=["section", "sentence", "context", "context_after"]).drop_duplicates()
+
+
+def _coding_table_statements(text: str) -> List[dict]:
+    """A coding table (markdown ``| domain | test | scores coded |``, as instructions and protocols
+    give it) -> one measure statement per test: "For the <test>, the dependent measures are <scores>."
+    Rows of the same test are merged; a blank first cell continues the previous domain."""
+    out: Dict[str, dict] = {}
+    lines = [ln.strip() for ln in str(text).splitlines()]
+    i = 0
+    while i < len(lines):
+        if not (lines[i].startswith("|") and lines[i].endswith("|")):
+            i += 1
+            continue
+        block = []
+        while i < len(lines) and lines[i].startswith("|") and lines[i].endswith("|"):
+            block.append([c.strip() for c in lines[i].strip("|").split("|")])
+            i += 1
+        if len(block) < 3 or not all(set(c) <= set("-: ") for c in block[1]):
+            continue
+        hdr = [h.lower() for h in block[0]]
+        sc = next((k for k, h in enumerate(hdr) if re.search(r"score|measure|outcome|statistic|variable", h)), None)
+        tc = next((k for k, h in enumerate(hdr) if re.search(r"\btest|task|instrument|scale", h) and k != sc), None)
+        if sc is None or tc is None:
+            continue
+        dc = next((k for k, h in enumerate(hdr) if k not in (sc, tc)), None)
+        dom = ""
+        for row in block[2:]:
+            if len(row) <= max(sc, tc):
+                continue
+            if dc is not None and dc < len(row) and row[dc]:
+                dom = row[dc]
+            if not row[tc]:
+                continue
+            for test in [t.strip() for t in row[tc].split(";") if t.strip()]:
+                scores = row[sc]
+                key = test.lower()
+                if key in out:
+                    out[key]["scores"].append(scores)
+                    out[key]["domains"].append(dom)
+                else:
+                    out[key] = {"test": test, "scores": [scores], "domains": [dom]}
+    rows = []
+    for v in out.values():
+        scores = ", ".join(dict.fromkeys(x.replace(";", ",") for x in v["scores"] if x))
+        doms = ", ".join(dict.fromkeys(d for d in v["domains"] if d))
+        rows.append({"section": doms or "coding table",
+                     "sentence": f"For the {v['test']}, the dependent measures are {scores}.",
+                     "context": f"{v['test']} is a coded test.",
+                     "context_after": ""})
+    return rows

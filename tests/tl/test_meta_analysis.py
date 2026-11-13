@@ -206,3 +206,53 @@ def test_pdf_column_tables():
     assert got[("Sorting task: Time (s)", "Patients (n = 10)")] == (12.5, 2.5)
     assert got[("Sorting task: Errors", "Controls (n = 12)")] == (1.5, 0.5)
     assert len(rows) == 6
+
+
+def test_to_mean_sd_conversions():
+    from omicverse.tl._meta_analysis import to_mean_sd
+    assert to_mean_sd("mean_se", 25, 10.0, 2.0) == (10.0, 10.0)
+    m, s = to_mean_sd("median_range", 120, 54, None, 22, 71)       # n > 70: mean = median, SD = range / 6
+    assert m == 54 and math.isclose(s, 49 / 6)
+    m, s = to_mean_sd("median_range", 30, 56.5, None, 32, 74)      # 25 < n <= 70: SD = range / 4
+    assert m == 56.5 and math.isclose(s, 10.5)
+    m, s = to_mean_sd("median_range", 10, 5, None, 1, 12)           # n <= 15: Hozo small-sample formulas
+    assert math.isclose(m, (1 + 10 + 12) / 4) and math.isclose(s, math.sqrt(((1 - 10 + 12) ** 2 / 4 + 121) / 12))
+
+
+_SUMMARY_TABLES = """<article><body>
+<table-wrap><label>Table 1</label><caption>Demographics</caption><table>
+<tr><th/><th>Patients</th><th>Healthy controls</th></tr>
+<tr><td>N</td><td>40</td><td>20</td></tr>
+<tr><td>Age (median; range)</td><td>45; 20–70</td><td>44; 21–69</td></tr></table></table-wrap>
+<table-wrap><label>Table 2</label><caption>Mean (SEM) reaction times</caption><table>
+<tr><th>Group</th><th>Cue A</th><th>Cue B</th></tr>
+<tr><td>Incongruent</td><td/><td/></tr>
+<tr><td>Control</td><td>500 (+10)</td><td>510 (+12)</td></tr>
+<tr><td>Early phase</td><td>560 (+20)</td><td>570 (+22)</td></tr>
+<tr><td>Late phase</td><td>540 (+15)</td><td>545 (+18)</td></tr>
+<tr><td>Congruent</td><td/><td/></tr>
+<tr><td>Control</td><td>480 (+10)</td><td>490 (+11)</td></tr>
+<tr><td>Early phase</td><td>530 (+20)</td><td>535 (+21)</td></tr>
+<tr><td>Late phase</td><td>520 (+14)</td><td>522 (+16)</td></tr></table></table-wrap>
+</body></article>"""
+
+
+def test_summary_kinds_transposed_and_n_rows():
+    from omicverse.tl._meta_analysis import extract_group_stats
+    led = extract_group_stats(_SUMMARY_TABLES, kind="xml")
+    t1 = led[led["table"] == "Table 1"]
+    assert set(t1["stat"]) == {"median_range"} and set(t1["n_header"]) == {40, 20}
+    t2 = led[led["table"] == "Table 2"]
+    assert set(t2["stat"]) == {"mean_se"}
+    r = t2[(t2["row"] == "Incongruent: Cue A") & (t2["group"] == "Late phase")].iloc[0]   # groups as rows
+    assert (r["mean"], r["sd"]) == (540.0, 15.0)
+
+
+def test_coding_table_statements():
+    from omicverse.tl._meta_analysis import method_measure_statements
+    md = ("| Domain | Test | Score(s) coded |\n| --- | --- | --- |\n| Memory | Word test | % correct; reaction time |\n"
+          "| | Figure test | copy score |\n| Speed | Word test | delayed accuracy |\n| | A test; B test | score |\n")
+    st = method_measure_statements(md)
+    sent = list(st["sentence"])
+    assert "For the Word test, the dependent measures are % correct, reaction time, delayed accuracy." in sent
+    assert any(x.startswith("For the B test") for x in sent)

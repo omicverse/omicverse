@@ -59,3 +59,5 @@ __all__ = ["cross_species_align", "bonsai", "bandpass_filter", "channel_qc_table
            "format_workbook", "method_measure_statements",
            "abbreviation_map", "propose_selection", "reconstruct_study_effects",
            "write_study_effects", "record_deliverable", "verify_deliverable"]
+from ._meta_analysis import to_mean_sd  # noqa: E402  (summary statistics -> mean / SD)
+__all__ += ["to_mean_sd"]
