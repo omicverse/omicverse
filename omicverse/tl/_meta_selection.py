@@ -463,7 +463,9 @@ def propose_selection(wb: pd.DataFrame, statements: pd.DataFrame, abbreviations:
 )
 def reconstruct_study_effects(sources: dict, method_source: Union[str, Path], case=None, control=None, exclude=None,
                               n_map: Optional[dict] = None, prefer_counts: bool = True,
-                              out_dir: Optional[str] = None, verbose: bool = True):
+                              out_dir: Optional[str] = None, out: Optional[str] = None,
+                              case_label: str = "case", out_columns: Optional[Sequence[str]] = None,
+                              verbose: bool = True):
     """Return ``(proposals, effects)``.
 
     ``proposals``: every workbook row with family, measure, decision (keep / exclude / review),
@@ -472,7 +474,10 @@ def reconstruct_study_effects(sources: dict, method_source: Union[str, Path], ca
     ``case=None`` treats every group that is not a control group as a case group (subgroups pooled;
     use ``exclude`` for groups of another diagnosis). ``prop.attrs['study_summary']`` (also printed)
     lists per study the statistics found, comparisons formed and the action needed (PDF only,
-    groups not matched, unknown n). ``out_dir``: also write ``proposals.csv`` there. Review the ``review`` rows (and spot-check
+    groups not matched, unknown n). ``out_dir``: also write ``proposals.csv`` there. ``out``: write
+    the deliverable (the ``keep`` rows, via :func:`write_study_effects`, columns renamed with
+    ``case_label`` and ordered as ``out_columns``) -- rewrite it with :func:`write_study_effects`
+    after resolving the review rows, never by hand. Review the ``review`` rows (and spot-check
     the others) against the articles; change a decision in ``proposals`` and recompute with
     ``meta_effect_sizes(proposals[proposals.decision == 'keep'], case='case')``.
     """
@@ -527,6 +532,10 @@ def reconstruct_study_effects(sources: dict, method_source: Union[str, Path], ca
     if out_dir:
         Path(out_dir).mkdir(parents=True, exist_ok=True)
         prop.drop(columns=["case_subgroups"], errors="ignore").to_csv(Path(out_dir) / "proposals.csv", index=False)
+    if out:
+        write_study_effects(prop.assign(decision=prop["decision"].replace({"review": "exclude"}),
+                                        proposed=prop["decision"].replace({"review": "exclude"})),
+                            out, case_label=case_label, columns=out_columns)
     # per-study health check: statistics found vs comparisons formed
     summ = []
     for sid, paths in sources.items():
@@ -565,6 +574,11 @@ def reconstruct_study_effects(sources: dict, method_source: Union[str, Path], ca
                 print(f"  [{i}] {r['decision']:7s} {str(r['row'])[-60:]} | {nn} | {r['reason'][:110]}")
         print("\nPER-STUDY CHECK (fix every 'action' and call again before reviewing):")
         print(summ.to_string(index=False))
+        if out:
+            print(f"DELIVERABLE written to {out} from the keep rows. After deciding the review rows (and any "
+                  f"hand-transcribed article, as extra_rows) rewrite it ONLY with ov.tl.write_study_effects(prop, "
+                  f"'{out}', case_label='{case_label}', columns=..., extra_rows=...). Do not add, drop or edit rows "
+                  f"by hand: exclusions follow the method's sentences.")
         print(f"keep {int((prop.decision == 'keep').sum())}, review {int((prop.decision == 'review').sum())}, "
               f"exclude {int((prop.decision == 'exclude').sum())}; rows with unknown n are not in the effects "
               f"until n_map supplies them")
