@@ -47,7 +47,7 @@ from .._registry import register_function
 from ._meta_analysis import (comparison_workbook, extract_group_stats, meta_effect_sizes,
                              method_measure_statements, _strip_tags, _CONTROL_DEFAULT)
 
-__all__ = ["abbreviation_map", "propose_selection", "reconstruct_study_effects"]
+__all__ = ["abbreviation_map", "propose_selection", "reconstruct_study_effects", "write_study_effects"]
 
 _STOP = set("""a an the of and or in on for to with by from as at is are was were be been this that these
 those which who it its their than then also both each either per vs versus into within across between
@@ -58,7 +58,7 @@ control controls patient patients study studies analysis analyzed reported repor
 used using use k p d effect size sizes composite individually included include includes including
 variable variables dependent primary common most reported version versions et al table note response responses
 completion characteristic characteristics there upon significant significantly effect effects difference
-differences found observed showed compared higher lower greater average performance average""".split())
+differences found observed showed compared higher lower greater average""".split())
 
 _SPEED = r"\b(rt|rts|reaction|latenc\w*|response time\w*|time\w*|speed|ms|msec|millisecond\w*|second\w*|sec|duration|slow\w*)\b|\(s\)"
 _ACC = (r"\b(accura\w*|correct\w*|hits?|errors?|error rates?|omissions?|commissions?|false[- ]?alarms?|"
@@ -80,7 +80,9 @@ def _stem(w: str) -> str:
 
 
 def _words(text: str) -> List[str]:
-    text = re.sub(r"['’]s\b", "", str(text))
+    # "Benton's FAS": a possessive capitalised word is an author / test-owner name, not a task word
+    text = re.sub(r"\b[A-Z][a-z]+['’]s\b", " ", str(text))
+    text = re.sub(r"['’]s\b", "", text)
     return [w for w in re.findall(r"[A-Za-z][A-Za-z']+", text)]
 
 
@@ -165,7 +167,7 @@ def _expand(text: str, abbr: Dict[str, str]) -> str:
     return str(text) + (" " + " ".join(extra) if extra else "")
 
 
-_COMPOSITE = r"\b(index|indices|quotient|composite|factor score|scale score|full[- ]scale)\b"
+_COMPOSITE = r"\b(index|indices|quotient|composite|factor score|scale score|full[- ]scale|iq)\b"
 
 
 def _types(text: str) -> set:
@@ -317,8 +319,12 @@ def propose_selection(wb: pd.DataFrame, statements: pd.DataFrame, abbreviations:
                     cand = sorted(((sum(idf(t) * min(atoks.get(t, 0), 3) for t in (cur_tok[j] | ctx_tok[j]))
                                     / (1 + len(cur_tok[j] | ctx_tok[j])), j) for j in range(len(cur_tok))
                                    if rtypes & st.at[j, "measures"]["pref"]["types"]), reverse=True)[:2]
-                    why += "; the article's text best matches: " + " || ".join(
-                        f"'{st.at[j, 'sentence'][:90]}'" for _, j in cand)
+                    def _desc(j):
+                        ctxs = " ".join(x for x in (st.at[j, "context"], st.at[j, "context_after"]) if x)
+                        return f"'{st.at[j, 'sentence'][:90]}' [about: {ctxs[:160]}]"
+                    why += ("; the article's text best matches the method sentence(s): " +
+                            " || ".join(_desc(j) for _, j in cand) +
+                            " -- keep if the article's task is that task and the sentence names this statistic")
                     if cand and cand[0][0] > 0:
                         j0 = cand[0][1]
                         m0 = st.at[j0, "measures"]["pref"]
@@ -394,6 +400,11 @@ def propose_selection(wb: pd.DataFrame, statements: pd.DataFrame, abbreviations:
             ac = {re.sub(r"[^a-z]", "", w.lower()) for w in re.findall(r"\b[A-Z]{2,5}\b", row)}
             return bool(ac & m["acronyms"])
 
+        if "composite index" in rtypes:
+            rec.append(dict(family=fam, statement=stmt[:300], measure=meas["pref"]["text"][:120],
+                            measure_type=",".join(sorted(rtypes)), coverage=round(cov, 2), decision="exclude",
+                            reason="a composite / index score of a test battery, not a task's score"))
+            continue
         base = dict(family=fam, statement=stmt[:300], measure=meas["pref"]["text"][:120],
                     measure_type=",".join(sorted(rtypes)), coverage=round(cov, 2))
         hidden = [u for u in unm if u in caps and u not in {n for n, _, ab_ in concepts if ab_}]
@@ -410,10 +421,11 @@ def propose_selection(wb: pd.DataFrame, statements: pd.DataFrame, abbreviations:
         else:
             dec, why = "exclude", f"statistic not among the method's measures for this task ({meas['pref']['text'][:80]})"
         if dec in ("keep", "fallback") and cov < min_coverage:
-            dec, why = "review", (f"task identity uncertain (coverage {cov:.2f}): {sorted(unm)} not in the method "
-                                  f"statement -- same task, or a variant the method does not name?")
+            dec, why = "exclude", (f"a variant / different task: {sorted(unm)} not in the method statement "
+                                   f"(coverage {cov:.2f}) -- the method does not name it")
         rec.append({**base, "decision": dec, "reason": why})
-    R = pd.DataFrame(rec, index=df.index)
+    R = pd.DataFrame(rec, index=df.index) if rec else pd.DataFrame(
+        columns=["family", "statement", "measure", "measure_type", "coverage", "decision", "reason"])
     for c in R:
         df[c] = R[c]
     sid = df["study"] if "study" in df else pd.Series("", index=df.index)
@@ -434,6 +446,7 @@ def propose_selection(wb: pd.DataFrame, statements: pd.DataFrame, abbreviations:
             if same.any():
                 df.at[i, "decision"] = "exclude"
                 df.at[i, "reason"] = "percentage of an accuracy/error measure while counts are reported (counts coded)"
+    df["proposed"] = df["decision"]
     return df
 
 
@@ -556,3 +569,64 @@ def reconstruct_study_effects(sources: dict, method_source: Union[str, Path], ca
               f"exclude {int((prop.decision == 'exclude').sum())}; rows with unknown n are not in the effects "
               f"until n_map supplies them")
     return prop, eff
+
+
+@register_function(
+    aliases=["写出研究效应", "write study effects", "deliver meta-analysis rows"],
+    category="utils",
+    description="Write the deliverable from reviewed proposals: every 'keep' row with complete statistics, "
+                "Hedges' g recomputed, columns renamed to the task's header. Refuses unresolved 'review' rows "
+                "and changes of a proposed keep / exclude that carry no cited reason (overrides={index: "
+                "'quoted method / instruction sentence'}).",
+    examples=["ov.tl.write_study_effects(prop, '/app/results/study_effects.csv', case_label='mdd', "
+              "columns=['doi','task','n_mdd','mean_mdd','sd_mdd','n_control','mean_control','sd_control','d'])"],
+    related=["tl.reconstruct_study_effects", "tl.meta_effect_sizes"],
+)
+def write_study_effects(prop: pd.DataFrame, path: str, case_label: str = "case", control_label: str = "control",
+                        columns: Optional[Sequence[str]] = None, study_column: str = "doi",
+                        task_column: str = "task", overrides: Optional[Dict] = None,
+                        extra_rows: Optional[pd.DataFrame] = None) -> pd.DataFrame:
+    """Write and return the delivered table.
+
+    ``extra_rows``: comparisons transcribed by hand (columns ``study, row, n_case, mean_case, sd_case,
+    n_control, mean_control, sd_control``), appended after the kept rows.
+    """
+    overrides = overrides or {}
+    if "proposed" in prop:
+        unresolved = prop.index[prop["decision"] == "review"].tolist()
+        if unresolved:
+            raise ValueError(f"resolve the review rows first (set decision to keep / exclude): {unresolved}")
+        changed = prop.index[(prop["proposed"].isin(["keep", "exclude"])) & (prop["decision"] != prop["proposed"])]
+        bad = [i for i in changed if len(str(overrides.get(i, ""))) < 25]
+        if bad:
+            raise ValueError(
+                f"rows {bad} changed from the proposed decision without a cited reason. Restore them "
+                f"(prop.loc[i, 'decision'] = prop.loc[i, 'proposed']) or pass overrides={{i: '<quoted method or "
+                f"instruction sentence that decides it>'}}. A measure you consider secondary is not a reason.")
+        for i in changed:
+            print(f"override [{i}] {prop.at[i, 'row']}: {prop.at[i, 'proposed']} -> {prop.at[i, 'decision']} "
+                  f"({overrides[i][:100]})")
+    kept = prop[prop["decision"] == "keep"]
+    if extra_rows is not None and len(extra_rows):
+        kept = pd.concat([kept, extra_rows], ignore_index=True)
+    stat = ["n_case", "mean_case", "sd_case", "n_control", "mean_control", "sd_control"]
+    miss = kept[kept[stat].isna().any(axis=1)]
+    if len(miss):
+        print(f"skipped {len(miss)} kept rows with missing statistics (fill n via n_map): "
+              f"{miss['row'].astype(str).str[-50:].tolist()}")
+    kept = kept.dropna(subset=stat)
+    eff = meta_effect_sizes(kept, case="case", control="control")
+    out = pd.DataFrame({study_column: eff["study"].values, task_column: eff["row"].astype(str).values})
+    for c in stat:
+        out[c.replace("_case", f"_{case_label}").replace("_control", f"_{control_label}")] = eff[c].values
+    out["d"] = eff["d"].values
+    for c in out.columns:
+        if c.startswith("n_"):
+            out[c] = out[c].round().astype(int)
+    out = out.drop_duplicates()
+    if columns:
+        out = out[list(columns)]
+    Path(path).parent.mkdir(parents=True, exist_ok=True)
+    out.to_csv(path, index=False)
+    print(f"wrote {len(out)} rows to {path}")
+    return out

@@ -2,6 +2,7 @@
 import math
 
 import numpy as np
+import pytest
 import pandas as pd
 
 from omicverse.tl._meta_analysis import (extract_group_stats, group_comparisons, hedges_g,
@@ -161,3 +162,17 @@ def test_propose_selection():
     assert d["% correct NoGo"] == "exclude"           # counts reported -> percentage not coded
     assert d["COWAT total"] == "keep" and d["Age (years)"] == "exclude" and d["Spatial span"] == "exclude"
     assert d["RT in ms"] == "review"                    # measure without a task name
+
+
+def test_write_study_effects_guard(tmp_path):
+    from omicverse.tl._meta_selection import write_study_effects
+    prop = pd.DataFrame({"study": ["s"] * 3, "row": ["a", "b", "c"], "n_case": [20, 20, 20],
+                         "mean_case": [1.0, 2.0, 3.0], "sd_case": [1.0, 1.0, 1.0], "n_control": [20, 20, 20],
+                         "mean_control": [0.5, 1.5, 2.5], "sd_control": [1.0, 1.0, 1.0],
+                         "proposed": ["keep", "keep", "exclude"], "decision": ["keep", "exclude", "exclude"]})
+    with pytest.raises(ValueError):
+        write_study_effects(prop, str(tmp_path / "o.csv"))
+    out = write_study_effects(prop, str(tmp_path / "o.csv"), case_label="mdd",
+                              overrides={1: "the method names only the other statistic for this task"})
+    assert list(out.columns) == ["doi", "task", "n_mdd", "mean_mdd", "sd_mdd", "n_control", "mean_control",
+                                 "sd_control", "d"] and len(out) == 1
