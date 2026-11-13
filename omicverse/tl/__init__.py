@@ -37,6 +37,7 @@ from ._meta_analysis import (parse_mean_sd, extract_group_stats, group_compariso
                              hedges_g, sd_from_summary, recompute_group_test, meta_effect_sizes,
                              apply_selection_rules, comparison_workbook, format_workbook,
                              method_measure_statements)
+from ._meta_selection import abbreviation_map, propose_selection, reconstruct_study_effects
 
 __all__ = ["cross_species_align", "bonsai", "bandpass_filter", "channel_qc_table",
            "bridged_channel_pairs", "erp_channel_outliers",
@@ -54,4 +55,5 @@ __all__ = ["cross_species_align", "bonsai", "bandpass_filter", "channel_qc_table
            "load_clinical_tables", "infer_clinical_schema", "audit_clinical_tables", "drug_sex_reference",
            "parse_mean_sd", "extract_group_stats", "group_comparisons", "pool_group_stats", "hedges_g",
            "sd_from_summary", "recompute_group_test", "meta_effect_sizes", "apply_selection_rules", "comparison_workbook",
-           "format_workbook", "method_measure_statements"]
+           "format_workbook", "method_measure_statements",
+           "abbreviation_map", "propose_selection", "reconstruct_study_effects"]

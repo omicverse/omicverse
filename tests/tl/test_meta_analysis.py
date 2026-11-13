@@ -116,7 +116,7 @@ def test_method_measure_statements_and_format():
             "individually.</p></html>")
     st = method_measure_statements(html)
     assert len(st) == 2 and set(st["section"]) == {"Shifting", "Fluency"}
-    assert st["sentence"].iloc[0].startswith("In the sorting task")      # antecedent kept
+    assert st["context"].iloc[0].startswith("In the sorting task")       # antecedent kept
     wb = comparison_workbook({"s1": _JATS}, case=r"depress|MDD|patients", verbose=False)
     txt = format_workbook(wb)
     assert "== s1:" in txt and "n=?" in txt
@@ -134,3 +134,30 @@ def test_apply_selection_rules_regex_labelling():
     d = apply_selection_rules(wb, rules)
     assert list(d["decision"]) == ["keep", "exclude", "exclude", "keep", "exclude", "keep"]
     assert d.loc[3, "stat_class"] == "reaction time" and d.loc[2, "family"] == ""
+
+
+_METHOD = """<html><h2>Shifting</h2><p>The most reported shifting task was the Card Sorting Test (CST).
+For the Card Sorting Test, the dependent measure was perseverative errors (when reported), or the number of
+categories achieved (when perseverative errors were not reported).</p>
+<h2>Inhibition</h2><p>Other inhibition tasks were reported. The dependent measures are reaction time and errors.
+The go/no-go task requires withholding a response.</p>
+<h2>Fluency</h2><p>Verbal fluency is the ability to generate words. The dependent measure reported is the number of
+words generated.</p>
+<h2>Age</h2><p>The mean age of the patient group was included as a continuous variable in meta-regression.</p></html>"""
+
+
+def test_propose_selection():
+    from omicverse.tl._meta_selection import abbreviation_map, propose_selection
+    from omicverse.tl._meta_analysis import method_measure_statements
+    st = method_measure_statements(_METHOD)
+    ab = abbreviation_map(_METHOD, "the Controlled Oral Word Association Test (COWAT) was given")
+    wb = pd.DataFrame({"study": ["a"] * 9, "section": [""] * 9,
+                       "row": ["CST perseverative errors", "CST categories", "Go/no-go RT (ms)", "NoGo commissions",
+                               "% correct NoGo", "COWAT total", "Age (years)", "Spatial span", "RT in ms"]})
+    p = propose_selection(wb, st, abbreviations=ab)
+    d = dict(zip(p["row"], p["decision"]))
+    assert d["CST perseverative errors"] == "keep" and d["CST categories"] == "exclude"
+    assert d["Go/no-go RT (ms)"] == "keep" and d["NoGo commissions"] == "keep"
+    assert d["% correct NoGo"] == "exclude"           # counts reported -> percentage not coded
+    assert d["COWAT total"] == "keep" and d["Age (years)"] == "exclude" and d["Spatial span"] == "exclude"
+    assert d["RT in ms"] == "review"                    # measure without a task name

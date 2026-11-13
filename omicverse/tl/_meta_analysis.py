@@ -799,7 +799,7 @@ def format_workbook(wb: pd.DataFrame, max_label: int = 70) -> str:
 
 
 _MEASURE_PAT = re.compile(
-    r"(dependent (measure|variable)s?|primary (outcome|measure)|outcome measures?|(the )?measures? (is|are|was|were)"
+    r"(dependent (measure|variable)s?|measures? included|other measures|primary (outcome|measure)|outcome measures?|(the )?measures? (is|are|was|were)"
     r"|were (coded|included|analy[sz]ed|computed|combined|averaged|excluded)|was (coded|used|included|analy[sz]ed)"
     r"|only when|if (no|not) |rather than|instead of|composite|analy[sz]ed (individually|separately|together)"
     r"|effect sizes? (was|were) (computed|calculated)|pooled|subgroups?|direction|sign)", re.I)
@@ -817,7 +817,8 @@ _MEASURE_PAT = re.compile(
     related=["tl.apply_selection_rules", "tl.comparison_workbook"],
 )
 def method_measure_statements(source: Union[str, Path], extra_pattern: Optional[str] = None) -> pd.DataFrame:
-    """Return ``section, sentence`` for every measure-defining sentence (tables and references removed)."""
+    """Return ``section, sentence, context`` for every measure-defining sentence (tables and references
+    removed); ``context`` is the sentence before it, which often names the task."""
     p = Path(str(source)) if len(str(source)) < 4096 else None
     text = p.read_text(errors="ignore") if (p is not None and p.exists()) else str(source)
     if p is not None and p.exists() and p.suffix.lower() == ".pdf":
@@ -844,12 +845,11 @@ def method_measure_statements(source: Union[str, Path], extra_pattern: Optional[
     pat = re.compile(_MEASURE_PAT.pattern + (f"|{extra_pattern}" if extra_pattern else ""), re.I)
     rows = []
     for sec, para in blocks:
-        sents = re.split(r"(?<=[.;])\s+(?=[A-Z(])", para)
+        sents = re.split(r"(?<=[.])\s+(?=[A-Z(])", para)
         for i, sent in enumerate(sents):
             if 25 <= len(sent) <= 800 and pat.search(sent):
-                # a sentence that refers back ("Dependent measures are ...", "These tasks ...") is
-                # shown with the sentence before it, which names the task
-                if i > 0 and re.match(r"(the|these|this|it|its|each|both|dependent|such|they)\b", sent, re.I):
-                    sent = sents[i - 1].strip() + " " + sent.strip()
-                rows.append({"section": sec, "sentence": sent.strip()})
-    return pd.DataFrame(rows, columns=["section", "sentence"]).drop_duplicates()
+                # the neighbouring sentences often name the task a measure sentence refers to
+                rows.append({"section": sec, "sentence": sent.strip(),
+                             "context": sents[i - 1].strip() if i > 0 else "",
+                             "context_after": sents[i + 1].strip() if i + 1 < len(sents) else ""})
+    return pd.DataFrame(rows, columns=["section", "sentence", "context", "context_after"]).drop_duplicates()
