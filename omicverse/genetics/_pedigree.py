@@ -16,6 +16,7 @@ via :func:`pedigree_core_source`.
                                  from phased parents + ordered transmissions.
 ``gamete_sequences``             transmitted sequences with <= k crossovers.
 ``gamete_distribution``          their probabilities for any pair of sequences.
+``offspring_outcome_probability`` expected offspring outcome of a parental state.
 ``genotype_likelihood_arrays``   long assay rows -> per-sample arrays.
 ``confident_copy_calls``         hard copy-number constraints from
                                  genotype-likelihood triplets.
@@ -36,7 +37,7 @@ from . import _pedigree_core as _core
 __all__ = [
     "two_phase_weights", "haplotype_frequencies", "fit_haplotype_prior", "HaplotypePrior",
     "fit_crossover_intervals", "gamete_sequences", "gamete_distribution",
-    "genotype_likelihood_arrays", "confident_copy_calls",
+    "genotype_likelihood_arrays", "offspring_outcome_probability", "confident_copy_calls",
     "compatible_diplotypes", "structural_identifiability", "simulate_family_cohort",
     "pedigree_core_source",
 ]
@@ -118,6 +119,20 @@ gamete_distribution = register_function(
     examples=["seqs, p = ov.genetics.gamete_distribution(h1, h2, rec['no_crossover'], rec['interval_masses'])"],
     related=["ov.genetics.fit_crossover_intervals", "ov.genetics.gamete_sequences"],
 )(_core.gamete_distribution)
+
+offspring_outcome_probability = register_function(
+    aliases=["offspring_outcome_probability", "state-conditional offspring risk", "parental state penetrance",
+             "next conceptus risk given parents", "子代风险", "给定父母状态的子代患病概率"],
+    category="genetics",
+    description="Expected per-offspring outcome probability for one joint parental state: the outcome "
+                "model (any callable of the maternal and paternal transmitted sequences, e.g. a "
+                "logistic penetrance) averaged over both meioses' transmission distributions with "
+                "role-specific crossover masses. Defined for any sequences (not limited to a catalog "
+                "or candidate list); building block for offspring risk and recruitment / sibship "
+                "history likelihoods of a supplied state.",
+    examples=["q = ov.genetics.offspring_outcome_probability(mat_pair, pat_pair, penetrance, rec_m, rec_p)"],
+    related=["ov.genetics.gamete_distribution", "ov.genetics.fit_crossover_intervals"],
+)(_core.offspring_outcome_probability)
 
 genotype_likelihood_arrays = register_function(
     aliases=["genotype_likelihood_arrays", "assay likelihood table to arrays", "基因型似然矩阵"],

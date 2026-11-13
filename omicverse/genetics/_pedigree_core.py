@@ -33,6 +33,8 @@ Meiosis
                                      crossovers.
     ``gamete_distribution``          probability of each transmitted sequence
                                      (any pair of sequences, <= 1 crossover).
+    ``offspring_outcome_probability`` expected offspring outcome (penetrance)
+                                     of a joint parental state.
     ``fit_crossover_intervals``      EM estimate of the no-crossover mass and
                                      per-interval single-crossover masses
                                      from phased parents + ordered
@@ -68,6 +70,7 @@ __all__ = [
     "gamete_sequences",
     "gamete_distribution",
     "genotype_likelihood_arrays",
+    "offspring_outcome_probability",
     "fit_crossover_intervals",
     "confident_copy_calls",
     "compatible_diplotypes",
@@ -791,6 +794,31 @@ def gamete_distribution(hap_1: str, hap_2: str, no_crossover: float, interval_ma
             out[seq] = out.get(seq, 0.0) + 0.5 * m[j - 1]
     seqs = sorted(out)
     return seqs, np.array([out[q] for q in seqs])
+
+
+def offspring_outcome_probability(maternal_pair: Tuple[str, str], paternal_pair: Tuple[str, str],
+                                  outcome, maternal_crossover: Dict[str, object],
+                                  paternal_crossover: Dict[str, object]) -> float:
+    """Expected per-offspring outcome probability for one joint parental state.
+
+    ``sum_{gm, gp} P(gm | mother) P(gp | father) * outcome(gm, gp)`` over the
+    transmitted sequences of both meioses (``gamete_distribution`` with the
+    ``fit_crossover_intervals`` results of each role). ``outcome`` is any
+    callable of the two transmitted sequences returning a probability (e.g. a
+    logistic penetrance, averaged over a binary offspring covariate when that
+    covariate is unobserved). Computed from the supplied sequences only, so it
+    is defined for every possible state, inside or outside a catalog or a
+    pruned candidate list.
+    """
+    gm, pm = gamete_distribution(maternal_pair[0], maternal_pair[1], maternal_crossover["no_crossover"],
+                                 maternal_crossover["interval_masses"])
+    gp, pp = gamete_distribution(paternal_pair[0], paternal_pair[1], paternal_crossover["no_crossover"],
+                                 paternal_crossover["interval_masses"])
+    total = 0.0
+    for a, wa in zip(gm, pm):
+        for b, wb in zip(gp, pp):
+            total += wa * wb * float(outcome(a, b))
+    return total / max(float(pm.sum() * pp.sum()), 1e-300)
 
 
 def genotype_likelihood_arrays(sample_ids, locus_ids, status, lik0, lik1, lik2, loci_order,

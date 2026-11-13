@@ -227,3 +227,21 @@ def test_genotype_likelihood_arrays():
     assert called.tolist() == [False, True] and lik[1].tolist() == [0.0, 0.2, 0.8]
     cc = pc.confident_copy_calls(lik, called, min_probability=0.72, min_ratio=3.0)
     assert cc.tolist() == [-1, 2]
+
+
+def test_offspring_outcome_probability():
+    rec = {"no_crossover": 0.6, "interval_masses": np.array([0.3, 0.1])}
+    # outcome = child receives allele at locus 0 from both parents
+    f = lambda gm, gp: float(gm[0] == "1" and gp[0] == "1")
+    q = pc.offspring_outcome_probability(("100", "000"), ("111", "011"), f, rec, rec)
+    assert q == pytest.approx(0.25)
+    # brute-force Monte Carlo agreement for a logistic penetrance and sequences outside any catalog
+    expit = lambda z: 1 / (1 + math.exp(-z))
+    pen = lambda gm, gp: expit(-2 + 1.5 * int(gm[2]) + 0.7 * int(gp[1]) + 1.0 * int(gm[0]) * int(gp[2]))
+    m, p = ("101", "010"), ("011", "110")
+    exact = pc.offspring_outcome_probability(m, p, pen, rec, rec)
+    gm, wm = pc.gamete_distribution(*m, rec["no_crossover"], rec["interval_masses"])
+    gp, wp = pc.gamete_distribution(*p, rec["no_crossover"], rec["interval_masses"])
+    brute = sum(a * b * pen(x, y) for x, a in zip(gm, wm) for y, b in zip(gp, wp))
+    assert exact == pytest.approx(brute)
+    assert 0 < exact < 1
