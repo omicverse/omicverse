@@ -67,8 +67,8 @@ def cross_species_align(
         The concatenated (and, by default, preprocessed) cross-species object,
         with ``uns['cross_species']`` describing the alignment.
     """
-    import scanpy as sc
-
+    from ..pp import normalize_total, log1p, highly_variable_genes
+    from .._sc_compat import scale_X, pca_X
     from ..single._cross_species import map_var_to_orthologs, _normalize_species
 
     if len(adatas) != len(species):
@@ -110,13 +110,13 @@ def cross_species_align(
 
     if preprocess:
         adata.layers["counts"] = adata.X.copy()
-        sc.pp.normalize_total(adata, target_sum=target_sum)
-        sc.pp.log1p(adata)
+        normalize_total(adata, target_sum=target_sum)
+        log1p(adata)
         adata.raw = adata
-        sc.pp.highly_variable_genes(
+        highly_variable_genes(
             adata, n_top_genes=min(n_top_genes, len(common)), batch_key=batch_key)
         adata = adata[:, adata.var["highly_variable"]].copy()
-        sc.pp.scale(adata, max_value=10)
-        sc.pp.pca(adata, n_comps=min(n_pcs, adata.n_vars - 1, adata.n_obs - 1))
+        scale_X(adata, max_value=10)
+        pca_X(adata, n_comps=min(n_pcs, adata.n_vars - 1, adata.n_obs - 1))
 
     return adata

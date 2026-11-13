@@ -1,4 +1,3 @@
-import scanpy as sc
 import os
 import torch
 import numpy as np
@@ -81,10 +80,9 @@ class GASTON(object):
             Domain labels after calling cal_iso_depth()
 
     Examples:
-        >>> import scanpy as sc
         >>> import omicverse as ov
         >>> # Load spatial data
-        >>> adata = sc.read_visium(...)
+        >>> adata = ov.io.read_visium(...)
         >>> # Initialize GASTON
         >>> gaston = ov.space.GASTON(adata)
         >>> # Prepare input data
@@ -139,7 +137,8 @@ class GASTON(object):
         import squidpy as sq
         adata=self.adata
         adata.obsm['spatial']=adata.obsm['spatial'].astype(float)
-        sc.pp.filter_cells(adata, min_counts=spot_umi_threshold)
+        from ..pp import filter_cells
+        filter_cells(adata, min_counts=spot_umi_threshold)
 
         gene_labels=adata.var.index.to_numpy()
 
@@ -193,20 +192,27 @@ class GASTON(object):
             - RGB features are concatenated after PCA if use_RGB=True
             - Features are used as input for neural network training
         """
+        from ..pp import normalize_total
+        from ..pp.experimental import (
+            highly_variable_genes as pr_highly_variable_genes,
+            normalize_pearson_residuals,
+        )
+        from .._sc_compat import pca_X
+
         adata=self.adata
-        sc.experimental.pp.highly_variable_genes(
+        pr_highly_variable_genes(
             adata, flavor="pearson_residuals", n_top_genes=n_top_genes
         )
 
         adata = adata[:, adata.var["highly_variable"]]
         adata.layers["raw"] = adata.X.copy()
         adata.layers["sqrt_norm"] = np.sqrt(
-            sc.pp.normalize_total(adata, inplace=False)["X"]
+            normalize_total(adata, inplace=False)["X"]
         )
 
         theta=np.inf
-        sc.experimental.pp.normalize_pearson_residuals(adata, clip=clip, theta=theta)
-        sc.pp.pca(adata, n_comps=num_dims)
+        normalize_pearson_residuals(adata, clip=clip, theta=theta)
+        pca_X(adata, n_comps=num_dims)
         A=adata.obsm['X_pca']
         if use_RGB:
             A=np.hstack((A,self.RGB_mean)) # attach to RGB mean

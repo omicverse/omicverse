@@ -2,7 +2,6 @@
 from typing import Any
 import pandas as pd
 import numpy as np
-import scanpy as sc
 from .._registry import register_function
 
 
@@ -67,11 +66,10 @@ class CellMap(object):
             Coordinate assignment results.
 
     Examples:
-        >>> import scanpy as sc
         >>> import omicverse as ov
         >>> # Load data
-        >>> adata_sc = sc.read_h5ad('single_cell.h5ad')
-        >>> adata_sp = sc.read_h5ad('spatial.h5ad')
+        >>> adata_sc = ov.read('single_cell.h5ad')
+        >>> adata_sp = ov.read('spatial.h5ad')
         >>> # Initialize CellMap
         >>> cm = ov.space.CellMap(
         ...     adata_sc=adata_sc,
@@ -154,12 +152,15 @@ class CellMap(object):
 
         ##spatial type
         if sp_type=='leiden' and 'leiden' not in self.adata_sp.obs.columns:
-            sc.pp.neighbors(self.adata_sp,n_neighbors=15,use_rep=self.use_rep_sp)
-            sc.tl.leiden(self.adata_sp,resolution=resolution)
+            from .._sc_compat import neighbors, leiden
+            neighbors(self.adata_sp,n_neighbors=15,use_rep=self.use_rep_sp)
+            leiden(self.adata_sp,resolution=resolution)
             self.adata_sp.obs['type']=self.adata_sp.obs[sp_type].tolist()
         elif sp_type=='louvain' and 'louvain' not in self.adata_sp.obs.columns:
-            sc.pp.neighbors(self.adata_sp,n_neighbors=15,use_rep=self.use_rep_sp)
-            sc.tl.louvain(self.adata_sp)
+            from .._sc_compat import neighbors
+            from ..pp import louvain
+            neighbors(self.adata_sp,n_neighbors=15,use_rep=self.use_rep_sp)
+            louvain(self.adata_sp)
             self.adata_sp.obs['type']=self.adata_sp.obs[sp_type].tolist()
         elif sp_type is None:
             aware_spatial=False
@@ -276,11 +277,10 @@ class CellLoc(object):
             Coordinate assignment results.
 
     Examples:
-        >>> import scanpy as sc
         >>> import omicverse as ov
         >>> # Load data
-        >>> adata_sc = sc.read_h5ad('single_cell.h5ad')
-        >>> adata_sp = sc.read_h5ad('spatial.h5ad')
+        >>> adata_sc = ov.read('single_cell.h5ad')
+        >>> adata_sp = ov.read('spatial.h5ad')
         >>> # Initialize CellLoc
         >>> cl = ov.space.CellLoc(
         ...     adata_sc=adata_sc,
@@ -360,12 +360,15 @@ class CellLoc(object):
 
         ##spatial type
         if sp_type=='leiden' and 'leiden' not in self.adata_sp.obs.columns:
-            sc.pp.neighbors(self.adata_sp,n_neighbors=15,use_rep=self.use_rep_sp)
-            sc.tl.leiden(self.adata_sp,resolution=resolution)
+            from .._sc_compat import neighbors, leiden
+            neighbors(self.adata_sp,n_neighbors=15,use_rep=self.use_rep_sp)
+            leiden(self.adata_sp,resolution=resolution)
             self.adata_sp.obs['type']=self.adata_sp.obs[sp_type].tolist()
         elif sp_type=='louvain' and 'louvain' not in self.adata_sp.obs.columns:
-            sc.pp.neighbors(self.adata_sp,n_neighbors=15,use_rep=self.use_rep_sp)
-            sc.tl.louvain(self.adata_sp)
+            from .._sc_compat import neighbors
+            from ..pp import louvain
+            neighbors(self.adata_sp,n_neighbors=15,use_rep=self.use_rep_sp)
+            louvain(self.adata_sp)
             self.adata_sp.obs['type']=self.adata_sp.obs[sp_type].tolist()
         elif sp_type is None:
             aware_spatial=False
@@ -415,12 +418,15 @@ class CellLoc(object):
         """
         ##spatial type
         if sp_type=='leiden' and 'leiden' not in self.adata_sp.obs.columns:
-            sc.pp.neighbors(self.adata_sp,n_neighbors=15,use_rep=self.use_rep_sp)
-            sc.tl.leiden(self.adata_sp,resolution=resolution)
+            from .._sc_compat import neighbors, leiden
+            neighbors(self.adata_sp,n_neighbors=15,use_rep=self.use_rep_sp)
+            leiden(self.adata_sp,resolution=resolution)
             self.adata_sp.obs['type']=self.adata_sp.obs[sp_type].tolist()
         elif sp_type=='louvain' and 'louvain' not in self.adata_sp.obs.columns:
-            sc.pp.neighbors(self.adata_sp,n_neighbors=15,use_rep=self.use_rep_sp)
-            sc.tl.louvain(self.adata_sp)
+            from .._sc_compat import neighbors
+            from ..pp import louvain
+            neighbors(self.adata_sp,n_neighbors=15,use_rep=self.use_rep_sp)
+            louvain(self.adata_sp)
             self.adata_sp.obs['type']=self.adata_sp.obs[sp_type].tolist()
         elif sp_type is None:
             aware_spatial=False
