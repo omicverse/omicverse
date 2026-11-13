@@ -507,7 +507,8 @@ def measure_cohort(items, stain_vectors="estimate", n_jobs=1, max_pixels_per_ima
 
 def feature_columns(columns, kind="shape"):
     """Split field-feature names into colour-free shape (``kind='shape'``) or stain."""
-    cols = [c for c in columns if c not in ("field_id",)]
+    # ``stain_index`` is a reporting alias of another stain column: never a model input
+    cols = [c for c in columns if c not in ("field_id",) and not c.startswith("stain_index")]
     if kind == "stain":
         return [c for c in cols if c.startswith("stain_")]
     if kind == "shape":
