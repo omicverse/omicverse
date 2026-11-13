@@ -117,7 +117,8 @@ def umap(  # noqa: PLR0913, PLR0915
         min_dist (float): Minimum distance between embedded points (default: 0.5)
         spread (float): Scale at which embedded points are spread out (default: 1.0)
         n_components (int): Number of dimensions for the embedding (default: 2)
-        maxiter (int): Number of optimization iterations (default: None)
+        maxiter (int): Number of optimization epochs (default: None = 500 up to
+            10,000 cells, 200 above, as umap-learn / scanpy)
         alpha (float): Initial learning rate for optimization (default: 1.0)
         gamma (float): Weighting for negative samples (default: 1.0)
         negative_sample_rate (int): Number of negative samples per positive sample (default: 5)
@@ -195,7 +196,8 @@ def umap(  # noqa: PLR0913, PLR0915
         print(f"   {Colors.GREEN}{EMOJI['start']} Computing UMAP embedding (classic method)...{Colors.ENDC}")
         # the data matrix X is really only used for determining the number of connected components
         # for the init condition in the UMAP embedding
-        default_epochs = 10 if neighbors["connectivities"].shape[0] <= 10000 else 20
+        # umap-learn / scanpy defaults (500 epochs up to 10k cells, 200 above)
+        default_epochs = 500 if neighbors["connectivities"].shape[0] <= 10000 else 200
         n_epochs = default_epochs if maxiter is None else maxiter
         from .._backend import resolve_backend
         if resolve_backend(backend) == "cpp" and neigh_params.get("metric", "euclidean") == "euclidean":
