@@ -144,11 +144,12 @@ class VAEModule(nn.Module):
         if self.gene_likelihood == "zinb":
             pi = gen["px_dropout"].float()
             if sparse:
-                return zinb_rowsum(mu, theta, pi, b["row"], b["col"], b["val"])
+                return zinb_rowsum(mu, theta, pi, b["row"], b["col"], b["val"],
+                                   flat=b.get("flat"))
             return log_zinb_positive(x, mu, theta, pi).sum(-1)
         if self.gene_likelihood == "nb":
             if sparse:
-                return nb_rowsum(mu, theta, b["row"], b["col"], b["val"])
+                return nb_rowsum(mu, theta, b["row"], b["col"], b["val"], flat=b.get("flat"))
             return log_nb_positive(x, mu, theta).sum(-1)
         if self.gene_likelihood == "poisson":
             return log_poisson(x, mu).sum(-1)

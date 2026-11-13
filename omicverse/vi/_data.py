@@ -223,7 +223,7 @@ def gather_rows(buf: Buffer, local: torch.Tensor, nnz: int, n_cols: int):
     off = torch.arange(nnz, device=dev) + (starts - excl)[row]
     col = buf.indices[off].long()
     val = buf.data[off]
-    x.index_put_((row, col), val)
+    x.view(-1).index_copy_(0, row * n_cols + col, val)
     return x, row, col, val
 
 
@@ -581,7 +581,8 @@ class DataSource:
                 off += x.shape[0]
             x, row, col, val, idx = (torch.cat(xs), torch.cat(rs), torch.cat(cs),
                                      torch.cat(vs), torch.cat(ids))
-        out = {"x": x, "row": row, "col": col, "val": val, "idx": idx}
+        out = {"x": x, "row": row, "col": col, "val": val, "idx": idx,
+               "flat": row * self.n_vars + col}
         for k, v in self.obs.items():
             out[k] = v[idx]
         return out

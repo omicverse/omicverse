@@ -192,7 +192,8 @@ class BaseVIModel:
               early_stopping: bool = False, check_val_every_n_epoch: int | None = None,
               shuffle: str = "auto", block_size: int | None = None,
               buffer_blocks: int | None = None, resident="auto", seed: int = 0,
-              precision: str = "32", compile: bool = False, progress: bool = True,
+              precision: str = "32", compile="auto", cuda_graph="auto",
+              progress: bool = True,
               plan_kwargs: dict | None = None, **kwargs):
         """Train the model.
 
@@ -218,7 +219,12 @@ class BaseVIModel:
             seed: Seed for initialisation-independent randomness (split, shuffle,
                 sampling).  Set it before constructing the model for full determinism.
             precision: ``'32'`` or ``'bf16'`` (autocast networks on CUDA).
-            compile: ``torch.compile`` the module.
+            compile: ``torch.compile`` the training step (``'auto'``: on the CPU for
+                runs longer than 5000 steps when a C++ compiler is available; about
+                2x faster steps after ~20 s of compilation).
+            cuda_graph: Replay the training step as a CUDA graph (``'auto'``: on CUDA,
+                single process, no LR scheduler / gradient clipping; ~2.5x faster
+                steps).
             plan_kwargs: Optimisation options (``lr``, ``weight_decay``, ``eps``,
                 ``n_epochs_kl_warmup``, ``n_steps_kl_warmup``, ``reduce_lr_on_plateau``,
                 ``lr_factor``, ``lr_patience``, ...); also accepted as keywords.
@@ -249,7 +255,8 @@ class BaseVIModel:
         cfg = TrainConfig.from_kwargs(**{**(plan_kwargs or {}), **kwargs},
                                       early_stopping=early_stopping,
                                       check_val_every_n_epoch=check_val_every_n_epoch,
-                                      precision=precision, compile=compile)
+                                      precision=precision, compile=compile,
+                                      cuda_graph=cuda_graph)
         self._configure_training(cfg)
         devs = [device] if device.type == "cuda" else []
         with torch.random.fork_rng(devices=devs):

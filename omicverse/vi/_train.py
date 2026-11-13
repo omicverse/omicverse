@@ -40,7 +40,8 @@ class TrainConfig:
     early_stopping_mode: str = "min"
     check_val_every_n_epoch: int | None = None
     precision: str = "32"          # '32' or 'bf16' (autocast of the networks on CUDA)
-    compile: bool = False
+    compile: bool | str = "auto"  # torch.compile the step (static shapes, dense likelihood)
+    cuda_graph: bool | str = "auto"  # capture the whole training step (CUDA, single process)
     gradient_clip_val: float | None = None
     extra: dict = field(default_factory=dict)  # model-specific (e.g. classification ratio)
 
@@ -64,16 +65,17 @@ def kl_weight(cfg: TrainConfig, epoch: int, step: int) -> float:
     return cfg.max_kl_weight
 
 
-def make_optimizer(params, cfg: TrainConfig, device):
+def make_optimizer(params, cfg: TrainConfig, device, capturable: bool = False):
     opt_cls = {"adam": torch.optim.Adam, "adamw": torch.optim.AdamW}[cfg.optimizer.lower()]
     params = [p for p in params if p.requires_grad]
     kw = dict(lr=cfg.lr, eps=cfg.eps, weight_decay=cfg.weight_decay)
-    if device.type == "cuda":
-        try:
-            return opt_cls(params, fused=True, **kw)
-        except (RuntimeError, TypeError, ValueError):
-            pass
-    return opt_cls(params, **kw)
+    if capturable:
+        kw["capturable"] = True
+    # fused Adam: one kernel over all parameters (CUDA; CPU since torch 2.4)
+    try:
+        return opt_cls(params, fused=True, **kw)
+    except (RuntimeError, TypeError, ValueError):
+        return opt_cls(params, **kw)
 
 
 class _Meter:
@@ -112,9 +114,125 @@ class _Meter:
 
 def _autocast(cfg: TrainConfig, device):
     if cfg.precision in ("bf16", "bf16-mixed") and device.type == "cuda":
-        return torch.autocast("cuda", dtype=torch.bfloat16)
+        return torch.autocast("cuda", dtype=torch.bfloat16, cache_enabled=False)
     import contextlib
     return contextlib.nullcontext()
+
+
+_DYNAMIC = ("row", "col", "val", "flat", "idx")
+
+
+class _GraphedStep:
+    """The whole training step (forward, backward, fused Adam) captured in a
+    CUDA graph and replayed for every full-size minibatch.
+
+    A minibatch of B cells is a handful of small kernels; launching them one by
+    one from Python costs more than running them, so replaying one graph per
+    step removes the launch overhead.  The graphed step uses the dense
+    likelihood (static shapes); incomplete minibatches run eagerly."""
+
+    N_WARMUP = 3
+
+    def __init__(self, net, opt, cfg, device):
+        self.net, self.opt, self.cfg, self.device = net, opt, cfg, device
+        self.module = getattr(net, "module", None) or net
+        self.graph = None
+        self.static = None
+        self.out = None
+        self.kl = torch.zeros((), device=device)
+        self.warm = 0
+        self.size = None
+        self.failed = False
+
+    def eager(self, b, kw):
+        with _autocast(self.cfg, self.device):
+            out = self.net(b, kl_weight=kw)
+            if out is None:  # compiled module that fell back
+                self.net = self.module
+                out = self.net(b, kl_weight=kw)
+        self.opt.zero_grad(set_to_none=self.graph is None)
+        out["loss"].backward()
+        self.opt.step()
+        return out
+
+    def __call__(self, b, kw):
+        n = b["x"].shape[0]
+        if self.failed or (self.size is not None and n != self.size):
+            return self.eager(b, kw)
+        dense = {k: v for k, v in b.items() if k not in _DYNAMIC}
+        if self.graph is None:
+            if self.static is None:
+                self.size = n
+                self.static = {k: v.clone() for k, v in dense.items()}
+            for k, v in dense.items():
+                self.static[k].copy_(v)
+            self.kl.fill_(kw)
+            if self.warm < self.N_WARMUP:  # warm-up on a side stream (real steps)
+                s = torch.cuda.Stream(self.device)
+                s.wait_stream(torch.cuda.current_stream(self.device))
+                with torch.cuda.stream(s):
+                    out = self.eager(self.static, self.kl)
+                    out = {k: v.detach().clone() for k, v in out.items()}
+                torch.cuda.current_stream(self.device).wait_stream(s)
+                self.warm += 1
+                return out
+            try:
+                g = torch.cuda.CUDAGraph()
+                self.opt.zero_grad(set_to_none=True)
+                with torch.cuda.graph(g):
+                    with _autocast(self.cfg, self.device):
+                        out = self.net(self.static, kl_weight=self.kl)
+                        if out is None:
+                            raise RuntimeError("compiled step unavailable")
+                    out["loss"].backward()
+                    self.opt.step()
+                self.graph, self.out = g, out
+            except Exception as e:  # pragma: no cover - fall back to eager steps
+                import warnings
+                warnings.warn(f"ov.vi: CUDA graph capture failed ({e}); training eagerly",
+                              RuntimeWarning, stacklevel=2)
+                self.failed = True
+                self.opt.zero_grad(set_to_none=True)
+                return self.eager(b, kw)
+        else:
+            for k, v in dense.items():
+                self.static[k].copy_(v)
+            self.kl.fill_(kw)
+        self.graph.replay()
+        return self.out
+
+
+def _compiler_available() -> bool:
+    import shutil
+    return any(shutil.which(c) for c in ("g++", "c++", "clang++"))
+
+
+class _Compiled:
+    """``torch.compile``-d module for full-size minibatches (static shapes, dense
+    likelihood).  ``compile='auto'`` enables it on the CPU when the run is long
+    enough to repay the ~20 s compilation (> 5000 steps) and a C++ compiler is
+    available; any compilation error falls back to eager execution."""
+
+    def __init__(self, module, cfg, device, n_steps):
+        mode = cfg.compile
+        if mode == "auto":
+            mode = device.type == "cpu" and n_steps > 5000 and _compiler_available()
+        self.enabled = bool(mode)
+        self.module = module
+        self.fn = torch.compile(module, dynamic=False) if self.enabled else None
+
+    def __call__(self, b, kl_weight=1.0):
+        if self.fn is None:
+            return None
+        try:
+            return self.fn({k: v for k, v in b.items() if k not in _DYNAMIC},
+                           kl_weight=kl_weight)
+        except Exception as e:  # pragma: no cover
+            import warnings
+            warnings.warn(f"ov.vi: torch.compile failed ({type(e).__name__}: {e}); running "
+                          "eagerly", RuntimeWarning, stacklevel=2)
+            self.fn = None
+            return None
 
 
 def evaluate(module, batches, device, cfg: TrainConfig | None = None, kl_w: float = 1.0,
@@ -141,9 +259,15 @@ def fit(model, source, train_rows, val_rows, *, max_epochs, batch_size, shuffle,
     device = source.device
     module = model.module
     net = ddp_module if ddp_module is not None else module
-    if cfg.compile:
-        net = torch.compile(net)
-    opt = make_optimizer(module.parameters(), cfg, device)
+    n_train = len(train_rows) if train_rows is not None else source.n_obs
+    fast = _Compiled(module, cfg, device, max_epochs * max(1, n_train // batch_size // world)) \
+        if ddp_module is None else None
+    if fast is not None and not fast.enabled:
+        fast = None
+    use_graph = (device.type == "cuda" and world == 1 and cfg.cuda_graph not in (False, None)
+                 and not cfg.reduce_lr_on_plateau and not cfg.gradient_clip_val)
+    opt = make_optimizer(module.parameters(), cfg, device, capturable=use_graph)
+    graphed = _GraphedStep(fast or net, opt, cfg, device) if use_graph else None
     sched = None
     if cfg.reduce_lr_on_plateau:
         sched = torch.optim.lr_scheduler.ReduceLROnPlateau(
@@ -190,8 +314,17 @@ def fit(model, source, train_rows, val_rows, *, max_epochs, batch_size, shuffle,
                                 world=world, n_batches=n_batches, drop_last=world > 1):
             if cfg.n_steps_kl_warmup:
                 kw = kl_weight(cfg, epoch, step)
+            if graphed is not None:
+                out = graphed(b, kw)
+                meter.add(out, b["x"].shape[0])
+                step += 1
+                continue
             with _autocast(cfg, device):
-                out = net(b, kl_weight=kw)
+                out = None
+                if fast is not None and b["x"].shape[0] == batch_size:
+                    out = fast(b, kw)
+                if out is None:
+                    out = net(b, kl_weight=kw)
             opt.zero_grad(set_to_none=True)
             out["loss"].backward()
             if cfg.gradient_clip_val:

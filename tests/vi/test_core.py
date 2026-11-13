@@ -293,3 +293,17 @@ def test_split_matches_scvi_datasplitter():
         assert (len(tr), len(va)) == (n_train, n_val)
         perm = np.random.RandomState(seed=0).permutation(n)
         assert np.array_equal(np.sort(perm[:n_val]), va)
+
+
+def test_compiled_step_matches_eager(toy):
+    import shutil
+    if not any(shutil.which(c) for c in ("g++", "c++")):
+        pytest.skip("no C++ compiler for torch.compile")
+    from omicverse.vi import SCVI
+    res = []
+    for comp in (False, True):
+        m = SCVI(toy, layer="counts", batch_key="batch", n_hidden=32, seed=0)
+        m.train(max_epochs=3, device="cpu", progress=False, seed=0, compile=comp)
+        res.append(m.history_["elbo_train"])
+    # compiled dropout / sampling use their own RNG stream: same fit, not bitwise
+    assert np.allclose(res[0], res[1], rtol=1e-2), res

@@ -95,44 +95,64 @@ def log_mixture_nb(x, mu_1, mu_2, theta_1, theta_2, pi_logits, eps: float = EPS)
 # ---------------------------------------------------------------------------
 # per-cell sums using the sparsity of x
 # ---------------------------------------------------------------------------
-def _nnz_terms(mu, theta, log_theta_mu_eps, row, col, val, eps):
+def _take(t, flat):
+    """``t[row, col]`` as a flat gather (its backward is an index_add, much
+    cheaper on GPUs than the accumulate-index_put of 2-D advanced indexing)."""
+    return t.reshape(-1).index_select(0, flat)
+
+
+def _flat(t, row, col, flat):
+    return flat if flat is not None else row * t.shape[-1] + col
+
+
+def _nnz_terms(mu, theta, log_theta_mu_eps, row, col, val, eps, flat):
     """sum over stored entries of x*(log(mu+eps)-log(theta+mu+eps)) + lgamma(x+theta)
     - lgamma(theta) - lgamma(x+1), per row."""
-    mu_s = mu[row, col]
-    th_s = theta[0, col] if theta.shape[0] == 1 else theta[row, col]
-    term = (val * (torch.log(mu_s + eps) - log_theta_mu_eps[row, col])
-            + torch.lgamma(val + th_s) - torch.lgamma(th_s) - torch.lgamma(val + 1))
-    out = torch.zeros(mu.shape[0], dtype=mu.dtype, device=mu.device)
+    mu_s = _take(mu, flat)
+    if theta.shape[0] == 1:  # per-gene theta: lgamma(theta) on G values, then gathered
+        th_s = theta[0].index_select(0, col)
+        lg_th = torch.lgamma(theta[0]).index_select(0, col)
+    else:
+        th_s = _take(theta, flat)
+        lg_th = torch.lgamma(th_s)
+    with torch.no_grad():
+        lg_x1 = torch.lgamma(val + 1)
+    term = (val * (torch.log(mu_s + eps) - _take(log_theta_mu_eps, flat))
+            + torch.lgamma(val + th_s) - lg_th - lg_x1)
+    out = torch.zeros(mu.shape[0], dtype=term.dtype, device=mu.device)
     return out.index_add_(0, row, term)
 
 
-def nb_rowsum(mu, theta, row, col, val, eps: float = EPS):
+def nb_rowsum(mu, theta, row, col, val, eps: float = EPS, flat=None):
     """Per-cell sum of log NB(x; mu, theta) given the non-zeros of x.
 
     ``row``/``col``/``val`` are the coordinates and values of the stored
-    entries of x (no explicit zeros needed; explicit zeros are harmless)."""
+    entries of x (no explicit zeros needed; explicit zeros are harmless);
+    ``flat = row * n_genes + col`` may be passed precomputed."""
     theta = _broadcast_theta(theta)
+    flat = _flat(mu, row, col, flat)
     log_theta_mu_eps = torch.log(theta + mu + eps)
     dense = (theta * (torch.log(theta + eps) - log_theta_mu_eps)).sum(-1)
-    return dense + _nnz_terms(mu, theta, log_theta_mu_eps, row, col, val, eps)
+    return dense + _nnz_terms(mu, theta, log_theta_mu_eps, row, col, val, eps, flat)
 
 
-def zinb_rowsum(mu, theta, pi, row, col, val, eps: float = EPS):
+def zinb_rowsum(mu, theta, pi, row, col, val, eps: float = EPS, flat=None):
     """Per-cell sum of log ZINB(x; mu, theta, pi) given the non-zeros of x.
 
     Entries must have ``val > eps`` (true non-zeros), as in the dense form
     where ``x < eps`` selects the zero branch."""
     theta = _broadcast_theta(theta)
+    flat = _flat(mu, row, col, flat)
     softplus_pi = F.softplus(-pi)
     log_theta_mu_eps = torch.log(theta + mu + eps)
     pi_theta_log = -pi + theta * (torch.log(theta + eps) - log_theta_mu_eps)
     case_zero = F.softplus(pi_theta_log) - softplus_pi
-    nz_base = -softplus_pi + pi_theta_log
     # all entries start in the zero branch; stored entries switch to the non-zero branch
+    # (non-zero branch = -softplus_pi + pi_theta_log + nnz terms)
     dense = case_zero.sum(-1)
-    switch = (nz_base - case_zero)[row, col]
+    switch = _take(pi_theta_log, flat) - _take(softplus_pi, flat) - _take(case_zero, flat)
     out = dense.index_add(0, row, switch)
-    return out + _nnz_terms(mu, theta, log_theta_mu_eps, row, col, val, eps)
+    return out + _nnz_terms(mu, theta, log_theta_mu_eps, row, col, val, eps, flat)
 
 
 # ---------------------------------------------------------------------------
