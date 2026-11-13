@@ -687,7 +687,7 @@ def _mt_mask(var_names, mt_startswith):
     category="preprocessing",
     description=(
         "Compute per-cell QC metrics WITHOUT filtering: flags mt/ribo/hb "
-        "genes, runs scanpy calculate_qc_metrics, and adds omicverse aliases "
+        "genes, runs ov.pp.calculate_qc_metrics, and adds omicverse aliases "
         "nUMIs / detected_genes / mito_perc. Inspect with ov.pl.qc, then "
         "filter with ov.pp.qc(tresh=...)."
     ),
@@ -713,8 +713,8 @@ def qc_metrics(
 ):
     r"""Compute per-cell QC metrics without filtering.
 
-    Flags mitochondrial / ribosomal / haemoglobin genes, runs scanpy's
-    ``calculate_qc_metrics`` (``total_counts``, ``n_genes_by_counts``,
+    Flags mitochondrial / ribosomal / haemoglobin genes, runs
+    :func:`omicverse.pp.calculate_qc_metrics` (``total_counts``, ``n_genes_by_counts``,
     ``pct_counts_{mt,ribo,hb}``), and adds the omicverse aliases ``nUMIs``,
     ``detected_genes`` and ``mito_perc`` so both naming conventions are
     available. Nothing is removed — this is the "look before you cut" step:
@@ -736,7 +736,7 @@ def qc_metrics(
     AnnData
         ``adata`` with QC metrics added to ``obs``/``var`` (in place).
     """
-    import scanpy as sc
+    from ._qc_metrics import calculate_qc_metrics
 
     var_names = adata.var_names
     if mt_startswith == "auto" and mt_genes is None:
@@ -754,7 +754,7 @@ def qc_metrics(
     else:
         adata.var["hb"] = var_names.str.contains(hb_startswith)
 
-    sc.pp.calculate_qc_metrics(
+    calculate_qc_metrics(
         adata, qc_vars=["mt", "ribo", "hb"], inplace=True, log1p=False,
         percent_top=None,
     )

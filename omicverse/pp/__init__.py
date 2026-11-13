@@ -36,6 +36,12 @@ Utility functions:
     anndata_to_CPU: Transfer data to CPU
     recover_counts: Recover original count data
     score_genes_cell_cycle: Cell cycle scoring
+    score_genes: Gene-set scoring (scanpy-compatible)
+    calculate_qc_metrics: QC metrics (scanpy-compatible)
+    diffmap / dpt: Diffusion map and diffusion pseudotime
+    draw_graph: Force-directed graph layout
+    dendrogram: Hierarchical clustering of groups
+    subsample: Random subsampling of cells
 
 Examples:
     >>> import omicverse as ov
@@ -72,6 +78,12 @@ from ._preprocess import (identify_robust_genes,
 from ._sude import sude
 
 from ._qc import qc,qc_metrics,filter_cells,filter_genes
+from ._qc_metrics import calculate_qc_metrics
+from ._score_genes import score_genes
+from ._dpt import diffmap, dpt
+from ._draw_graph import draw_graph
+from ._dendrogram import dendrogram
+from ._subsample import subsample
 
 
 def load_pumap(path):
@@ -138,6 +150,15 @@ __all__ = [
 
     # Ambient / contamination-RNA removal (ov.pp.ambient)
     'ambient',
+
+    # scanpy-compatible native ports
+    'calculate_qc_metrics',
+    'score_genes',
+    'diffmap',
+    'dpt',
+    'draw_graph',
+    'dendrogram',
+    'subsample',
 
     # Utility functions
     'score_genes_cell_cycle',

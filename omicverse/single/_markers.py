@@ -657,9 +657,9 @@ def find_markers(
 
     A unified wrapper supporting multiple algorithms.  For statistical methods
     (``t-test``, ``wilcoxon``, ``logreg``) the implementation is ported
-    directly from scanpy — **no scanpy runtime dependency**.  Results are
+    directly from the scanpy implementation — **no scanpy runtime dependency**.  Results are
     stored in ``adata.uns[key_added]`` using the same structured-array format
-    as ``sc.tl.rank_genes_groups``, so all downstream tools (including
+    as scanpy's ``rank_genes_groups``, so all downstream tools (including
     :func:`omicverse.single.get_markers` and
     :func:`omicverse.pl.markers_dotplot`) work out of the box.
 
@@ -881,7 +881,7 @@ def get_markers(
     r"""Extract top marker genes from ``rank_genes_groups`` results.
 
     Works with results produced by :func:`find_markers`,
-    :func:`omicverse.single.cosg`, or ``sc.tl.rank_genes_groups``.
+    :func:`omicverse.single.cosg`, or scanpy's ``rank_genes_groups``.
 
     Parameters
     ----------
@@ -926,7 +926,7 @@ def get_markers(
     if key not in adata.uns:
         raise KeyError(
             f"Key '{key}' not found in adata.uns. "
-            "Run ov.single.find_markers() or sc.tl.rank_genes_groups() first."
+            "Run ov.single.find_markers() first."
         )
 
     result = adata.uns[key]

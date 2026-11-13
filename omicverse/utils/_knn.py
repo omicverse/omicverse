@@ -1,4 +1,3 @@
-import scanpy as sc
 import pandas as pd
 import os
 import numpy as np

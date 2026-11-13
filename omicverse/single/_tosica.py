@@ -10,7 +10,6 @@ import pandas as pd
 from tqdm import tqdm
 from sklearn.preprocessing import LabelEncoder
 from collections import OrderedDict
-import scanpy as sc
 import anndata as ad
 
 import os
@@ -430,13 +429,13 @@ class pyTOSICA(object):
                     meta.index = meta.index.astype('str')
                     if laten:
                         l_p = l_p.astype('float32')
-                        new = sc.AnnData(l_p, obs=meta)
+                        new = ad.AnnData(l_p, obs=meta)
                     else:
                         att = att[:,0:(len(self.pathway)-self.n_unannotated)]
                         att = att.astype('float32')
                         varinfo = pd.DataFrame(self.pathway.iloc[0:len(self.pathway)-self.n_unannotated,0].values,
                                                index=self.pathway.iloc[0:len(self.pathway)-self.n_unannotated,0],columns=['pathway_index'])
-                        new = sc.AnnData(att, obs=meta, var = varinfo)
+                        new = ad.AnnData(att, obs=meta, var = varinfo)
                     adata_list.append(new)
         print(all_line)
         new = ad.concat(adata_list)

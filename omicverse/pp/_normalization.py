@@ -275,11 +275,8 @@ def normalize_total_old(  # noqa: PLR0912
 
     Example
     -------
-    >>> import sys
     >>> from anndata import AnnData
-    >>> import scanpy as sc
-    >>> sc.settings.verbosity = "info"
-    >>> sc.settings.logfile = sys.stdout  # for doctests
+    >>> import omicverse as ov
     >>> np.set_printoptions(precision=2)
     >>> adata = AnnData(
     ...     np.array(
@@ -295,24 +292,18 @@ def normalize_total_old(  # noqa: PLR0912
     array([[ 3.,  3.,  3.,  6.,  6.],
            [ 1.,  1.,  1.,  2.,  2.],
            [ 1., 22.,  1.,  2.,  2.]], dtype=float32)
-    >>> X_norm = sc.pp.normalize_total(adata, target_sum=1, inplace=False)["X"]
-    normalizing counts per cell
-        finished (0:00:00)
+    >>> X_norm = ov.pp.normalize_total(adata, target_sum=1, inplace=False)["X"]
     >>> X_norm
     array([[0.14, 0.14, 0.14, 0.29, 0.29],
            [0.14, 0.14, 0.14, 0.29, 0.29],
            [0.04, 0.79, 0.04, 0.07, 0.07]], dtype=float32)
-    >>> X_norm = sc.pp.normalize_total(
+    >>> X_norm = ov.pp.normalize_total(
     ...     adata,
     ...     target_sum=1,
     ...     exclude_highly_expressed=True,
     ...     max_fraction=0.2,
     ...     inplace=False,
     ... )["X"]
-    normalizing counts per cell
-    The following highly-expressed genes are not considered during normalization factor computation:
-    ['1', '3', '4']
-        finished (0:00:00)
     >>> X_norm
     array([[ 0.5,  0.5,  0.5,  1. ,  1. ],
            [ 0.5,  0.5,  0.5,  1. ,  1. ],
@@ -731,11 +722,8 @@ def normalize_total(
 
     Example
     --------
-    >>> import sys
     >>> from anndata import AnnData
-    >>> import scanpy as sc
-    >>> sc.settings.verbosity = 'info'
-    >>> sc.settings.logfile = sys.stdout  # for doctests
+    >>> import omicverse as ov
     >>> np.set_printoptions(precision=2)
     >>> adata = AnnData(np.array([
     ...     [3, 3, 3, 6, 6],
@@ -746,20 +734,15 @@ def normalize_total(
     array([[ 3.,  3.,  3.,  6.,  6.],
            [ 1.,  1.,  1.,  2.,  2.],
            [ 1., 22.,  1.,  2.,  2.]], dtype=float32)
-    >>> X_norm = sc.pp.normalize_total(adata, target_sum=1, inplace=False)['X']
-    normalizing counts per cell
-        finished (0:00:00)
+    >>> X_norm = ov.pp.normalize_total(adata, target_sum=1, inplace=False)['X']
     >>> X_norm
     array([[0.14, 0.14, 0.14, 0.29, 0.29],
            [0.14, 0.14, 0.14, 0.29, 0.29],
            [0.04, 0.79, 0.04, 0.07, 0.07]], dtype=float32)
-    >>> X_norm = sc.pp.normalize_total(
+    >>> X_norm = ov.pp.normalize_total(
     ...     adata, target_sum=1, exclude_highly_expressed=True,
     ...     max_fraction=0.2, inplace=False
     ... )['X']
-    normalizing counts per cell. The following highly-expressed genes are not considered during normalization factor computation:
-    ['1', '3', '4']
-        finished (0:00:00)
     >>> X_norm
     array([[ 0.5,  0.5,  0.5,  1. ,  1. ],
            [ 0.5,  0.5,  0.5,  1. ,  1. ],

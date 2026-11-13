@@ -1,7 +1,6 @@
 import torch
 import torch.nn as nn
 import numpy as np
-import scanpy as sc
 import anndata as ad
 from torch.optim.lr_scheduler import _LRScheduler, ReduceLROnPlateau
 from tqdm import tqdm

@@ -7,7 +7,7 @@ from typing import Mapping
 
 import numpy as np
 import pandas as pd
-import scanpy as sc
+import anndata
 
 from .._registry import register_function
 
@@ -693,7 +693,7 @@ def format_liana_results(
         .to_numpy(dtype=float)
     )
 
-    comm_adata = sc.AnnData(X=score_matrix, obs=obs, var=var)
+    comm_adata = anndata.AnnData(X=score_matrix, obs=obs, var=var)
     comm_adata.layers["means"] = score_matrix.copy()
     comm_adata.layers["pvalues"] = pvalue_matrix.copy()
 

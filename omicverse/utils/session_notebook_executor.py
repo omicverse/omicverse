@@ -462,7 +462,6 @@ class SessionNotebookExecutor:
             # Re-initialize session imports
             init_code = """
 import omicverse as ov
-import scanpy as sc
 import pandas as pd
 import numpy as np
 print("✓ [OK] Session re-initialized after recovery")
@@ -551,7 +550,6 @@ print("✓ [OK] Session re-initialized after recovery")
 import matplotlib
 matplotlib.use('Agg')
 import omicverse as ov
-import scanpy as sc
 import pandas as pd
 import numpy as np
 import matplotlib.pyplot as plt
@@ -693,7 +691,6 @@ print("✓ Session initialized")
 
             new_markdown_cell("## Session Initialization"),
             new_code_cell("""import omicverse as ov
-import scanpy as sc
 import pandas as pd
 import numpy as np
 import matplotlib.pyplot as plt
@@ -969,8 +966,8 @@ warnings.filterwarnings('ignore')""")
 
         # Inject adata into kernel namespace
         inject_code = f"""
-import scanpy as sc
-adata = sc.read_h5ad('{temp_input}')
+import anndata
+adata = anndata.read_h5ad('{temp_input}')
 print(f"✓ Loaded: {{adata.shape[0]}} cells × {{adata.shape[1]}} genes")
 """
         inject_outputs = self._execute_code_in_kernel(inject_code, kc)
@@ -1006,8 +1003,8 @@ print(f"✓ Saved: {{adata.shape[0]}} cells × {{adata.shape[1]}} genes")
 
         # Load result
         try:
-            import scanpy as sc
-            result_adata = sc.read_h5ad(temp_output)
+            import anndata
+            result_adata = anndata.read_h5ad(temp_output)
         except Exception as e:
             raise RuntimeError(
                 f"Failed to load result adata: {e}\n"
@@ -1121,8 +1118,8 @@ print(f"✓ Saved: {{adata.shape[0]}} cells × {{adata.shape[1]}} genes")
             temp_input = session_dir / "temp_input_readonly.h5ad"
             adata.write_h5ad(temp_input)
             inject_code = (
-                "import scanpy as sc\n"
-                f"adata = sc.read_h5ad('{temp_input}')\n"
+                "import anndata\n"
+                f"adata = anndata.read_h5ad('{temp_input}')\n"
                 "print(f'✓ Loaded: {adata.shape[0]} cells × {adata.shape[1]} genes')\n"
             )
             inject_out = self._execute_code_in_kernel(inject_code, kc)

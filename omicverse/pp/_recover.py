@@ -45,13 +45,13 @@ def recover_counts(X, mult_value, max_range, log_base=None, chunk_size=1000):
         via X := log(X/S * mult_value + 1)
         
         **IMPORTANT**: This function REQUIRES log-transformed data (e.g., after 
-        `scanpy.pp.normalize_total()` followed by `scanpy.pp.log1p()`).
+        `ov.pp.normalize_total()` followed by `ov.pp.log1p()`).
         It will NOT work correctly on linearly normalized data (e.g., data 
         normalized to CPM/TPM without log transformation).
         
         Expected preprocessing workflow:
-        1. sc.pp.normalize_total(adata, target_sum=mult_value)
-        2. sc.pp.log1p(adata)
+        1. ov.pp.normalize_total(adata, target_sum=mult_value)
+        2. ov.pp.log1p(adata)
         3. ov.pp.recover_counts(adata.X, mult_value, max_range)
         
     max_range:
@@ -82,7 +82,7 @@ def recover_counts(X, mult_value, max_range, log_base=None, chunk_size=1000):
         warnings.warn(
             "Input data contains very large values (max={:.2f}), which suggests "
             "it may not be log-transformed. This function requires log-transformed data "
-            "(e.g., after scanpy.pp.normalize_total() + scanpy.pp.log1p()). "
+            "(e.g., after ov.pp.normalize_total() + ov.pp.log1p()). "
             "Using non-log-transformed data will produce invalid results.".format(max_val),
             UserWarning,
             stacklevel=2

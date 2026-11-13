@@ -10,7 +10,7 @@ from datetime import datetime
 import numpy as np
 from sklearn.utils import check_array, check_random_state
 
-from scanpy import settings
+from ._compat import sc_settings as settings
 from ._compat import old_positionals, get_init_pos_from_paga
 from ._neighbors import NeighborsView, _choose_representation
 from .._settings import EMOJI, Colors, settings as ov_settings
@@ -117,7 +117,8 @@ def umap(  # noqa: PLR0913, PLR0915
         min_dist (float): Minimum distance between embedded points (default: 0.5)
         spread (float): Scale at which embedded points are spread out (default: 1.0)
         n_components (int): Number of dimensions for the embedding (default: 2)
-        maxiter (int): Number of optimization iterations (default: None)
+        maxiter (int): Number of optimization epochs (default: None = 500 up to
+            10,000 cells, 200 above, as umap-learn / scanpy)
         alpha (float): Initial learning rate for optimization (default: 1.0)
         gamma (float): Weighting for negative samples (default: 1.0)
         negative_sample_rate (int): Number of negative samples per positive sample (default: 5)
@@ -141,7 +142,7 @@ def umap(  # noqa: PLR0913, PLR0915
     if neighbors_key is None:  # backwards compat
         neighbors_key = "neighbors"
     if neighbors_key not in adata.uns:
-        msg = f"Did not find .uns[{neighbors_key!r}]. Run `sc.pp.neighbors` first."
+        msg = f"Did not find .uns[{neighbors_key!r}]. Run `ov.pp.neighbors` first."
         raise ValueError(msg)
 
     print(f"\n{Colors.HEADER}{Colors.BOLD}{EMOJI['start']} UMAP Dimensionality Reduction:{Colors.ENDC}")
@@ -175,7 +176,7 @@ def umap(  # noqa: PLR0913, PLR0915
         init_coords = adata.obsm[init_pos]
     elif isinstance(init_pos, str) and init_pos == "paga":
         init_coords = get_init_pos_from_paga(
-            adata, random_state=random_state_processed, neighbors_key=neighbors_key
+            adata, random_state=random_state, neighbors_key=neighbors_key
         )
     else:
         init_coords = init_pos  # Let umap handle it
@@ -195,7 +196,8 @@ def umap(  # noqa: PLR0913, PLR0915
         print(f"   {Colors.GREEN}{EMOJI['start']} Computing UMAP embedding (classic method)...{Colors.ENDC}")
         # the data matrix X is really only used for determining the number of connected components
         # for the init condition in the UMAP embedding
-        default_epochs = 10 if neighbors["connectivities"].shape[0] <= 10000 else 20
+        # umap-learn / scanpy defaults (500 epochs up to 10k cells, 200 above)
+        default_epochs = 500 if neighbors["connectivities"].shape[0] <= 10000 else 200
         n_epochs = default_epochs if maxiter is None else maxiter
         from .._backend import resolve_backend
         if resolve_backend(backend) == "cpp" and neigh_params.get("metric", "euclidean") == "euclidean":
@@ -514,7 +516,7 @@ def umap(  # noqa: PLR0913, PLR0915
         metric = neigh_params.get("metric", "euclidean")
         if metric != "euclidean":
             msg = (
-                f"`sc.pp.neighbors` was called with `metric` {metric!r}, "
+                f"`ov.pp.neighbors` was called with `metric` {metric!r}, "
                 "but umap `method` 'rapids' only supports the 'euclidean' metric."
             )
             raise ValueError(msg)

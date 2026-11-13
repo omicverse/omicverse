@@ -4,7 +4,7 @@ import os
 import warnings
 warnings.filterwarnings("ignore")
 
-import scanpy as sc
+import anndata
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
@@ -20,7 +20,6 @@ from tqdm.auto import tqdm
 import matplotlib.pyplot as plt
 import pandas as pd
 
-#sc._settings.ScanpyConfig.n_jobs = 6
 
 import math
 from typing import Tuple
@@ -265,7 +264,7 @@ for dataset, path in tqdm(list(dataset_to_paths.items())):
     if dataset in dataset_to_protein_embeddings.keys() and not redo:
         continue # skip since already procced
     print(dataset)
-    adata = sc.read(path)
+    adata = anndata.read_h5ad(path)
     dataset_species = datasets_to_species[dataset]
     spec_pe_genes = list(species_to_pe[dataset_species].keys())
     offset = species_to_offsets[dataset_species]
