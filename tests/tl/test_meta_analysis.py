@@ -265,6 +265,9 @@ def test_writer_refuses_edited_statistics(tmp_path):
                          "proposed": ["keep"], "decision": ["keep"]})
     prop["stats_key"] = [_stats_key(r) for _, r in prop.iterrows()]
     write_study_effects(prop, str(tmp_path / "o.csv"))
+    import os
+    assert not os.access(str(tmp_path / "o.csv"), os.W_OK) or os.geteuid() == 0   # locked read-only
+    write_study_effects(prop, str(tmp_path / "o.csv"))                               # the writer may rewrite it
     prop.loc[0, "mean_control"] = 0.7
     with pytest.raises(ValueError):
         write_study_effects(prop, str(tmp_path / "o.csv"))

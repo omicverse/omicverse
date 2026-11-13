@@ -637,6 +637,7 @@ def reconstruct_study_effects(sources: dict, method_source: Union[str, Path], ca
     # group sizes printed in one place of an article (a table header, an "N" row, the text
     # "acute group (n = 15)") apply to the same group named elsewhere in it
     user_n = set(n_map or {})
+    _user_n_map = {k: dict(v) for k, v in (n_map or {}).items()}
     n_map = {k: dict(v) for k, v in (n_map or {}).items()}
     case_by_study = {}
     for sid, paths in sources.items():
@@ -674,6 +675,10 @@ def reconstruct_study_effects(sources: dict, method_source: Union[str, Path], ca
             if n_ is not None:
                 auto[rf"^\s*(?:\[control\]\s*)?{re.escape(g_.strip())}\s*$"] = n_
         auto.update({rf"(?:^|[\]\s(]){re.escape(b)}\b": next(iter(v)) for b, v in found.items() if len(v) == 1})
+        if auto and sid in _user_n_map and verbose:
+            print(f"WARNING [{sid}]: n_map replaces group sizes the article itself gives for these groups "
+                  f"({', '.join(sorted({str(v) for v in auto.values()}))}). Pass n_map only for groups whose "
+                  f"sizes the per-study check reports as unknown.")
         if auto:
             n_map[sid] = {**auto, **n_map.get(sid, {})}
         # the case group is the one the task names (case_label), when an article has such a column
@@ -899,8 +904,14 @@ def write_study_effects(prop: pd.DataFrame, path: str, case_label: str = "case",
     if columns:
         out = out[list(columns)]
     Path(path).parent.mkdir(parents=True, exist_ok=True)
+    import os
+    import stat as _stat
+    if Path(path).exists():
+        os.chmod(path, _stat.S_IRUSR | _stat.S_IWUSR | _stat.S_IRGRP | _stat.S_IROTH)
     out.to_csv(path, index=False)
     record_deliverable(path, "omicverse.tl.write_study_effects", rows=len(out))
+    # read-only: the file is rewritten only by this function (which unlocks it), never edited by hand
+    os.chmod(path, _stat.S_IRUSR | _stat.S_IRGRP | _stat.S_IROTH)
     print(f"wrote {len(out)} rows to {path} (fingerprint recorded; verify with ov.tl.verify_deliverable)")
     return out
 
