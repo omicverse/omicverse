@@ -27,6 +27,7 @@ Spatially variable genes:
 Spatial trajectory analysis:
     STT: Spatial transition tensor analysis
     CellMap: Cell mapping in spatial context
+    CMAP: Three-level cell mapping across positions (SVM domain -> spot -> coordinate)
     CellLoc: Cell localization analysis
     
 Spatial deconvolution:
@@ -63,6 +64,7 @@ from .._optional import bind_optional_symbols
 from .._moscot import moscot_alignment, moscot_mapping
 from ._tangram import Tangram
 from ._spatrio import CellMap,CellLoc
+from ._cmap import CMAP
 from ._stt import STT
 from ._svg import svg,spatial_neighbors,spatial_autocorr,moranI
 from ._niche import molecular as _niche_molecular

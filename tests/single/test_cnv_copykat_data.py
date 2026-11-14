@@ -54,4 +54,4 @@ def test_error_names_the_reinstall_command(monkeypatch, tmp_path):
     _fake_pycopykat(monkeypatch, pkg)
     with pytest.raises(ImportError) as exc:
         _check_copykat_data()
-    assert "py-CopyKAT.git" in str(exc.value)
+    assert "pip install -U 'pycopykat" in str(exc.value)
