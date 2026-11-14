@@ -35,7 +35,7 @@ _LAZY_ATTRS = {
     "BaseVIModel": ("._base", "BaseVIModel"),
     "build_source": ("._data", "build_source"),
     "train_distributed": ("._distributed", "train_distributed"),
-    "mde": ("._mde", "mde"),
+    "mde": ("..utils._mde", "mde"),
     "distributions": ("._distributions", None),
     "nn": ("._nn", None),
     "priors": ("._priors", None),

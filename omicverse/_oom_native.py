@@ -55,6 +55,11 @@ OOM_NATIVE: set = {
     "omicverse.pl._violin.violin",
     "omicverse.pl._spatial.spatial",
     "omicverse.pl._multi.embedding_multi",
+    # ---- ov.vi: scVI-family models stream AnnDataOOM / Dask blocks themselves
+    # (classes are not wrapped today; listed so the guard stays correct if they are)
+    "omicverse.vi._scvi.SCVI",
+    "omicverse.vi._scanvi.SCANVI",
+    "omicverse.vi._totalvi.TOTALVI",
     # ---- ov.space ----
     "omicverse.space._svg.spatial_neighbors",
     "omicverse.space._svg.spatial_autocorr",

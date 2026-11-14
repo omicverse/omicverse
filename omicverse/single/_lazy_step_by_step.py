@@ -287,9 +287,9 @@ def lazy_step_scvi(adata, sample_key, output_path=None, **scvi_kwargs):
     print("⚠️  WARNING: This step is very memory-intensive")
 
     try:
-        import scvi
+        import torch  # noqa: F401  (ov.vi: omicverse's own scVI, no scvi-tools needed)
     except ImportError:
-        print("❌ scvi package not found, skipping scVI step")
+        print("❌ torch not found (needed by ov.vi's scVI), skipping scVI step")
         return adata
 
     if "n_layers" not in scvi_kwargs:
