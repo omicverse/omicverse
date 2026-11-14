@@ -606,6 +606,7 @@ def reconstruct_study_effects(sources: dict, method_source: Union[str, Path], ca
                         print(f"[{sid}] fetched a full text with tables: {got}")
                     sources[sid] = [got] + paths
     kw = {} if control is None else {"control": control}
+    user_case_given = case is not None
     # groups the method / instruction leaves out ("participants still in the acute phase ... are not part
     # of the case group: leave them out"): words of such sentences that name a group in an article
     try:
@@ -790,6 +791,17 @@ def reconstruct_study_effects(sources: dict, method_source: Union[str, Path], ca
             if not len(g):
                 msgs.append("no case-vs-control comparison found: if the article puts its group statistics in "
                             "supplementary files, download them and add them to this study's file list")
+        if user_case_given and len(g):
+            used = set()
+            for x in g["case_groups"].astype(str):
+                used |= {c.strip() for c in x.split(" + ")}
+            used |= set(g["control_group"].astype(str))
+            exc_ = exclude.get(sid) if isinstance(exclude, dict) else exclude
+            unused = [k for k, _ in groups.most_common() if k not in used and k.strip() not in used
+                      and not (exc_ and re.search(exc_, k, re.I))]
+            if unused:
+                msgs.append(f"groups used neither as case nor control: {unused[:6]} -- if they are case subgroups "
+                            f"(e.g. a subgroup table), call with case=None (the default) instead of a custom case")
         if sid in inferred_n:
             msgs.append(f"group sizes taken from the text: case {inferred_n[sid][0]}, control {inferred_n[sid][1]} "
                         f"(check against the participants section)")
