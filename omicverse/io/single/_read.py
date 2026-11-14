@@ -72,15 +72,17 @@ def _read_h5ad_rust(path, **kwargs):
         import anndataoom
     except ImportError:
         raise ImportError(
-            "Rust backend requires the 'anndataoom' package. "
-            "Install with:  pip install omicverse[rust]   (or  pip install anndataoom)"
+            "ov.read(storage='disk') needs the 'anndataoom' package (a dependency of "
+            "omicverse): pip install anndataoom. Or read into memory with "
+            "ov.read(path, storage='memory')."
         ) from None
 
     if not _h5ad_csr_sorted(path):
         raise ValueError(
-            f"Cannot read {path} with backend='rust': its sparse X matrix has "
+            f"Cannot read {path} with storage='disk': its sparse X matrix has "
             "unsorted minor indices, which anndata-rs rejects.\n"
-            "Rewrite with sorted indices, e.g.:\n"
+            "Read it into memory instead with ov.read(path, storage='memory'), or "
+            "rewrite it with sorted indices, e.g.:\n"
             "    import anndata as ad\n"
             f"    a = ad.read_h5ad('{path}')\n"
             "    a.X.sort_indices()\n"
@@ -100,10 +102,39 @@ def _read_h5ad_rust(path, **kwargs):
     return adata
 
 
+def _read_h5ad_threaded(path):
+    """``anndata.read_h5ad`` with a CSR ``X`` read by anndataoom-fast on all
+    threads (int32 indices).  None when it does not apply (backend='python',
+    anndataoom-fast without ``read_csr``, non-CSR ``X`` or a ``raw`` section)."""
+    from ..._backend import resolve_backend
+    if resolve_backend(None) != 'cpp':
+        return None
+    try:
+        import h5py
+        from anndataoom_fast.memory import read_csr
+    except ImportError:
+        return None
+    try:
+        from anndata.io import read_elem
+    except ImportError:  # anndata < 0.11
+        from anndata.experimental import read_elem
+    import anndata
+    with h5py.File(path, 'r') as f:
+        if 'X' not in f or 'raw' in f or not isinstance(f['X'], h5py.Group):
+            return None
+        enc = f['X'].attrs.get('encoding-type', b'')
+        enc = enc.decode() if isinstance(enc, bytes) else str(enc)
+        if enc != 'csr_matrix':
+            return None
+        parts = {k: read_elem(f[k]) for k in
+                 ('obs', 'var', 'uns', 'obsm', 'varm', 'obsp', 'varp', 'layers') if k in f}
+    return anndata.AnnData(X=read_csr(path), **parts)
+
+
 @register_function(
     aliases=["读取数据", "read", "load_data", "数据读取", "file_reader"],
     category="utils",
-    description="Universal file reader for common bioinformatics data formats including h5ad, csv, tsv, txt, and gzipped files; h5ad either in memory or kept on disk (storage='disk')",
+    description="Universal file reader for common bioinformatics data formats including h5ad, csv, tsv, txt, and gzipped files; h5ad read into memory (default) or kept on disk (storage='disk')",
     examples=[
         "# Read AnnData file into memory",
         "adata = ov.read('data.h5ad')",
@@ -141,7 +172,9 @@ def read(path, storage='memory', *, backend=None, **kwargs):
 
     ``storage='disk'`` keeps memory low (SEA-AD, 1.38M cells / 91 GB: 13 GB
     on CPU, 5 GB in GPU mode); every step re-reads the file, so it relies on
-    disk / page-cache bandwidth.
+    disk / page-cache bandwidth. Not every omicverse / scanpy function accepts
+    a disk-backed object yet; the default ``storage='memory'`` returns a plain
+    ``anndata.AnnData``.
 
     Parameters
     ----------
@@ -165,8 +198,8 @@ def read(path, storage='memory', *, backend=None, **kwargs):
     Raises
     ------
     ImportError
-        If ``storage='disk'`` needs ``anndataoom`` (CPU modes) or ``dask``
-        (GPU mode) and it is not installed.
+        If ``anndataoom`` (CPU modes) or ``dask`` (GPU mode), both hard
+        dependencies, are missing from the environment.
     ValueError
         If ``storage``/``backend`` is invalid, the file suffix is unsupported,
         or the ``.h5ad`` has an unsorted sparse ``X`` (AnnDataOOM; see
@@ -190,7 +223,8 @@ def read(path, storage='memory', *, backend=None, **kwargs):
                 return _anndata_read_h5ad(path, **kwargs)
             return _read_h5ad_rust(path, **kwargs)
         if storage == 'memory':
-            return _anndata_read_h5ad(path, **kwargs)
+            fast = None if kwargs else _read_h5ad_threaded(path)
+            return fast if fast is not None else _anndata_read_h5ad(path, **kwargs)
         if storage == 'disk':
             from ..._settings import settings
             if settings.mode == 'gpu':

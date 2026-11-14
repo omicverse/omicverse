@@ -400,6 +400,8 @@ def _swap_mask(obs: pd.DataFrame) -> np.ndarray:
         return (
             (~obs["first_type_neighborhood_agreement"].astype(bool))
             & (~obs["first_type_class_neighborhood_agreement"].astype(bool))
+            & obs["second_type_class"].notna()
+            & obs["first_type_class_neighborhood"].notna()
             & (obs["second_type_class"].astype(str) == obs["first_type_class_neighborhood"].astype(str))
         ).to_numpy()
     if {"first_type", "second_type", "first_type_neighborhood"}.issubset(obs.columns):
@@ -459,13 +461,25 @@ def split_balance(
         balanced[removed, :] = 0
     adata.layers[result_layer] = balanced.tocsr()
     status = np.full(adata.n_obs, "raw", dtype=object)
-    status[use_purified] = "purified"
+    status[use_purified] = (adata.obs["purification_status"].astype(str).to_numpy()[use_purified]
+                            if "purification_status" in adata.obs else "purified")
     status[removed] = "removed"
     adata.obs["split_balance_status"] = status
 
     if swap_labels:
         swap = _swap_mask(adata.obs)
         adata.obs["split_shift_swap"] = swap
+        # R SPLIT-shift replaces a swapped purified profile with its residual.
+        purified_status = (adata.obs["purification_status"].eq("purified").to_numpy()
+                           if "purification_status" in adata.obs
+                           else np.asarray((raw - purified).sum(axis=1)).ravel() > 0)
+        replace_profile = swap & purified_status & ~removed
+        if replace_profile.any():
+            shifted = (raw - purified).tocsr()
+            shifted.data[shifted.data < 0] = 0
+            shifted.eliminate_zeros()
+            balanced[replace_profile, :] = shifted[replace_profile, :]
+            adata.layers[result_layer] = balanced.tocsr()
         for first, second in (("first_type", "second_type"), ("weight_first_type", "weight_second_type")):
             if first in adata.obs and second in adata.obs:
                 a = adata.obs[first].copy()
@@ -495,8 +509,26 @@ def split_reassign_residuals(
     k: int = 20,
     radius: float | None = None,
     self_keep: float = 0.0,
+    receiver_policy: Literal["second_type", "all"] = "second_type",
 ):
-    """Reassign positive residual counts from purified cells to neighbors."""
+    """Reassign positive residual counts to eligible spatial neighbors.
+
+    By default, recipients must have a ``first_type`` equal to the sender's
+    ``second_type`` and must not have ``spot_class == 'reject'``, matching
+    SPLIT's second_type_neighbors_no_reject rule. Run purify first to populate
+    these labels. ``receiver_policy='all'`` explicitly requests the legacy
+    Python-only redistribution across all neighbors (not R SPLIT parity).
+    """
+    if receiver_policy not in {"second_type", "all"}:
+        raise ValueError("receiver_policy must be 'second_type' or 'all'.")
+    if receiver_policy == "second_type":
+        missing = {"first_type", "second_type"} - set(adata.obs.columns)
+        if missing:
+            raise ValueError("Run purify first or supply first_type and second_type labels.")
+        first_types = adata.obs["first_type"].to_numpy()
+        second_types = adata.obs["second_type"].to_numpy()
+        rejected = (adata.obs["spot_class"].eq("reject").fillna(False).to_numpy()
+                    if "spot_class" in adata.obs else np.zeros(adata.n_obs, dtype=bool))
     if mode not in {"uniform", "count_proportional"}:
         raise ValueError("`mode` must be 'uniform' or 'count_proportional'.")
     if purified_layer not in adata.layers:
@@ -529,6 +561,12 @@ def split_reassign_residuals(
         if not is_sender:
             continue
         receivers = np.array([j for j in idx[sender] if j >= 0 and j != sender], dtype=int)
+        if receiver_policy == "second_type":
+            if pd.isna(second_types[sender]):
+                receivers = np.array([], dtype=int)
+            else:
+                eligible = pd.Series(first_types[receivers]).eq(second_types[sender]).fillna(False).to_numpy()
+                receivers = receivers[eligible & ~rejected[receivers]]
         if receivers.size == 0:
             continue
         sender_has_receivers[sender] = True
@@ -568,6 +606,7 @@ def split_reassign_residuals(
         "k": k,
         "radius": radius,
         "self_keep": self_keep,
+        "receiver_policy": receiver_policy,
     }
     return None
 

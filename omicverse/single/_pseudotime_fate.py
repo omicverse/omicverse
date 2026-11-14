@@ -1739,7 +1739,7 @@ class PseudotimeFate:
 
         Empty dict if ``groupby`` is unset or scanpy hasn't written the
         palette yet (it writes it the first time you call
-        ``sc.pl.embedding(color=groupby)``).
+        ``ov.pl.embedding(color=groupby)``).
         """
         import matplotlib.colors as mc
         if self.groupby is None:
@@ -2430,7 +2430,7 @@ class PseudotimeFate:
         """One UMAP panel per inferred lineage, coloured by fate
         probability. The terminal cell of each lineage is overlaid as a
         yellow star (``show_terminals=True``). Equivalent to MIRA's
-        per-branch UMAP overlay (``sc.pl.umap(color='lineage_prob')``)
+        per-branch UMAP overlay (``ov.pl.embedding(basis='X_umap', color='lineage_prob')``)
         but plots all lineages in a single grid.
         """
         if self.result is None or self.result.fate_probabilities is None:

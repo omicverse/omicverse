@@ -172,21 +172,37 @@ def _highly_variable_pearson_residuals(
 
     # Get pearson residuals for each batch separately
     residual_gene_vars = []
+    # In-memory CSR with backend='cpp': cut the batch / non-zero genes on all
+    # threads (and only when something is dropped) instead of slicing views.
+    _cut = None
+    if _cpp and not is_rust:
+        from .._qc import _fast_cut
+        _cut = _fast_cut(adata, backend)
+        _X_all = _get_obs_rep(adata, layer=layer) if _cut is not None else None
+        if _cut is not None and not (sp_sparse.issparse(_X_all) and _X_all.format == 'csr'):
+            _cut = None
     for batch in np.unique(batch_info):
-        if is_rust:
-            adata_subset_prefilter = adata.subset(obs_indices=np.where(batch_info == batch)[0],inplace=False)
+        if _cut is not None:
+            from ..._backend import cpp_memory
+            _rows = batch_info == batch
+            X_batch_prefilter = _X_all if _rows.all() else _cut(_X_all, _rows, None)
+            nonzero_genes = cpp_memory().gene_sums(X_batch_prefilter)[0] != 0
+            X_batch = X_batch_prefilter if nonzero_genes.all() else \
+                _cut(X_batch_prefilter, None, nonzero_genes)
         else:
-            adata_subset_prefilter = adata[batch_info == batch]
-        #  adata_subset_prefilter = adata[batch_info == batch]
-        X_batch_prefilter = _get_obs_rep(adata_subset_prefilter, layer=layer)
-        if is_rust:
-            X_batch_prefilter = X_batch_prefilter[:]
-        # Filter out zero genes
-        nonzero_genes = np.ravel(X_batch_prefilter.sum(axis=0)) != 0
-        adata_subset = adata_subset_prefilter[:, nonzero_genes]
-        X_batch = _get_obs_rep(adata_subset, layer=layer)
-        if is_rust:
-            X_batch = X_batch[:]
+            if is_rust:
+                adata_subset_prefilter = adata.subset(obs_indices=np.where(batch_info == batch)[0],inplace=False)
+            else:
+                adata_subset_prefilter = adata[batch_info == batch]
+            X_batch_prefilter = _get_obs_rep(adata_subset_prefilter, layer=layer)
+            if is_rust:
+                X_batch_prefilter = X_batch_prefilter[:]
+            # Filter out zero genes
+            nonzero_genes = np.ravel(X_batch_prefilter.sum(axis=0)) != 0
+            adata_subset = adata_subset_prefilter[:, nonzero_genes]
+            X_batch = _get_obs_rep(adata_subset, layer=layer)
+            if is_rust:
+                X_batch = X_batch[:]
         # Prepare clipping
         if clip is None:
             n = X_batch.shape[0]
@@ -415,7 +431,7 @@ def highly_variable_genes(
 
     Notes
     -----
-    Experimental version of `sc.pp.highly_variable_genes()`
+    Experimental version of `ov.pp.highly_variable_genes()`
     """
 
     print(f"\n{Colors.HEADER}{Colors.BOLD}{EMOJI['start']} Highly Variable Genes Selection (Experimental):{Colors.ENDC}")

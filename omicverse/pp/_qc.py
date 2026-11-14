@@ -52,6 +52,112 @@ def _oom_axis_stats(X, axis):
     return s, nnz
 
 
+def _n_threads():
+    import os
+    try:
+        n = len(os.sched_getaffinity(0))
+    except AttributeError:
+        n = os.cpu_count() or 1
+    env = os.environ.get("OMP_NUM_THREADS")
+    return max(1, min(n, int(env))) if env and env.isdigit() else n
+
+
+def threaded_chunks(fn, n, min_chunk=1 << 22):
+    """Run ``fn(start, stop)`` over ``range(n)`` split into contiguous chunks
+    on a thread pool (numpy ufuncs release the GIL); returns the results."""
+    k = max(1, min(_n_threads(), n // min_chunk))
+    if k == 1:
+        return [fn(0, n)]
+    from concurrent.futures import ThreadPoolExecutor
+    b = np.linspace(0, n, k + 1, dtype=np.int64)
+    with ThreadPoolExecutor(k) as ex:
+        return list(ex.map(lambda i: fn(int(b[i]), int(b[i + 1])), range(k)))
+
+
+def _fast_cut(adata, backend):
+    """anndataoom-fast's threaded CSR subset applies: in-memory CSR ``X``
+    (not a view, not AnnDataOOM) and the cpp backend."""
+    from .._backend import resolve_backend
+    if resolve_backend(backend) != 'cpp' or adata.is_view or _is_oom(adata):
+        return None
+    if not (sparse.issparse(adata.X) and adata.X.format == 'csr'):
+        return None
+    try:
+        from anndataoom_fast.memory import subset_csr
+    except ImportError:
+        return None
+    return subset_csr
+
+
+def _detach_csr(adata):
+    """Take ``X`` and the CSR layers out of ``adata`` (returned as a dict)."""
+    parts = {None: adata.X}
+    for k in list(adata.layers.keys()):
+        v = adata.layers[k]
+        if sparse.issparse(v) and v.format == 'csr':
+            parts[k] = v
+            del adata.layers[k]
+    adata.X = None
+    return parts
+
+
+def _attach_csr(adata, parts):
+    for k, v in parts.items():
+        if k is None:
+            adata.X = v
+        else:
+            adata.layers[k] = v
+
+
+def subset_inplace(adata, obs=None, var=None, backend=None):
+    """``adata._inplace_subset_obs/var`` that cuts an in-memory CSR ``X`` and
+    its CSR layers on all threads (anndata copies them single-threaded, and
+    twice).  No-op for all-true masks."""
+    obs = None if obs is None else np.asarray(obs)
+    var = None if var is None else np.asarray(var)
+    if obs is not None and obs.dtype == bool and obs.all():
+        obs = None
+    if var is not None and var.dtype == bool and var.all():
+        var = None
+    if obs is None and var is None:
+        return
+    cut = _fast_cut(adata, backend)
+    if cut is None:
+        if obs is not None:
+            adata._inplace_subset_obs(obs)
+        if var is not None:
+            adata._inplace_subset_var(var)
+        return
+    parts = _detach_csr(adata)
+    try:
+        if obs is not None:
+            adata._inplace_subset_obs(obs)
+        if var is not None:
+            adata._inplace_subset_var(var)
+    except BaseException:
+        _attach_csr(adata, parts)
+        raise
+    _attach_csr(adata, {k: cut(v, obs, var) for k, v in parts.items()})
+
+
+def subset_copy(adata, obs=None, var=None, backend=None):
+    """``adata[obs, var].copy()`` with in-memory CSR matrices cut on all
+    threads; ``adata`` itself is left unchanged."""
+    cut = _fast_cut(adata, backend)
+    if cut is None:
+        sel = (slice(None) if obs is None else obs, slice(None) if var is None else var)
+        return adata[sel].copy()
+    parts = _detach_csr(adata)
+    try:
+        sel = (slice(None) if obs is None else np.asarray(obs),
+               slice(None) if var is None else np.asarray(var))
+        new = adata[sel].copy()
+    finally:
+        _attach_csr(adata, parts)
+    _attach_csr(new, {k: cut(v, obs, var) for k, v in parts.items()})
+    return new
+
+
 def _filter_cells_impl(
     adata,
     min_counts=None,
@@ -89,7 +195,7 @@ def _filter_cells_impl(
         cell_subset &= n_genes <= max_genes
 
     if inplace:
-        adata._inplace_subset_obs(cell_subset)
+        subset_inplace(adata, obs=cell_subset, backend=backend)
         return None
     else:
         return cell_subset, n_counts
@@ -131,7 +237,7 @@ def _filter_genes_impl(
         gene_subset &= n_cells <= max_cells
 
     if inplace:
-        adata._inplace_subset_var(gene_subset)
+        subset_inplace(adata, var=gene_subset, backend=backend)
         return None
     else:
         return gene_subset, n_counts
@@ -581,7 +687,7 @@ def _mt_mask(var_names, mt_startswith):
     category="preprocessing",
     description=(
         "Compute per-cell QC metrics WITHOUT filtering: flags mt/ribo/hb "
-        "genes, runs scanpy calculate_qc_metrics, and adds omicverse aliases "
+        "genes, runs ov.pp.calculate_qc_metrics, and adds omicverse aliases "
         "nUMIs / detected_genes / mito_perc. Inspect with ov.pl.qc, then "
         "filter with ov.pp.qc(tresh=...)."
     ),
@@ -607,8 +713,8 @@ def qc_metrics(
 ):
     r"""Compute per-cell QC metrics without filtering.
 
-    Flags mitochondrial / ribosomal / haemoglobin genes, runs scanpy's
-    ``calculate_qc_metrics`` (``total_counts``, ``n_genes_by_counts``,
+    Flags mitochondrial / ribosomal / haemoglobin genes, runs
+    :func:`omicverse.pp.calculate_qc_metrics` (``total_counts``, ``n_genes_by_counts``,
     ``pct_counts_{mt,ribo,hb}``), and adds the omicverse aliases ``nUMIs``,
     ``detected_genes`` and ``mito_perc`` so both naming conventions are
     available. Nothing is removed — this is the "look before you cut" step:
@@ -630,7 +736,7 @@ def qc_metrics(
     AnnData
         ``adata`` with QC metrics added to ``obs``/``var`` (in place).
     """
-    import scanpy as sc
+    from ._qc_metrics import calculate_qc_metrics
 
     var_names = adata.var_names
     if mt_startswith == "auto" and mt_genes is None:
@@ -648,7 +754,7 @@ def qc_metrics(
     else:
         adata.var["hb"] = var_names.str.contains(hb_startswith)
 
-    sc.pp.calculate_qc_metrics(
+    calculate_qc_metrics(
         adata, qc_vars=["mt", "ribo", "hb"], inplace=True, log1p=False,
         percent_top=None,
     )
@@ -1427,10 +1533,14 @@ def qc_cpu(
         removed = QC_test.loc[lambda x : x == False]
         removed_cells.extend(list(removed.index.values))
         total_qc_failed = n1-np.sum(QC_test)
-        adata = adata[QC_test, :]
-    
-    
-    n2 = adata.shape[0]
+    # In-memory CSR with backend='cpp': the QC filter and the min_genes /
+    # min_cells filters below become one threaded cut (same result as the
+    # step-by-step subsets, which each copied the whole matrix).
+    _fused = (not is_oom) and _fast_cut(adata, backend) is not None
+    if not is_oom and not _fused:
+        adata = subset_copy(adata, obs=QC_test.values, backend=backend)
+
+    n2 = int(np.sum(QC_test)) if _fused else adata.shape[0]
     
     print(f"   {Colors.GREEN}✓ Combined QC filters: {Colors.BOLD}{total_qc_failed:,}{Colors.ENDC}{Colors.GREEN} cells removed ({total_qc_failed/n1*100:.1f}%){Colors.ENDC}")
 
@@ -1439,10 +1549,22 @@ def qc_cpu(
     print(f"   {Colors.CYAN}Parameters: min_genes={min_genes}, min_cells={min_cells}{Colors.ENDC}")
     print(f"   {Colors.CYAN}Ratios: max_genes_ratio={max_genes_ratio}, max_cells_ratio={max_cells_ratio}{Colors.ENDC}")
     
-    cells_before_final = adata.shape[0]
+    cells_before_final = n2
     genes_before_final = adata.shape[1]
 
-    if is_oom:
+    if _fused:
+        from .._backend import cpp_memory
+        _mem = cpp_memory()
+        _rows = np.asarray(QC_test.values, dtype=bool).copy()
+        if min_genes is not None:
+            _rows &= _mem.qc_metrics(adata.X)['n_positive'] >= min_genes
+        _genes = np.ones(adata.n_vars, dtype=bool)
+        if min_cells is not None:
+            _genes = _mem.positive_counts(adata.X, rows=_rows) >= min_cells
+        adata = subset_copy(adata, obs=_rows, var=_genes, backend=backend)
+        _filter_cells_impl(adata, max_genes=int(max_genes_ratio*adata.shape[1]), backend=backend)
+        _filter_genes_impl(adata, max_cells=int(max_cells_ratio*adata.shape[0]), backend=backend)
+    elif is_oom:
         # OOM path: use _inplace_subset and chunked column counts
         selected_cells = np.ones(adata.n_obs, dtype=bool)
         if min_genes:

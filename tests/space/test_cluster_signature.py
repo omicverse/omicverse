@@ -217,6 +217,39 @@ def test_review_flags_and_enforced_lineage():
     assert n_open(r4) <= n_open(r0) and r4.attrs["review_below"] == -5.0
 
 
+def test_review_states_open_resolved_fixed():
+    st = getattr(cs, "_review_state", None)
+    if st is None:
+        from omicverse.space._cluster_signature import _review_state as st
+    assert st(1.0, 0.5, 0.0, "A", "B", 1.0, 0.2, (0.5, 1.5)) == "fixed"
+    # another candidate leads on one defining marker only: resolved, winner kept
+    s = st(0.8, 1.4, 0.0, "A", "B", 0.9, 0.5, (0.5, 1.5))
+    assert s.startswith("resolved: keep A") and "0.90" in s and "z=1.4" in s
+    # weak winner, alternative above the mean: open
+    assert st(-0.4, 0.6, 0.0, "A", "B", 0.3, 0.2, None).startswith("open")
+    # weak winner, no alternative reaches the mean: resolved
+    assert st(-0.4, -0.1, 0.0, "A", "B", 0.3, 0.2, None, "R").startswith("resolved: keep A")
+    assert st(-0.4, -0.1, 0.0, "A", "B", 0.3, 0.2, None).startswith("open")
+    assert st(float("nan"), float("nan"), 0.0, "A", None, 0.3, float("nan"), None, "R").startswith("resolved")
+
+
+def test_lineage_ignored_on_fixed_or_resolved_clusters():
+    p = cs.cluster_marker_profile(_panel(), "cluster")
+    d = {"A": ["m1"], "B": ["m2"], "B_x": ["m3"], "B_y": ["m4"]}
+    par = {"B_x": "B", "B_y": "B"}
+    r = cs.score_cluster_signatures(p, SIGS, parents=par, defining=d, residual_label="R")
+    # no signature present: the label of exclusion is a default, left open
+    assert str(r.at["q1", "review"]).startswith("open") and r.at["q1", "label"] == "R"
+    resolved = [c for c in r.index if str(r.at[c, "review"]).startswith("resolved")]
+    fixed = [c for c in r.index if r.at[c, "review"] == "fixed"]
+    c0 = (resolved or fixed)[0]
+    other = "B" if r.at[c0, "top_label"] == "A" else "A"
+    r2 = cs.score_cluster_signatures(p, SIGS, parents=par, defining=d, residual_label="R",
+                                     lineage={c0: other, "q1": "A"})
+    assert r2.at[c0, "top_label"] == r.at[c0, "top_label"] and "ignored" in r2.at[c0, "reason"]
+    assert r2.at["q1", "top_label"] == "A"
+
+
 def test_residual_label_signature_does_not_compete():
     p = cs.cluster_marker_profile(_panel(), "cluster")
     sigs = dict(SIGS, R={"m1": 0.05})            # weak signature of the exclusion label
@@ -351,3 +384,98 @@ def test_single_excellent_marker_label_is_testable():
     r = cs.score_cluster_signatures(cs.cluster_marker_profile(df, "cluster"), sigs, residual_label="O")
     assert "EN" not in r.attrs["weak"] and "W" in r.attrs["weak"]
     assert r.at["en", "label"] == "EN" and r.at["q", "label"] == "O"
+
+
+def test_lineage_markers_exclude_a_state_label_without_its_lineage():
+    # 'kx' carries a state marker (k) and a moderate tumour-like marker (h)
+    # but its lineage marker t is below the background every cluster carries
+    mk = ["t", "k", "h"]
+    spec = {"t1": dict(t=0.8), "q1": dict(t=0.2), "q2": dict(t=0.2), "q3": dict(t=0.2),
+            "kx": dict(k=0.8, h=0.3, t=0.0), "h1": dict(h=0.8, t=0.2)}
+    p = cs.cluster_marker_profile(_make(spec, mk), "cluster")
+    sigs = {"TK": {"k": 1.0, "t": 0.15}, "H": {"h": 1.0}, "T": {"t": 1.0}}
+    d = {"TK": ["k"], "H": ["h"], "T": ["t"]}
+    plain = cs.score_cluster_signatures(p, sigs, defining=d)
+    assert plain.at["kx", "label"] == "TK"
+    r = cs.score_cluster_signatures(p, sigs, defining=d, lineage_markers={"TK": ["t"]})
+    assert r.at["kx", "label"] == "H"
+    assert r.at["t1", "label"] == "T"
+
+
+def test_defining_check_weighs_marker_contrast():
+    # marker s is carried by every cluster near its maximum (little contrast
+    # over background); m is a clean marker.  Both stand out in x, s more so;
+    # x's whole-signature winner X has its own defining marker a below 0.5
+    mk = ["a", "b", "c", "s", "m"]
+    base = dict(s=0.5)
+    spec = {"x": dict(a=0.3, b=0.8, c=0.8, s=0.65, m=0.3), "y": dict(base, m=0.2, a=0.3),
+            "u": dict(base, a=0.6), "v": dict(base, b=0.3), "w": dict(base, c=0.3), "z": dict(base)}
+    p = cs.cluster_marker_profile(_make(spec, mk), "cluster")
+    assert p.at["x", "z:s"] > p.at["x", "z:m"] > 1.5
+    sigs = {"X": {"a": 1.0, "b": 1.0, "c": 1.0}, "P": {"s": 1.0}, "M": {"m": 1.0}}
+    d = {"X": ["a"], "P": ["s"], "M": ["m"]}
+    r = cs.score_cluster_signatures(p, sigs, defining=d)
+    assert r.at["x", "label"] == "M" and "defining-marker check" in r.at["x", "reason"]
+
+
+def test_increment_split_axis_follows_what_a_child_adds():
+    # two members of lineage P; the bright one is high on g (child C1's own
+    # marker) and somewhat on h; C2 lists g and h weakly on top of P's marker
+    mk = ["p", "g", "h", "o"]
+    spec = {"x": dict(p=0.9, g=0.8, h=0.6), "y": dict(p=0.3, g=0.05, h=0.05),
+            "o1": dict(o=0.8), "o2": dict(o=0.6), "o3": {}}
+    p = cs.cluster_marker_profile(_make(spec, mk), "cluster")
+    sigs = {"P": {"p": 1.0}, "C1": {"p": 1.0, "g": 0.24}, "C2": {"p": 1.0, "g": 0.08, "h": 0.08},
+            "O": {"o": 1.0}}
+    par = {"C1": "P", "C2": "P"}
+    d = {"P": ["p"], "C1": ["p"], "C2": ["p"], "O": ["o"]}
+    old = cs.score_cluster_signatures(p, sigs, parents=par, defining=d, split_axis="signature")
+    new = cs.score_cluster_signatures(p, sigs, parents=par, defining=d)
+    assert new.at["x", "label"] == "C1" and new.at["y", "label"] == "P"
+    assert old.at["x", "label"] in ("C1", "C2")
+
+
+def test_single_marker_conflict_switches_to_specific_coherent_evidence():
+    # x: the whole-signature winner MO leads through a child whose defining
+    # marker (sh) is shared with another lineage (N); MA's child marker r is
+    # specific and stands out more -> MA takes the cluster
+    mk = ["p", "sh", "q", "r", "o"]
+    spec = {"x": dict(p=0.75, sh=0.9, q=0.3, r=0.85), "n1": dict(sh=0.6), "ma1": dict(q=0.8, r=0.3),
+            "mo1": dict(p=0.8), "o1": dict(o=0.8), "o2": dict(o=0.5), "e": {}}
+    p = cs.cluster_marker_profile(_make(spec, mk), "cluster")
+    sigs = {"MO": {"p": 1.0}, "MO_c": {"p": 1.0, "sh": 1.0}, "MA": {"q": 1.0, "r": 0.3},
+            "MA_c": {"r": 1.0, "q": 0.3}, "N": {"sh": 1.0}, "O": {"o": 1.0}}
+    par = {"MO_c": "MO", "MA_c": "MA"}
+    d = {"MO": ["p"], "MO_c": ["sh"], "MA": ["q"], "MA_c": ["r"], "N": ["sh"], "O": ["o"]}
+    off = cs.score_cluster_signatures(p, sigs, parents=par, defining=d, switch_rule="none")
+    assert off.at["x", "top_label"] == "MO" and str(off.at["x", "review"]).startswith("resolved")
+    on = cs.score_cluster_signatures(p, sigs, parents=par, defining=d)
+    assert on.at["x", "top_label"] == "MA" and "single-marker conflict" in on.at["x", "reason"]
+
+
+def test_single_marker_conflict_keeps_winner_when_other_is_incoherent():
+    # S stands out on v, but its other defining marker w is below the mean in x
+    mk = ["p", "sh", "v", "w", "o"]
+    spec = {"x": dict(p=0.75, sh=0.9, v=0.85), "n1": dict(sh=0.6), "s1": dict(v=0.5, w=0.8),
+            "mo1": dict(p=0.8), "o1": dict(o=0.8), "o2": dict(o=0.5), "e": dict(w=0.3)}
+    p = cs.cluster_marker_profile(_make(spec, mk), "cluster")
+    sigs = {"MO": {"p": 1.0}, "MO_c": {"p": 1.0, "sh": 1.0}, "S": {"v": 1.0, "w": 1.0},
+            "N": {"sh": 1.0}, "O": {"o": 1.0}}
+    d = {"MO": ["p"], "MO_c": ["sh"], "S": ["v", "w"], "N": ["sh"], "O": ["o"]}
+    r = cs.score_cluster_signatures(p, sigs, parents={"MO_c": "MO"}, defining=d)
+    assert r.at["x", "alt_label"] == "S" and r.at["x", "alt_lineage_z"] > r.at["x", "lineage_z"]
+    assert r.at["x", "top_label"] == "MO" and str(r.at["x", "review"]).startswith("resolved: keep MO")
+
+
+def test_label_with_most_defining_markers_unmeasured_is_not_a_candidate():
+    # F is defined by f1 and f2; the panel measures only f2, which x carries
+    # alongside its own lineage marker (as with an exclusion label in play)
+    mk = ["f2", "g", "o"]
+    spec = {"x": dict(f2=0.8, g=0.7), "g1": dict(g=0.8), "o1": dict(o=0.8), "q": {}}
+    p = cs.cluster_marker_profile(_make(spec, mk), "cluster")
+    sigs = {"F": {"f1": 1.0, "f2": 0.8, "g": 0.4}, "G": {"g": 1.0}, "O": {"o": 1.0}}
+    d = {"F": ["f1", "f2"], "G": ["g"], "O": ["o"]}
+    r = cs.score_cluster_signatures(p, sigs, defining=d, residual_label="R")
+    assert r.at["x", "label"] == "G"
+    loose = cs.score_cluster_signatures(p, sigs, defining=d, residual_label="R", identifiable="any")
+    assert loose.at["x", "label"] == "F"

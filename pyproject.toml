@@ -6,7 +6,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "omicverse"
-version = "2.4.1"
+version = "2.4.3"
 description = "OmicVerse: A single pipeline for exploring the entire transcriptome universe"
 readme = "README.md"
 requires-python = ">=3.9"
@@ -30,7 +30,6 @@ classifiers = [
 dependencies = [
     
     'numpy>=1.23',
-    'scanpy>=1.9',
     'pandas>=1.5, <3.0.0',
     'matplotlib>3.6',
     'scikit-learn>=1.2',
@@ -103,10 +102,29 @@ dependencies = [
     # Multithreaded C++ kernels behind the default backend='cpp' (QC, normalize,
     # HVG, scale, PCA, neighbors, UMAP, Leiden, COSG); backend='python' or a
     # missing install falls back to the original code.
-    'anndataoom-fast>=0.1.3',
+    'anndataoom-fast>=0.1.6',
+    # ov.read(path, storage='disk'): AnnDataOOM in the CPU modes, Dask row
+    # blocks in GPU mode.
+    'anndataoom>=0.1.9,<1.0',
+    # natural sort order for cluster labels (Louvain / DPT ports)
+    'natsort',
+    # imported directly by omicverse (formerly installed through scanpy, which is
+    # now optional): positional-argument shims, UMAP fuzzy graph / layout, NN-descent
+    'legacy-api-wrap',
+    'umap-learn>=0.5',
+    'pynndescent',
+    'dask[array]',
 ]
 
 [project.optional-dependencies]
+# Optional moscot backend (roadmap #989).
+moscot = ["moscot>=0.5.2,<0.6"]
+
+# scanpy itself: no longer needed by omicverse's own code (vendored tools under
+# omicverse/external and third-party workflows may still use it).
+scanpy = [
+    "scanpy>=1.9",
+]
 # Spatial flow network learning; GEMs are supplied separately.
 commot = [
     "torch>=2.0,<3",
@@ -116,12 +134,15 @@ flowsig = [
     "causaldag==0.1a163",
     "torch>=2.0,<3",
 ]
-# Out-of-memory backend (Rust-powered AnnData). Install via:
-#   pip install omicverse[rust]
-# Enables ov.read(path, backend='rust') with chunked preprocessing.
+# Out-of-memory backend (Rust-powered AnnData); now a core dependency, the
+# extra is kept so `pip install omicverse[rust]` keeps working.
 rust = [
     "anndataoom>=0.1.0,<1.0",
 ]
+
+# Optional pyLemur backend (roadmap #989).
+lemur = ["pylemur>=0.3.1,<0.4"]
+
 # Flow / spectral / mass cytometry. `flowio` (BSD-3, pure Python, numpy only) is
 # the FCS parser behind ov.io.read_fcs and behind both pytometry and FlowKit; it
 # was previously an UNDECLARED runtime dependency of a public function.
@@ -138,7 +159,12 @@ cytometry-full = [
     "flowio>=1.3",
     "pytometry>=0.1.4",
 ]
+# Optional Novae backend (roadmap #989).
+novae = ["novae>=1.1.2,<1.2"]
+
+
 full = [
+  "scanpy>=1.9",
   "dynamo-release<=1.5.3",
   "squidpy",
   "s3fs>=2023.1.0",  # pin to avoid ancient s3fs pulled by squidpy→spatialdata→ome-zarr chain
@@ -252,6 +278,9 @@ skillseeker = [
   "PyGithub>=2.2",
   "PyMuPDF>=1.24",
 ]
+
+# Optional pertpy backend (roadmap #989); requires Python >= 3.12.
+pertpy = ["pertpy>=1.4,<1.5"]
 
 jarvis = [
   "python-telegram-bot>=21.3",
@@ -371,10 +400,10 @@ airr = [
 # / 'scar') are heavyweight and intentionally NOT bundled here — install
 # CellBender / scAR directly when needed.
 ambient = [
-  "pysoupx>=0.1.0",        # SoupX — empty-droplet soup profile, multinomial subtraction
-  "pydecontx>=0.1.0",      # DecontX — variational-EM contamination mixture
-  "pyfastcar>=0.1.0",      # FastCAR — deterministic per-gene ambient subtraction
-  "pysccdc>=0.1.0",        # scCDC — entropy-based GCG-specific decontamination
+  "pysoupx>=0.1.1",        # SoupX — empty-droplet soup profile, multinomial subtraction
+  "pydecontx>=0.1.1",      # DecontX — variational-EM contamination mixture
+  "pyfastcar>=0.1.1",      # FastCAR — deterministic per-gene ambient subtraction
+  "pysccdc>=0.1.1",        # scCDC — entropy-based GCG-specific decontamination
 ]
 
 # Lipidomics backend for the lipidomics path of ``ov.metabol`` — a

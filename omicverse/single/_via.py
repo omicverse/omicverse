@@ -3,7 +3,6 @@ import builtins
 import contextlib
 import math
 import numpy as np
-import scanpy as sc
 import pandas as pd
 
 import igraph as ig
@@ -951,7 +950,7 @@ arrow_style="-|>",  max_length:int=4, linewidth:float=1,min_mass = 1, cutoff_per
 
     if add_outline_clusters:
         # add black outline to outer cells and a white inner rim
-        #adapted from scanpy (scVelo utils adapts this from scanpy)
+        #adapted from the scanpy implementation (also used by scVelo utils)
         gp_size = (2 * (scatter_size * cluster_outline_edgewidth *.1) + 0.1*scatter_size) ** 2
 
         bg_size = (2 * (scatter_size * cluster_outline_edgewidth)+ math.sqrt(gp_size)) ** 2

@@ -1,5 +1,4 @@
 import os 
-import scanpy as sc
 import pandas as pd
 import numpy as np
 from typing import Optional
@@ -141,11 +140,11 @@ def data_preprocess(adata,clustertype='leiden',
     except OSError as e:
         print("......Unable to create directory {}. Reason {}".format(dirname,e))
 
-    sc.settings.verbosity = 2  # reduce the verbosity
+    from ._sc_compat import rank_genes_groups
     if rank_rep==False and 'rank_genes_groups' not in adata.uns.keys():
-        sc.tl.rank_genes_groups(adata, clustertype, method='wilcoxon')
+        rank_genes_groups(adata, clustertype, method='wilcoxon')
     elif rank_rep==True:
-        sc.tl.rank_genes_groups(adata, clustertype, method='wilcoxon')
+        rank_genes_groups(adata, clustertype, method='wilcoxon')
     else:
         pass
     result = adata.uns['rank_genes_groups']
@@ -308,42 +307,47 @@ def scanpy_lazy(adata:anndata.AnnData,min_genes:int=200,min_cells:int=3,drop_dou
     anndata.AnnData
         Processed AnnData with QC, HVG, PCA, neighbors, and UMAP results.
     """
+    from ..pp import (filter_cells, filter_genes, scrublet, calculate_qc_metrics,
+                      normalize_total, log1p, highly_variable_genes, neighbors,
+                      leiden, umap)
+    from ._sc_compat import scale_X, pca_X, paga, paga_pos
     #filter cells and genes
-    sc.pp.filter_cells(adata, min_genes=min_genes)
-    sc.pp.filter_genes(adata, min_cells=min_cells)
+    filter_cells(adata, min_genes=min_genes)
+    filter_genes(adata, min_cells=min_cells)
     #filter the doublets cells
     if drop_doublet:
-        sc.external.pp.scrublet(adata) #estimates doublets
+        scrublet(adata) #estimates doublets
         adata = adata[adata.obs['predicted_doublet'] == False] #do the actual filtering
     #calculate the proportion of mito-genes
     adata.var['mt'] = adata.var_names.str.startswith('MT-')  # annotate the group of mitochondrial genes as 'mt'
-    sc.pp.calculate_qc_metrics(adata, qc_vars=['mt'], percent_top=None, log1p=False, inplace=True)
+    calculate_qc_metrics(adata, qc_vars=['mt'], percent_top=None, log1p=False, inplace=True)
     adata = adata[adata.obs.n_genes_by_counts < n_genes_by_counts, :]
     adata = adata[adata.obs.pct_counts_mt < pct_counts_mt, :]
     #save the raw counts
     adata.layers["counts"] = adata.X.copy()
     #normalization, the max counts of total_counts is 20000 means the amount is 10e4
-    sc.pp.normalize_total(adata, target_sum=target_sum)
+    normalize_total(adata, target_sum=target_sum)
     #log
-    sc.pp.log1p(adata)
+    log1p(adata)
     #select high-variable genes
-    sc.pp.highly_variable_genes(adata, min_mean=min_mean, max_mean=max_mean, min_disp=min_disp)
+    highly_variable_genes(adata, flavor='seurat', min_mean=min_mean, max_mean=max_mean, min_disp=min_disp)
     #save and filter
     adata.raw = adata
-    adata = adata[:, adata.var.highly_variable]
+    adata = adata[:, adata.var.highly_variable].copy()
     #scale
-    #scale(adata, max_value=max_value)
-    sc.pp.scale(adata, max_value=max_value)
+    scale_X(adata, max_value=max_value)
     #pca analysis
-    sc.tl.pca(adata, n_comps=n_comps, svd_solver=svd_solver)
-    #pca(adata,layer='scaled',n_pcs=50)
+    pca_X(adata, n_comps=n_comps, svd_solver=svd_solver)
     #cell neighbors graph construct
-    sc.pp.neighbors(adata, n_neighbors=n_neighbors, random_state = random_state, n_pcs=n_pcs)
+    neighbors(adata, n_neighbors=n_neighbors, random_state = random_state, n_pcs=n_pcs)
     #umap
-    sc.tl.leiden(adata)
-    sc.tl.paga(adata)
-    sc.pl.paga(adata, plot=False)  # remove `plot=False` if you want to see the coarse-grained graph
-    sc.tl.umap(adata, init_pos='paga')
+    leiden(adata, random_state=0, backend='python')
+    paga(adata)
+    paga_pos(adata)
+    # PAGA-initialised UMAP (scanpy's ``init_pos='paga'``, seeded with 0)
+    from ..pp._compat import get_init_pos_from_paga
+    umap(adata, init_pos=get_init_pos_from_paga(adata, random_state=0, neighbors_key='neighbors'),
+         random_state=0)
     return adata
 
 @register_function(
@@ -429,7 +433,7 @@ def scanpy_cellanno_from_dict(adata:anndata.AnnData,
         "b_cell_markers = marker_dict['B cell']",
         "print(b_cell_markers[:10])  # Top 10 markers",
         "# Use with plotting",
-        "sc.pl.dotplot(adata, marker_dict, groupby='leiden')"
+        "ov.pl.dotplot(adata, marker_dict, groupby='leiden')"
     ],
     related=["single.pySCSA", "single.scanpy_cellanno_from_dict", "pl.dotplot"]
 )
@@ -456,7 +460,7 @@ def get_celltype_marker(adata:anndata.AnnData,
     pval_cutoff : float
         Maximum adjusted p-value cutoff for retained markers.
     rank : bool
-        Whether to run ``sc.tl.rank_genes_groups`` before extraction.
+        Whether to run :func:`omicverse.single.find_markers` before extraction.
     key : str
         Key in ``adata.uns`` storing ranked-gene results.
     method : str
@@ -481,6 +485,7 @@ def get_celltype_marker(adata:anndata.AnnData,
     dict
         Dictionary mapping cluster labels to marker gene lists.
     """
+    from ._sc_compat import rank_genes_groups, rank_genes_groups_df
     print('...get cell type marker')
     celltypes = sorted(adata.obs[clustertype].unique())
     cell_marker_dict={}
@@ -491,9 +496,9 @@ def get_celltype_marker(adata:anndata.AnnData,
         if layer is not None:
             rg_kwargs['layer'] = layer
         rg_kwargs.update(kwargs)
-        sc.tl.rank_genes_groups(adata, clustertype, **rg_kwargs)
+        rank_genes_groups(adata, clustertype, **rg_kwargs)
     for celltype in celltypes:
-        degs = sc.get.rank_genes_groups_df(adata, group=celltype, key=key, log2fc_min=log2fc_min, 
+        degs = rank_genes_groups_df(adata, group=celltype, key=key, log2fc_min=log2fc_min,
                                         pval_cutoff=pval_cutoff)
         foldp=np.histogram(degs[scores_type])
         if foldchange is None:
@@ -980,7 +985,9 @@ class MetaTiME(object):
         """
 
         print('...overclustering using leiden')
-        sc.tl.leiden(self.adata, resolution=resolution, key_added = clustercol, random_state=random_state)
+        from ..pp import leiden
+        leiden(self.adata, resolution=resolution, key_added = clustercol, random_state=random_state,
+               backend='python')
         self.clustercol=clustercol
         #self.adata = annotator.overcluster(self.adata,resolution,random_state,clustercol) # this generates a 'overcluster' columns in adata.obs
         
@@ -1045,7 +1052,7 @@ class MetaTiME(object):
         legend_loc : str or None
             Matplotlib legend placement.
         palette : Any
-            Color palette passed to ``scanpy.pl.embedding``.
+            Color palette passed to ``ov.pl.embedding``.
 
         Returns
         -------
@@ -1067,8 +1074,8 @@ class MetaTiME(object):
             palette=plt.cycler("color",plt.cm.tab20(np.linspace(0,1,20)))
 
         with plt.rc_context({"figure.figsize": figsize, "figure.dpi": dpi, "figure.frameon": frameon}):
-            #ax = sc.pl.umap(pdata, color="MetaTiME_overcluster", show=False, legend_loc=None, frameon=False, size=30)
-            ax = sc.pl.embedding(self.adata, basis=basis,color= cluster_key , show=False, legend_loc=None, add_outline=False, 
+            from ..pl import embedding
+            ax = embedding(self.adata, basis=basis,color= cluster_key , show=False, legend_loc=None, add_outline=False, 
                     #legend_loc='on data',legend_fontsize=6, legend_fontoutline=2,
                     title= title, 
                     palette=palette, 

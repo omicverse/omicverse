@@ -4,8 +4,8 @@ r"""Write and audit a cluster → label deliverable from a scorer result.
 column of :func:`omicverse.space.score_cluster_signatures` (one result, or
 one per dataset) in the column layout the caller asks for.  Manual changes
 go only through ``overrides={cluster: (label, evidence)}`` and only for
-clusters the scorer marked ``review = 'open ...'``; overrides of fixed
-clusters are refused.  Every cluster's scorer label, written label, source
+clusters the scorer marked ``review = 'open ...'``; overrides of fixed or
+resolved clusters are refused.  Every cluster's scorer label, written label, source
 and evidence go to a sidecar audit file next to the deliverable.
 
 :func:`audit_cluster_labels` reads an existing deliverable back and reports
@@ -65,22 +65,38 @@ REVIEW_BELOW = 0.0       # the default review threshold (dataset mean of lineage
 
 
 def _default_review(rr) -> str:
-    """Open / fixed under the DEFAULT policy, recomputed from the result's
+    """Review state under the DEFAULT policy, recomputed from the result's
     evidence columns (``lineage_z``, ``alt_lineage_z``) — independent of the
-    arguments the scorer was called with.  Without those columns: fixed."""
+    arguments the scorer was called with.  Same states as the scorer:
+    ``fixed``; ``resolved`` (another candidate leads only on one defining
+    marker, or the winner is weak but no candidate reaches the mean, when
+    the result has a ``label_of_exclusion``); ``open`` (winner below the mean
+    or unmeasured while another candidate reaches it, or with no label of
+    exclusion, or no signature present — ``top_label`` empty).  Without those columns: fixed."""
     if "lineage_z" not in rr.index:
         return "fixed (no evidence columns)"
-    try:
-        lz = float(rr["lineage_z"])
-    except (TypeError, ValueError):
-        lz = float("nan")
-    alt = float(rr["alt_lineage_z"]) if "alt_lineage_z" in rr.index and rr["alt_lineage_z"] == rr["alt_lineage_z"] \
-        and rr["alt_lineage_z"] is not None else float("nan")
-    if lz != lz or lz < REVIEW_BELOW:
-        return f"open: winner evidence z={lz:.1f} below {REVIEW_BELOW}"
-    if alt == alt and alt > lz:
-        return f"open: another candidate's evidence z={alt:.1f} > winner z={lz:.1f}"
-    return "fixed"
+    def _f(k):
+        try:
+            v = float(rr[k]) if k in rr.index and rr[k] is not None else float("nan")
+        except (TypeError, ValueError):
+            v = float("nan")
+        return v
+    lz, alt = _f("lineage_z"), _f("alt_lineage_z")
+    if "top_label" in rr.index and (rr["top_label"] is None or rr["top_label"] != rr["top_label"]):
+        return "open: no signature present"
+    if lz == lz and lz >= REVIEW_BELOW:
+        if alt == alt and alt > lz:
+            return (f"resolved: winner leads on the whole signature; another candidate leads "
+                    f"only on one defining marker (z={alt:.1f} vs {lz:.1f})")
+        return "fixed"
+    lzs = f"z={lz:.1f}" if lz == lz else "unmeasured (no signature present)"
+    if alt == alt and alt >= REVIEW_BELOW:
+        return f"open: winner evidence {lzs} below {REVIEW_BELOW}; another candidate z={alt:.1f}"
+    excl = rr["label_of_exclusion"] if "label_of_exclusion" in rr.index else None
+    if excl is None or excl != excl or str(excl) in ("", "None"):
+        return f"open: winner evidence {lzs}; no candidate reaches {REVIEW_BELOW}; no label of exclusion"
+    return (f"resolved: winner evidence {lzs}; no candidate reaches {REVIEW_BELOW}; the presence "
+            f"test decided it against the label of exclusion {excl}")
 
 
 def _sort_clusters(idx):
@@ -141,7 +157,9 @@ def write_cluster_labels(
             ...}`` for a mapping).  Accepted only for clusters that are open
             under the DEFAULT review policy, recomputed here from the
             result's ``lineage_z`` / ``alt_lineage_z`` (winner evidence below
-            the dataset mean, unmeasured, or a stronger other candidate) —
+            the dataset mean or unmeasured while another candidate's reaches
+            it, or no label of exclusion was given; fixed and resolved
+            clusters are refused) —
             whatever ``review_below`` the scorer was called with; refused
             (with a printed reason) otherwise, and for results without those
             columns.  ``evidence`` must state the marker values relied on.
@@ -191,7 +209,7 @@ def write_cluster_labels(
                 elif review.startswith("open"):
                     lab, src = want, "override"
                 else:
-                    src = "override refused (fixed)"
+                    src = f"override refused ({review.split(':')[0]})"
                     print(f"[write_cluster_labels] override of {g + ' ' if g else ''}cluster {c} "
                           f"-> {want!r} refused: the scorer marked it {review!r}; keeping {scorer!r}")
             if allowed is not None and lab not in set(allowed):
@@ -212,6 +230,12 @@ def write_cluster_labels(
     diff = aud[aud["scorer_label"] != aud["written_label"]].reset_index(drop=True)
     print(f"[write_cluster_labels] wrote {len(tab)} rows to {path}; "
           f"{len(diff)} accepted override(s); audit {_audit_path(path)}")
+    n_ref = int(aud["source"].astype(str).str.startswith("override refused").sum())
+    if n_ref:
+        print(f"[write_cluster_labels] {n_ref} override(s) refused: those clusters are fixed or "
+              "resolved by the evidence and keep the scorer's label. This file is the deliverable "
+              "- do not rewrite it by other means; put any disagreement, with its numbers, in the "
+              "report.")
     return tab, diff
 
 
@@ -304,4 +328,6 @@ def audit_cluster_labels(
     print(f"[audit_cluster_labels] {len(out)} unrecorded difference(s) in {path}")
     if len(out):
         print(out.to_string(index=False))
+        print("[audit_cluster_labels] rewrite the file with write_cluster_labels (scorer labels plus "
+              "accepted overrides) - never by hand - and audit again")
     return out

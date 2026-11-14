@@ -275,11 +275,8 @@ def normalize_total_old(  # noqa: PLR0912
 
     Example
     -------
-    >>> import sys
     >>> from anndata import AnnData
-    >>> import scanpy as sc
-    >>> sc.settings.verbosity = "info"
-    >>> sc.settings.logfile = sys.stdout  # for doctests
+    >>> import omicverse as ov
     >>> np.set_printoptions(precision=2)
     >>> adata = AnnData(
     ...     np.array(
@@ -295,24 +292,18 @@ def normalize_total_old(  # noqa: PLR0912
     array([[ 3.,  3.,  3.,  6.,  6.],
            [ 1.,  1.,  1.,  2.,  2.],
            [ 1., 22.,  1.,  2.,  2.]], dtype=float32)
-    >>> X_norm = sc.pp.normalize_total(adata, target_sum=1, inplace=False)["X"]
-    normalizing counts per cell
-        finished (0:00:00)
+    >>> X_norm = ov.pp.normalize_total(adata, target_sum=1, inplace=False)["X"]
     >>> X_norm
     array([[0.14, 0.14, 0.14, 0.29, 0.29],
            [0.14, 0.14, 0.14, 0.29, 0.29],
            [0.04, 0.79, 0.04, 0.07, 0.07]], dtype=float32)
-    >>> X_norm = sc.pp.normalize_total(
+    >>> X_norm = ov.pp.normalize_total(
     ...     adata,
     ...     target_sum=1,
     ...     exclude_highly_expressed=True,
     ...     max_fraction=0.2,
     ...     inplace=False,
     ... )["X"]
-    normalizing counts per cell
-    The following highly-expressed genes are not considered during normalization factor computation:
-    ['1', '3', '4']
-        finished (0:00:00)
     >>> X_norm
     array([[ 0.5,  0.5,  0.5,  1. ,  1. ],
            [ 0.5,  0.5,  0.5,  1. ,  1. ],
@@ -450,14 +441,33 @@ def log1p_sparse(x: CSBase, *, base: Number | None = None, copy: bool = False):
     x = check_array(
         x, accept_sparse=("csr", "csc"), dtype=(np.float64, np.float32), copy=copy
     )
+    d = x.data
+    if d.size >= 1 << 24 and d.flags.c_contiguous:
+        # large matrices: in place on all threads (the result replaces x.data
+        # anyway, so nothing else sees the intermediate)
+        from ._qc import threaded_chunks
+        scale = None if base is None else 1.0 / np.log(base)
+        def _part(a, b):
+            np.log1p(d[a:b], out=d[a:b])
+            if scale is not None:
+                np.multiply(d[a:b], scale, out=d[a:b])
+        threaded_chunks(_part, d.size)
+        return x
     x.data = _log1p(x.data, copy=False, base=base)
     return x
 
 
 
+from scipy.sparse import issparse as _sp_issparse
+
+
 def log1p_array(x: np.ndarray, *, base: Number | None = None, copy: bool = False):
     # Can force arrays to be np.ndarrays, but would be useful to not
     # X = check_array(X, dtype=(np.float64, np.float32), ensure_2d=False, copy=copy)
+    if _sp_issparse(x) and getattr(x, "format", None) in ("csr", "csc") and x.data.size >= 1 << 24:
+        # large sparse matrices: in place on all threads instead of np.log1p's
+        # deduplicate + copy of the whole matrix
+        return log1p_sparse(x, base=base, copy=copy)
     
     if copy:
         x = x.astype(float) if not np.issubdtype(x.dtype, np.floating) else x.copy()
@@ -712,11 +722,8 @@ def normalize_total(
 
     Example
     --------
-    >>> import sys
     >>> from anndata import AnnData
-    >>> import scanpy as sc
-    >>> sc.settings.verbosity = 'info'
-    >>> sc.settings.logfile = sys.stdout  # for doctests
+    >>> import omicverse as ov
     >>> np.set_printoptions(precision=2)
     >>> adata = AnnData(np.array([
     ...     [3, 3, 3, 6, 6],
@@ -727,20 +734,15 @@ def normalize_total(
     array([[ 3.,  3.,  3.,  6.,  6.],
            [ 1.,  1.,  1.,  2.,  2.],
            [ 1., 22.,  1.,  2.,  2.]], dtype=float32)
-    >>> X_norm = sc.pp.normalize_total(adata, target_sum=1, inplace=False)['X']
-    normalizing counts per cell
-        finished (0:00:00)
+    >>> X_norm = ov.pp.normalize_total(adata, target_sum=1, inplace=False)['X']
     >>> X_norm
     array([[0.14, 0.14, 0.14, 0.29, 0.29],
            [0.14, 0.14, 0.14, 0.29, 0.29],
            [0.04, 0.79, 0.04, 0.07, 0.07]], dtype=float32)
-    >>> X_norm = sc.pp.normalize_total(
+    >>> X_norm = ov.pp.normalize_total(
     ...     adata, target_sum=1, exclude_highly_expressed=True,
     ...     max_fraction=0.2, inplace=False
     ... )['X']
-    normalizing counts per cell. The following highly-expressed genes are not considered during normalization factor computation:
-    ['1', '3', '4']
-        finished (0:00:00)
     >>> X_norm
     array([[ 0.5,  0.5,  0.5,  1. ,  1. ],
            [ 0.5,  0.5,  0.5,  1. ,  1. ],

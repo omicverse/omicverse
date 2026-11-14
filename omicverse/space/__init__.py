@@ -27,6 +27,7 @@ Spatially variable genes:
 Spatial trajectory analysis:
     STT: Spatial transition tensor analysis
     CellMap: Cell mapping in spatial context
+    CMAP: Three-level cell mapping across positions (SVM domain -> spot -> coordinate)
     CellLoc: Cell localization analysis
     
 Spatial deconvolution:
@@ -38,10 +39,9 @@ Utility functions:
 
 Examples:
     >>> import omicverse as ov
-    >>> import scanpy as sc
     >>> 
     >>> # Load spatial data
-    >>> adata = sc.read_visium('path/to/visium/data')
+    >>> adata = ov.io.read_visium('path/to/visium/data')
     >>> 
     >>> # Identify spatial domains
     >>> ov.space.pySTAGATE(adata, n_domains=7, radius=50)
@@ -61,8 +61,10 @@ Examples:
 
 from .._optional import bind_optional_symbols
 
+from .._moscot import moscot_alignment, moscot_mapping
 from ._tangram import Tangram
 from ._spatrio import CellMap,CellLoc
+from ._cmap import CMAP
 from ._stt import STT
 from ._svg import svg,spatial_neighbors,spatial_autocorr,moranI
 from ._niche import molecular as _niche_molecular
@@ -79,6 +81,7 @@ from ._neighborhood import (
     var_by_distance,
 )
 from ._cast import CAST
+from ._novae import novae
 from ._cellcharter import cellcharter
 from ._tools import *
 from ._commot import create_communication_anndata,update_classification_from_database

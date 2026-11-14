@@ -143,8 +143,8 @@ class JarvisSession:
         if not candidates:
             return None
         target = candidates[0]
-        import scanpy as sc
-        self.adata = sc.read_h5ad(str(target))
+        import anndata
+        self.adata = anndata.read_h5ad(str(target))
         self.save_adata()
         return self.adata
 
@@ -260,8 +260,8 @@ class JarvisSession:
         """Read ``workspace_dir/current.h5ad`` if it exists.  Updates self.adata."""
         path = self.workspace_dir / "current.h5ad"
         if path.exists():
-            import scanpy as sc
-            self.adata = sc.read_h5ad(str(path))
+            import anndata
+            self.adata = anndata.read_h5ad(str(path))
         return self.adata
 
     def kernel_status(self) -> dict:

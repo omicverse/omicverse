@@ -5,7 +5,6 @@ from matplotlib.gridspec import GridSpec
 from matplotlib.colors import LinearSegmentedColormap
 from matplotlib.colors import Normalize
 from matplotlib.cm import ScalarMappable
-import scanpy as sc
 from .._registry import register_function
 from .._optional import build_optional_dependency_error
 
@@ -231,10 +230,9 @@ def crop_space_visium(adata, crop_loc, crop_area,
         - Coordinates are automatically adjusted to the new cropped region
 
     Examples:
-        >>> import scanpy as sc
         >>> import omicverse as ov
         >>> # Load Visium data
-        >>> adata = sc.read_visium(...)
+        >>> adata = ov.io.read_visium(...)
         >>> # Crop a 1000x1000 region starting at (500, 500)
         >>> adata_cropped = ov.space.crop_space_visium(
         ...     adata,
@@ -416,10 +414,9 @@ def rotate_space_visium(
         - Image interpolation can be adjusted for quality vs speed tradeoff
 
     Examples:
-        >>> import scanpy as sc
         >>> import omicverse as ov
         >>> # Load Visium data
-        >>> adata = sc.read_visium(...)
+        >>> adata = ov.io.read_visium(...)
         >>> # Rotate 45 degrees counterclockwise
         >>> adata_rotated = ov.space.rotate_space_visium(
         ...     adata,
@@ -514,7 +511,6 @@ import numpy as np
 import matplotlib.pyplot as plt
 from scipy.ndimage import shift
 import os
-import scanpy as sc  # 假设您使用了 scanpy
 
 def find_image_offset_phase_correlation_array_input(image1_array, image2_array):
     """
@@ -758,7 +754,8 @@ def _create_spatial_image(adata, ax, color=None, alpha=1, save_path=None):
     scalefactors = adata.uns['spatial'][library_id]['scalefactors']
     tissue_hires_scalef = scalefactors['tissue_hires_scalef']
 
-    sc.pl.embedding(
+    from ..pl import embedding as _ov_embedding
+    _ov_embedding(
         adata,
         basis='spatial',
         color='temp_color', # 使用临时列
@@ -766,7 +763,8 @@ def _create_spatial_image(adata, ax, color=None, alpha=1, save_path=None):
         ax=ax,
         size=10,
         scale_factor=tissue_hires_scalef,
-        legend_loc=None
+        legend_loc=None,
+        frameon=True,  # scanpy default; ov's 'small' adds axis arrows
     )
 
     cur_coords = np.concatenate([ax.get_xlim(), ax.get_ylim()])
@@ -935,10 +933,9 @@ def map_spatial_auto(
         - Different methods may work better for different data types
 
     Examples:
-        >>> import scanpy as sc
         >>> import omicverse as ov
         >>> # Load and preprocess data
-        >>> adata = sc.read_visium(...)
+        >>> adata = ov.io.read_visium(...)
         >>> # Perform automatic alignment
         >>> adata_aligned = ov.space.map_spatial_auto(
         ...     adata,
@@ -984,14 +981,15 @@ def map_spatial_auto(
 
     fig1, ax1 = plt.subplots(figsize=figsize)
     ax=ax1
-    sc.pl.embedding(
+    from ..pl import embedding as _ov_embedding
+    _ov_embedding(
         plot_adata,
         basis='spatial',
         color=None,
         show=False,
         ax=ax1,
         size=10,
-        #frameon=False,
+        frameon=True,  # scanpy default; ov's 'small' adds axis arrows
         legend_loc=None
     )
     cur_coords = np.concatenate([ax1.get_xlim(), ax1.get_ylim()])
@@ -1140,10 +1138,9 @@ def map_spatial_manual(
         - Positive absolute dx moves spots right; positive dy moves spots down.
 
     Examples:
-        >>> import scanpy as sc
         >>> import omicverse as ov
         >>> # Load data
-        >>> adata = sc.read_visium(...)
+        >>> adata = ov.io.read_visium(...)
         >>> # Apply manual offset
         >>> adata_aligned = ov.space.map_spatial_manual(
         ...     adata,
@@ -1827,7 +1824,7 @@ def sync_visium_hd_seg_geometries(adata, sample=None):
 
     Parameters
     ----------
-    adata : sc.AnnData
+    adata : anndata.AnnData
         A (possibly subsetted) AnnData object containing spatial segmentation metadata.
     sample : str, optional
         Sample key under ``adata.uns["spatial"]``. If ``None``, the first available key
@@ -1835,7 +1832,7 @@ def sync_visium_hd_seg_geometries(adata, sample=None):
 
     Returns
     -------
-    sc.AnnData
+    anndata.AnnData
         The same ``adata`` object, modified in place.
     """
     import warnings

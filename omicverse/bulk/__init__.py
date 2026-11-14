@@ -48,6 +48,8 @@ from ._combat import batch_correction
 from ._ruv import ruvg, ruvr, ruvs
 from .._roadmap_ports import music_basis, music_prop
 from ._multisite import multisite_harmonize, apply_multisite_harmonization, predict_device_offsets
+from ._annotation_recovery import (annotation_batch_center, fit_annotation_classifier,
+                                   recover_sample_annotations)
 from ._spikein_chip import (spikein_reference_qc, select_reference_regions, spikein_exposures,
                             paired_global_shift, paired_count_differential, spikein_chip_analysis)
 
@@ -120,6 +122,11 @@ __all__ = [
     'paired_count_differential',
     'spikein_chip_analysis',
     'predict_device_offsets',
+
+    # Sample annotation (metadata) recovery
+    'annotation_batch_center',
+    'fit_annotation_classifier',
+    'recover_sample_annotations',
 
     # Deconvolution
     'Deconvolution',

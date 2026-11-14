@@ -1,9 +1,8 @@
 import pandas as pd
-import scanpy
+from anndata import AnnData
 from collections import defaultdict
 import numpy as np
 from scipy.optimize import nnls
-import scanpy as sc
 from scipy.stats import pearsonr
 import matplotlib.pyplot as plt
 from ..utils import pyomic_palette
@@ -153,7 +152,8 @@ def bulk2single_plot_correlation(single_data:anndata.AnnData,
     """
 
     # Calculate 200 marker genes of each cell type
-    sc.tl.rank_genes_groups(single_data, celltype_key, method='wilcoxon')
+    from .._sc_compat import rank_genes_groups
+    rank_genes_groups(single_data, celltype_key, method='wilcoxon')
     marker_df = pd.DataFrame(single_data.uns['rank_genes_groups']['names']).head(200)
     #marker = list(set(np.unique(np.ravel(np.array(marker_df))))&set(generate_adata.var.index.tolist()))
     marker = list(set(np.unique(np.ravel(np.array(marker_df))))&set(generate_single_data.var.index.tolist()))
@@ -280,10 +280,11 @@ def data_process(data:dict, top_marker_num:int, ratio_num:int)->dict:
         Mapping from cell-type name to target generated cell count.
     """
     # marker used
-    sc = scanpy.AnnData(data["input_sc_data"].T)
-    sc.obs = data["input_sc_meta"][['Cell_type']]
-    scanpy.tl.rank_genes_groups(sc, 'Cell_type', method='wilcoxon')
-    marker_df = pd.DataFrame(sc.uns['rank_genes_groups']['names']).head(top_marker_num)
+    from .._sc_compat import rank_genes_groups
+    adata_sc = AnnData(data["input_sc_data"].T)
+    adata_sc.obs = data["input_sc_meta"][['Cell_type']]
+    rank_genes_groups(adata_sc, 'Cell_type', method='wilcoxon')
+    marker_df = pd.DataFrame(adata_sc.uns['rank_genes_groups']['names']).head(top_marker_num)
     marker_array = np.array(marker_df)
     marker_array = np.ravel(marker_array)
     marker_array = np.unique(marker_array)

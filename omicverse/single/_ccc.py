@@ -1037,11 +1037,11 @@ def compare_ccc(adata: anndata.AnnData, *, key: str = "ccc", methods: Sequence[s
                 ovl.loc[a, b] = inter
                 jac.loc[a, b] = inter / max(len(sets[a] | sets[b]), 1)
                 rec.loc[a, b] = inter / max(len(sets[a]), 1)
-    sc = pd.DataFrame(1.0, index=methods, columns=methods)
+    score_sp = pd.DataFrame(1.0, index=methods, columns=methods)
     for a, b in combinations(methods, 2):
         common = tabs[a].index.intersection(tabs[b].index)
         v = spearmanr(tabs[a].loc[common, "score"], tabs[b].loc[common, "score"])[0] if len(common) > 2 else np.nan
-        sc.loc[a, b] = sc.loc[b, a] = v
+        score_sp.loc[a, b] = score_sp.loc[b, a] = v
     # LR-level agreement: number of significant cell pairs per (undirected) LR pair.
     names = {}
     lr_counts = {}
@@ -1070,7 +1070,7 @@ def compare_ccc(adata: anndata.AnnData, *, key: str = "ccc", methods: Sequence[s
     top = {m: [f"{names[k]} ({int(n)})" for k, n in v.head(top_n).items()] for m, v in lr_counts.items()}
     top_df = pd.DataFrame({m: pd.Series(v, dtype=object) for m, v in top.items()})
     return {"methods": methods, "n_significant": pd.Series({m: len(s) for m, s in sets.items()}),
-            "jaccard": jac, "overlap": ovl, "recall": rec, "score_spearman": sc, "lr_spearman": lr_sp,
+            "jaccard": jac, "overlap": ovl, "recall": rec, "score_spearman": score_sp, "lr_spearman": lr_sp,
             "cellpair_pearson": cp, "cellpair_counts": {m: pd.DataFrame(v, index=groups, columns=groups) for m, v in cnt.items()},
             "lr_counts": lrm, "top_lr": top_df, "sets": sets,
             "universe_size": len(universe) if universe is not None else None, "level": level}

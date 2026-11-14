@@ -43,7 +43,10 @@ import json
 import math
 import os
 import re
+import threading
+import time
 import urllib.parse
+import warnings
 from pathlib import Path
 from typing import Dict, Iterable, List, Mapping, Optional, Sequence, Tuple
 
@@ -56,13 +59,62 @@ _HGNC = "https://rest.genenames.org"
 _MYGENE = "https://mygene.info/v3"
 
 
-def _get(url, params=None, headers=None, timeout=30):
+_RETRY_STATUS = (429, 500, 502, 503, 504)
+_FAIL = threading.local()       # per-thread count of failed lookups (see _tracked)
+
+
+def _get(url, params=None, headers=None, timeout=30, retries: int = 3):
+    """GET JSON; transient failures (rate limits, 5xx, connection errors,
+    timeouts) are retried with backoff before the error is raised."""
     import requests
 
-    r = requests.get(url, params=params, headers=headers or {"Accept": "application/json"},
-                     timeout=timeout)
-    r.raise_for_status()
-    return r.json()
+    for attempt in range(retries + 1):
+        try:
+            r = requests.get(url, params=params, headers=headers or {"Accept": "application/json"},
+                             timeout=timeout)
+        except (requests.ConnectionError, requests.Timeout):
+            if attempt == retries:
+                raise
+            time.sleep(min(2 ** attempt, 8))
+            continue
+        if r.status_code in _RETRY_STATUS and attempt < retries:
+            try:
+                wait = float(r.headers.get("Retry-After", ""))
+            except ValueError:
+                wait = 2 ** attempt
+            time.sleep(min(max(wait, 0.5), 10))
+            continue
+        r.raise_for_status()
+        return r.json()
+
+
+def _transient(err) -> bool:
+    """Network / rate-limit / server errors (worth retrying later), as opposed
+    to a definite answer such as 404 or a malformed reply."""
+    try:
+        import requests
+    except Exception:
+        return False
+    if isinstance(err, (requests.ConnectionError, requests.Timeout)):
+        return True
+    resp = getattr(err, "response", None)
+    return isinstance(err, requests.HTTPError) and resp is not None and resp.status_code in _RETRY_STATUS
+
+
+def _note_fail(err=None):
+    """Record that a lookup in this thread failed transiently (network /
+    service error), so that its empty result is not mistaken for 'no match'
+    and cached."""
+    if err is None or _transient(err):
+        _FAIL.n = getattr(_FAIL, "n", 0) + 1
+
+
+def _tracked(fn):
+    """Run ``fn()``; return ``(result, failed)`` where ``failed`` says whether
+    any lookup inside it hit a network / service error."""
+    _FAIL.n = 0
+    out = fn()
+    return out, getattr(_FAIL, "n", 0) > 0
 
 
 def _pmap(fn, items, workers: int = 8):
@@ -96,7 +148,8 @@ def _variants(name: str) -> List[str]:
 def _hgnc(path: str, timeout: float) -> List[dict]:
     try:
         return _get(f"{_HGNC}/{path}", timeout=timeout)["response"]["docs"]
-    except Exception:
+    except Exception as _e:
+        _note_fail(_e)
         return []
 
 
@@ -209,7 +262,8 @@ def _gene_candidates(name: str, species: str, timeout: float) -> Tuple[List[str]
                         params={"q": f"symbol:{v} OR alias:{v}", "species": species,
                                 "fields": "symbol,alias", "size": 10},
                         timeout=timeout).get("hits", [])
-        except Exception:
+        except Exception as _e:
+            _note_fail(_e)
             hits = []
         if hits:
             # the approved symbol whose alias list carries the name, not
@@ -292,7 +346,8 @@ def _uniprot_query(query: str, timeout: float, size: int = 25) -> List[str]:
     try:
         js = _get(_UNIPROT, params={"query": query, "fields": "gene_primary", "size": size,
                                     "format": "json"}, timeout=timeout)
-    except Exception:
+    except Exception as _e:
+        _note_fail(_e)
         return []
     out = []
     for r in js.get("results", []):
@@ -338,7 +393,8 @@ def _antibody_registry_genes(name: str, timeout: float, taxon: str = "9606") -> 
     for v in _name_variants(name):
         try:
             items = _get(_ABREG, params={"q": v, "page": 1, "size": 100}, timeout=timeout).get("items", [])
-        except Exception:
+        except Exception as _e:
+            _note_fail(_e)
             continue
         n = _norm(v)
         for it in items:
@@ -393,7 +449,8 @@ def _uniprot_exact_name(name: str, timeout: float, taxon: str = "9606") -> List[
             "query": f'protein_name:"{name}" AND organism_id:{taxon} AND reviewed:true',
             "fields": "gene_primary,protein_name", "size": 25, "format": "json"},
             timeout=timeout)
-    except Exception:
+    except Exception as _e:
+        _note_fail(_e)
         return []
     n = _norm(name)
     out = []
@@ -417,7 +474,8 @@ def _antibody_registry_majority(names: Sequence[str], timeout: float,
         try:
             items = _get(_ABREG, params={"q": v, "page": 1, "size": 100},
                          timeout=timeout).get("items", [])
-        except Exception:
+        except Exception as _e:
+            _note_fail(_e)
             continue
         n = _norm(v)
         for it in items:
@@ -471,7 +529,8 @@ def panel_gene_map(markers: Iterable[str], species: str = "human", *,
                    overrides: Optional[Mapping[str, Sequence[str]]] = None,
                    marker_genes: Optional[Mapping[str, int]] = None,
                    timeout: float = 20.0, workers: int = 8,
-                   sources: Optional[Dict[str, str]] = None):
+                   sources: Optional[Dict[str, str]] = None,
+                   failed: Optional[List[str]] = None):
     r"""Resolve panel marker names to gene symbols from public gene nomenclature.
 
     Arguments:
@@ -487,6 +546,9 @@ def panel_gene_map(markers: Iterable[str], species: str = "human", *,
             was matched (``symbol`` = approved HGNC symbol; ``alias`` /
             ``mygene`` / ``name`` / ``uniprot`` / ``antibody`` / ``stem`` /
             ``family`` are indirect matches worth reviewing; ``override``).
+        failed: optional list filled with the names whose lookup hit a
+            network / service error (after retries): their result — even an
+            empty one — may be incomplete and should not be cached.
 
     Alias matches keep only the approved symbols whose own alias list
     contains the name. A name led by a lower-case Greek letter (``aSMA``,
@@ -502,7 +564,11 @@ def panel_gene_map(markers: Iterable[str], species: str = "human", *,
     """
     markers = list(markers)
     todo = [m for m in markers if not (overrides and m in overrides)]
-    cands = dict(zip(todo, _pmap(lambda m: _gene_candidates(m, species, timeout), todo, workers)))
+    tracked = dict(zip(todo, _pmap(lambda m: _tracked(lambda: _gene_candidates(m, species, timeout)),
+                                   todo, workers)))
+    cands = {m: v[0] for m, v in tracked.items()}
+    if failed is not None:
+        failed.extend(m for m in todo if tracked[m][1])
     gm, miss = {}, []
     for m in markers:
         if overrides and m in overrides:
@@ -529,7 +595,8 @@ def _ols_docs(params: dict, timeout: float) -> List[dict]:
     try:
         docs = _get(f"{_OLS}/search", params={"ontology": "cl", "fieldList": "obo_id,label,synonym",
                                               **params}, timeout=timeout)["response"]["docs"]
-    except Exception:
+    except Exception as _e:
+        _note_fail(_e)
         return []
     return [d for d in docs if str(d.get("obo_id", "")).startswith("CL:")]
 
@@ -572,25 +639,36 @@ def _ols_parents(cl_id: str, timeout: float) -> List[str]:
             out += [t.get("obo_id") for t in js.get("_embedded", {}).get("terms", [])
                     if str(t.get("obo_id", "")).startswith("CL:")]
             url = js.get("_links", {}).get("next", {}).get("href")
-    except Exception:
+    except Exception as _e:
+        _note_fail(_e)
         pass
     return out
 
 
 def _cl_lineage(cl_ids: Iterable[str], parents: Dict[str, List[str]], timeout: float,
-                workers: int, max_depth: int = 30) -> Dict[str, Dict[str, int]]:
+                workers: int, max_depth: int = 30,
+                failed: Optional[List[str]] = None) -> Dict[str, Dict[str, int]]:
     """``{term: {ancestor: generation}}`` by breadth-first search over CL
-    ``is_a`` / ``part_of`` parents; ``parents`` is a shared cache."""
+    ``is_a`` / ``part_of`` parents; ``parents`` is a shared cache.  A parent
+    lookup that hit a network / service error is used as returned but not
+    cached, and its term is appended to ``failed``."""
     cl_ids = [c for c in dict.fromkeys(cl_ids) if c]
     gen = {c: {} for c in cl_ids}
     front = {c: {c} for c in cl_ids}
+    now: Dict[str, List[str]] = {}
     for depth in range(1, max_depth + 1):
-        need = sorted({x for f in front.values() for x in f} - set(parents))
-        for c, p in zip(need, _pmap(lambda x: _ols_parents(x, timeout), need, workers)):
-            parents[c] = p
+        need = sorted({x for f in front.values() for x in f} - set(parents) - set(now))
+        for c, (p, bad) in zip(need, _pmap(lambda x: _tracked(lambda: _ols_parents(x, timeout)),
+                                           need, workers)):
+            if bad:
+                now[c] = p
+                if failed is not None and c not in failed:
+                    failed.append(c)
+            else:
+                parents[c] = p
         nxt = {}
         for c, f in front.items():
-            new = {p for x in f for p in parents.get(x, [])} - set(gen[c]) - {c}
+            new = {p for x in f for p in (parents.get(x) or now.get(x) or [])} - set(gen[c]) - {c}
             for p in new:
                 gen[c][p] = depth
             if new:
@@ -782,6 +860,7 @@ def markerdb_signatures(
     inherit_depth: int = 2,
     inherit_decay: float = 0.5,
     ontology_parents: bool = False,
+    subtype_markers: bool = True,
     cache: Optional[str] = None,
     timeout: float = 30.0,
     workers: int = 8,
@@ -841,6 +920,11 @@ def markerdb_signatures(
         inherit_depth / inherit_decay: a label also carries the markers of its
             CL ancestors up to ``inherit_depth`` generations, scaled by
             ``inherit_decay ** generation`` (``0`` disables inheritance).
+        subtype_markers: ``True`` (default): an ancestor's marker that is a
+            defining marker of another label descending from that ancestor
+            (it separates the ancestor's subtypes, e.g. one T-cell subset's
+            co-receptor listed for T cells in general) is not inherited by
+            labels outside that subtype.
         cache: optional JSON path; network results are stored and reused.
         workers: parallel requests.
 
@@ -852,7 +936,11 @@ def markerdb_signatures(
         (``{parent: [child, child]}`` — opposed sibling pairs: each one's
         defining panel marker is an atlas negative marker of the other),
         ``defining`` (``{label: [panel markers]}`` — the label's own markers
-        with at least half its top support), ``resolved``
+        with at least half its top support), ``lineage_markers``
+        (``{label: [panel markers]}`` — defining markers of the label's CL
+        ancestors that its own atlas entry also lists as positive, limited to
+        markers that define another label and that most labels do not carry;
+        pass to :func:`score_cluster_signatures`), ``resolved``
         (``{label: {"terms": [{cell_name, cl_id}], "score"}}``), ``cl_ids``,
         ``unresolved_labels``, ``out_of_context`` (labels dropped by
         ``context``), ``context_scopes``, ``gene_map``, ``gene_names``
@@ -869,7 +957,10 @@ def markerdb_signatures(
         / exclusion label), ``gene_map_source`` (``{marker: rule}``),
         ``gene_review`` (``{marker: ["GENE (approved name)"]}`` for indirect
         matches) and ``evidence``
-        (``{label: {marker: [[cell type, gene, n_pmid, polarity, generation]]}}``).
+        (``{label: {marker: [[cell type, gene, n_pmid, polarity, generation]]}}``),
+        ``lookup_failed`` (panel names, ``label: ...`` matches and ``CL ...``
+        ontology lookups that hit a network / service error: used as returned,
+        not cached — call again with the same cache until it is empty).
     """
     labels = list(dict.fromkeys(labels))
     if weighting not in ("relative", "share", "literature"):
@@ -904,11 +995,16 @@ def markerdb_signatures(
     gsrc = store.setdefault("gene_source", {})
     todo = [m for m in panel_markers if (m not in gcache or m not in gsrc)
             and not (gene_overrides and m in gene_overrides)]
+    lookup_failed: List[str] = []
+    fresh: Dict[str, Tuple[List[str], str]] = {}
     if todo:
         srcd: Dict[str, str] = {}
         got, _ = panel_gene_map(todo, species, marker_genes=usage, timeout=timeout,
-                                workers=workers, sources=srcd)
+                                workers=workers, sources=srcd, failed=lookup_failed)
         for m in todo:
+            if m in lookup_failed:      # possibly incomplete: use now, retry next call
+                fresh[m] = (got.get(m, []), srcd.get(m, ""))
+                continue
             gcache[m] = got.get(m, [])
             gsrc[m] = srcd.get(m, "")
     pncache = store.setdefault("protein_name_cache", {})
@@ -918,7 +1014,7 @@ def markerdb_signatures(
         pncache[n] = g
     gm, miss = {}, []
     for m in panel_markers:
-        g = gcache.get(m, [])
+        g = fresh[m][0] if m in fresh else gcache.get(m, [])
         if m in pn and pncache.get(pn[m]):
             g = _pick(pncache[pn[m]], usage) or pncache[pn[m]]
         if gene_overrides and m in gene_overrides:
@@ -934,7 +1030,9 @@ def markerdb_signatures(
     def _gname(g):
         d = _hgnc(f"fetch/symbol/{urllib.parse.quote(g)}", timeout)
         return d[0].get("name", "") if d else ""
-    for g, n in zip(need, _pmap(_gname, need, workers)):
+    for g, (n, bad) in zip(need, _pmap(lambda g: _tracked(lambda: _gname(g)), need, workers)):
+        if bad:
+            continue                    # not cached: retried on the next call
         gnames[g] = n
     gene_names = {m: {g: gnames.get(g, "") for g in genes} for m, genes in gm.items()}
     gene_to_markers: Dict[str, List[str]] = {}
@@ -967,23 +1065,29 @@ def markerdb_signatures(
         if text:
             return _resolve_description(lab, text, atlas, timeout) or _resolve_label(lab, atlas, timeout)
         return _resolve_label(lab, atlas, timeout)
-    for l, hit in zip(new, _pmap(_res, new, workers)):
+    resolved_now: Dict[str, Optional[dict]] = {}
+    for l, (hit, bad) in zip(new, _pmap(lambda l: _tracked(lambda: _res(l)), new, workers)):
+        if bad:                         # an ontology lookup failed: use now, retry next call
+            resolved_now[l] = hit
+            lookup_failed.append(f"label: {l}")
+            continue
         resolved[l] = hit
         text = (descriptions or {}).get(l)
         if text:
             desc_store[l] = text
         else:
             desc_store.pop(l, None)
+    res_all = {**resolved, **resolved_now}
     # an atlas cell type serves one label only (the closest name)
     owner: Dict[tuple, str] = {}
     for lab in labels:
-        r = resolved.get(lab)
+        r = res_all.get(lab)
         if not r:
             continue
         key = tuple(sorted(t["cell_name"] for t in r["terms"]))
-        if key not in owner or r["score"] > resolved[owner[key]]["score"]:
+        if key not in owner or r["score"] > res_all[owner[key]]["score"]:
             owner[key] = lab
-    res = {lab: r for lab, r in resolved.items() if lab in labels and r
+    res = {lab: r for lab, r in res_all.items() if lab in labels and r
            and owner.get(tuple(sorted(t["cell_name"] for t in r["terms"]))) == lab}
     unresolved_labels = [l for l in labels if l not in res]
 
@@ -996,13 +1100,20 @@ def markerdb_signatures(
             return r["terms"][0]["cl_id"]
         names = ([r["terms"][0]["cell_name"]] if r and len(r["terms"]) == 1 else []) + [l]
         return _cl_exact(names, timeout)
-    for l, c in zip(need, _pmap(_cl_of, need, workers)):
-        clc[l] = c
-    cl_of = {l: clc.get(l) for l in labels if clc.get(l)}
+    clc_now: Dict[str, Optional[str]] = {}
+    for l, (c, bad) in zip(need, _pmap(lambda l: _tracked(lambda: _cl_of(l)), need, workers)):
+        if bad:
+            clc_now[l] = c
+            lookup_failed.append(f"label CL term: {l}")
+        else:
+            clc[l] = c
+    cl_of = {l: clc.get(l) or clc_now.get(l) for l in labels if clc.get(l) or clc_now.get(l)}
 
     # 3. CL lineage (labels' terms) -> inherited atlas terms and CL parents
     pcache = store.setdefault("cl_parents", {})
-    lineage = _cl_lineage(cl_of.values(), pcache, timeout, workers)
+    cl_failed: List[str] = []
+    lineage = _cl_lineage(cl_of.values(), pcache, timeout, workers, failed=cl_failed)
+    lookup_failed += [f"CL parents: {c}" for c in cl_failed]
     save()
 
     def inherited(lab):
@@ -1026,8 +1137,11 @@ def markerdb_signatures(
         if not todo:
             return
         if not tok:
-            raise RuntimeError("OMICOS_USER_TOKEN is not set; the atlas marker endpoint needs "
-                               "an OmicOS account token")
+            raise RuntimeError(
+                "OMICOS_USER_TOKEN is not set; the atlas marker endpoint needs an OmicOS account "
+                "token (OmicOS kernels receive it at start; if it is missing the session has no "
+                "cloud credential). Report this as a blocker. Do NOT substitute marker signatures "
+                "written by hand or from memory: annotations built on them are not evidence-based.")
         chunks = [todo[i:i + 20] for i in range(0, len(todo), 20)]
 
         def fetch(chunk):
@@ -1036,7 +1150,17 @@ def markerdb_signatures(
                                 "include_negative": "true", "pmids_per_gene": 0},
                         headers={"Accept": "application/json", "Authorization": f"Bearer {tok}"},
                         timeout=timeout).get("templates", [])
-        for got in _pmap(fetch, chunks, min(workers, 4)):
+        try:
+            fetched = _pmap(fetch, chunks, min(workers, 4))
+        except Exception as e:
+            code = getattr(getattr(e, "response", None), "status_code", None)
+            if code in (401, 403):
+                raise RuntimeError(
+                    f"the atlas marker endpoint refused the OmicOS token (HTTP {code}). Report this "
+                    "as a blocker. Do NOT substitute marker signatures written by hand or from "
+                    "memory: annotations built on them are not evidence-based.") from e
+            raise
+        for got in fetched:
             for t in got:
                 tmpl_store[t["cell_name"]] = t
         for n in todo:
@@ -1101,8 +1225,15 @@ def markerdb_signatures(
             for g in genes:
                 src.setdefault(g.upper(), []).append(tag)
         return {"genes": src, "cl": _cl_synonym_terms(m, timeout)}
-    for m, got in zip(need, _pmap(_alt, need, workers)):
-        acache[m] = got
+    alias_now: Dict[str, dict] = {}
+    for m, (got, bad) in zip(need, _pmap(lambda m: _tracked(lambda: _alt(m)), need, workers)):
+        if bad:
+            alias_now[m] = got          # used now, not cached
+            if m not in lookup_failed:
+                lookup_failed.append(m)
+        else:
+            acache[m] = got
+    acache = {**acache, **alias_now}
     # cell-type synonyms -> the atlas markers of that cell type (or its nearest ancestor)
     cl_need = sorted({c for m in suspects for c in acache[m]["cl"]})
     cl_gen = _cl_lineage(cl_need, pcache, timeout, workers) if cl_need else {}
@@ -1159,6 +1290,25 @@ def markerdb_signatures(
         return acc
 
     signatures, evidence, empty, own = {}, {}, [], {}
+    # an ancestor's marker that defines another label descending from that
+    # ancestor separates the ancestor's subtypes (e.g. a co-receptor of one
+    # T-cell subset listed for T cells in general); it is not inherited by
+    # labels outside that subtype
+    pre_def = {lab: set(own_defining(lab)) for lab in res}
+    cl_name = {v: k for k, v in atlas_by_cl.items()}
+
+    def _subtype_marker(lab, anc_name, mk):
+        a = cl_name.get(anc_name)
+        if not a:
+            return False
+        mine = lineage.get(cl_of.get(lab), {})
+        for o, ms in pre_def.items():
+            if o == lab or mk not in ms or not cl_of.get(o):
+                continue
+            if a in lineage.get(cl_of[o], {}) and cl_of[o] not in mine and cl_of[o] != cl_of.get(lab):
+                return True
+        return False
+
     for lab in res:
         acc, ev = {}, {}
         sources = [(t["cell_name"], 0) for t in res[lab]["terms"]] + inherited(lab)
@@ -1170,6 +1320,8 @@ def markerdb_signatures(
                 for mk in gene_to_markers.get(g, []):
                     if gen > 0 and mk in spoken:
                         continue        # the specific statement overrides the inherited one
+                    if gen > 0 and subtype_markers and _subtype_marker(lab, name, mk):
+                        continue
                     if gen == 0:
                         spoken.add(mk)
                     a = acc.setdefault(mk, [0.0, 0.0])
@@ -1300,6 +1452,34 @@ def markerdb_signatures(
     gene_review = {m: [f"{g} ({gnames.get(g, '')})" for g in genes] for m, genes in gm.items()
                    if gene_map_source.get(m) not in ("symbol", "override")}
     defining = {lab: own_defining(lab) for lab in signatures}
+    # lineage markers: defining markers of the label's Cell Ontology ancestors
+    # (within inherit_depth) that the label's own atlas entry also lists as
+    # positive - the lineage the label belongs to, as opposed to the state /
+    # subtype markers that define the label itself
+    lineage_markers: Dict[str, List[str]] = {}
+    # markers carried by most labels (e.g. a pan-leukocyte antigen in an immune
+    # label set) separate no lineage from another
+    npos: Dict[str, int] = {}
+    for sig in signatures.values():
+        for m, w in sig.items():
+            if w > 0:
+                npos[m] = npos.get(m, 0) + 1
+    pan = {m for m, k in npos.items() if 2 * k > len(signatures)}
+    for lab in signatures:
+        ownpos = {g for term in res[lab]["terms"]
+                  for g, d in rel(tmpl_store.get(term["cell_name"], {}), 0.0).items()
+                  if d.get("positive", 0.0) > d.get("negative", 0.0)}
+        lm = set()
+        for name, gen in inherited(lab):
+            for g in top_genes(tmpl_store.get(name, {}), 0.5):
+                if g in ownpos:
+                    lm.update(gene_to_markers.get(g, []))
+        # only markers that define some label of the set identify a lineage
+        # (pan-lineage markers carried by everything do not)
+        lm = {m for m in lm if m not in defining[lab] and m not in pan
+              and any(m in defining[o] for o in signatures if o != lab)}
+        if lm:
+            lineage_markers[lab] = sorted(lm)
     # review table for the panel-name -> gene mapping: how it was matched, how
     # often the atlas uses the gene as a marker, which candidate labels it defines
     defines: Dict[str, List[str]] = {}
@@ -1316,8 +1496,15 @@ def markerdb_signatures(
               defines=sorted(defines.get(m, [])))
          for m, genes in gm.items()],
         key=lambda r: (r["match"] != "alias / name", bool(r["defines"]), r["atlas_usage"]))
+    if lookup_failed:
+        warnings.warn("markerdb_signatures: lookups failed (network / rate limit) for "
+                      f"{sorted(lookup_failed)}; their gene mapping, label match or ontology "
+                      "lineage may be missing or incomplete and was not cached — call "
+                      "markerdb_signatures again (same cache) before scoring")
     save()
     return dict(signatures=signatures, parents=parents, polar=polar, defining=defining,
+                lineage_markers=lineage_markers,
+                lookup_failed=sorted(lookup_failed),
                 resolved=res,
                 cl_ids=cl_of, unresolved_labels=unresolved_labels,
                 out_of_context=out_of_context, context_scopes=ctx_scopes,

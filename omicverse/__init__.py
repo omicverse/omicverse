@@ -89,6 +89,7 @@ _LAZY_MODULES = {
     'micro',
     'mol',
     'synbio',
+    'vi',
     'protein',
     'genetics',
     'airr',
@@ -140,7 +141,6 @@ _LAZY_ATTRS = {
 }
 
 _DEFAULT_CORE_PACKAGES = (
-    "scanpy",
     "anndata",
     "numpy",
     "pandas",
@@ -301,8 +301,8 @@ def load_package(
     Parameters
     ----------
     packages : list[str] | tuple[str] | None
-        External package import paths. Defaults to common heavy dependencies
-        such as scanpy and torch.
+        External package import paths. Defaults to the core dependencies
+        (anndata, numpy, pandas, matplotlib, scipy, scikit-learn).
     omicverse_modules : list[str] | tuple[str] | None
         Top-level omicverse modules to preload via lazy getattr.
     include_omicverse_modules : bool
@@ -381,6 +381,7 @@ __all__ = [
     "metabol",
     "mol",
     "synbio",
+    "vi",
     "protein",
     "genetics",
     "airr",

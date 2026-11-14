@@ -34,8 +34,9 @@ cl = _load()
 def _res(labels, reviews):
     """reviews: 'fixed' or 'open...' -> evidence columns under the default policy"""
     lz = [1.0 if r == "fixed" else -0.5 for r in reviews]
+    alt = [float("nan") if r == "fixed" else 0.5 for r in reviews]   # open: another candidate reaches the mean
     return pd.DataFrame({"label": labels, "review": reviews, "lineage_z": lz,
-                         "alt_lineage_z": [float("nan")] * len(labels)},
+                         "alt_lineage_z": alt},
                         index=[str(i) for i in range(len(labels))])
 
 
@@ -118,14 +119,29 @@ def test_forced_lineage_results_are_refused_and_reported():
 def test_writer_recomputes_default_flags_ignoring_review_text():
     d = tempfile.mkdtemp()
     # the scorer was called with a loose policy: every cluster reads "open"
-    res = pd.DataFrame({"label": ["A", "B", "C"],
-                        "review": ["open: below 10.0"] * 3,
-                        "lineage_z": [2.0, -0.3, 1.0], "alt_lineage_z": [0.5, float("nan"), 1.5]},
-                       index=["0", "1", "2"])
+    res = pd.DataFrame({"label": ["A", "B", "C", "D", "E"],
+                        "review": ["open: below 10.0"] * 5,
+                        "lineage_z": [2.0, -0.3, 1.0, -0.3, float("nan")],
+                        "alt_lineage_z": [0.5, 0.4, 1.5, -0.1, float("nan")],
+                        "label_of_exclusion": "R"},
+                       index=["0", "1", "2", "3", "4"])
     tab, diff = cl.write_cluster_labels(
         res, os.path.join(d, "a.csv"),
-        overrides={"0": ("X", "ev"), "1": ("Y", "ev"), "2": ("Z", "ev")})
-    assert tab["label"].tolist() == ["A", "Y", "Z"]   # 0 fixed by default; 1 weak; 2 contested
+        overrides={str(i): (x, "ev") for i, x in enumerate("VWXYZ")})
+    # 0 fixed; 1 open (weak winner, alternative above the mean); 2 resolved (the
+    # alternative leads on one marker only); 3 resolved (no alternative reaches the
+    # mean); 4 resolved (unmeasured winner, no alternative)
+    assert tab["label"].tolist() == ["A", "W", "C", "D", "E"]
+    aud = pd.read_csv(os.path.join(d, "a.audit.csv"))
+    assert (aud["source"] == "override refused (resolved)").sum() == 3
+    # no signature present (empty top_label): open
+    res5 = res.assign(top_label=["A", "B", "C", "D", None])
+    tab5, _ = cl.write_cluster_labels(res5, os.path.join(d, "e.csv"), overrides={"4": ("Z", "ev")})
+    assert tab5["label"].tolist()[4] == "Z"
+    # without a label of exclusion a weak winner nobody beats stays open
+    tab3, _ = cl.write_cluster_labels(res.drop(columns="label_of_exclusion"), os.path.join(d, "c.csv"),
+                                      overrides={"3": ("Y", "ev")})
+    assert tab3["label"].tolist()[3] == "Y"
     # results without evidence columns: every override refused
     bare = pd.DataFrame({"label": ["A"], "review": ["open"]}, index=["0"])
     tab2, _ = cl.write_cluster_labels(bare, os.path.join(d, "b.csv"), overrides={"0": ("X", "ev")})
