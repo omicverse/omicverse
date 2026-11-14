@@ -22,6 +22,10 @@ The API mirrors scvi-tools, but configuration goes to the constructor::
     m.train()
     adata.obsm["X_scVI"] = m.get_latent_representation()
 
+Helpers: ``plot_history`` (training curves), ``integration_metrics``
+(scib-metrics batch-removal / bio-conservation scores of embeddings) and
+``MemoryMonitor`` (wall time, host RSS and GPU memory of a block).
+
 ``torch`` is imported only when a model is used.
 """
 from __future__ import annotations
@@ -36,12 +40,16 @@ _LAZY_ATTRS = {
     "build_source": ("._data", "build_source"),
     "train_distributed": ("._distributed", "train_distributed"),
     "mde": ("..utils._mde", "mde"),
+    "plot_history": ("._utils", "plot_history"),
+    "integration_metrics": ("._utils", "integration_metrics"),
+    "MemoryMonitor": ("._utils", "MemoryMonitor"),
     "distributions": ("._distributions", None),
     "nn": ("._nn", None),
     "priors": ("._priors", None),
 }
 
-__all__ = ["SCVI", "SCANVI", "TOTALVI", "BaseVIModel", "build_source", "train_distributed", "mde"]
+__all__ = ["SCVI", "SCANVI", "TOTALVI", "BaseVIModel", "build_source", "train_distributed", "mde",
+           "plot_history", "integration_metrics", "MemoryMonitor"]
 
 
 def __getattr__(name):
