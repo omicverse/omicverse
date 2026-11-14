@@ -121,12 +121,23 @@ def CMAP(
 
     Returns
     -------
-    adata_sc
-        Modified in place: ``obs['CMAP_domain', 'CMAP_svm_prob', 'CMAP_spot',
-        'CMAP_spot_prob', 'CMAP_entropy', 'CMAP_norm_entropy',
-        'CMAP_quality']`` and ``obsm['spatial_CMAP']``.
-    cell_spot_map
-        A DataFrame of the cell-to-spot assignment, for inspection.
+    cell_spot_map : pandas.DataFrame
+        The cell-to-spot assignment, one row per placed cell, with columns
+        ``Single_cell``, ``Spot``, ``Probability``, ``Second_prob``,
+        ``Entropy``, ``Norm_entropy``. **This is the only return value.**
+
+    Side effects
+    ------------
+    ``adata_sc`` is modified **in place** — this is where the placement lands:
+    ``obs['CMAP_domain', 'CMAP_svm_prob', 'CMAP_spot', 'CMAP_spot_prob',
+    'CMAP_entropy', 'CMAP_norm_entropy', 'CMAP_quality']`` and
+    ``obsm['spatial_CMAP']``. No copy is made, so the object you pass in is
+    the object that carries the result.
+
+    That is the opposite convention from :class:`~omicverse.space.CellMap`,
+    whose ``assign_coord()`` returns a *copy* and leaves the input untouched.
+    Unpacking this function's return as a pair, which an earlier version of
+    this docstring showed, raises ``ValueError: too many values to unpack``.
 
     Notes
     -----
@@ -138,10 +149,12 @@ def CMAP(
     --------
     >>> import omicverse as ov
     >>> svg_list = ov.space.svg(adata_st, mode='prost', n_svgs=3000)
-    >>> adata_sc, cell_spot_map = ov.space.CMAP(
+    >>> cell_spot_map = ov.space.CMAP(
     ...     adata_sc, adata_st, spatial_genes=svg_list,
     ... )
-    >>> adata_sc.obsm['spatial_CMAP'][:3]
+    >>> adata_sc.obsm['spatial_CMAP'][:3]      # written in place
+    >>> cell_spot_map.columns.tolist()[:2]
+    ['Single_cell', 'Spot']
     """
     run_cmap, run_cmap_fast = _get_pycmap()
 
