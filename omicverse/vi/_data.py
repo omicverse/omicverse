@@ -442,9 +442,22 @@ class DataSource:
     def __init__(self, n_obs, n_vars, device, obs: dict, block_size=None):
         self.n_obs, self.n_vars = int(n_obs), int(n_vars)
         self.device = device
+        self._obs_host = {k: v.cpu() for k, v in obs.items()}
         self.obs = {k: v.to(device) for k, v in obs.items()}
         self.starts, self.ends = make_blocks(self.n_obs, block_size or DEFAULT_BLOCK_SIZE)
         self._stream = None
+
+    # -- worker processes ----------------------------------------------------
+    def spec(self) -> dict:
+        """Picklable recipe to rebuild this source in another process (no AnnData,
+        no HDF5: see ``source_from_spec``)."""
+        raise NotImplementedError(
+            f"{type(self).__name__} cannot be shared with worker processes")
+
+    def _base_spec(self, kind, **kw):
+        return dict(kind=kind, obs={k: v.share_memory_() for k, v in self._obs_host.items()},
+                    starts=self.starts, ends=self.ends, n_obs=self.n_obs, n_vars=self.n_vars,
+                    **kw)
 
     # -- to override -------------------------------------------------------
     def _load(self, blocks: np.ndarray) -> Buffer:
@@ -622,6 +635,14 @@ class DeviceCSRSource(DataSource):
             X = X.copy()
             X.sort_indices()
         self._buf = _csr_tensors(X.indptr, X.indices, X.data, device)
+        self._host = X
+
+    def spec(self):
+        X = self._host
+        t = lambda a: torch.from_numpy(np.ascontiguousarray(a)).share_memory_()  # noqa: E731
+        return self._base_spec("csr", indptr=t(X.indptr.astype(np.int64)), indices=t(X.indices),
+                               data=t(X.data.astype(np.float32, copy=False)),
+                               shape=tuple(X.shape), resident=True)
 
     def _load(self, blocks):
         return self._buf
@@ -697,12 +718,19 @@ class HostCSRSource(_StreamedSource):
         if X.data.dtype != np.float32:
             X = X.astype(np.float32)
         super().__init__(MemoryCSR(X), None, None, X.shape[1], device, obs, block_size)
+        self._host = X
+
+    spec = DeviceCSRSource.spec
 
 
 class H5Source(_StreamedSource):
     """AnnDataOOM resolved to an on-disk CSR (anndataoom-fast reader)."""
 
     kind = "h5"
+
+    def spec(self):
+        return self._base_spec("h5", reader=self.reader, view_rows=self.view_rows,
+                               col_map=self.col_map_host)
 
 
 class OOMSource(DataSource):
@@ -754,6 +782,9 @@ class DaskSource(DataSource):
         self.starts, self.ends = self.starts[keep], self.ends[keep]
         self._block_index = np.flatnonzero(keep)
         self.X = X
+
+    def spec(self):
+        return self._base_spec("dask", X=self.X, block_index=self._block_index)
 
     def _compute(self, j):
         import dask
@@ -808,6 +839,37 @@ class DaskSource(DataSource):
             ev.record(torch.cuda.current_stream(dev))
             buf.event = ev
         return buf
+
+
+def source_from_spec(spec: dict, device, resident=None) -> DataSource:
+    """Rebuild a source from ``DataSource.spec()`` in a worker process.
+
+    On-disk sources reuse the chunk tables built by the parent (``CSRFile``):
+    workers read with ``pread`` and never open the file with HDF5."""
+    import scipy.sparse as sp
+    device = resolve_device(device)
+    kind = spec["kind"]
+    obs = dict(spec["obs"])
+    if kind == "csr":
+        X = sp.csr_matrix((spec["data"].numpy(), spec["indices"].numpy(), spec["indptr"].numpy()),
+                          shape=spec["shape"])
+        if resident is False or (resident is None and device.type == "cuda" and
+                                 X.nnz * 8 > _device_budget(device)):
+            src = HostCSRSource(X, device, obs)
+        else:
+            src = DeviceCSRSource(X, device, obs)
+    elif kind == "h5":
+        src = H5Source(spec["reader"], spec["view_rows"], spec["col_map"], spec["n_vars"],
+                       device, obs)
+    elif kind == "dask":
+        src = DaskSource.__new__(DaskSource)
+        DataSource.__init__(src, spec["n_obs"], spec["n_vars"], device, obs)
+        src.X = spec["X"]
+        src._block_index = spec["block_index"]
+    else:
+        raise ValueError(f"unknown source kind {kind!r}")
+    src.starts, src.ends = np.asarray(spec["starts"]), np.asarray(spec["ends"])
+    return src
 
 
 # ---------------------------------------------------------------------------
@@ -911,6 +973,6 @@ def build_source(adata, *, layer=None, genes=None, obs=None, device="auto",
 
 __all__ = [
     "build_source", "DataSource", "DeviceCSRSource", "HostCSRSource", "H5Source", "DaskSource",
-    "OOMSource", "CSRFile", "split_train_val", "resolve_device", "gather_rows", "make_blocks",
+    "OOMSource", "CSRFile", "split_train_val", "source_from_spec", "resolve_device", "gather_rows", "make_blocks",
     "DEFAULT_BLOCK_SIZE", "DEFAULT_BUFFER_BLOCKS",
 ]

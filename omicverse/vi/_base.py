@@ -173,6 +173,12 @@ class BaseVIModel:
                           f"(layer={self.registry['layer']!r}); the likelihood assumes counts.",
                           UserWarning, stacklevel=4)
 
+    def _is_disk_backed(self, adata=None) -> bool:
+        from ._data import is_dask_array, is_oom
+        adata = self.adata if adata is None else adata
+        X = adata.X if self.registry["layer"] is None else adata.layers[self.registry["layer"]]
+        return is_oom(adata) or is_dask_array(X)
+
     def to_device(self, device):
         self._device = resolve_device(device)
         if self.module is not None:

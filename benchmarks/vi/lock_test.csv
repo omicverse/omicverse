@@ -1,0 +1,17 @@
+mode,procs,split,rank,elements,gb_read,seconds,gb_per_s,full,error,wall_s,hdf5_locking,file,writer_open
+pread,4,True,0,1905517726,22.87,16.1,1.418,True,,29.2,default,,
+pread,4,True,1,1905062067,22.86,17.0,1.345,True,,29.2,default,,
+pread,4,True,2,1906913857,22.88,14.0,1.636,True,,29.2,default,,
+pread,4,True,3,1904256692,22.85,14.9,1.529,True,,29.2,default,,
+h5py,4,True,0,1905517726,22.87,12.6,1.813,True,,13.3,default,,
+h5py,4,True,1,1905062067,22.86,13.1,1.748,True,,13.3,default,,
+h5py,4,True,2,1906913857,22.88,11.9,1.918,True,,13.3,default,,
+h5py,4,True,3,1904256692,22.85,12.3,1.854,True,,13.3,default,,
+pread,4,False,0,27527215,0.22,0.3,0.715,True,,6.6,default,lockcopy.h5ad,True
+pread,4,False,1,27527215,0.22,0.4,0.593,True,,6.6,default,lockcopy.h5ad,True
+pread,4,False,2,27527215,0.22,0.4,0.499,True,,6.6,default,lockcopy.h5ad,True
+pread,4,False,3,27527215,0.22,0.3,0.782,True,,6.6,default,lockcopy.h5ad,True
+h5py,4,False,0,0,0.0,0.0,0.0,False,"BlockingIOError: [Errno 11] Unable to synchronously open file (unable to lock file, errno = 11, error message = 'Resource temporarily unavailable')",0.3,default,lockcopy.h5ad,True
+h5py,4,False,1,0,0.0,0.0,0.0,False,"BlockingIOError: [Errno 11] Unable to synchronously open file (unable to lock file, errno = 11, error message = 'Resource temporarily unavailable')",0.3,default,lockcopy.h5ad,True
+h5py,4,False,2,0,0.0,0.0,0.0,False,"BlockingIOError: [Errno 11] Unable to synchronously open file (unable to lock file, errno = 11, error message = 'Resource temporarily unavailable')",0.3,default,lockcopy.h5ad,True
+h5py,4,False,3,0,0.0,0.0,0.0,False,"BlockingIOError: [Errno 11] Unable to synchronously open file (unable to lock file, errno = 11, error message = 'Resource temporarily unavailable')",0.3,default,lockcopy.h5ad,True

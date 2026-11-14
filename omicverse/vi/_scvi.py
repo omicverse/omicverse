@@ -259,13 +259,14 @@ class SCVI(BaseVIModel):
         kw = {k: v for k, v in kw.items() if k != "seed"}
         self._module_kwargs = kw
         r = self.registry
+        self._module_args = dict(
+            n_input=self.n_vars, n_batch=self.n_batch, n_labels=self.n_labels,
+            n_continuous_cov=len(r["continuous_covariate_keys"]),
+            n_cats_per_cov=[len(c) for c in r["cat_categories"]], **kw)
         with torch.random.fork_rng(devices=[]):
             if seed is not None:
                 torch.manual_seed(seed)
-            self.module = self._module_cls(
-                self.n_vars, n_batch=self.n_batch, n_labels=self.n_labels,
-                n_continuous_cov=len(r["continuous_covariate_keys"]),
-                n_cats_per_cov=[len(c) for c in r["cat_categories"]], **kw)
+            self.module = self._module_cls(**self._module_args)
         self.module.to(self._device)
 
     def _init_params(self):

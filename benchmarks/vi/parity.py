@@ -79,6 +79,9 @@ def main():
                                        args.block_size, args.buffer_blocks)
             else:
                 z, et, ev, tt = run_scvi(a, seed, epochs, args.device)
+            os.makedirs(os.path.join(common.CACHE, "latents"), exist_ok=True)
+            np.save(os.path.join(common.CACHE, "latents",
+                                 f"{out}_{impl}_{args.shuffle}_{args.order}_s{seed}.npy"), z)
             a.obsm["Z"] = z
             met = common.scib(a, "Z", n_jobs=args.threads)
             r = dict(data=args.data, n_obs=a.n_obs, impl=impl, device=args.device, seed=seed,

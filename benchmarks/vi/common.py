@@ -91,13 +91,17 @@ def scib(adata, key, batch_key="donor", label_key="cell_type", n_jobs=16):
     """scib-metrics on ``adata.obsm[key]``: iLISI, cLISI, kBET, ASW (batch: BRAS),
     ASW label, NMI / ARI of Leiden, graph connectivity, isolated labels."""
     import scib_metrics as sm
-    from scib_metrics.nearest_neighbors import pynndescent
+    from scib_metrics.nearest_neighbors import NeighborsResults, pynndescent
     X = np.asarray(adata.obsm[key], dtype=np.float32)
     batch = np.asarray(adata.obs[batch_key].astype(str).values)
     labels = np.asarray(adata.obs[label_key].astype(str).values)
     nn90 = pynndescent(X, n_neighbors=90, random_state=0, n_jobs=n_jobs)
-    nn15 = nn90.subset_neighbors(15)
-    nn50 = nn90.subset_neighbors(50)
+
+    def sub(k):  # C-contiguous (umap's numba kernels reject strided views)
+        return NeighborsResults(indices=np.ascontiguousarray(nn90.indices[:, :k]),
+                                distances=np.ascontiguousarray(nn90.distances[:, :k]))
+
+    nn15, nn50 = sub(15), sub(50)
     res = {}
     res["iLISI"] = float(sm.ilisi_knn(nn90, batch))
     res["cLISI"] = float(sm.clisi_knn(nn90, labels))
