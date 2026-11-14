@@ -5,7 +5,7 @@ Each test uses a tiny synthetic AnnData and trains for a single epoch
 (or a small ``max_epochs`` value) — enough to exercise the full code path
 (setup_anndata → kwarg split → model construction → train → latent
 write-back) without becoming a slow integration test. The scvi tests gate
-on ``pytest.importorskip("scvi")``; the scPoli test additionally gates on
+on ``pytest.importorskip("torch")  # ov.vi (no scvi-tools)``; the scPoli test additionally gates on
 ``pytest.importorskip("scarches")``.
 
 The intent is to lock the kwarg-routing contract (named init params land
@@ -51,7 +51,7 @@ def _toy_adata_with_counts(n_per_batch=80, n_genes=120, n_batches=3, seed=0):
 
 class TestSCVIRouting:
     def test_scvi_kwargs_route_to_init_and_train(self) -> None:
-        pytest.importorskip("scvi")
+        pytest.importorskip("torch")  # ov.vi (no scvi-tools)
         from omicverse.single import batch_correction
 
         adata = _toy_adata_with_counts()
@@ -73,7 +73,7 @@ class TestSCVIRouting:
 
 class TestSCANVI:
     def test_scanvi_requires_labels_key(self) -> None:
-        pytest.importorskip("scvi")
+        pytest.importorskip("torch")  # ov.vi (no scvi-tools)
         from omicverse.single import batch_correction
 
         adata = _toy_adata_with_counts()
@@ -81,7 +81,7 @@ class TestSCANVI:
             batch_correction(adata, batch_key="batch", methods="scANVI")
 
     def test_scanvi_runs_and_writes_latent(self) -> None:
-        pytest.importorskip("scvi")
+        pytest.importorskip("torch")  # ov.vi (no scvi-tools)
         from omicverse.single import batch_correction
 
         adata = _toy_adata_with_counts()
@@ -106,7 +106,7 @@ class TestSCANVI:
 
 class TestTotalVI:
     def test_totalvi_requires_protein_obsm_key(self) -> None:
-        pytest.importorskip("scvi")
+        pytest.importorskip("torch")  # ov.vi (no scvi-tools)
         from omicverse.single import batch_correction
 
         adata = _toy_adata_with_counts()
@@ -114,7 +114,7 @@ class TestTotalVI:
             batch_correction(adata, batch_key="batch", methods="totalVI")
 
     def test_totalvi_runs_with_fake_protein_matrix(self) -> None:
-        pytest.importorskip("scvi")
+        pytest.importorskip("torch")  # ov.vi (no scvi-tools)
         from omicverse.single import batch_correction
 
         adata = _toy_adata_with_counts()
@@ -156,3 +156,39 @@ class TestScPoli:
         # scPoli's latent dimension is determined internally (latent_dim
         # default 10 unless overridden) — assert presence + shape contract.
         assert adata.obsm["X_scPoli"].shape[0] == adata.n_obs
+
+
+# ── ov.vi specifics ─────────────────────────────────────────────────────────
+
+class TestOvVIBackend:
+    def test_scvi_uses_ov_vi_and_plan_kwargs(self) -> None:
+        pytest.importorskip("torch")
+        from omicverse.single import batch_correction
+        from omicverse.vi import SCVI
+
+        adata = _toy_adata_with_counts()
+        model = batch_correction(adata, batch_key="batch", methods="scVI", n_latent=4,
+                                 max_epochs=2, lr=2e-3, n_epochs_kl_warmup=10,
+                                 accelerator="cpu", enable_progress_bar=False)
+        assert isinstance(model, SCVI)
+        assert model.module.train_config.lr == 2e-3
+        assert model.history_["kl_weight"] == [0.0, 0.1]
+
+    def test_scvi_on_anndataoom_is_native(self, tmp_path) -> None:
+        pytest.importorskip("torch")
+        pytest.importorskip("anndataoom")
+        import omicverse as ov
+        from omicverse.single import batch_correction
+
+        adata = _toy_adata_with_counts()
+        path = tmp_path / "toy.h5ad"
+        import scipy.sparse as sp
+        ad.AnnData(X=sp.csr_matrix(adata.layers["counts"]), obs=adata.obs,
+                   var=adata.var).write_h5ad(path)
+        ov.settings.cpu_init()
+        oom = ov.read(str(path), storage="disk")
+        model = batch_correction(oom, batch_key="batch", methods="scVI", n_latent=4,
+                                 max_epochs=2, accelerator="cpu")
+        assert model._source().kind == "h5"  # streamed from disk, not materialised
+        assert oom.obsm["X_scVI"].shape == (oom.n_obs, 4)
+        oom.close()

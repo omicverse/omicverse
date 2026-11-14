@@ -122,6 +122,92 @@ def _split_kwargs_by_signature(
     return tuple(buckets)
 
 
+_ACCELERATOR = {"gpu": "cuda", "cuda": "cuda", "cpu": "cpu", "auto": "auto", "mps": "mps"}
+
+
+def _vi_kwargs(kwargs):
+    """Translate scvi-tools-style training keywords to ``ov.vi``."""
+    kwargs = dict(kwargs)
+    acc = kwargs.pop("accelerator", None)
+    if acc is not None and "device" not in kwargs:
+        kwargs["device"] = _ACCELERATOR.get(str(acc), str(acc))
+    if "use_gpu" in kwargs:
+        use_gpu = kwargs.pop("use_gpu")
+        kwargs.setdefault("device", "cuda" if use_gpu else "cpu")
+    devices = kwargs.get("devices")
+    if devices in ("auto", 1, [0], "1"):
+        kwargs.pop("devices")
+    for k in ("enable_progress_bar", "logger", "log_every_n_steps", "datasplitter_kwargs",
+              "load_sparse_tensor", "trainer_config", "plan_config"):
+        if k in kwargs:
+            v = kwargs.pop(k)
+            if k == "enable_progress_bar":
+                kwargs.setdefault("progress", bool(v))
+    return kwargs
+
+
+def _run_vi(adata, batch_key, methods, kwargs):
+    """scVI / scANVI / totalVI through :mod:`omicverse.vi` (same outputs as before:
+    ``obsm['X_scVI' | 'X_scANVI' | 'X_totalVI']``, scANVI predictions in
+    ``obs['scANVI_predicted_labels']``; returns the trained model)."""
+    from .. import vi
+    kwargs = _vi_kwargs(kwargs)
+    layer = kwargs.pop("layer", "counts" if "counts" in adata.layers.keys() else None)
+    if layer is None:
+        warnings.warn(f"methods={methods!r}: no layers['counts']; using adata.X as raw counts.",
+                      UserWarning, stacklevel=3)
+    if methods == "scVI":
+        cls, key, ref = vi.SCVI, "X_scVI", ("scVI", "batch correction with scVI")
+        init_extra = {}
+    elif methods in ("scANVI", "SCANVI"):
+        labels_key = kwargs.pop("labels_key", None)
+        unlabeled_category = kwargs.pop("unlabeled_category", "Unknown")
+        if labels_key is None:
+            raise ValueError(
+                "methods='scANVI' requires labels_key= naming a column in adata.obs with "
+                "cell-type labels (use the value passed as unlabeled_category= for cells you "
+                "want the model to predict labels for).")
+        cls, key = vi.SCANVI, "X_scANVI"
+        ref = ("scANVI", "batch correction with scANVI (semi-supervised)")
+        init_extra = {"labels_key": labels_key, "unlabeled_category": unlabeled_category}
+    else:
+        pkey = kwargs.pop("protein_expression_obsm_key", None)
+        if pkey is None:
+            raise ValueError(
+                "methods='totalVI' requires protein_expression_obsm_key= naming an obsm slot "
+                "with the (cell x protein) ADT count matrix. If you only have RNA, use "
+                "methods='scVI' (or 'scANVI' with labels).")
+        cls, key = vi.TOTALVI, "X_totalVI"
+        ref = ("totalVI", "batch correction with totalVI (joint RNA+protein)")
+        init_extra = {"protein_expression_obsm_key": pkey}
+        if "protein_names_uns_key" in kwargs:
+            init_extra["protein_names_uns_key"] = kwargs.pop("protein_names_uns_key")
+    # optimisation options (lr, weight_decay, n_epochs_kl_warmup, ...) go to train()
+    from ..vi._train import TrainConfig
+    from ..vi._base import BaseVIModel
+    init_named = set(inspect.signature(cls.__init__).parameters)
+    train_named = set(TrainConfig.__dataclass_fields__) | \
+        set(inspect.signature(BaseVIModel.train).parameters) - {"self", "kwargs"}
+    plan = {k: kwargs.pop(k) for k in list(kwargs)
+            if k in train_named and k not in init_named}
+    init_kwargs, train_kwargs = _split_kwargs_by_signature(
+        kwargs,
+        (f"ov.vi.{cls.__name__}.__init__", cls.__init__),
+        (f"ov.vi.{cls.__name__}.train", cls.train),
+    )
+    train_kwargs.update(plan)
+    model = cls(adata, layer=layer, batch_key=batch_key, **init_extra, **init_kwargs)
+    model.train(**train_kwargs)
+    adata.obsm[key] = model.get_latent_representation()
+    if cls is vi.SCANVI:
+        try:
+            adata.obs["scANVI_predicted_labels"] = model.predict()
+        except Exception:
+            pass
+    add_reference(adata, *ref)
+    return model
+
+
 # Per-method obsm key the integrated embedding lands in. Used by the
 # tracked() viz spec so the report's diagnostic plot is colored by
 # batch_key on the embedding the user just produced.
@@ -243,7 +329,7 @@ def batch_correction(adata:anndata.AnnData,batch_key:str,
     from ..pp._qc import _is_oom
     _oom = _is_oom(adata)
 
-    if _oom and methods not in ('harmony',):
+    if _oom and methods not in ('harmony', 'scVI', 'scANVI', 'SCANVI', 'totalVI', 'TOTALVI'):
         print(
             f"[AnnDataOOM] '{methods}' requires the full expression matrix in memory.\n"
             f"  Converting to in-memory AnnData automatically.\n"
@@ -351,104 +437,10 @@ def batch_correction(adata:anndata.AnnData,batch_key:str,
         adata.obsm["X_scanorama"] = all_s
         add_reference(adata,'Scanorama','batch correction with Scanorama')
         return adata
-    elif methods=='scVI':
-        try:
-            import scvi 
-            #print('mofax have been install version:',mfx.__version__)
-        except ImportError:
-            raise ImportError(
-                'Please install the scVI: `pip install scvi-tools`. or `conda install scvi-tools -c conda-forge`'
-            )
-        import scvi
-        scvi.model.SCVI.setup_anndata(adata, layer="counts", batch_key=batch_key)
-        # The user's **kwargs may target either SCVI.__init__ (architecture:
-        # n_hidden / n_latent / dropout_rate / dispersion / gene_likelihood /
-        # latent_distribution / …) or SCVI.train (optimisation: max_epochs /
-        # batch_size / accelerator / devices / early_stopping / …). Route by
-        # signature so train-side parameters are no longer silently swallowed
-        # by SCVI.__init__'s **kwargs catch-all.
-        init_kwargs, train_kwargs = _split_kwargs_by_signature(
-            kwargs,
-            ("scvi.model.SCVI.__init__", scvi.model.SCVI.__init__),
-            ("scvi.model.SCVI.train", scvi.model.SCVI.train),
-        )
-        model = scvi.model.SCVI(adata, **init_kwargs)
-        model.train(**train_kwargs)
-        SCVI_LATENT_KEY = "X_scVI"
-        adata.obsm[SCVI_LATENT_KEY] = model.get_latent_representation()
-        add_reference(adata,'scVI','batch correction with scVI')
-        return model
-    elif methods in ('scANVI', 'SCANVI'):
-        try:
-            import scvi
-        except ImportError:
-            raise ImportError(
-                'Please install scvi-tools: `pip install scvi-tools` '
-                'or `conda install scvi-tools -c conda-forge`'
-            )
-        # scANVI is semi-supervised — it needs a cell-type column with an
-        # explicit "unknown" marker for cells without a confident label.
-        labels_key = kwargs.pop('labels_key', None)
-        unlabeled_category = kwargs.pop('unlabeled_category', 'Unknown')
-        if labels_key is None:
-            raise ValueError(
-                "methods='scANVI' requires labels_key= naming a column in "
-                "adata.obs with cell-type labels (use the value passed as "
-                "unlabeled_category= for cells you want the model to predict "
-                "labels for). See scvi-tools docs: "
-                "https://docs.scvi-tools.org/en/stable/user_guide/models/scanvi.html"
-            )
-        scvi.model.SCANVI.setup_anndata(
-            adata, layer="counts", batch_key=batch_key,
-            labels_key=labels_key, unlabeled_category=unlabeled_category,
-        )
-        init_kwargs, train_kwargs = _split_kwargs_by_signature(
-            kwargs,
-            ("scvi.model.SCANVI.__init__", scvi.model.SCANVI.__init__),
-            ("scvi.model.SCANVI.train", scvi.model.SCANVI.train),
-        )
-        model = scvi.model.SCANVI(adata, **init_kwargs)
-        model.train(**train_kwargs)
-        adata.obsm["X_scANVI"] = model.get_latent_representation()
-        # scANVI also predicts labels for unlabeled cells — surface them.
-        try:
-            adata.obs["scANVI_predicted_labels"] = model.predict()
-        except Exception:
-            pass
-        add_reference(adata, 'scANVI', 'batch correction with scANVI (semi-supervised)')
-        return model
-    elif methods in ('totalVI', 'TOTALVI'):
-        try:
-            import scvi
-        except ImportError:
-            raise ImportError(
-                'Please install scvi-tools: `pip install scvi-tools` '
-                'or `conda install scvi-tools -c conda-forge`'
-            )
-        # totalVI is a JOINT RNA + protein (CITE-seq / Total-seq) model. It
-        # needs the protein matrix attached to adata.obsm[<key>] BEFORE call.
-        protein_expression_obsm_key = kwargs.pop('protein_expression_obsm_key', None)
-        if protein_expression_obsm_key is None:
-            raise ValueError(
-                "methods='totalVI' requires protein_expression_obsm_key= naming "
-                "an obsm slot with the (cell × protein) ADT count matrix. "
-                "If you only have RNA, use methods='scVI' (or 'scANVI' with "
-                "labels). See scvi-tools docs: "
-                "https://docs.scvi-tools.org/en/stable/user_guide/models/totalvi.html"
-            )
-        scvi.model.TOTALVI.setup_anndata(
-            adata, batch_key=batch_key, layer="counts",
-            protein_expression_obsm_key=protein_expression_obsm_key,
-        )
-        init_kwargs, train_kwargs = _split_kwargs_by_signature(
-            kwargs,
-            ("scvi.model.TOTALVI.__init__", scvi.model.TOTALVI.__init__),
-            ("scvi.model.TOTALVI.train", scvi.model.TOTALVI.train),
-        )
-        model = scvi.model.TOTALVI(adata, **init_kwargs)
-        model.train(**train_kwargs)
-        adata.obsm["X_totalVI"] = model.get_latent_representation()
-        add_reference(adata, 'totalVI', 'batch correction with totalVI (joint RNA+protein)')
+    elif methods in ('scVI', 'scANVI', 'SCANVI', 'totalVI', 'TOTALVI'):
+        # omicverse's own scVI family (ov.vi): no scvi-tools needed, trains on
+        # in-memory AnnData, AnnDataOOM (disk) and Dask-backed AnnData alike.
+        model = _run_vi(adata, batch_key, methods, kwargs)
         return model
     elif methods in ('scPoli', 'SCPOLI'):
         try:

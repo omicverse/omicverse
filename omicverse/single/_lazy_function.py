@@ -255,7 +255,7 @@ def lazy(
         print("✅ Batch Correction: `Harmony` step already finished, skipping it")
 
     try:
-        import scvi
+        import torch  # noqa: F401  (ov.vi: omicverse's own scVI, no scvi-tools needed)
 
         if ("X_scVI" not in adata.obsm.keys()) or ("scVI" in reforce_steps):
             print("❌ Batch Correction: `scVI` step didn't start, we will start it now")
@@ -284,8 +284,10 @@ def lazy(
         else:
             print("✅ Batch Correction: `scVI` step already finished, skipping it")
         del adata_hvg
-    except:
-        print("❌ scvi package not found, we will not run scVI step")
+    except ImportError:
+        print("❌ torch not found (needed by ov.vi's scVI), we will not run scVI step")
+    except Exception as e:  # keep the lazy pipeline going, but say why
+        print(f"❌ scVI step failed ({type(e).__name__}: {e}); skipping it")
 
     if ("bench_best_res" not in adata.uns.keys()) or ("eval_bench" in reforce_steps):
         print("❌ Best Bench Correction Eval step didn't start, we will start it now")

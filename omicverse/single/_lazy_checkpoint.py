@@ -336,7 +336,7 @@ def lazy_checkpoint(
     step_file = checkpoint_file.format("07_scvi")
 
     try:
-        import scvi
+        import torch  # noqa: F401  (ov.vi: omicverse's own scVI, no scvi-tools needed)
 
         if (
             os.path.exists(step_file)
@@ -396,7 +396,7 @@ def lazy_checkpoint(
         else:
             print("✅ Batch Correction: `scVI` step already finished, skipping it")
     except ImportError:
-        print("❌ scvi package not found, we will not run scVI step")
+        print("❌ torch not found (needed by ov.vi's scVI), we will not run scVI step")
 
     # Step 8: Evaluate best batch correction method
     step_name = "eval_bench"

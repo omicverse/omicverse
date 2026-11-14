@@ -1,0 +1,33 @@
+mode,procs,split,rank,file,writer_open,threads,chunk,startup_s,elements,gb_read,seconds,gb_per_s,full,error,wall_s,hdf5_locking,cache
+pread,4,True,0,SEAAD_raw.h5ad,False,4,16777216,0.5,1905517726,22.87,29.0,0.789,True,,30.1,default,cold
+pread,4,True,1,SEAAD_raw.h5ad,False,4,16777216,0.9,1905062067,22.86,27.7,0.824,True,,30.1,default,cold
+pread,4,True,2,SEAAD_raw.h5ad,False,4,16777216,1.4,1906913857,22.88,24.7,0.926,True,,30.1,default,cold
+pread,4,True,3,SEAAD_raw.h5ad,False,4,16777216,1.9,1904256692,22.85,26.4,0.867,True,,30.1,default,cold
+h5py,4,True,0,SEAAD_raw.h5ad,False,1,16777216,0.1,1905517726,22.87,33.0,0.693,True,,33.2,default,cold
+h5py,4,True,1,SEAAD_raw.h5ad,False,1,16777216,0.2,1905062067,22.86,33.0,0.693,True,,33.2,default,cold
+h5py,4,True,2,SEAAD_raw.h5ad,False,1,16777216,0.2,1906913857,22.88,32.3,0.708,True,,33.2,default,cold
+h5py,4,True,3,SEAAD_raw.h5ad,False,1,16777216,0.2,1904256692,22.85,31.9,0.716,True,,33.2,default,cold
+pread,4,True,0,SEAAD_raw.h5ad,False,4,16777216,0.4,1905517726,22.87,6.6,3.452,True,,8.7,default,warm
+pread,4,True,1,SEAAD_raw.h5ad,False,4,16777216,0.9,1905062067,22.86,6.3,3.642,True,,8.7,default,warm
+pread,4,True,2,SEAAD_raw.h5ad,False,4,16777216,1.4,1906913857,22.88,3.5,6.498,True,,8.7,default,warm
+pread,4,True,3,SEAAD_raw.h5ad,False,4,16777216,2.0,1904256692,22.85,6.1,3.765,True,,8.7,default,warm
+h5py,4,True,0,SEAAD_raw.h5ad,False,1,16777216,0.1,1905517726,22.87,10.3,2.222,True,,12.1,default,warm
+h5py,4,True,1,SEAAD_raw.h5ad,False,1,16777216,0.1,1905062067,22.86,11.8,1.93,True,,12.1,default,warm
+h5py,4,True,2,SEAAD_raw.h5ad,False,1,16777216,0.1,1906913857,22.88,11.2,2.039,True,,12.1,default,warm
+h5py,4,True,3,SEAAD_raw.h5ad,False,1,16777216,0.1,1904256692,22.85,10.5,2.175,True,,12.1,default,warm
+pread,4,False,0,lockcopy.h5ad,True,4,16777216,0.5,27527215,0.22,0.2,0.931,True,,1.5,default,warm
+pread,4,False,1,lockcopy.h5ad,True,4,16777216,0.5,27527215,0.22,0.2,1.274,True,,1.5,default,warm
+pread,4,False,2,lockcopy.h5ad,True,4,16777216,0.6,27527215,0.22,0.2,1.232,True,,1.5,default,warm
+pread,4,False,3,lockcopy.h5ad,True,4,16777216,0.8,27527215,0.22,0.2,1.318,True,,1.5,default,warm
+h5py,4,False,0,lockcopy.h5ad,True,1,16777216,0.2,0,0.0,0.0,0.0,False,"BlockingIOError: [Errno 11] Unable to synchronously open file (unable to lock file, errno = 11, error message = 'Resource temporarily unavailable')",0.2,default,warm
+h5py,4,False,1,lockcopy.h5ad,True,1,16777216,0.2,0,0.0,0.0,0.0,False,"BlockingIOError: [Errno 11] Unable to synchronously open file (unable to lock file, errno = 11, error message = 'Resource temporarily unavailable')",0.2,default,warm
+h5py,4,False,2,lockcopy.h5ad,True,1,16777216,0.1,0,0.0,0.0,0.0,False,"BlockingIOError: [Errno 11] Unable to synchronously open file (unable to lock file, errno = 11, error message = 'Resource temporarily unavailable')",0.2,default,warm
+h5py,4,False,3,lockcopy.h5ad,True,1,16777216,0.1,0,0.0,0.0,0.0,False,"BlockingIOError: [Errno 11] Unable to synchronously open file (unable to lock file, errno = 11, error message = 'Resource temporarily unavailable')",0.2,default,warm
+pread,4,True,0,SEAAD_raw.h5ad,False,1,16777216,0.5,1905517726,22.87,12.8,1.789,True,,14.6,default,warm
+pread,4,True,1,SEAAD_raw.h5ad,False,1,16777216,0.9,1905062067,22.86,12.6,1.81,True,,14.6,default,warm
+pread,4,True,2,SEAAD_raw.h5ad,False,1,16777216,1.4,1906913857,22.88,11.4,2.01,True,,14.6,default,warm
+pread,4,True,3,SEAAD_raw.h5ad,False,1,16777216,1.9,1904256692,22.85,12.1,1.882,True,,14.6,default,warm
+pread,4,True,0,SEAAD_raw.h5ad,False,8,16777216,0.5,1905517726,22.87,5.2,4.42,True,,7.4,default,warm
+pread,4,True,1,SEAAD_raw.h5ad,False,8,16777216,0.9,1905062067,22.86,4.6,4.923,True,,7.4,default,warm
+pread,4,True,2,SEAAD_raw.h5ad,False,8,16777216,1.4,1906913857,22.88,5.0,4.595,True,,7.4,default,warm
+pread,4,True,3,SEAAD_raw.h5ad,False,8,16777216,1.9,1904256692,22.85,4.8,4.757,True,,7.4,default,warm
