@@ -236,14 +236,17 @@ def _compiler_available() -> bool:
 
 class _Compiled:
     """``torch.compile``-d module for full-size minibatches (static shapes, dense
-    likelihood).  ``compile='auto'`` enables it on the CPU when the run is long
-    enough to repay the ~20 s compilation (> 5000 steps) and a C++ compiler is
-    available; any compilation error falls back to eager execution."""
+    likelihood).  ``compile='auto'`` enables it when the run is long enough to
+    repay the compilation (CPU: > 5000 steps and a C++ compiler; CUDA: > 100k
+    steps); any compilation error falls back to eager execution."""
 
     def __init__(self, module, cfg, device, n_steps):
         mode = cfg.compile
         if mode == "auto":
-            mode = device.type == "cpu" and n_steps > 5000 and _compiler_available()
+            # CPU: ~2x faster steps for ~20 s of compilation; CUDA (inside the CUDA
+            # graph): ~1.45x faster steps for ~25 s of compilation
+            need = 5000 if device.type == "cpu" else 100_000
+            mode = n_steps > need and (device.type == "cuda" or _compiler_available())
         self.enabled = bool(mode)
         self.module = module
         self.fn = torch.compile(module, dynamic=False) if self.enabled else None

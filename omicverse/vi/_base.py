@@ -225,9 +225,10 @@ class BaseVIModel:
             seed: Seed for initialisation-independent randomness (split, shuffle,
                 sampling).  Set it before constructing the model for full determinism.
             precision: ``'32'`` or ``'bf16'`` (autocast networks on CUDA).
-            compile: ``torch.compile`` the training step (``'auto'``: on the CPU for
-                runs longer than 5000 steps when a C++ compiler is available; about
-                2x faster steps after ~20 s of compilation).
+            compile: ``torch.compile`` the training step (``'auto'``: CPU runs longer
+                than 5000 steps when a C++ compiler is available, ~2x faster steps
+                after ~20 s of compilation; CUDA runs longer than 100k steps, ~1.45x
+                faster graphed steps after ~25 s).
             cuda_graph: Replay the training step as a CUDA graph (``'auto'``: on CUDA,
                 single process, no LR scheduler / gradient clipping; ~2.5x faster
                 steps).

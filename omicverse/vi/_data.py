@@ -829,6 +829,12 @@ class DaskSource(DataSource):
         if cols is not None:
             X = X[:, cols]
         super().__init__(X.shape[0], X.shape[1], device, obs, block_size=None)
+        if device.type == "cuda":  # give back cupy pool blocks cached by earlier dask passes
+            try:
+                import cupy
+                cupy.get_default_memory_pool().free_all_blocks()
+            except ImportError:
+                pass
         bounds = np.concatenate([[0], np.cumsum(X.chunks[0])]).astype(np.int64)
         self.starts, self.ends = bounds[:-1], bounds[1:]
         keep = self.ends > self.starts
