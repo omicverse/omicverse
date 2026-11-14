@@ -46,6 +46,23 @@ def parity():
     return "\n".join(out)
 
 
+def models():
+    out = []
+    d = _read("models_parity_scanvi_smoke.csv")
+    if d is not None:
+        cols = ["acc_hidden", "f1_macro_hidden", "neg_elbo_train", "neg_elbo_validation",
+                "iLISI", "kBET", "ASW_batch", "ASW_label", "NMI", "ARI", "train_time_s"]
+        out += ["### SCANVI, SEA-AD 5k, 70 % labels hidden, H100\n",
+                common.to_markdown(common.summarize(d, ["impl"], cols)), ""]
+    d = _read("models_parity_totalvi.csv")
+    if d is not None:
+        cols = ["epochs", "neg_elbo_train", "neg_elbo_validation", "iLISI",
+                "protein_denoised_vs_raw_r", "train_time_s"]
+        out += ["### TOTALVI, 10x PBMC 5k+10k CITE-seq (14 proteins), H100\n",
+                common.to_markdown(common.summarize(d, ["impl"], cols)), ""]
+    return "\n".join(out)
+
+
 def blockshuffle():
     d = _read("blockshuffle_seaad50k.csv")
     if d is None:
@@ -53,7 +70,7 @@ def blockshuffle():
     ref = _read("parity_seaad50k_cuda.csv")
     if ref is not None:
         r = ref[ref.impl == "ov"].copy()
-        r["shuffle"], r["order"], r["block_size"], r["buffer_blocks"] = "random", "any", "-", "-"
+        r["shuffle"], r["order"], r["block_size"], r["buffer_blocks"] = "random", "file", "-", "-"
         d = pd.concat([r, d], ignore_index=True)
     d["config"] = (d["shuffle"].astype(str) + " order=" + d["order"].astype(str) + " block="
                    + d["block_size"].astype(str) + " x" + d["buffer_blocks"].astype(str))
@@ -91,6 +108,7 @@ def disk():
 
 def main():
     parts = ["# ov.vi benchmark results\n", "## Parity with scvi-tools 1.5.2\n", parity(),
+             models(),
              "## Block shuffle\n", blockshuffle(), "\n## Training speed\n", speed(),
              "## Disk training\n", disk()]
     lock = _read("lock_test.csv")
