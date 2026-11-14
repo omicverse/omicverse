@@ -78,6 +78,15 @@ def _log_fn(verbose):
 
 
 def _peak_rss_mb() -> float:
+    """High-water RSS of this process in MB (/proc VmHWM; ru_maxrss is inherited
+    from the parent across fork + exec, so it can report a parent's peak)."""
+    try:
+        with open("/proc/self/status") as fh:
+            for line in fh:
+                if line.startswith("VmHWM:"):
+                    return float(line.split()[1]) / 1024.0
+    except OSError:
+        pass
     try:
         import resource
         return resource.getrusage(resource.RUSAGE_SELF).ru_maxrss / 1024.0
@@ -379,6 +388,24 @@ def aggregate_orthoviews(lab_xy, lab_xz, lab_yz, *, smooth_binary: float = 1.0,
 # --------------------------------------------------------------------------- #
 # 2-D segmenters
 # --------------------------------------------------------------------------- #
+def _slice_normalize(stack, floor, lower=1.0, upper=99.0):
+    """Cellpose's per-image percentile normalisation, with the upper level floored.
+
+    ``(x - p_lower) / (p_upper - p_lower)`` per slice, as Cellpose does by
+    default, except that ``p_upper`` is never below ``floor`` (the volume's
+    foreground level): a slice that is mostly background is then not stretched
+    until its noise looks like nuclei (which yields hundreds of spurious
+    masks and makes their computation very slow).
+    """
+    out = np.empty(stack.shape, np.float32)
+    for i in range(stack.shape[0]):
+        sl = stack[i]
+        lo, hi = np.percentile(sl, [lower, upper])
+        hi = max(float(hi), float(floor))
+        out[i] = (sl - lo) / max(hi - lo, 1e-6)
+    return out
+
+
 class _CellposeView:
     """Cellpose 2-D model applied to a stack of slices, in small batches."""
 
@@ -434,15 +461,26 @@ def _as_view(model, **kw):
     return _CellposeView(model, **kw)
 
 
-def _run_view(seg, stack, diameter, sig_level=None, min_pixels=0):
-    """Run a 2-D segmenter on the slices of ``stack`` that carry signal; others stay 0."""
-    if sig_level is None or min_pixels <= 0:
-        return np.asarray(seg(stack, diameter), np.int32)
-    active = (stack > sig_level).reshape(stack.shape[0], -1).sum(1) >= min_pixels
+def _run_view(seg, stack, diameter, sig_level=None, min_pixels=0, norm_floor=None):
+    """Run a 2-D segmenter on the slices of ``stack`` that carry signal; others stay 0.
+
+    Slices with fewer than ``min_pixels`` voxels above ``sig_level`` are not
+    segmented. With ``norm_floor`` the slices are percentile-normalised here
+    (upper level floored, see :func:`_slice_normalize`) and the segmenter
+    must not normalise again.
+    """
+    if sig_level is not None and min_pixels > 0:
+        active = (stack > sig_level).reshape(stack.shape[0], -1).sum(1) >= min_pixels
+    else:
+        active = np.ones(stack.shape[0], bool)
     out = np.zeros(stack.shape, np.int32)
     if active.any():
         idx = np.nonzero(active)[0]
-        out[idx] = np.asarray(seg(np.ascontiguousarray(stack[idx]), diameter), np.int32)
+        sub = np.ascontiguousarray(stack[idx]) if not active.all() else stack
+        if norm_floor is not None:
+            sub = _slice_normalize(sub, norm_floor)
+        out[idx] = np.asarray(seg(sub, diameter), np.int32)
+        del sub
     _release()
     return out
 
@@ -609,13 +647,13 @@ def segment_volume_multiview(
     min_volume: Optional[int] = None,
     normalize_percentiles: Sequence[float] = (1.0, 99.8),
     skip_empty: bool = True,
-    slice_normalize: bool = True,
+    slice_normalize: Union[bool, str] = True,
     diameter_quantile: float = 0.9,
     n_threads: Optional[int] = None,
     gpu: bool = False,
     batch_size: int = 2,
     max_tiles: Optional[int] = None,
-    tile_indices: Optional[Sequence[int]] = None,
+    tile_indices: Union[Sequence[int], str, None] = None,
     resume: bool = False,
     relabel: bool = True,
     aggregate_kwargs: Optional[dict] = None,
@@ -654,8 +692,12 @@ def segment_volume_multiview(
         of all sections is biased low by caps), iterated to a fixed point --
         check it in ``info`` and pass it explicitly once known.
     memory_mb
-        Peak-memory budget for the whole process; sets the tile size. ``None``
-        = no limit (one tile if ``tile`` is not given).
+        The memory limit of the process / container (e.g. 2048), as is: the
+        tile size is chosen to stay well below it, with room for the
+        interpreter, torch and the models already included -- do not subtract
+        your own margin (smaller tiles only cost time). The high-water RSS of
+        this process is logged per tile and returned as ``peak_rss_mb``.
+        ``None`` = no limit (one tile if ``tile`` is not given).
     tile, halo
         Tile core size and halo in original xy voxels (z is tiled only when a
         full-depth column cannot fit). Default: halo = 2 diameters, tile from
@@ -677,13 +719,18 @@ def segment_volume_multiview(
         signal (fewer voxels above the global Otsu level than a quarter of
         one object section).
     slice_normalize
-        Let Cellpose normalise each 2-D slice (its default, and how its
-        models are trained); ``False`` feeds the globally scaled intensities.
+        ``True`` (default): normalise each 2-D slice by its 1st / 99th
+        percentiles as Cellpose does (how its models are trained), but with
+        the upper level floored at the volume's foreground level, so that a
+        slice that is mostly background is not stretched into spurious
+        objects. ``'cellpose'``: Cellpose's own unfloored normalisation.
+        ``False``: the globally scaled intensities.
     n_threads
         Torch / BLAS threads; default = CPUs available to the process.
     max_tiles, tile_indices
-        Process only the first N tiles, or only these tile indices (timing /
-        dry run, e.g. on the densest tile, whose peak memory is the highest).
+        Process only the first N tiles, or only these tile indices, or
+        ``'densest'`` (the tile with most foreground: the slowest and the one
+        with the highest peak memory) -- for a timing / memory dry run.
     resume
         Continue a run interrupted after some tiles (progress is kept in the
         zarr store's attributes).
@@ -711,10 +758,15 @@ def segment_volume_multiview(
     try:
         import torch
         torch.set_num_threads(nth)
+        # CPU convolutions on dim (near-zero) slices hit denormal floats and run several
+        # times slower; flushing them to zero does not change the result measurably
+        torch.set_flush_denormal(True)
     except ImportError:  # pragma: no cover - custom segmenters need no torch
         pass
 
-    view_kw = dict(gpu=gpu, flow_threshold=flow_threshold, normalize=bool(slice_normalize),
+    if slice_normalize not in (True, False, "cellpose"):
+        raise ValueError("slice_normalize must be True, False or 'cellpose'")
+    view_kw = dict(gpu=gpu, flow_threshold=flow_threshold, normalize=(slice_normalize == "cellpose"),
                    cellprob_threshold=cellprob_threshold, batch_size=batch_size)
     seg_xy = _as_view(model, **view_kw)
     seg_side = _as_view(side_model, **view_kw) if side_model is not None else seg_xy
@@ -733,6 +785,7 @@ def segment_volume_multiview(
     except ValueError:
         sig_level = 0.5
     del sub
+    nfloor = sig_level if slice_normalize is True else None
     log(f"input {vol.shape} spacing {tuple(spacing)}; normalisation {p_lo:.1f}..{p_hi:.1f}, "
         f"signal level {sig_level:.3f}; {nth} threads")
 
@@ -765,7 +818,7 @@ def segment_volume_multiview(
         d = float(getattr(seg_xy, "diam_labels", 30.0)) if hasattr(seg_xy, "diam_labels") else 30.0
         hist = []
         for _ in range(4):
-            eq = _eq_diameters(seg_xy(stack, d))
+            eq = _eq_diameters(_run_view(seg_xy, stack, d, norm_floor=nfloor))
             if eq.size < 3:
                 break
             dn = float(np.quantile(eq, diameter_quantile))
@@ -777,7 +830,6 @@ def segment_volume_multiview(
         diameter = d * dxy * xb0
         info_diam = {"estimate_history_px": hist, "estimate_grid_xy_bin": xb0}
         log(f"diameter estimated: {diameter:.3g} (spacing units) = {d:.2f} working px; history {hist}")
-    del subn
 
     xb, zu, wsp = multiview_working_grid(spacing, diameter)
     if xy_bin:
@@ -825,8 +877,20 @@ def segment_volume_multiview(
     ty, tx, tz_ = math.ceil(Y / ny), math.ceil(X / nx), math.ceil(Z / nz)
     cores = [(z0, min(z0 + tz_, Z), y0, min(y0 + ty, Y), x0, min(x0 + tx, X))
              for z0 in range(0, Z, tz_) for y0 in range(0, Y, ty) for x0 in range(0, X, tx)]
+    occ_tiles = []
+    for (z0, z1, y0, y1, x0, x1) in cores:
+        blk = subn[z0 // zstep:max(z0 // zstep + 1, z1 // zstep), y0 // step:max(y0 // step + 1, y1 // step),
+                   x0 // step:max(x0 // step + 1, x1 // step)]
+        occ_tiles.append(float((blk > sig_level).mean()) if blk.size else 0.0)
+    del subn
+    if isinstance(tile_indices, str):
+        if tile_indices != "densest":
+            raise ValueError("tile_indices must be a list of indices or 'densest'")
+        tile_indices = [int(np.argmax(occ_tiles))]
     log(f"tiles: {len(cores)} ({nz} z x {ny} y x {nx} x), core {tz_}x{ty}x{tx}, "
-        f"halo {halo_z}/{halo}/{halo}")
+        f"halo {halo_z}/{halo}/{halo}; foreground fraction per tile "
+        f"{[round(o, 3) for o in occ_tiles]}. A tile keeps ('owns') only the objects whose "
+        f"centroid lies in its core, so a sparse or border tile can own none.")
 
     # ---- output
     chunks = (min(Z, 32), min(Y, 128), min(X, 128))
@@ -883,9 +947,9 @@ def segment_volume_multiview(
             # a slice with less signal than a quarter of one object section is not segmented
             # (per-slice normalisation would stretch its noise into objects)
             mp = 0.25 * math.pi * (0.5 * diam_w) ** 2 if skip_empty else 0
-            views = [_run_view(seg_xy, w, diam_w, sig_level, mp),
-                     _run_view(seg_side, np.ascontiguousarray(w.transpose(1, 0, 2)), diam_w, sig_level, mp),
-                     _run_view(seg_side, np.ascontiguousarray(w.transpose(2, 0, 1)), diam_w, sig_level, mp)]
+            views = [_run_view(seg_xy, w, diam_w, sig_level, mp, nfloor),
+                     _run_view(seg_side, np.ascontiguousarray(w.transpose(1, 0, 2)), diam_w, sig_level, mp, nfloor),
+                     _run_view(seg_side, np.ascontiguousarray(w.transpose(2, 0, 1)), diam_w, sig_level, mp, nfloor)]
             del w
             rss_views = _peak_rss_mb()
             seg = aggregate_orthoviews(views.pop(0), views.pop(0), views.pop(0), **agg_kw)
@@ -945,9 +1009,11 @@ def segment_volume_multiview(
             labels.attrs["next_label"] = next_label
         dt = time.time() - t0
         tile_log.append({"tile": ti, "core": (z0, z1, y0, y1, x0, x1), "z_run": (za + rz0, zb + rz0),
+                         "foreground_fraction": round(occ_tiles[ti], 4),
                          "objects": n_obj, "owned": n_own, "seconds": round(dt, 1),
                          "peak_rss_after_views_mb": rss_views, "peak_rss_after_aggregate_mb": rss_agg})
-        log(f"tile {ti + 1}/{len(cores)} z {z0}:{z1} y {y0}:{y1} x {x0}:{x1}: {n_obj} objects, "
+        log(f"tile {ti + 1}/{len(cores)} z {z0}:{z1} y {y0}:{y1} x {x0}:{x1} "
+            f"(foreground {occ_tiles[ti]:.3f}): {n_obj} objects, "
             f"{n_own} owned, total {next_label - 1}; {dt:.0f}s; peak RSS {_peak_rss_mb():.0f} MB "
             f"(views {rss_views or 0:.0f}, aggregate {rss_agg or 0:.0f})")
 
