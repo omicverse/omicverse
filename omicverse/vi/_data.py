@@ -791,6 +791,13 @@ class OOMSource(DataSource):
 
     kind = "oom"
 
+    def spec(self):
+        raise NotImplementedError(
+            "this AnnDataOOM matrix is read through anndataoom / HDF5 (its view chain could "
+            "not be resolved to an on-disk CSR readable by anndataoom-fast), so it cannot be "
+            "shared with worker processes without HDF5; train in one process, or pass the "
+            "raw-count layer of a CSR h5ad (e.g. layer='counts' after ov.pp.preprocess)")
+
     def __init__(self, arr, cols, device, obs, block_size=None):
         n_vars = arr.shape[1] if cols is None else len(cols)
         super().__init__(arr.shape[0], n_vars, device, obs, block_size)
@@ -1000,8 +1007,16 @@ def build_source(adata, *, layer=None, genes=None, obs=None, device="auto",
                 "ov.vi needs raw counts, but this AnnDataOOM matrix carries transforms "
                 "(normalisation / log1p / scaling); pass layer='counts' (ov.pp.preprocess "
                 "keeps the raw counts there).")
+        reader = None
         if view is not None and resident is not True:
-            reader = CSRFile.open(view.handle.path, view.handle.key)
+            try:
+                reader = CSRFile.open(view.handle.path, view.handle.key)
+            except Exception as e:  # layout the pread reader cannot decode
+                import warnings
+                warnings.warn(f"ov.vi: cannot stream {view.handle.key!r} with anndataoom-fast "
+                              f"({e}); falling back to anndataoom row reads (single process)",
+                              UserWarning, stacklevel=3)
+        if reader is not None:
             vcols = view.cols if view.cols is not None else np.arange(view.handle.shape[1])
             train_cols = vcols if sel is None else vcols[sel]
             col_map = None
