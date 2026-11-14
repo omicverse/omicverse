@@ -45,7 +45,8 @@ def run_scvi(a, seed, epochs, device):
     m.train(max_epochs=epochs, accelerator=acc, devices=1, enable_progress_bar=False)
     tt = time.perf_counter() - t
     z = m.get_latent_representation()
-    return z, -m.get_elbo(indices=m.train_indices), -m.get_elbo(indices=m.validation_indices), tt
+    return (z, -float(m.get_elbo(indices=m.train_indices)),
+            -float(m.get_elbo(indices=m.validation_indices)), tt)
 
 
 def main():

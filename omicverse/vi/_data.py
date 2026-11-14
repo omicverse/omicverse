@@ -713,27 +713,32 @@ class _StreamedSource(DataSource):
         dev = self.device
         ip = self.reader.indptr
         ranges = [self._orig_range(j) for j in blocks]
-        total = sum(int(ip[r1] - ip[r0]) for r0, r1, _ in ranges)
-        stage = self._stages[self._turn]
-        self._turn ^= 1
-        stage.wait()  # the previous copy out of this stage must be complete
-        stage.ensure(total)
-        indptr_parts, keeps, o = [], [], 0
-        for r0, r1, keep in ranges:
-            e0, e1 = int(ip[r0]), int(ip[r1])
-            self.reader.read_into(e0, e1, stage.data[o:o + e1 - e0],
-                                  stage.indices[o:o + e1 - e0], self.n_threads)
-            indptr_parts.append(ip[r0:r1] - e0 + o)
-            keeps.append(np.ones(r1 - r0, bool) if keep is None else keep)
-            o += e1 - e0
-        indptr_raw = np.concatenate(indptr_parts + [[o]]).astype(np.int64)
-        keep_all = np.concatenate(keeps)
         stream = torch.cuda.current_stream(dev) if dev.type == "cuda" else None
-        indices, data = stage.to_device(total, dev, stream)
         if self._col_map is None and self.col_map_host is not None:
             self._col_map = torch.from_numpy(self.col_map_host).to(dev)
-        indptr, lens, indices, data, lens_host = compact_rows(
-            indptr_raw, indices, data, None if keep_all.all() else keep_all, self._col_map, dev)
+        # block by block: read into one of two pinned stages (the other one may
+        # still be copying to the device), copy, compact on the device.  Host
+        # staging = 2 raw blocks; device = the compacted buffer + 1 raw block.
+        pieces = []
+        for r0, r1, keep in ranges:
+            e0, e1 = int(ip[r0]), int(ip[r1])
+            stage = self._stages[self._turn]
+            self._turn ^= 1
+            stage.wait()  # the previous copy out of this stage must be complete
+            stage.ensure(e1 - e0)
+            self.reader.read_into(e0, e1, stage.data[:e1 - e0], stage.indices[:e1 - e0],
+                                  self.n_threads)
+            indices, data = stage.to_device(e1 - e0, dev, stream)
+            pieces.append(compact_rows(ip[r0:r1 + 1], indices, data, keep, self._col_map, dev))
+        if len(pieces) == 1:
+            indptr, lens, indices, data, lens_host = pieces[0]
+        else:
+            lens_host = np.concatenate([p[4] for p in pieces])
+            lens = torch.cat([p[1] for p in pieces])
+            indices = torch.cat([p[2] for p in pieces])
+            data = torch.cat([p[3] for p in pieces])
+            indptr = torch.cumsum(lens, 0) - lens
+        del pieces
         sizes = np.array([int(self.ends[j] - self.starts[j]) for j in blocks], dtype=np.int64)
         buf = Buffer(indptr, lens, indices, data, lens_host, self.starts[blocks].astype(np.int64),
                      np.concatenate([[0], np.cumsum(sizes)[:-1]]).astype(np.int64))

@@ -238,3 +238,23 @@ def test_streaming_memory_is_bounded(tmp_path):
     # shuffle buffer: 2 blocks x 256 cells x ~400 nnz x 8 B ~ 1.6 MB; a few buffers are
     # in flight (reading / queued / in use) plus 2 MB dense minibatches: O(buffer), not O(n)
     assert grow_mb < 0.25 * file_mb, (grow_mb, file_mb)
+
+
+def test_write_normalized_expression_block_by_block(h5ad, tmp_path):
+    import h5py
+    from omicverse.vi import SCVI
+    rows = _row_mask(3000)
+    oom = _oom(h5ad, rows, None)
+    m = SCVI(oom, batch_key="batch", n_hidden=16, n_latent=4)
+    m.train(max_epochs=1, device="cpu", progress=False)
+    name = m.write_normalized_expression("norm", adata=oom, library_size=1e4, batch_size=500)
+    assert name.endswith(":/layers/norm")
+    lay = oom.layers["norm"]
+    assert lay.shape == oom.shape
+    first = np.asarray(lay[:5])
+    assert np.allclose(first.sum(1), 1e4, rtol=1e-3)
+    out = tmp_path / "ne.h5"
+    m.write_normalized_expression("ne", path=str(out), library_size=1e4, batch_size=700)
+    with h5py.File(out, "r") as f:
+        assert f["ne"].shape == oom.shape
+        assert np.allclose(f["ne"][-3:].sum(1), 1e4, rtol=1e-3)

@@ -370,6 +370,57 @@ class SCVI(BaseVIModel):
         obs_names = ad.obs_names if indices is None else ad.obs_names[np.asarray(indices)]
         return pd.DataFrame(out, index=obs_names, columns=names)
 
+    def write_normalized_expression(self, key: str = "scvi_normalized", adata=None, path=None,
+                                    batch_size: int | None = 4096, dtype="float32",
+                                    compression=None, **kwargs):
+        """Compute ``get_normalized_expression`` block by block and write it to disk
+        without holding the cells x genes matrix in memory.
+
+        Arguments:
+            key: Layer / dataset name.
+            adata: An AnnDataOOM whose genes are the model's genes: the result
+                becomes ``adata.layers[key]`` (stored in its HDF5 sidecar).
+            path: Alternatively an ``.h5`` file to write dataset ``key`` to.
+            **kwargs: Passed to :meth:`get_normalized_expression`
+                (``library_size``, ``transform_batch``, ``n_samples``...).
+        Returns:
+            The written ``h5py.Dataset`` path (``'<file>:<key>'``).
+        """
+        import h5py
+        from ._data import is_oom
+        ad = self.adata if adata is None else adata
+        n, g = ad.n_obs, self.n_vars
+        if path is None:
+            if not is_oom(ad):
+                raise ValueError("pass path= (an .h5 file) or an AnnDataOOM as adata=")
+            if ad.n_vars != g or self._genes_for(ad) is not None:
+                raise ValueError("the AnnDataOOM's genes must be the model's genes "
+                                 "(subset it to the training genes first) or pass path=")
+            grp = ad.layers._group()
+            f = None
+        else:
+            f = h5py.File(path, "a")
+            grp = f
+        if key in grp:
+            del grp[key]
+        ds = grp.create_dataset(key, shape=(n, g), dtype=dtype,
+                                chunks=(min(1024, max(n, 1)), g), compression=compression)
+        try:
+            for idx, block in self.get_normalized_expression(adata=adata, as_generator=True,
+                                                             batch_size=batch_size, **kwargs):
+                o = np.argsort(idx)
+                idx, block = idx[o], block[o]
+                if idx.size and idx[-1] - idx[0] + 1 == idx.size:
+                    ds[int(idx[0]):int(idx[-1]) + 1] = block.astype(dtype, copy=False)
+                else:
+                    ds[idx] = block.astype(dtype, copy=False)
+            grp.file.flush()
+        finally:
+            name = f"{grp.file.filename}:{ds.name}"
+            if f is not None:
+                f.close()
+        return name
+
     def _generate(self, fn, adata=None, indices=None, batch_size=None):
         self._check_trained()
         src, it, rows, order, n = self._batches(adata, indices, batch_size)
