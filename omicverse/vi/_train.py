@@ -88,7 +88,7 @@ class _Meter:
 
     def add(self, out: dict, n: int):
         for k, v in out.items():
-            if k in ("loss",) or v is None:
+            if k == "loss" or k.startswith("_") or v is None:
                 continue
             v = v.detach()
             s = v.sum() if v.dim() else v * n
@@ -155,17 +155,44 @@ class _GraphedStep:
         self.opt.step()
         return out
 
+    @staticmethod
+    def _dense(b):
+        out = {}
+        for k, v in b.items():
+            if isinstance(v, dict):
+                out[k] = {kk: vv for kk, vv in v.items() if kk not in _DYNAMIC}
+            elif k not in _DYNAMIC:
+                out[k] = v
+        return out
+
+    @staticmethod
+    def _sig(d):
+        return tuple(sorted((k, tuple(v.shape)) if not isinstance(v, dict) else
+                            (k, tuple(sorted((kk, tuple(vv.shape)) for kk, vv in v.items())))
+                            for k, v in d.items()))
+
+    def _copy(self, dense):
+        for k, v in dense.items():
+            if isinstance(v, dict):
+                for kk, vv in v.items():
+                    self.static[k][kk].copy_(vv)
+            else:
+                self.static[k].copy_(v)
+
     def __call__(self, b, kw):
-        n = b["x"].shape[0]
-        if self.failed or (self.size is not None and n != self.size):
+        if self.failed:
             return self.eager(b, kw)
-        dense = {k: v for k, v in b.items() if k not in _DYNAMIC}
+        dense = self._dense(b)
+        sig = self._sig(dense)
+        if self.size is not None and sig != self.size:
+            return self.eager(b, kw)
         if self.graph is None:
             if self.static is None:
-                self.size = n
-                self.static = {k: v.clone() for k, v in dense.items()}
-            for k, v in dense.items():
-                self.static[k].copy_(v)
+                self.size = sig
+                self.static = {k: ({kk: vv.clone() for kk, vv in v.items()}
+                                   if isinstance(v, dict) else v.clone())
+                               for k, v in dense.items()}
+            self._copy(dense)
             self.kl.fill_(kw)
             if self.warm < self.N_WARMUP:  # warm-up on a side stream (real steps)
                 s = torch.cuda.Stream(self.device)
@@ -195,8 +222,7 @@ class _GraphedStep:
                 self.opt.zero_grad(set_to_none=True)
                 return self.eager(b, kw)
         else:
-            for k, v in dense.items():
-                self.static[k].copy_(v)
+            self._copy(dense)
             self.kl.fill_(kw)
         self.graph.replay()
         return self.out
@@ -225,8 +251,7 @@ class _Compiled:
         if self.fn is None:
             return None
         try:
-            return self.fn({k: v for k, v in b.items() if k not in _DYNAMIC},
-                           kl_weight=kl_weight)
+            return self.fn(_GraphedStep._dense(b), kl_weight=kl_weight)
         except Exception as e:  # pragma: no cover
             import warnings
             warnings.warn(f"ov.vi: torch.compile failed ({type(e).__name__}: {e}); running "
@@ -259,14 +284,18 @@ def fit(model, source, train_rows, val_rows, *, max_epochs, batch_size, shuffle,
     device = source.device
     module = model.module
     net = ddp_module if ddp_module is not None else module
+    aux_fn = getattr(model, "_aux_rows", None)  # scANVI: labelled cells per epoch
     n_train = len(train_rows) if train_rows is not None else source.n_obs
     fast = _Compiled(module, cfg, device, max_epochs * max(1, n_train // batch_size // world)) \
         if ddp_module is None else None
     if fast is not None and not fast.enabled:
         fast = None
     use_graph = (device.type == "cuda" and world == 1 and cfg.cuda_graph not in (False, None)
-                 and not cfg.reduce_lr_on_plateau and not cfg.gradient_clip_val)
-    opt = make_optimizer(module.parameters(), cfg, device, capturable=use_graph)
+                 and not cfg.reduce_lr_on_plateau and not cfg.gradient_clip_val
+                 and not getattr(module, "has_extra_step", False))
+    params = module.optim_parameters() if hasattr(module, "optim_parameters") else \
+        module.parameters()
+    opt = make_optimizer(params, cfg, device, capturable=use_graph)
     graphed = _GraphedStep(fast or net, opt, cfg, device) if use_graph else None
     sched = None
     if cfg.reduce_lr_on_plateau:
@@ -309,9 +338,11 @@ def fit(model, source, train_rows, val_rows, *, max_epochs, batch_size, shuffle,
             counts = source.n_rows_per_rank(train_rows, world, seed, epoch)
             n_batches = min(c // batch_size for c in counts)
         kw = kl_weight(cfg, epoch, step)
+        aux = aux_fn(epoch, "train") if aux_fn is not None else None
         for b in source.iterate(train_rows, batch_size=batch_size, shuffle=shuffle, seed=seed,
                                 epoch=epoch, buffer_blocks=buffer_blocks, rank=rank,
-                                world=world, n_batches=n_batches, drop_last=world > 1):
+                                world=world, n_batches=n_batches, drop_last=world > 1,
+                                aux_rows=aux):
             if cfg.n_steps_kl_warmup:
                 kw = kl_weight(cfg, epoch, step)
             if graphed is not None:
@@ -330,6 +361,8 @@ def fit(model, source, train_rows, val_rows, *, max_epochs, batch_size, shuffle,
             if cfg.gradient_clip_val:
                 torch.nn.utils.clip_grad_norm_(module.parameters(), cfg.gradient_clip_val)
             opt.step()
+            if getattr(module, "has_extra_step", False):
+                module.extra_step(out, b, kw)
             meter.add(out, b["x"].shape[0])
             step += 1
         rec = meter.result("train", reduce)
@@ -337,8 +370,9 @@ def fit(model, source, train_rows, val_rows, *, max_epochs, batch_size, shuffle,
         rec["kl_weight"] = kw
         rec["lr"] = opt.param_groups[0]["lr"]
         if check_val and val_rows is not None and len(val_rows) and (e + 1) % check_val == 0:
-            val_batches = source.iterate(val_rows, batch_size=max(batch_size, 1024),
-                                         shuffle="none", rank=rank, world=world)
+            val_batches = source.iterate(
+                val_rows, batch_size=max(batch_size, 1024), shuffle="none", rank=rank,
+                world=world, aux_rows=aux_fn(epoch, "validation") if aux_fn else None)
             rec.update(evaluate(module, val_batches, device, cfg, kw, reduce))
         rec["time"] = time.perf_counter() - t0
         for k, v in rec.items():

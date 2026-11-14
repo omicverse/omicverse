@@ -96,6 +96,8 @@ def _worker(rank, world, backend, port, payload, queue):
 
         m = _M()
         m.module = module
+        if payload.get("aux") is not None:
+            m._aux_rows = payload["aux"]
         t0 = time.perf_counter()
         hist = fit(m, src, payload["train"], payload["val"], max_epochs=payload["max_epochs"],
                    batch_size=payload["batch_size"], shuffle=payload["shuffle"],
@@ -114,10 +116,8 @@ def _worker(rank, world, backend, port, payload, queue):
             with torch.no_grad():
                 for b in src.iterate(None, batch_size=4096, shuffle="none", rank=rank,
                                      world=world, buffer_blocks=payload["buffer_blocks"]):
-                    inf = module.inference(b["x"], b["batch"], module._cats(b), b.get("cont"),
-                                           sample=False)
                     idx.append(b["idx"].cpu())
-                    zs.append(inf["qz_m"].float().cpu())
+                    zs.append(module.latent_mean(b).float().cpu())
             part = (torch.cat(idx).numpy(), torch.cat(zs).numpy()) if idx else None
             gathered = [None] * world if rank == 0 else None
             dist.gather_object(part, gathered, dst=0)
@@ -168,8 +168,8 @@ def train_distributed(model, devices, max_epochs=None, *, train_size=None, valid
     spec = src.spec()
     if max_epochs is None:
         max_epochs = _max_epochs_heuristic(src.n_obs)
-    train, val = split_train_val(src.n_obs, train_size, validation_size, batch_size, seed,
-                                 shuffle_set_split)
+    train, val = model._split(src.n_obs, train_size, validation_size, batch_size, seed,
+                              shuffle_set_split)
     model.train_indices, model.validation_indices = train, val
     if shuffle == "auto":
         shuffle = "random" if spec["kind"] == "csr" else "block"
@@ -187,6 +187,7 @@ def train_distributed(model, devices, max_epochs=None, *, train_size=None, valid
         shuffle=shuffle, buffer_blocks=buffer_blocks or DEFAULT_BUFFER_BLOCKS, seed=seed,
         progress=progress, latent=latent_key is not None,
         find_unused=getattr(model, "_ddp_find_unused", False),
+        aux=getattr(model, "_aux_rows", None),
     )
     ctx = mp.get_context("spawn")
     queue = ctx.Queue()

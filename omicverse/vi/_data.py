@@ -522,7 +522,8 @@ class DataSource:
             t.join()
 
     def iterate(self, rows=None, *, batch_size=128, shuffle="none", seed=0, epoch=0,
-                buffer_blocks=None, rank=0, world=1, n_batches=None, drop_last=False):
+                buffer_blocks=None, rank=0, world=1, n_batches=None, drop_last=False,
+                aux_rows=None, aux_key="labelled"):
         """Minibatches (dicts of device tensors) over the cells ``rows``.
 
         Arguments:
@@ -533,7 +534,15 @@ class DataSource:
             rank, world: Shard blocks ``rank::world`` (distributed training).
             n_batches: Stop after this many minibatches (equal counts per rank).
             drop_last: Drop a final incomplete minibatch.
+            aux_rows: Cells of a second stream attached to every minibatch as
+                ``batch[aux_key]`` (scANVI's labelled cells): a shuffled, cycled
+                sequence of the ``aux_rows`` present in the current buffer (for a
+                resident source: all of them, as scvi-tools' concatenated loader).
         """
+        aux = None
+        if aux_rows is not None and len(aux_rows):
+            aux = np.zeros(self.n_obs, dtype=bool)
+            aux[np.asarray(aux_rows, dtype=np.int64)] = True
         mask = None
         if rows is not None:
             mask = np.zeros(self.n_obs, dtype=bool)
@@ -552,14 +561,33 @@ class DataSource:
                                buffer_blocks or (len(self.starts) if self.resident
                                                  else DEFAULT_BUFFER_BLOCKS),
                                rank, world)
-        yield from self._batches(self._prefetch(loads), batch_size, n_batches, drop_last)
+        aux_rng = np.random.RandomState((int(seed) * 1_000_003 + int(epoch) + 7919) % (2**32))
+        yield from self._batches(self._prefetch(loads), batch_size, n_batches, drop_last,
+                                 aux, aux_rng, aux_key)
 
-    def _batches(self, stream, batch_size, n_batches, drop_last):
+    def _aux_order(self, ld, aux, rng):
+        rows = np.concatenate([np.arange(self.starts[j], self.ends[j]) for j in ld.blocks])
+        rows = rows[aux[rows]]
+        return rng.permutation(rows) if rows.size else rows
+
+    def _aux_batch(self, buf, order, ptr, k):
+        take = order[(ptr + np.arange(k)) % len(order)]
+        local = buf.local(take)
+        nnz = int(buf.lens_host[local].sum())
+        dev = self.device
+        piece = gather_rows(buf, torch.from_numpy(local).to(dev), nnz, self.n_vars) + \
+            (torch.from_numpy(take.astype(np.int64)).to(dev),)
+        return self._assemble([piece])
+
+    def _batches(self, stream, batch_size, n_batches, drop_last, aux=None, aux_rng=None,
+                 aux_key="labelled"):
         dev = self.device
         emitted = 0
         carry = []  # pieces of a minibatch straddling two buffers
         carry_n = 0
         for ld, buf in stream:
+            aux_order = self._aux_order(ld, aux, aux_rng) if aux is not None else None
+            aux_ptr = 0
             local = buf.local(ld.rows)
             lens = buf.lens_host[local]
             local_t = torch.from_numpy(local).to(dev, non_blocking=True)
@@ -575,13 +603,20 @@ class DataSource:
                 carry.append(piece)
                 carry_n += take
                 if carry_n == batch_size:
-                    yield self._assemble(carry)
+                    out = self._assemble(carry)
+                    if aux_order is not None and len(aux_order):
+                        out[aux_key] = self._aux_batch(buf, aux_order, aux_ptr, batch_size)
+                        aux_ptr = (aux_ptr + batch_size) % len(aux_order)
+                    yield out
                     emitted += 1
                     carry, carry_n = [], 0
                     if n_batches is not None and emitted >= n_batches:
                         return
         if carry and not drop_last and (n_batches is None or emitted < n_batches):
-            yield self._assemble(carry)
+            out = self._assemble(carry)
+            if aux_order is not None and len(aux_order):
+                out[aux_key] = self._aux_batch(buf, aux_order, aux_ptr, batch_size)
+            yield out
 
     def _assemble(self, pieces):
         if len(pieces) == 1:

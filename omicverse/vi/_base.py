@@ -253,8 +253,8 @@ class BaseVIModel:
         src = self._source(device=device, block_size=block_size, resident=resident)
         if max_epochs is None:
             max_epochs = _max_epochs_heuristic(src.n_obs)
-        train, val = split_train_val(src.n_obs, train_size, validation_size, batch_size, seed,
-                                     shuffle_set_split)
+        train, val = self._split(src.n_obs, train_size, validation_size, batch_size, seed,
+                                 shuffle_set_split)
         self.train_indices, self.validation_indices = train, val
         if shuffle == "auto":
             shuffle = "random" if src.resident else "block"
@@ -274,6 +274,15 @@ class BaseVIModel:
         self.is_trained_ = True
         self.module.eval()
         return self
+
+    def _split(self, n_obs, train_size, validation_size, batch_size, seed, shuffle_set_split):
+        """Train / validation cells (a model may precompute them, e.g. SCANVI)."""
+        ov = getattr(self, "_split_override", None)
+        if ov is not None:
+            self._split_override = None
+            return ov
+        return split_train_val(n_obs, train_size, validation_size, batch_size, seed,
+                               shuffle_set_split)
 
     def _configure_training(self, cfg: TrainConfig):
         """Hook for model-specific training options (e.g. SCANVI classification ratio)."""

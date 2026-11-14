@@ -162,6 +162,11 @@ class VAEModule(nn.Module):
                               b.get("labels"))
         return self.loss_terms(b, inf, gen, kl_weight)
 
+    def latent_mean(self, b):
+        """Posterior mean of z for a minibatch (used by sharded inference)."""
+        return self.inference(b["x"], b["batch"], self._cats(b), b.get("cont"),
+                              sample=False)["qz_m"]
+
     def loss_terms(self, b, inf, gen, kl_weight):
         rec = -self.log_likelihood(b, gen)
         kl_z = self.prior.kl(inf["qz_m"].float(), inf["qz_v"].float(), inf["z"].float())
