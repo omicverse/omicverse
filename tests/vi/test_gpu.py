@@ -78,3 +78,18 @@ def test_gpu_training_close_to_cpu(h5ad):
         elbos.append(m.get_elbo())
     # different RNG streams / kernels -> not bitwise, but the same fit quality
     assert abs(elbos[0] - elbos[1]) < 0.02 * abs(elbos[0]), elbos
+
+
+def test_gpu_graph_with_lr_plateau():
+    from omicverse.vi import TOTALVI
+    from .test_models import _cite
+    a = _cite(n=1500)
+    res = {}
+    for cg in (True, False):
+        m = TOTALVI(a, batch_key="batch", protein_expression_obsm_key="protein_expression")
+        m.train(max_epochs=12, device="cuda", progress=False, cuda_graph=cg, lr_patience=1,
+                lr_factor=0.5, early_stopping=False)
+        res[cg] = (m.history_["lr"], m.history_["elbo_validation"][-1])
+    lrs = res[True][0]
+    assert lrs[-1] < lrs[0]  # plateau steps reached the graphed optimizer
+    assert abs(res[True][1] - res[False][1]) < 0.05 * abs(res[False][1])

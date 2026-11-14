@@ -230,7 +230,7 @@ class BaseVIModel:
                 after ~20 s of compilation; CUDA runs longer than 100k steps, ~1.45x
                 faster graphed steps after ~25 s).
             cuda_graph: Replay the training step as a CUDA graph (``'auto'``: on CUDA,
-                single process, no LR scheduler / gradient clipping; ~2.5x faster
+                single process, no gradient clipping / adversarial classifier; ~2.5x faster
                 steps).
             plan_kwargs: Optimisation options (``lr``, ``weight_decay``, ``eps``,
                 ``n_epochs_kl_warmup``, ``n_steps_kl_warmup``, ``reduce_lr_on_plateau``,

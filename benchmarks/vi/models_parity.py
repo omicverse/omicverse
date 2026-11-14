@@ -107,6 +107,7 @@ def main():
     p.add_argument("--seeds", nargs="+", type=int, default=[0, 1, 2])
     p.add_argument("--device", default="cuda")
     p.add_argument("--threads", type=int, default=16)
+    p.add_argument("--tag", default="", help="suffix for the impl column")
     args = p.parse_args()
     common.set_threads(args.threads)
     from sklearn.metrics import accuracy_score, f1_score
@@ -119,7 +120,7 @@ def main():
                 truth = a.obs["cell_type"].astype(str).values
                 a.obsm["Z"] = z
                 met = common.scib(a, "Z", n_jobs=args.threads)
-                r = dict(model="SCANVI", data=args.data, impl=impl, seed=seed,
+                r = dict(model="SCANVI", data=args.data, impl=impl + args.tag, seed=seed,
                          acc_hidden=accuracy_score(truth[hidden], pred[hidden]),
                          f1_macro_hidden=f1_score(truth[hidden], pred[hidden], average="macro"),
                          neg_elbo_train=et, neg_elbo_validation=ev, train_time_s=tt, **met)
@@ -133,7 +134,7 @@ def main():
                 from scib_metrics import ilisi_knn
                 from scib_metrics.nearest_neighbors import pynndescent
                 nn = pynndescent(np.asarray(z, np.float32), n_neighbors=90, n_jobs=args.threads)
-                r = dict(model="TOTALVI", data="pbmc_cite", impl=impl, seed=seed, epochs=ep,
+                r = dict(model="TOTALVI", data="pbmc_cite", impl=impl + args.tag, seed=seed, epochs=ep,
                          neg_elbo_train=et, neg_elbo_validation=ev, train_time_s=tt,
                          iLISI=float(ilisi_knn(nn, a.obs["batch"].astype(str).values)),
                          protein_denoised_vs_raw_r=float(np.nanmedian(cors)))

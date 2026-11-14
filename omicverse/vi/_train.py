@@ -295,11 +295,17 @@ def fit(model, source, train_rows, val_rows, *, max_epochs, batch_size, shuffle,
     if fast is not None and not fast.enabled:
         fast = None
     use_graph = (device.type == "cuda" and world == 1 and cfg.cuda_graph not in (False, None)
-                 and not cfg.reduce_lr_on_plateau and not cfg.gradient_clip_val
-                 and not getattr(module, "has_extra_step", False))
+                 and not cfg.gradient_clip_val and not getattr(module, "has_extra_step", False))
     params = module.optim_parameters() if hasattr(module, "optim_parameters") else \
         module.parameters()
     opt = make_optimizer(params, cfg, device, capturable=use_graph)
+    lr_t = None
+    if use_graph and cfg.reduce_lr_on_plateau:
+        # the graphed optimizer step reads the learning rate from a device tensor,
+        # so LR-plateau updates reach the replayed graph
+        lr_t = torch.tensor(float(cfg.lr), device=device)
+        for g in opt.param_groups:
+            g["lr"] = lr_t
     graphed = _GraphedStep(fast or net, opt, cfg, device) if use_graph else None
     sched = None
     if cfg.reduce_lr_on_plateau:
@@ -372,7 +378,7 @@ def fit(model, source, train_rows, val_rows, *, max_epochs, batch_size, shuffle,
         rec = meter.result("train", reduce)
         rec["epoch"] = epoch
         rec["kl_weight"] = kw
-        rec["lr"] = opt.param_groups[0]["lr"]
+        rec["lr"] = float(opt.param_groups[0]["lr"])
         if check_val and val_rows is not None and len(val_rows) and (e + 1) % check_val == 0:
             val_batches = source.iterate(
                 val_rows, batch_size=max(batch_size, 1024), shuffle="none", rank=rank,
@@ -383,6 +389,11 @@ def fit(model, source, train_rows, val_rows, *, max_epochs, batch_size, shuffle,
             history.setdefault(k, []).append(v)
         if sched is not None and cfg.lr_scheduler_metric in rec:
             sched.step(rec[cfg.lr_scheduler_metric])
+            if lr_t is not None:
+                for g in opt.param_groups:
+                    if not isinstance(g["lr"], torch.Tensor):
+                        lr_t.fill_(float(g["lr"]))
+                        g["lr"] = lr_t
         if bar is not None:
             bar.update(1)
             bar.set_postfix({k: f"{rec[k]:.4g}" for k in ("elbo_train", "elbo_validation")
