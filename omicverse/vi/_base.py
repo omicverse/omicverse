@@ -235,6 +235,17 @@ class BaseVIModel:
                 ``n_epochs_kl_warmup``, ``n_steps_kl_warmup``, ``reduce_lr_on_plateau``,
                 ``lr_factor``, ``lr_patience``, ...); also accepted as keywords.
         """
+        from ._distributed import torchrun_world
+        if devices is None and torchrun_world() > 1:  # launched by torchrun
+            from ._distributed import train_torchrun
+            return train_torchrun(self, device=device, max_epochs=max_epochs,
+                                  train_size=train_size, validation_size=validation_size,
+                                  shuffle_set_split=shuffle_set_split, batch_size=batch_size,
+                                  early_stopping=early_stopping,
+                                  check_val_every_n_epoch=check_val_every_n_epoch,
+                                  shuffle=shuffle, block_size=block_size,
+                                  buffer_blocks=buffer_blocks, seed=seed, precision=precision,
+                                  progress=progress, plan_kwargs=plan_kwargs, **kwargs)
         if devices is not None and not (isinstance(devices, (list, tuple)) and len(devices) == 1):
             from ._distributed import train_distributed
             return train_distributed(self, devices=devices, max_epochs=max_epochs,
@@ -268,7 +279,7 @@ class BaseVIModel:
         with torch.random.fork_rng(devices=devs):
             torch.manual_seed(seed + 1)  # dropout / reparameterisation noise
             hist = fit(self, src, train, val, max_epochs=max_epochs, batch_size=batch_size,
-                       shuffle=shuffle, buffer_blocks=buffer_blocks or DEFAULT_BUFFER_BLOCKS,
+                       shuffle=shuffle, buffer_blocks=buffer_blocks,
                        seed=seed, cfg=cfg, progress=progress)
         self._merge_history(hist)
         self.is_trained_ = True

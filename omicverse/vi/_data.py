@@ -47,8 +47,14 @@ from dataclasses import dataclass, field
 import numpy as np
 import torch
 
+# Held by the prefetch thread while it loads a buffer on a CUDA device and by
+# the trainer while it captures a CUDA graph: no other CUDA work may run during
+# a capture (allocations / syncs from another thread invalidate it).
+CUDA_LOCK = threading.RLock()
+
 DEFAULT_BLOCK_SIZE = 2048
 DEFAULT_BUFFER_BLOCKS = 32
+DEFAULT_BUFFER_CELLS = DEFAULT_BLOCK_SIZE * DEFAULT_BUFFER_BLOCKS  # cells per shuffle buffer
 _RESIDENT_FRACTION = 0.5
 
 
@@ -466,6 +472,13 @@ class DataSource:
     def close(self):
         pass
 
+    def default_buffer_blocks(self) -> int:
+        """Blocks per shuffle buffer: about ``DEFAULT_BUFFER_CELLS`` cells (32 blocks
+        of 2048 cells; 3 dask chunks of 20,000 cells)."""
+        sizes = self.ends - self.starts
+        med = float(np.median(sizes)) if len(sizes) else 1.0
+        return max(1, int(round(DEFAULT_BUFFER_CELLS / max(med, 1.0))))
+
     # -- iteration ---------------------------------------------------------
     def _prefetch(self, loads):
         """Yield (load, buffer) with the next buffer read by a background thread."""
@@ -486,7 +499,9 @@ class DataSource:
                         for ld in loads:
                             if stop.is_set():
                                 break
-                            q.put((ld, self._load(ld.blocks)))
+                            with CUDA_LOCK:
+                                buf = self._load(ld.blocks)
+                            q.put((ld, buf))
                 else:
                     for ld in loads:
                         if stop.is_set():
@@ -558,9 +573,7 @@ class DataSource:
             loads = [Load(np.arange(len(self.starts)), perm)]
         else:
             loads = plan_loads(self.starts, self.ends, mask, shuffle, rng,
-                               buffer_blocks or (len(self.starts) if self.resident
-                                                 else DEFAULT_BUFFER_BLOCKS),
-                               rank, world)
+                               buffer_blocks or self.default_buffer_blocks(), rank, world)
         aux_rng = np.random.RandomState((int(seed) * 1_000_003 + int(epoch) + 7919) % (2**32))
         yield from self._batches(self._prefetch(loads), batch_size, n_batches, drop_last,
                                  aux, aux_rng, aux_key)

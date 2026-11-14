@@ -204,9 +204,10 @@ class _GraphedStep:
                 self.warm += 1
                 return out
             try:
+                from ._data import CUDA_LOCK
                 g = torch.cuda.CUDAGraph()
                 self.opt.zero_grad(set_to_none=True)
-                with torch.cuda.graph(g):
+                with CUDA_LOCK, torch.cuda.graph(g, capture_error_mode="thread_local"):
                     with _autocast(self.cfg, self.device):
                         out = self.net(self.static, kl_weight=self.kl)
                         if out is None:

@@ -128,6 +128,12 @@ def main():
     res["rss_growth_train_gb"] = rss_peak_train - rss0
     res["gpu_used_peak_train_gb"] = gpu_peak_train
     res["torch_peak_alloc_gb"] = torch.cuda.max_memory_allocated() / 2**30
+    res["torch_peak_reserved_gb"] = torch.cuda.max_memory_reserved() / 2**30
+    try:
+        import cupy
+        res["cupy_pool_gb"] = cupy.get_default_memory_pool().total_bytes() / 2**30
+    except Exception:
+        pass
     print(res, flush=True)
 
     smp.start()

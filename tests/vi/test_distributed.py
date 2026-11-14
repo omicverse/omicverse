@@ -60,3 +60,43 @@ def test_ddp_uneven_blocks_no_deadlock(data, tmp_path):
     assert len(m.history_["elbo_train"]) == 3
     assert "elbo_validation" in m.history_
     assert np.isfinite(m.get_latent_representation()).all()
+
+
+_TORCHRUN_SCRIPT = r"""
+import os, sys, numpy as np
+sys.path.insert(0, {root!r})
+import torch
+torch.set_num_threads(1)
+import omicverse as ov
+from omicverse.vi import SCVI
+ov.settings.cpu_init()
+a = ov.read({path!r}, storage="disk")
+m = SCVI(a, batch_key="batch", n_hidden=16, n_latent=4, seed=0)
+m.train(max_epochs=2, block_size=400, buffer_blocks=2, progress=False, device="cpu")
+z = m.get_latent_representation()
+w = m.module.z_encoder.mean_encoder.weight.detach().numpy()
+np.save(os.path.join({out!r}, f"w{{os.environ['RANK']}}.npy"), w)
+if os.environ["RANK"] == "0":
+    np.save(os.path.join({out!r}, "z.npy"), z)
+    print("SOURCE", m._source().kind, len(m.history_["elbo_train"]))
+"""
+
+
+def test_torchrun_launch(data, tmp_path):
+    import subprocess
+    import sys
+    import os
+    path = tmp_path / "tr.h5ad"
+    data[:2000].copy().write_h5ad(path)
+    root = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+    script = tmp_path / "run.py"
+    script.write_text(_TORCHRUN_SCRIPT.format(root=root, path=str(path), out=str(tmp_path)))
+    env = dict(os.environ, OMP_NUM_THREADS="1")
+    r = subprocess.run([sys.executable, "-m", "torch.distributed.run", "--standalone",
+                        "--nproc_per_node=2", str(script)], capture_output=True, text=True,
+                       env=env, timeout=900, cwd=str(tmp_path))
+    assert r.returncode == 0, r.stderr[-3000:]
+    assert "SOURCE h5 2" in r.stdout
+    w0, w1 = np.load(tmp_path / "w0.npy"), np.load(tmp_path / "w1.npy")
+    assert np.allclose(w0, w1)  # DDP keeps the ranks' weights identical
+    assert np.isfinite(np.load(tmp_path / "z.npy")).all()
