@@ -30,30 +30,6 @@ def test_spark_sparse_orientation_and_gene_names(monkeypatch):
     with pytest.raises(ValueError,match='obs_names'):
         ports.sparkx(a,covariates=pd.DataFrame({'x':[1,2,3,4]}))
 
-def test_scrans_restricted_path_and_no_mutation(monkeypatch):
-    a=ad.AnnData(np.ones((240,10)));a.layers['counts']=a.X.copy()
-    a.obs['cluster']=np.repeat(['a','b'],120)
-    def call(work,**kwargs):
-        assert kwargs['algorithm']=='QR' and kwargs['max_size'] is None
-        assert not kwargs['parallelize'] and not kwargs['plotting']
-        work.obs['size_factors']=np.ones(240)
-        work.X[:]=99
-    monkeypatch.setattr(ports,'_backend',lambda name:SimpleNamespace(compute_sum_factors=call))
-    out=ports.scran_pooling(a,cluster_key='cluster')
-    np.testing.assert_array_equal(out,1)
-    np.testing.assert_array_equal(a.X,1)
-    assert 'size_factors' not in a.obs
-    a.layers['counts']=sparse.csr_matrix(a.layers['counts'])
-    with pytest.raises(ValueError,match='dense'):ports.scran_pooling(a)
-
-def test_nebulosa_requires_explicit_bandwidth(monkeypatch):
-    def call(w,x,**kwargs):
-        assert kwargs['bandwidth']==(.3,.4) and kwargs['method']=='wkde'
-        return np.ones(len(w))
-    monkeypatch.setattr(ports,'_backend',lambda name:SimpleNamespace(calculate_density=call))
-    np.testing.assert_array_equal(ports.nebulosa_density([1,2],[[0,0],[1,1]],bandwidth=(.3,.4)),1)
-    with pytest.raises(TypeError):ports.nebulosa_density([1,2],[[0,0],[1,1]])
-
 def test_muscat_preserves_design_contrast_and_sample_contract(monkeypatch):
     design=pd.DataFrame({'intercept':[1,1,1,1],'condition':[0,0,1,1]},index=list('abcd'))
     contrasts=pd.DataFrame({'stim':[0,1]},index=design.columns)
@@ -65,3 +41,15 @@ def test_muscat_preserves_design_contrast_and_sample_contract(monkeypatch):
     monkeypatch.setattr(ports,'_backend',lambda name:SimpleNamespace(pb_ds=call))
     result=ports.muscat_pb_ds(pb,design,contrasts,method='limma-voom',min_cells=12,filter='genes')
     assert 'rare' in result['skipped']
+
+
+@pytest.mark.parametrize('module,distribution', ports._BACKENDS.items())
+def test_missing_backend_install_hint(monkeypatch, module, distribution):
+    from omicverse import _optional
+    def missing(name, **kwargs):
+        assert name == module
+        raise ModuleNotFoundError(f"No module named '{name}'", name=name)
+    monkeypatch.setattr(_optional.importlib, 'import_module', missing)
+    with pytest.raises(ImportError) as error:
+        ports._backend(module)
+    assert f'python -m pip install "{distribution}"' in str(error.value)

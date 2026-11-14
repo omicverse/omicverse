@@ -6,9 +6,19 @@ from ._optional import import_optional_module
 from ._registry import register_function
 
 
+_BACKENDS = {
+    'pyruvseq': 'py-ruvseq-omicverse==0.1.0',
+    'pysparkx': 'py-sparkx-omicverse==0.1.0',
+    'pymusic_deconv': 'py-music-omicverse==0.1.0',
+    'pymuscat': 'py-muscat-omicverse==0.1.0',
+}
+
+
 def _backend(module):
-    return import_optional_module(module,feature='Roadmap #989 analysis',dependencies=(module,),
-        install_hint='Install the pinned standalone backend described in docs/roadmap989-ports.md.')
+    return import_optional_module(
+        module, feature='Roadmap #989 analysis', dependencies=(module,),
+        install_hint=f'Install the tested backend with `python -m pip install "{_BACKENDS[module]}"`.',
+    )
 
 
 @register_function(aliases=['RUVg'],category='bulk',description='Estimate unwanted factors from control genes')
@@ -77,44 +87,3 @@ def muscat_aggregate(adata,*,cluster_key='cluster_id',sample_key='sample_id',gro
 def muscat_pb_ds(pseudobulk,design,contrasts,*,method='edgeR',min_cells=10,filter='both'):
     """Run edgeR or limma-voom; return local/global FDR and skipped-cluster reasons."""
     return _backend('pymuscat').pb_ds(pseudobulk,design,contrasts,method=method,min_cells=min_cells,filter=filter)
-
-
-@register_function(aliases=['scran pooling'],category='pp',description='Estimate pooling size factors with the validated scranPY QR path')
-def scran_pooling(adata,*,layer='counts',cluster_key=None,min_mean=.1):
-    """Return size factors without modifying input, using patched scranPY QR.
-
-    The validated subset requires dense counts and >=101 cells per cluster.
-    No CVXPY constraints, cluster splitting, small-cluster fallback or sparse
-    densification is selected implicitly. This is fixture-level R validation.
-    """
-    x=adata.X if layer is None else adata.layers[layer]
-    if sparse.issparse(x):raise ValueError('This scranPY subset requires explicitly supplied dense counts.')
-    if not np.isfinite(x).all() or np.any(x<0) or not np.allclose(x,np.rint(x),rtol=0,atol=1e-8):
-        raise ValueError('Supply finite nonnegative integer counts.')
-    if cluster_key is None:sizes=[adata.n_obs]
-    else:
-        labels=adata.obs[cluster_key]
-        if labels.isna().any():raise ValueError('Missing cluster labels.')
-        sizes=labels.value_counts().loc[lambda s:s>0]
-    if min(sizes)<101:raise ValueError('The validated scranPY subset requires >=101 cells per cluster.')
-    work=adata.copy();work.X=np.array(x,copy=True)
-    _backend('scranPY').compute_sum_factors(work,clusters=cluster_key,parallelize=False,
-        algorithm='QR',max_size=None,min_mean=min_mean,plotting=False,stopwatch=False)
-    factors=work.obs['size_factors'].copy()
-    if not np.isfinite(factors).all() or (factors<=0).any():raise RuntimeError('Invalid pooling size factors.')
-    return factors
-
-
-@register_function(aliases=['Nebulosa density'],category='pl',description='Compute weighted density with explicit validated bandwidth')
-def nebulosa_density(weights,coordinates,*,bandwidth,adjust=1.):
-    """Return per-cell wkde density using patched pyNebulosa and explicit bandwidth.
-
-    Bandwidth must be supplied, e.g. exported R ks::hpi values. This adapter does
-    not silently substitute Silverman's rule or scipy gaussian_kde for R ks.
-    Input weights must be finite and nonnegative; no negative clipping is hidden.
-    """
-    weights=np.asarray(weights,dtype=float);coordinates=np.asarray(coordinates,dtype=float)
-    if not np.isfinite(adjust) or adjust<=0:raise ValueError('adjust must be finite and positive.')
-    if weights.ndim!=1 or coordinates.shape!=(len(weights),2) or not np.isfinite(weights).all() or np.any(weights<0):
-        raise ValueError('Supply a nonnegative weight per cell and an n x 2 coordinate matrix.')
-    return _backend('pynebulosa').calculate_density(weights,coordinates,method='wkde',bandwidth=bandwidth,adjust=adjust)

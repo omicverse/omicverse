@@ -1,26 +1,24 @@
 # Roadmap #989 standalone adapters
 
-Algorithms live in independent packages. OmicVerse imports each backend only when called. These are review-stage source installs, not published PyPI releases. Base OmicVerse does not require these backends.
+Algorithms live in independent packages. OmicVerse imports each backend only when called. These four backends have published, installed-wheel-validated PyPI releases. Base OmicVerse does not require these backends.
 
-## Pinned installation
+## Published installation
 
-Use a separate analysis environment with these tested revisions:
+All four optional backends are available as tested PyPI 0.1.0 distributions:
 
-    python -m pip install "git+https://github.com/omicverse/py-RUVSeq.git@9efdf826a5fb637253c08a743610b4401e1d7da6"
-    python -m pip install "git+https://github.com/omicverse/py-SPARKX.git@fe490febbaf28e2c9a4eecd6cd0005303a979020"
-    python -m pip install "git+https://github.com/omicverse/py-MuSiC.git@b23fcba0d35ef42c592420f243dd6bfb78050d1d"
-    python -m pip install "git+https://github.com/omicverse/py-muscat.git@7b9c1a8394b1aa99203b5474f9f2f9ab1d1dba79"
-    python -m pip install "git+https://github.com/hurry060215-tech/scranPY.git@17b6aeabd02fa6ceae8e4f5e3838a10276337b29"
-    python -m pip install "git+https://github.com/hurry060215-tech/pyNebulosa.git@3f2678cb7b0825e669608e8734d894f6598efd86"
+    python -m pip install py-ruvseq-omicverse==0.1.0 py-sparkx-omicverse==0.1.0 py-music-omicverse==0.1.0 py-muscat-omicverse==0.1.0
 
-| Backend | Public API |
-|---|---|
-| omicverse/py-RUVSeq | ov.bulk.ruvg / ruvr / ruvs |
-| omicverse/py-SPARKX | ov.space.sparkx |
-| omicverse/py-MuSiC | ov.bulk.music_basis / music_prop |
-| omicverse/py-muscat | ov.single.muscat_aggregate / muscat_pb_ds |
-| hurry060215-tech/scranPY | ov.pp.scran_pooling |
-| hurry060215-tech/pyNebulosa | ov.pl.nebulosa_density |
+The optional `roadmap-ports` extra records these same pins. Base OmicVerse does
+not install or import the backends eagerly.
+
+| Distribution | Import module | Public API |
+|---|---|---|
+| py-ruvseq-omicverse | pyruvseq | ov.bulk.ruvg / ruvr / ruvs |
+| py-sparkx-omicverse | pysparkx | ov.space.sparkx |
+| py-music-omicverse | pymusic_deconv | ov.bulk.music_basis / music_prop |
+| py-muscat-omicverse | pymuscat | ov.single.muscat_aggregate / muscat_pb_ds |
+
+scran pooling and Nebulosa are deferred and are not included in this PR.
 
 ## Scope
 
@@ -28,8 +26,6 @@ Use a separate analysis environment with these tested revisions:
 - SPARK-X: AnnData cells x genes, count layer and spatial coordinates. Sparse counts are transposed without densification. Returns gene-labelled tables and filtering masks without changing AnnData.
 - MuSiC: genes x cells reference and genes x samples bulk DataFrames, with aligned cell type/donor Series. Only the default independent cell-type variance path is covered; check convergence diagnostics.
 - muscat: sum pseudobulks by cluster and biological sample, retaining absent combinations. Explicit sample-indexed designs and coefficient-indexed contrasts. edgeR and limma-voom return local and per-contrast global BH; untestable clusters are reported.
-- scran pooling: patched scranPY QR only, dense counts, >=101 cells per cluster. No implicit densification, CVXPY constraint, cluster splitting or small-cluster fallback. Returns factors without modifying input. Fix: sfortma2/scranPY#5.
-- Nebulosa: patched wkde grid with required explicit bandwidth, e.g. R ks::hpi output. Default Silverman bandwidth and scipy's ks replacement are not selected. Returns per-cell density. Fix: mdmanurung/pyNebulosa#10.
 
 ## Examples
 
@@ -45,4 +41,4 @@ Standalone repositories include frozen R oracles, export coverage manifests and 
     python -m pytest tests/test_roadmap_standalone_ports.py tests/bulk/test_ruvg.py -q
     python scripts/validate_roadmap_ports.py --ports-root PATH
 
-The first command checks adapter contracts and optional RUVg integration. Missing real backends cause skips, not successful backend validation. The second exercises all six real backends against the standalone/fork fixture layout (py-RUVSeq, py-SPARKX, py-MuSiC, py-muscat, references/scranPY and references/pyNebulosa).
+The first command checks adapter contracts and optional RUVg integration. Missing real backends cause skips, not successful backend validation. The second exercises all four real backends against the standalone/fork fixture layout (py-RUVSeq, py-SPARKX, py-MuSiC, py-muscat).

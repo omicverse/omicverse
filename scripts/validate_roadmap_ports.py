@@ -48,18 +48,6 @@ for method in ['edgeR','limma-voom']:
     np.testing.assert_allclose(result.logFC,ref.logFC,atol=1e-8,rtol=1e-8)
     assert spearmanr(result.p_val,ref.p_val).statistic>=.99
 passed.append('muscat edgeR/limma-voom')
-p=root/'references/scranPY/tests/fixtures'
-x=np.loadtxt(p/'scran_counts.csv',delimiter=',').T;a=ad.AnnData(x.copy());a.layers['counts']=a.X.copy()
-a.obs['cluster']=np.repeat(['a','b'],120)
-result=ov.pp.scran_pooling(a,cluster_key='cluster')
-np.testing.assert_allclose(result,np.loadtxt(p/'scran_factors.csv',delimiter=','),atol=1e-8,rtol=1e-8)
-np.testing.assert_array_equal(a.X,x)
-passed.append('scranPY QR')
-p=root/'references/pyNebulosa/tests/fixtures/r_grid'
-result=ov.pl.nebulosa_density(np.loadtxt(p/'weights.csv',delimiter=','),np.loadtxt(p/'coordinates.csv',delimiter=','),
-                              bandwidth=tuple(np.loadtxt(p/'bandwidth.csv',delimiter=',')))
-np.testing.assert_allclose(result,np.loadtxt(p/'cells.csv',delimiter=','),atol=1e-12,rtol=1e-10)
-passed.append('Nebulosa fixed bandwidth')
 report={'passed':passed,'status':'passed','scope':'Fixture-level acceptance of the documented subsets.'}
 print(json.dumps(report,indent=2))
 if args.report:args.report.write_text(json.dumps(report,indent=2)+'\n')
