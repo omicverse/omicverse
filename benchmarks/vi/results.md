@@ -9,12 +9,6 @@
 | ov | 1114 ± 0.73 | 1252 ± 5 | 0.1275 ± 0.00068 | 1 ± 0 | 0.9263 ± 0.0016 | 0.7721 ± 0.0037 | 0.6652 ± 0.0033 | 0.9275 ± 0.0068 | 0.8908 ± 0.0058 | 0.9745 ± 0.0045 | 0.7133 ± 0.026 | 14.68 ± 0.92 |
 | scvi | 1114 ± 0.43 | 1251 ± 6 | 0.1275 ± 0.001 | 1 ± 0 | 0.9314 ± 0.003 | 0.7705 ± 0.0038 | 0.6618 ± 0.0056 | 0.9237 ± 0.0019 | 0.8851 ± 0.0042 | 0.9569 ± 0.012 | 0.6831 ± 0.031 | 85.8 ± 0.45 |
 
-### SEA-AD 5k cells (smoke), CPU 16 threads (seeds per impl: {'scvi': 1}; epochs 400)
-
-| impl | neg_elbo_train | neg_elbo_validation | iLISI | cLISI | kBET | ASW_batch | ASW_label | NMI | ARI | graph_conn | isolated_labels | train_time_s |
-|---|---|---|---|---|---|---|---|---|---|---|---|---|
-| scvi | 1114 ± 0 | 1258 ± 0 | 0.1272 ± 0 | 1 ± 0 | 0.9274 ± 0 | 0.7767 ± 0 | 0.6653 ± 0 | 0.9273 ± 0 | 0.8908 ± 0 | 0.953 ± 0 | 0.6028 ± 0 | 228.7 ± 0 |
-
 ### SEA-AD 50k cells, H100 (seeds per impl: {'ov': 3, 'scvi': 3}; epochs 160)
 
 | impl | neg_elbo_train | neg_elbo_validation | iLISI | cLISI | kBET | ASW_batch | ASW_label | NMI | ARI | graph_conn | isolated_labels | train_time_s |
@@ -52,17 +46,6 @@
 
 ## Training speed
 
-### speed_cpu.csv
-
-| data | device | impl | epochs | mean | min | count |
-|---|---|---|---|---|---|---|
-| seaad300k | cpu | ov | 3 | 54.49 | 54.49 | 1 |
-| seaad300k | cpu | ov_compile | 3 | 49.58 | 49.58 | 1 |
-| seaad300k | cpu | scvi | 3 | 113.16 | 113.16 | 1 |
-| smoke | cpu | ov | 50 | 29.23 | 29.23 | 1 |
-| smoke | cpu | ov_compile | 50 | 37.67 | 37.67 | 1 |
-| smoke | cpu | scvi | 50 | 34.85 | 34.85 | 1 |
-
 ### speed_cuda.csv
 
 | data | device | impl | epochs | mean | min | count |
@@ -93,21 +76,15 @@
 
 ## Concurrent reads (lock test)
 
-| mode | procs | split | rank | elements | gb_read | seconds | gb_per_s | full | error | wall_s | hdf5_locking | file | writer_open |
-|---|---|---|---|---|---|---|---|---|---|---|---|---|---|
-| pread | 4 | True | 0 | 1905517726 | 22.87 | 16.1 | 1.418 | True | nan | 29.2 | default | nan | nan |
-| pread | 4 | True | 1 | 1905062067 | 22.86 | 17.0 | 1.345 | True | nan | 29.2 | default | nan | nan |
-| pread | 4 | True | 2 | 1906913857 | 22.88 | 14.0 | 1.636 | True | nan | 29.2 | default | nan | nan |
-| pread | 4 | True | 3 | 1904256692 | 22.85 | 14.9 | 1.529 | True | nan | 29.2 | default | nan | nan |
-| h5py | 4 | True | 0 | 1905517726 | 22.87 | 12.6 | 1.813 | True | nan | 13.3 | default | nan | nan |
-| h5py | 4 | True | 1 | 1905062067 | 22.86 | 13.1 | 1.748 | True | nan | 13.3 | default | nan | nan |
-| h5py | 4 | True | 2 | 1906913857 | 22.88 | 11.9 | 1.918 | True | nan | 13.3 | default | nan | nan |
-| h5py | 4 | True | 3 | 1904256692 | 22.85 | 12.3 | 1.854 | True | nan | 13.3 | default | nan | nan |
-| pread | 4 | False | 0 | 27527215 | 0.22 | 0.3 | 0.715 | True | nan | 6.6 | default | lockcopy.h5ad | True |
-| pread | 4 | False | 1 | 27527215 | 0.22 | 0.4 | 0.593 | True | nan | 6.6 | default | lockcopy.h5ad | True |
-| pread | 4 | False | 2 | 27527215 | 0.22 | 0.4 | 0.499 | True | nan | 6.6 | default | lockcopy.h5ad | True |
-| pread | 4 | False | 3 | 27527215 | 0.22 | 0.3 | 0.782 | True | nan | 6.6 | default | lockcopy.h5ad | True |
-| h5py | 4 | False | 0 | 0 | 0.0 | 0.0 | 0.0 | False | BlockingIOError: [Errno 11] Unable to synchronously open file (unable to lock file, errno = 11, error message = 'Resource temporarily unavailable') | 0.3 | default | lockcopy.h5ad | True |
-| h5py | 4 | False | 1 | 0 | 0.0 | 0.0 | 0.0 | False | BlockingIOError: [Errno 11] Unable to synchronously open file (unable to lock file, errno = 11, error message = 'Resource temporarily unavailable') | 0.3 | default | lockcopy.h5ad | True |
-| h5py | 4 | False | 2 | 0 | 0.0 | 0.0 | 0.0 | False | BlockingIOError: [Errno 11] Unable to synchronously open file (unable to lock file, errno = 11, error message = 'Resource temporarily unavailable') | 0.3 | default | lockcopy.h5ad | True |
-| h5py | 4 | False | 3 | 0 | 0.0 | 0.0 | 0.0 | False | BlockingIOError: [Errno 11] Unable to synchronously open file (unable to lock file, errno = 11, error message = 'Resource temporarily unavailable') | 0.3 | default | lockcopy.h5ad | True |
+4 processes, each reading a contiguous quarter of the rows (SEA-AD: X.data float32 + X.indices int64 = 91.5 GB); cold = file evicted from this node's page cache first (POSIX_FADV_DONTNEED). writer_open = the parent holds the file open with h5py mode 'a' (as a rank-0 writer would).
+
+| file | writer_open | mode | cache | threads | procs | gb_total | wall_s | read_s_max | gb_per_s_per_proc | startup_s_max | failed | error |
+|---|---|---|---|---|---|---|---|---|---|---|---|---|
+| SEAAD_raw.h5ad | False | pread | cold | 4 | 4 | 91.46 | 30.1 | 29.0 | 0.85 | 1.9 | 0 |  |
+| SEAAD_raw.h5ad | False | h5py | cold | 1 | 4 | 91.46 | 33.2 | 33.0 | 0.7 | 0.2 | 0 |  |
+| SEAAD_raw.h5ad | False | pread | warm | 4 | 4 | 91.46 | 8.7 | 6.6 | 4.34 | 2.0 | 0 |  |
+| SEAAD_raw.h5ad | False | h5py | warm | 1 | 4 | 91.46 | 12.1 | 11.8 | 2.09 | 0.1 | 0 |  |
+| lockcopy.h5ad | True | pread | warm | 4 | 4 | 0.88 | 1.5 | 0.2 | 1.19 | 0.8 | 0 |  |
+| lockcopy.h5ad | True | h5py | warm | 1 | 4 | 0.0 | 0.2 | 0.0 | 0.0 | 0.2 | 4 | BlockingIOError: [Errno 11] Unable to synchronously open file (unable  |
+| SEAAD_raw.h5ad | False | pread | warm | 1 | 4 | 91.46 | 14.6 | 12.8 | 1.87 | 1.9 | 0 |  |
+| SEAAD_raw.h5ad | False | pread | warm | 8 | 4 | 91.46 | 7.4 | 5.2 | 4.67 | 1.9 | 0 |  |

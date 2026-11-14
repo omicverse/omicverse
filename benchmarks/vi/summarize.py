@@ -33,7 +33,6 @@ def _read(name):
 def parity():
     out = []
     for f, title in (("parity_smoke_cuda.csv", "SEA-AD 5k cells (smoke), H100"),
-                     ("parity_smoke_cpu.csv", "SEA-AD 5k cells (smoke), CPU 16 threads"),
                      ("parity_seaad50k_cuda.csv", "SEA-AD 50k cells, H100")):
         d = _read(f)
         if d is None or d.empty:
@@ -81,7 +80,7 @@ def blockshuffle():
 
 def speed():
     out = []
-    for f in ("speed_cpu.csv", "speed_cuda.csv"):
+    for f in ("speed_cuda.csv",):
         d = _read(f)
         if d is None:
             continue
@@ -106,14 +105,32 @@ def disk():
         common.to_markdown(d)
 
 
+def lock():
+    d = _read("lock_test.csv")
+    if d is None:
+        return ""
+    d = d[d["cache"].notna() | d["writer_open"].astype(bool)].copy()
+    d["cache"] = d["cache"].fillna("warm")
+    d["error"] = d["error"].fillna("")
+    g = d.groupby(["file", "writer_open", "mode", "cache", "threads"], sort=False)
+    t = g.agg(procs=("rank", "count"), gb_total=("gb_read", "sum"), wall_s=("wall_s", "first"),
+              read_s_max=("seconds", "max"), gb_per_s_per_proc=("gb_per_s", "mean"),
+              startup_s_max=("startup_s", "max"),
+              failed=("error", lambda e: int((e != "").sum()))).reset_index()
+    t["error"] = g["error"].agg(lambda e: next((x[:70] for x in e if x), "")).values
+    return ("4 processes, each reading a contiguous quarter of the rows (SEA-AD: X.data "
+            "float32 + X.indices int64 = 91.5 GB); cold = file evicted from this node's page "
+            "cache first (POSIX_FADV_DONTNEED). writer_open = the parent holds the file "
+            "open with h5py mode 'a' (as a rank-0 writer would).\n\n" +
+            common.to_markdown(t.round(2)))
+
+
 def main():
     parts = ["# ov.vi benchmark results\n", "## Parity with scvi-tools 1.5.2\n", parity(),
              models(),
              "## Block shuffle\n", blockshuffle(), "\n## Training speed\n", speed(),
              "## Disk training\n", disk()]
-    lock = _read("lock_test.csv")
-    if lock is not None:
-        parts += ["\n## Concurrent reads (lock test)\n", common.to_markdown(lock)]
+    parts += ["\n## Concurrent reads (lock test)\n", lock()]
     text = "\n".join(parts) + "\n"
     with open(os.path.join(HERE, "results.md"), "w") as f:
         f.write(text)
