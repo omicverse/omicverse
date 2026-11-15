@@ -402,17 +402,26 @@ class DRVI(BaseVIModel):
         names = np.asarray(self.registry["var_names"])[order]
         return names, effect[order]
 
-    def dimension_gene_effects(self, n_genes: int = 20, **kwargs):
-        """:meth:`differential_vars` for every latent dimension.
+    def dimension_gene_effects(self, n_genes: int = 20, dims=None, **kwargs):
+        """:meth:`differential_vars` for every latent dimension (or ``dims`` if given).
+
+        Arguments:
+            n_genes: Top genes kept per dimension.
+            dims: Dimensions to compute (default: all ``n_latent``); unlike
+                :meth:`latent_traverse`, the *actual* dimension indices are
+                used as the keys of the returned dict even when ``dims`` is
+                a non-contiguous subset.
 
         Returns:
-            dict ``{dim: (genes, effects)}`` for ``dim in range(n_latent)``.
+            dict ``{dim: (genes, effects)}`` for ``dim in dims`` (default
+            ``range(n_latent)``).
         """
-        effects = self.latent_traverse(**kwargs)
+        effects = self.latent_traverse(dims=dims, **kwargs)
+        actual_dims = np.arange(self.module.n_latent) if dims is None else np.asarray(dims)
         out = {}
-        for d in range(effects.shape[0]):
-            order = np.argsort(-np.abs(effects[d]))[:n_genes]
-            out[d] = (np.asarray(self.registry["var_names"])[order], effects[d, order])
+        for i, d in enumerate(actual_dims):
+            order = np.argsort(-np.abs(effects[i]))[:n_genes]
+            out[int(d)] = (np.asarray(self.registry["var_names"])[order], effects[i, order])
         return out
 
 

@@ -129,6 +129,14 @@ def test_latent_traverse_and_differential_vars():
     assert np.allclose(eff, eff2)
     allg = m.dimension_gene_effects(n_genes=3, n_samples=16, seed=0)
     assert set(allg) == set(range(4))
+    # a non-contiguous `dims=` subset must be keyed by the *actual* dimension
+    # indices, not by their position in `dims` (regression: used to raise
+    # KeyError / silently mislabel dimensions for any dims != range(k)).
+    subset = m.dimension_gene_effects(n_genes=3, dims=[3, 1], n_samples=16, seed=0)
+    assert set(subset) == {3, 1}
+    g3, v3 = subset[3]
+    g3_direct, v3_direct = m.differential_vars(dim=3, n_genes=3, n_samples=16, seed=0)
+    assert list(g3) == list(g3_direct) and np.allclose(v3, v3_direct)
 
 
 def test_oom_matches_in_memory(tmp_path):
