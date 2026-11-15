@@ -51,6 +51,8 @@ _LAZY_ATTRS = {
     "DRVI": ("._drvi", "DRVI"),
     "RESOLVI": ("._resolvi", "RESOLVI"),
     "MRVI": ("._mrvi", "MRVI"),
+    "plot_sample_distances": ("._mrvi", "plot_sample_distances"),
+    "sample_distance_ratio": ("._mrvi", "sample_distance_ratio"),
     "Decipher": ("._decipher", "Decipher"),
     "Trajectory": ("._decipher", "Trajectory"),
     "rotate_decipher_components": ("._decipher", "rotate_decipher_components"),
@@ -69,7 +71,7 @@ _LAZY_ATTRS = {
     "priors": ("._priors", None),
 }
 
-__all__ = ["SCVI", "SCANVI", "TOTALVI", "DRVI", "RESOLVI", "MRVI", "Decipher", "Trajectory", "rotate_decipher_components", "compute_decipher_time", "SysVI", "BaseVIModel", "build_source", "train_distributed", "mde", "plot_history", "integration_metrics", "plot_dimension_heatmap", "MemoryMonitor"]
+__all__ = ["SCVI", "SCANVI", "TOTALVI", "DRVI", "RESOLVI", "MRVI", "plot_sample_distances", "sample_distance_ratio", "Decipher", "Trajectory", "rotate_decipher_components", "compute_decipher_time", "SysVI", "plot_dimension_heatmap", "BaseVIModel", "build_source", "train_distributed", "mde", "plot_history", "integration_metrics", "MemoryMonitor"]
 
 
 def __getattr__(name):

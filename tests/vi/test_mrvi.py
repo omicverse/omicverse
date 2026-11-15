@@ -128,9 +128,21 @@ def test_mrvi_trains_and_runs_downstream_analyses(tmp_path):
     ap = m.get_aggregated_posterior(sample="s0")
     assert ap.sample((4,)).shape == (4, 5)
 
-    da = m.differential_abundance(sample_cov_keys=["disease"])
+    da = m.differential_abundance(sample_cov_keys=["disease"], compute_log_enrichment=True)
     assert da["log_probs"].shape == (a.n_obs, 8)
     assert set(da["disease_log_probs"].keys()) == {"covid", "ctrl"}
+    # regression test for a bug where `aggregate()`'s `omit_original_sample` masking
+    # (`np.isin(samples[:, None], ...)`, shape (n_obs, 1)) broadcast a *single* True
+    # across every column of the per-covariate `sub` matrix instead of only the one
+    # column matching the cell's own sample -- so every cell belonging to a given
+    # covariate value got `-inf` for that value's own aggregate (log_probs/log_enrichs
+    # all `-inf`/`nan` for, e.g., every covid cell under `disease_log_probs["covid"]`).
+    for v in ("covid", "ctrl"):
+        assert np.isfinite(da["disease_log_probs"][v]).all(), f"{v}: non-finite log_probs"
+        assert np.isfinite(da["disease_log_enrichs"][v]).all(), f"{v}: non-finite log_enrichs"
+    is_covid_cell = a.obs["disease"].values == "covid"
+    covid_enrich = da["disease_log_enrichs"]["covid"]
+    assert covid_enrich[is_covid_cell].mean() > covid_enrich[~is_covid_cell].mean()
 
     torch.manual_seed(123)  # differential_expression draws MC samples from the global RNG
     de = m.differential_expression(sample_cov_keys=["disease"], mc_samples=25, store_lfc=True,
@@ -192,3 +204,39 @@ def test_mrvi_disk_and_dask_match_memory(tmp_path):
 
     assert abs(oom_elbo - mem_elbo) < 0.2 * abs(mem_elbo)
     assert abs(dask_elbo - mem_elbo) < 0.2 * abs(mem_elbo)
+
+
+def _toy_dist():
+    """A tiny synthetic `get_local_sample_distances`-shaped dict: 4 samples, 2
+    disease groups {s0, s1} vs {s2, s3}; 'typeA' has a strong across-group gap,
+    'typeB' has none, so the expected `sample_distance_ratio` is analytically known."""
+    order = ["s0", "s1", "s2", "s3"]
+    disease = pd.Series(["covid", "covid", "ctrl", "ctrl"], index=order)
+    base = np.array([[0, 1, 1, 1], [1, 0, 1, 1], [1, 1, 0, 1], [1, 1, 1, 0]], dtype=float)
+    matA = np.where(base > 0, np.where(
+        (disease.values[:, None] == disease.values[None, :]), 1.0, 4.0), 0.0)
+    matB = base.copy()  # uniform -> ratio should be 1.0
+    dist = {"sample_order": order, "groups": {"cell_type": {"typeA": matA, "typeB": matB}}}
+    return dist, disease
+
+
+def test_sample_distance_ratio():
+    from omicverse.vi import sample_distance_ratio
+    dist, disease = _toy_dist()
+    ratio = sample_distance_ratio(dist, disease, groupby="cell_type")
+    assert list(ratio.index[:1]) == ["typeA"]  # typeA has the larger across/within gap
+    assert ratio["typeA"] == pytest.approx(4.0)
+    assert ratio["typeB"] == pytest.approx(1.0)
+    # groupby= is optional when there is only one key
+    assert sample_distance_ratio({"sample_order": dist["sample_order"],
+                                  "groups": {"ct": dist["groups"]["cell_type"]}},
+                                 disease).equals(ratio)
+
+
+def test_plot_sample_distances():
+    pytest.importorskip("seaborn")
+    from omicverse.vi import plot_sample_distances
+    dist, disease = _toy_dist()
+    g = plot_sample_distances(dist, "typeA", groupby="cell_type", sample_annotation=disease)
+    assert g.data2d.shape == (4, 4)
+    assert list(g.data2d.index) == dist["sample_order"]
