@@ -41,6 +41,14 @@ h-maxima watershed, shape-checked merges, focal-depth split of nuclei that
 overlap in projection)::
 
     labels, table, info = ov.space.seg.segment_nuclei(dapi_zyx, return_info=True)
+``segment_volume_multiview`` segments a 3-D volume of any size (zarr / tif /
+array) tile by tile within a memory budget: a 2-D model (Cellpose) over the
+xy, xz and yz slices of a near-isotropic working grid, the three label sets
+aggregated into 3-D instances (u-Segment3D), seam-free ownership by centroid::
+
+    labels, table, info = ov.space.seg.segment_volume_multiview(
+        'volume.zarr', spacing=(dz, dy, dx), model='nuclei',
+        out='labels.zarr', memory_mb=2048, return_info=True)
 ``cellpose``   Cellpose 2/3/4; ``restore_type='denoise_cyto3'`` (v3) and
                Cellpose-SAM ``'cpsam'`` (v4, default when installed).
 ``stardist``   StarDist ``2D_versatile_fluo`` / ``2D_versatile_he``.
@@ -66,6 +74,7 @@ from ._metrics import compare, evaluate
 from ._nuclei import segment_nuclei
 from ._cilia import detect_cilia
 from ._tiling import segment_tiled
+from ._multiview3d import aggregate_orthoviews, multiview_working_grid, segment_volume_multiview
 from ._transcripts import aggregate, assign_transcripts, segment_transcripts
 
 __all__ = [
@@ -73,6 +82,9 @@ __all__ = [
     "segment",
     "segment_tiled",
     "segment_nuclei",
+    "segment_volume_multiview",
+    "aggregate_orthoviews",
+    "multiview_working_grid",
     "detect_cilia",
     "expand_labels",
     "load_image",
