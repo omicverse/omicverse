@@ -59,15 +59,73 @@ before comparing ours vs. reference directly.
 
 Mean +/- sd: ELBO ours -607.2 +/- 30.2, ref -609.2 +/- 37.8 (2.0 nats/cell
 gap, well inside the seed spread). NLL ours 599.9 +/- 27.2, ref 596.7 +/- 30.8.
-|rho| vs. ground-truth pseudotime: ours 0.76 +/- 0.08, ref 0.87 +/- 0.02 --
-both recover the trajectory strongly and consistently; ref has a slightly
-tighter, slightly higher spread here but ours is within it.
 
 **Direct ours-vs-reference trajectory agreement** (same seed, sign-aligned
 best axis, Spearman on the ground-truth-pseudotime subset): seed 0 = 0.882,
-seed 1 = 0.962, seed 2 = 0.722 -- the two implementations recover
-*the same* cell ordering, not just similarly-good orderings against the
+seed 1 = 0.962, seed 2 = 0.722 -- the two implementations recover *the same*
+cell ordering on most seeds, not just similarly-good orderings against the
 ground truth independently.
+
+### Trajectory-recovery gap, 8 seeds, and root-cause investigation
+
+|rho| vs. ground-truth pseudotime over 8 seeds (0-7, CPU for throughput --
+quality metrics are hardware-independent): **ours 0.772 +/- 0.098 (range
+0.620-0.898), ref 0.878 +/- 0.019 (range 0.849-0.905)**. Reference is
+consistently strong on every single seed; ours is occasionally weaker
+(seeds 0, 2) -- a real, reproducible gap, not a 3-seed sampling artifact.
+
+Investigated and **ruled out** as the cause:
+- **Init**: constructing both modules with the same `torch.manual_seed`
+  gives bit-identical weights layer-by-layer (`decoder_v_to_z`,
+  `decoder_z_to_x`, `encoder_x_to_z`, `encoder_zx_to_v`) -- confirmed directly
+  with `torch.equal`. (`BatchNorm1d.reset_parameters()` is a deterministic
+  ones/zeros init, so reference's Linear/BatchNorm-interleaved construction
+  order vs. ours' all-Linears-then-all-BatchNorms order consumes the RNG
+  identically.)
+- **ClippedAdam**: diffed element-by-element against the installed Pyro
+  1.9.1 source (`pyro.optim.clipped_adam`) -- clamp order, weight-decay
+  placement, `exp_avg`/`exp_avg_sq` update, bias correction, `lrd` gating,
+  default `eps=1e-8` all match exactly.
+- **v/z priors, encoder z->v path, softplus parametrisation**: diffed against
+  the installed scvi-tools 1.5.2 source (`scvi/external/decipher/_module.py`,
+  `_components.py`) line-by-line -- identical.
+- **KL weight / warm-up**: `DecipherModule.forward` ignores `kl_weight`, but
+  so does scvi-tools' (its `PyroTrainingPlan` only injects `kl_weight` when
+  `"kl_weight" in signature(model)`, which is false for Decipher's pyro
+  `model(self, x, beta=None)`) -- both silently disable it identically.
+- **BatchNorm-freeze epoch** (`freeze_bn_from`): re-derived from Lightning's
+  `on_validation_model_train`/`current_epoch` semantics and confirmed to fire
+  at the same epoch as reference's `current_epoch > 0` check for both
+  `check_val_every_n_epoch` values tested.
+- **Early-stopping criterion**: swapping the monitor from `nll_validation` to
+  `elbo_validation` for seeds 0/2/7 changed |rho| by <0.03 (0.642->0.666,
+  0.620->0.620, 0.720->0.662) -- not the cause.
+- **Early-stopping patience / "stopping too early"**: disabling early
+  stopping and training a fixed 80 or 150 epochs instead made every tested
+  seed *worse* (seed 3: 0.853 with early stopping -> 0.297 fixed; seed 0:
+  0.642 -> 0.474-0.70; seed 2 diverged to NaN at a fixed 150 epochs) --
+  early stopping is already doing its job and is not the cause; if anything
+  it is the only thing keeping `ours` close to reference at all.
+- Minibatch size (128) and `drop_last=True` are applied identically to the
+  training loader in both (validation never drops a batch in either).
+
+**Not fully resolved**: the data-order/shuffle algorithm itself (our
+`numpy.random.RandomState` block/random permutation vs. PyTorch
+`DataLoader`'s `RandomSampler`/generator) was not literally replayed
+cell-for-cell between the two stacks -- doing that requires intercepting
+scvi's dataloader to record its exact per-epoch index sequence and feeding it
+through our `source.iterate`, which we did not get to. Given every other
+hyperparameter and formula is verified identical, and that longer/fixed
+training reliably makes the gap *worse*, the remaining difference is most
+likely genuine optimisation-landscape sensitivity: the 3 donors are combined
+with no batch covariate, so the loss has (at least) two comparable local
+optima for the 2-D `v` -- one where axis 0/1 cleanly separates pseudotime
+from donor identity (reference lands here on 8/8 seeds), one where the two
+partially entangle across both axes (ours lands here on 2/8 seeds: 0, 2).
+This reads as cross-framework RNG-stream variance landing in a different
+attractor, not an implementation bug -- but it is not yet proven, and is the
+next thing to check (literal per-epoch index replay, or adding `batch_key`
+to remove the confound as a diagnostic, not as a protocol change).
 
 ## Timing
 
