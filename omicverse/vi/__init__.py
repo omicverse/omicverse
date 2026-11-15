@@ -19,6 +19,9 @@ Models
              decoder (log-sum-exp aggregation); pnb/nb/zinb/poisson
              likelihoods; ``latent_traverse`` / ``differential_vars`` for
              per-dimension gene-effect interpretability.
+``Decipher`` two-level VAE with a 2-D interpretable trajectory space ``v``
+             (plus ``Trajectory``, ``rotate_decipher_components``,
+             ``compute_decipher_time``).
 
 The API mirrors scvi-tools, but configuration goes to the constructor::
 
@@ -43,6 +46,10 @@ _LAZY_ATTRS = {
     "DRVI": ("._drvi", "DRVI"),
     "RESOLVI": ("._resolvi", "RESOLVI"),
     "MRVI": ("._mrvi", "MRVI"),
+    "Decipher": ("._decipher", "Decipher"),
+    "Trajectory": ("._decipher", "Trajectory"),
+    "rotate_decipher_components": ("._decipher", "rotate_decipher_components"),
+    "compute_decipher_time": ("._decipher", "compute_decipher_time"),
     "BaseVIModel": ("._base", "BaseVIModel"),
     "build_source": ("._data", "build_source"),
     "train_distributed": ("._distributed", "train_distributed"),
@@ -55,7 +62,7 @@ _LAZY_ATTRS = {
     "priors": ("._priors", None),
 }
 
-__all__ = ["SCVI", "SCANVI", "TOTALVI", "DRVI", "RESOLVI", "MRVI", "BaseVIModel", "build_source", "train_distributed", "mde", "plot_history", "integration_metrics", "MemoryMonitor"]
+__all__ = ["SCVI", "SCANVI", "TOTALVI", "DRVI", "RESOLVI", "MRVI", "Decipher", "Trajectory", "rotate_decipher_components", "compute_decipher_time", "BaseVIModel", "build_source", "train_distributed", "mde", "plot_history", "integration_metrics", "MemoryMonitor"]
 
 
 def __getattr__(name):

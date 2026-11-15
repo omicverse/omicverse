@@ -145,6 +145,7 @@ from ._scissor import Scissor
 from ._metabolism import Metabolism, MetaboliteCCC, differential_metabolism
 from ._drvi import drvi
 
+from ._decipher import decipher
 from ._stavia import StaVIA
 from ._lazy_step_by_step import (
     lazy_step_qc, lazy_step_preprocess, lazy_step_scale, lazy_step_pca,
@@ -333,6 +334,7 @@ __all__ = [
     'plot_weights',
     
     # Trajectory and pseudotime analysis
+    'decipher',
     'StaVIA',
     'pyVIA',
     'hematopoiesis',
