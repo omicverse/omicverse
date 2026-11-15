@@ -12,7 +12,9 @@ re-identification from images (:func:`reid_embed`, :func:`reid_local_verify`,
 :func:`reid_open_set_cluster`), data-entry error audits of linked clinical / EHR
 tables (:func:`audit_clinical_tables`) and study-level effect-size extraction for
 meta-analysis (:func:`extract_group_stats`, :func:`group_comparisons`,
-:func:`meta_effect_sizes`).
+:func:`meta_effect_sizes`), and per-survey species-set prediction from
+presence-absence / presence-only data (:func:`sdm_community_pipeline` and its
+steps).
 """
 from ._cross_species import cross_species_align
 from ._bonsai import bonsai
@@ -39,6 +41,10 @@ from ._meta_analysis import (parse_mean_sd, extract_group_stats, group_compariso
                              method_measure_statements)
 from ._meta_selection import (abbreviation_map, propose_selection, reconstruct_study_effects,
                               write_study_effects, record_deliverable, verify_deliverable)
+from ._sdm import (sdm_sample_f1, sdm_decode_sets, sdm_sets_to_strings, sdm_spatial_holdout,
+                   sdm_neighbor_composition, sdm_presence_only_histogram, sdm_cube_summary,
+                   sdm_read_tensor_dir, sdm_standardize, sdm_fit_mlp, sdm_fuse,
+                   sdm_community_pipeline)
 
 __all__ = ["cross_species_align", "bonsai", "bandpass_filter", "channel_qc_table",
            "bridged_channel_pairs", "erp_channel_outliers",
@@ -58,6 +64,10 @@ __all__ = ["cross_species_align", "bonsai", "bandpass_filter", "channel_qc_table
            "sd_from_summary", "recompute_group_test", "meta_effect_sizes", "apply_selection_rules", "comparison_workbook",
            "format_workbook", "method_measure_statements",
            "abbreviation_map", "propose_selection", "reconstruct_study_effects",
-           "write_study_effects", "record_deliverable", "verify_deliverable"]
+           "write_study_effects", "record_deliverable", "verify_deliverable",
+           "sdm_sample_f1", "sdm_decode_sets", "sdm_sets_to_strings", "sdm_spatial_holdout",
+           "sdm_neighbor_composition", "sdm_presence_only_histogram", "sdm_cube_summary",
+           "sdm_read_tensor_dir", "sdm_standardize", "sdm_fit_mlp", "sdm_fuse",
+           "sdm_community_pipeline"]
 from ._meta_analysis import to_mean_sd  # noqa: E402  (summary statistics -> mean / SD)
 __all__ += ["to_mean_sd"]
