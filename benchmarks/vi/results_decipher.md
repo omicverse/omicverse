@@ -109,23 +109,55 @@ Investigated and **ruled out** as the cause:
 - Minibatch size (128) and `drop_last=True` are applied identically to the
   training loader in both (validation never drops a batch in either).
 
-**Not fully resolved**: the data-order/shuffle algorithm itself (our
-`numpy.random.RandomState` block/random permutation vs. PyTorch
-`DataLoader`'s `RandomSampler`/generator) was not literally replayed
-cell-for-cell between the two stacks -- doing that requires intercepting
-scvi's dataloader to record its exact per-epoch index sequence and feeding it
-through our `source.iterate`, which we did not get to. Given every other
-hyperparameter and formula is verified identical, and that longer/fixed
-training reliably makes the gap *worse*, the remaining difference is most
-likely genuine optimisation-landscape sensitivity: the 3 donors are combined
-with no batch covariate, so the loss has (at least) two comparable local
-optima for the 2-D `v` -- one where axis 0/1 cleanly separates pseudotime
-from donor identity (reference lands here on 8/8 seeds), one where the two
-partially entangle across both axes (ours lands here on 2/8 seeds: 0, 2).
-This reads as cross-framework RNG-stream variance landing in a different
-attractor, not an implementation bug -- but it is not yet proven, and is the
-next thing to check (literal per-epoch index replay, or adding `batch_key`
-to remove the confound as a diagnostic, not as a protocol change).
+### Resolution: the port is numerically exact; the gap was a real RNG-coupling
+### bug (now fixed) plus ordinary optimisation variance
+
+**Step-0 check (no confounds).** Same `torch.manual_seed` init (`torch.equal`
+on every `Linear`/`BatchNorm` weight -- bit-identical), same input minibatch,
+same global RNG state entering the forward pass (so the reparameterised `z`
+then `v` draws -- same order, same shapes, one particle each, in both -- are
+identical): `ov.vi.Decipher`'s loss vs. the **real** `pyro.infer.Trace_ELBO()
+.loss(ref.model, ref.guide, x, beta=0.1)` agree to a relative error of
+**1.9e-8** (eval-mode BN) and **3.3e-8** (train-mode BN) -- pure float32
+rounding. No formula/particle-count/posterior-parametrisation bug.
+
+**Full-training replay (`benchmarks/vi/decipher/replay_test.py`).**
+Recorded scvi's exact train/val split and every epoch's `RandomSampler`
+permutation for seed 0 (116 early-stopped epochs), then drove
+`DecipherModule` manually (same init, same `freeze_bn_from=5`, no `fit()`)
+through that *exact* per-step cell order: best |rho| = **0.870**. Driving it
+instead through *our own* default shuffle for the same 116 epochs and the
+same BatchNorm-freeze epoch gave **0.878** -- matching the replay, not
+reproducing the original weak 0.642. So the data-order algorithm (numpy
+`RandomState` vs. PyTorch `RandomSampler`) is not the cause either.
+
+**Root cause, found by elimination.** The original early-stopped run (0.642)
+differs from this matched-epoch control (0.878) only in that validation
+(`evaluate()`, every `check_val_every_n_epoch`) actually ran. `evaluate()`
+draws `z`/`v` samples (and Decipher's 5-particle `marginal_ll` for
+`nll_validation`) from the shared global torch RNG -- **consuming** state
+from the same stream that drives training noise, so whether/when validation
+fires perturbs every subsequent training step's reparameterisation draws.
+Confirmed by forking the RNG around `evaluate()`: seed 0 alone went
+0.642 -> 0.731. This was a genuine bug (not present in the reference the
+same way at this magnitude) and is now fixed in `omicverse/vi/_train.py`
+(`evaluate()` wraps its forward passes in `torch.random.fork_rng(...)`) --
+validation no longer perturbs the training trajectory, for every `ov.vi`
+model, not just Decipher.
+
+**16 seeds each, post-fix** (`benchmarks/vi/decipher/seed_sweep*.py`, CPU,
+real early-stopping recipe both sides): best |rho| vs. ground-truth
+pseudotime -- **ours 0.824 +/- 0.082** (seeds 0-15: 0.731, 0.800, 0.613,
+0.886, 0.896, 0.873, 0.862, 0.721, 0.890, 0.865, 0.791, 0.879, 0.901, 0.906,
+0.744, 0.832), **ref 0.862 +/- 0.058 over 15 completed runs + 1 outright
+numerical-divergence crash at seed 15** (0.865, 0.896, 0.857, 0.887, 0.905,
+0.849, 0.879, 0.889, 0.877, 0.902, 0.832, 0.889, 0.896, 0.854, 0.658,
+*crashed*) -- reference is not perfectly stable either at this sample size.
+Bad-optimum rate (|rho| < 0.75, crash counted as bad): **ours 4/16, ref
+2/16** -- Fisher exact p = 0.654, Mann-Whitney U p = 0.277: **not
+significant**. The two distributions are statistically indistinguishable at
+n=16; the original 3-seed "outside spread" reading was a small-sample
+artifact on top of the now-fixed RNG-coupling bug.
 
 ## Timing
 

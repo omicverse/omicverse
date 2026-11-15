@@ -327,12 +327,20 @@ class _Compiled:
 
 def evaluate(module, batches, device, cfg: TrainConfig | None = None, kl_w: float = 1.0,
              reduce=None, suffix="validation") -> dict:
-    """Mean ELBO terms of ``module`` over ``batches`` (eval mode, no grad)."""
+    """Mean ELBO terms of ``module`` over ``batches`` (eval mode, no grad).
+
+    Reparameterised sampling inside the forward pass (and any
+    importance-weighted NLL, e.g. Decipher's ``marginal_ll``) draws from the
+    global torch RNG even in eval mode; forking it here keeps a validation
+    pass from perturbing the training-noise stream of the epochs that follow
+    (``fit`` would otherwise produce a different, validation-frequency-
+    dependent trajectory for the same ``seed``)."""
     cfg = cfg or TrainConfig()
     was = module.training
     module.eval()
     meter = _Meter(device)
-    with torch.no_grad(), _autocast(cfg, device):
+    devs = [device] if device.type == "cuda" else []
+    with torch.random.fork_rng(devices=devs), torch.no_grad(), _autocast(cfg, device):
         for b in batches:
             out = module(b, kl_weight=kl_w)
             meter.add(out, b["x"].shape[0])
