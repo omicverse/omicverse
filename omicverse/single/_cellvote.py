@@ -329,7 +329,7 @@ class CellVote(object):
         """
         from scipy.sparse import csc_matrix
         from ..external import scMulan
-        import scanpy as sc
+        from ..pp import normalize_total, log1p
 
         # ensure CSC format for scMulan
         if not isinstance(self.adata.X, csc_matrix):
@@ -339,8 +339,8 @@ class CellVote(object):
             input_adata=self.adata, output_dir="./", output_prefix="scmulan"
         )
         if adata.X.max() > 10:
-            sc.pp.normalize_total(adata, target_sum=1e4)
-            sc.pp.log1p(adata)
+            normalize_total(adata, target_sum=1e4)
+            log1p(adata)
 
         model = scMulan.model_inference("./ckpt/ckpt_scMulan.pt", adata)
         model.cuda_count()

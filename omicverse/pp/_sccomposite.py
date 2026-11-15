@@ -59,7 +59,6 @@ import numpy as np
 import pandas as pd
 import scipy
 from scipy.io import mmread
-#import scanpy as sc
 import torch
 import torch.nn as nn
 import torch.optim as optim

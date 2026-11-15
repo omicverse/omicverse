@@ -659,7 +659,7 @@ def build_sandbox_globals(ctx: "AgentContext") -> Dict[str, Any]:
         "importlib.resources",
     }
     core_modules = (
-        "omicverse", "numpy", "pandas", "scanpy",
+        "omicverse", "numpy", "pandas",
         "time", "math", "json", "re", "pathlib",
         "itertools", "functools", "collections",
         "statistics", "random", "warnings", "datetime", "typing",
@@ -667,6 +667,9 @@ def build_sandbox_globals(ctx: "AgentContext") -> Dict[str, Any]:
     skill_modules = (
         "openpyxl", "reportlab", "matplotlib", "seaborn",
         "scipy", "statsmodels", "sklearn",
+        # scanpy is an optional dependency of omicverse; expose it (as ``sc``)
+        # only when installed.
+        "scanpy",
     )
     # Warn once per missing module instead of on every execute_code call —
     # reportlab/openpyxl/etc. are optional skill modules; their absence is

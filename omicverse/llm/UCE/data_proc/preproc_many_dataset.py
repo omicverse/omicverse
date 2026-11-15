@@ -7,7 +7,6 @@ from typing import Dict, List, Optional, Tuple
 import torch
 import torch.utils.data as data
 import numpy as np
-import scanpy as sc
 from numpy import array
 import subprocess
 import os
@@ -19,11 +18,11 @@ warnings.filterwarnings("ignore")
 from .gene_embeddings import load_gene_embeddings_adata
 import pandas as pd
 import numpy as np
-from scanpy import AnnData
+from anndata import AnnData
 from .data_utils import process_raw_anndata
 
 def data_to_torch_X(X):
-    if isinstance(X, sc.AnnData):
+    if isinstance(X, AnnData):
         X = X.X
     if not isinstance(X, np.ndarray):
             X = X.toarray()
@@ -94,14 +93,14 @@ class SincleCellDataset(data.Dataset):
 
 
 def data_to_torch_X(X):
-    if isinstance(X, sc.AnnData):
+    if isinstance(X, AnnData):
         X = X.X
     if not isinstance(X, np.ndarray):
             X = X.toarray()
     return torch.from_numpy(X).float()
 
 
-def anndata_to_sc_dataset(adata:sc.AnnData, 
+def anndata_to_sc_dataset(adata:AnnData, 
                                  species:str="human", 
                                  labels:list=[],
                                  covar_col:str=None,
@@ -117,7 +116,8 @@ def anndata_to_sc_dataset(adata:sc.AnnData,
     )
     
     if DO_HVG:
-        sc.pp.highly_variable_genes(adata, flavor='seurat_v3', n_top_genes=hv_genes)  # Expects Count Data
+        from omicverse.pp import highly_variable_genes
+        highly_variable_genes(adata, flavor='seurat_v3', n_top_genes=hv_genes)  # Expects Count Data
     
         hv_index = adata.var["highly_variable"]
         adata = adata[:, hv_index] # Subset to hv genes only

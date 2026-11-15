@@ -23,7 +23,6 @@ Device support (``backend='auto'`` picks the best available):
 
 Example
 -------
->>> import scanpy as sc
 >>> from omicverse.utils.gpuex.umap import (
 ...     simplicial_set_embedding_torch, find_ab_params)
 >>> a, b = find_ab_params(spread=1.0, min_dist=0.5)

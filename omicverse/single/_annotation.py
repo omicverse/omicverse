@@ -10,7 +10,6 @@ from typing import Any, Callable, Dict, List, Optional
 import pandas as pd
 import requests
 from anndata import AnnData
-import scanpy as sc
 
 from ..datasets import download_data
 from .._registry import register_function
@@ -451,7 +450,8 @@ class Annotation(object):
             )
             if cluster_key not in self.adata.obs.columns:
                 resolution = 1
-                sc.tl.leiden(self.adata, resolution=resolution, key_added=cluster_key)
+                from ..pp import leiden
+                leiden(self.adata, resolution=resolution, key_added=cluster_key, random_state=0, backend='python')
 
             anno=scsa.cell_anno(clustertype=cluster_key,
                cluster='all',rank_rep=True)
@@ -559,8 +559,9 @@ class Annotation(object):
             except (TypeError, ValueError):
                 _xmax = None
             if _xmax is not None and _xmax > 10:
-                sc.pp.normalize_total(adata_for_scml, target_sum=1e4)
-                sc.pp.log1p(adata_for_scml)
+                from ..pp import normalize_total, log1p
+                normalize_total(adata_for_scml, target_sum=1e4)
+                log1p(adata_for_scml)
 
             scml = _scmulan_mod.model_inference(
                 ckp_path, adata_for_scml, **kwargs,

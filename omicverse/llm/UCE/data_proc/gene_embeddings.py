@@ -4,7 +4,7 @@ from typing import Dict, Tuple
 
 import torch
 
-from scanpy import AnnData
+from anndata import AnnData
 import numpy as np
 import pandas as pd
 

@@ -1,4 +1,3 @@
-import scanpy as sc
 import pandas as pd
 import numpy as np
 import matplotlib.pyplot as plt
@@ -400,17 +399,18 @@ def pathway_enrichment(adata, pathways_dict,organism='Human',group_by='louvain',
         >>> res = pathway_enrichment(adata, pathways_dict)
     
     Reference:
-        The code for pathway_enrichment() function was adapted from scanpy workflows: 
+        The code for pathway_enrichment() function was adapted from the scanpy tutorial workflow: 
         https://scanpy-tutorials.readthedocs.io/en/latest/pbmc3k.html#Gene-set-enrichment-analysis.
     """
 
     from ..bulk._ora import enrichr
+    from ._sc_compat import rank_genes_groups_df
     df_list = []
     cluster_list = []
     celltypes = sorted(adata.obs[group_by].unique())
 
     for celltype in celltypes:
-        degs = sc.get.rank_genes_groups_df(adata, group=celltype, key='rank_genes_groups', log2fc_min=logfc_threshold, 
+        degs = rank_genes_groups_df(adata, group=celltype, key='rank_genes_groups', log2fc_min=logfc_threshold, 
                                     pval_cutoff=cutoff)['names'].squeeze()
         if isinstance(degs, str):
             degs = [degs.strip()]

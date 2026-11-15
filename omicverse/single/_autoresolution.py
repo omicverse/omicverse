@@ -129,7 +129,8 @@ def _build_null_adata(
     from the observed stability.
     """
     import scipy.sparse
-    import scanpy as sc
+    from ..pp._neighbors import neighbors
+    from ._sc_compat import pca_X
 
     rng = np.random.default_rng(null_seed)
     if null_layer is not None and null_layer in adata.layers:
@@ -149,13 +150,13 @@ def _build_null_adata(
         obs=adata.obs[[]].copy(),
         var=adata.var[[]].copy(),
     )
-    # Use scanpy directly so the null pipeline doesn't touch ov.settings
-    # dispatch — the null is a procedural twin, not a "best-effort
+    # Use the scanpy-equivalent CPU paths so the null pipeline doesn't touch
+    # ov.settings dispatch — the null is a procedural twin, not a "best-effort
     # omicverse run". Keep PCA n_comps and neighbor count matched to the
     # real graph so the null is comparable.
-    sc.pp.pca(null_adata, n_comps=n_pcs, zero_center=True)
-    sc.pp.neighbors(null_adata, n_neighbors=n_neighbors,
-                     use_rep='X_pca', random_state=0)
+    pca_X(null_adata, n_comps=n_pcs, zero_center=True)
+    neighbors(null_adata, n_neighbors=n_neighbors, method='umap',
+              use_rep='X_pca', random_state=0)
     return null_adata
 
 

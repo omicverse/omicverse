@@ -66,10 +66,9 @@ def CAST(adata, sample_key=None, basis='spatial', layer='norm_1e4',
         - Progress is shown with tqdm progress bars
 
     Examples:
-        >>> import scanpy as sc
         >>> import omicverse as ov
         >>> # Load multiple samples
-        >>> adata = sc.read_h5ad('spatial_samples.h5ad')
+        >>> adata = ov.read('spatial_samples.h5ad')
         >>> # Run CAST integration
         >>> adata = ov.space.CAST(
         ...     adata,

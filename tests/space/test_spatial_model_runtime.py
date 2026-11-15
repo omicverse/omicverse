@@ -41,16 +41,17 @@ def test_spaceflow_regularization_samples_independent_spatial_pairs(monkeypatch)
 
 
 def _patch_scanpy_trajectory(monkeypatch):
-    monkeypatch.setattr("scanpy.pp.neighbors", lambda *args, **kwargs: None)
-    monkeypatch.setattr("scanpy.tl.umap", lambda *args, **kwargs: None)
-    monkeypatch.setattr("scanpy.tl.leiden", lambda *args, **kwargs: None)
-    monkeypatch.setattr("scanpy.tl.paga", lambda *args, **kwargs: None)
-    monkeypatch.setattr("scanpy.tl.diffmap", lambda *args, **kwargs: None)
+    # cal_pSM runs the scanpy-equivalent helpers (omicverse._sc_compat) and the
+    # omicverse.pp diffmap / dpt ports; stub them so the 6-cell graph only
+    # exercises the subsample-root mapping.
+    for name in ("neighbors", "umap", "leiden", "paga"):
+        monkeypatch.setattr(f"omicverse._sc_compat.{name}", lambda *args, **kwargs: None)
+    monkeypatch.setattr("omicverse.pp.diffmap", lambda *args, **kwargs: None)
 
     def fake_dpt(adata, *args, **kwargs):
         adata.obs["dpt_pseudotime"] = np.linspace(0, 1, adata.n_obs)
 
-    monkeypatch.setattr("scanpy.tl.dpt", fake_dpt)
+    monkeypatch.setattr("omicverse.pp.dpt", fake_dpt)
 
 
 def test_identical_sampled_points_have_zero_distance():

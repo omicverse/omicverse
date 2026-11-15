@@ -1,10 +1,33 @@
 import numpy as np
 import scipy.sparse as _sp
-import scanpy as sc
 import warnings
 from ..pp import preprocess
 from .._settings import add_reference
 from .._registry import register_function
+
+
+def _row_sums(X, chunk_size=2048):
+    """Per-observation totals of ``X`` read in row blocks.
+
+    In-memory dense / sparse matrices are summed directly. Disk-backed
+    matrices (anndataoom ``BackedArray``) are streamed in ``chunk_size``-row
+    blocks; ``np.asarray`` on such an object falls back to element-wise
+    ``__getitem__`` calls and effectively never finishes.
+    """
+    if _sp.issparse(X):
+        return np.asarray(X.sum(axis=1), dtype=np.float64).ravel()
+    if isinstance(X, np.ndarray):
+        return X.sum(axis=1, dtype=np.float64)
+    n_obs = X.shape[0]
+    out = np.empty(n_obs, dtype=np.float64)
+    for start in range(0, n_obs, chunk_size):
+        stop = min(start + chunk_size, n_obs)
+        block = X[start:stop]
+        if _sp.issparse(block):
+            out[start:stop] = np.asarray(block.sum(axis=1)).ravel()
+        else:
+            out[start:stop] = np.asarray(block, dtype=np.float64).reshape(stop - start, -1).sum(axis=1)
+    return out
 
 
 def _select_significant_svg_names(qvals, *, n_svgs, qval_threshold):
@@ -92,14 +115,61 @@ def _svg_multiple_libraries(adata, mode, n_svgs, target_sum, platform,
 # Internal helpers for spatial autocorrelation
 # ---------------------------------------------------------------------------
 
+_AUTOCORR_CHUNK = 1024
+
+
+def _centered_quadratic_terms(g, vals, chunk=_AUTOCORR_CHUNK):
+    """Per-gene ``z' G z`` and ``z' z`` for centred columns ``z`` of ``vals``.
+
+    ``vals`` is observations x genes; genes are processed in column blocks so
+    the extra memory is one ``n_obs x chunk`` block.
+    """
+    g = _sp.csr_matrix(g, dtype=np.float64)
+    n_genes = vals.shape[1]
+    zgz = np.empty(n_genes, dtype=np.float64)
+    zz = np.empty(n_genes, dtype=np.float64)
+    zr = np.empty(n_genes, dtype=np.float64)  # sum_i rowsum_i z_i^2 + colsum_i z_i^2
+    deg = (np.asarray(g.sum(axis=1)).ravel() + np.asarray(g.sum(axis=0)).ravel())
+    for start in range(0, n_genes, chunk):
+        stop = min(start + chunk, n_genes)
+        block = vals[:, start:stop]
+        block = block.toarray() if _sp.issparse(block) else np.asarray(block)
+        z = block.astype(np.float64, copy=True)
+        z -= z.mean(axis=0, keepdims=True)
+        z2 = z * z
+        zgz[start:stop] = np.einsum('ij,ij->j', z, g @ z)
+        zz[start:stop] = z2.sum(axis=0)
+        zr[start:stop] = deg @ z2
+    return zgz, zz, zr
+
+
 def _moran_i_scores(g, vals):
-    """Use Scanpy's Moran kernel, as Squidpy does (genes by observations)."""
-    return sc.metrics.morans_i(g, vals.T)
+    """Moran's I per gene (``vals`` is observations x genes).
+
+    Same statistic as ``scanpy.metrics.morans_i`` / squidpy:
+    ``I = N / W * z' G z / z' z`` with ``z`` the centred expression and
+    ``W`` the sum of all weights.
+    """
+    n = vals.shape[0]
+    W = float(g.sum())
+    zgz, zz, _ = _centered_quadratic_terms(g, vals)
+    with np.errstate(divide='ignore', invalid='ignore'):
+        return n / W * zgz / zz
 
 
 def _geary_c_scores(g, vals):
-    """Use Scanpy's Geary kernel, including asymmetric permutation weights."""
-    return sc.metrics.gearys_c(g, vals.T)
+    """Geary's C per gene (``vals`` is observations x genes).
+
+    Same statistic as ``scanpy.metrics.gearys_c``, including asymmetric
+    (permuted) weights: ``C = (N - 1) * sum_ij w_ij (x_i - x_j)^2 /
+    (2 W sum_i z_i^2)``; the numerator is expanded on centred values.
+    """
+    n = vals.shape[0]
+    W = float(g.sum())
+    zgz, zz, zr = _centered_quadratic_terms(g, vals)
+    total = zr - 2.0 * zgz
+    with np.errstate(divide='ignore', invalid='ignore'):
+        return (n - 1) * total / (2.0 * W * zz)
 
 
 def _analytic_pval(scores, g, mode, n, two_tailed):
@@ -868,10 +938,9 @@ def svg(adata,mode='prost',n_svgs=3000,target_sum=50*1e4,platform="visium",
         - Results are normalized and log-transformed
 
     Examples:
-        >>> import scanpy as sc
         >>> import omicverse as ov
         >>> # Load spatial data
-        >>> adata = sc.read_visium(...)
+        >>> adata = ov.io.read_visium(...)
         >>> # Find SVGs using PROST
         >>> adata = ov.space.svg(
         ...     adata,
@@ -927,8 +996,9 @@ def svg(adata,mode='prost',n_svgs=3000,target_sum=50*1e4,platform="visium",
         
         #drop_gene_name = mt_startwith
         #selected_gene_name=list(adata.var_names[adata.var_names.str.contains(mt_startwith)==False])
-        sc.pp.normalize_total(bdata, target_sum=target_sum)
-        sc.pp.log1p(bdata)
+        from ..pp import normalize_total, log1p
+        normalize_total(bdata, target_sum=target_sum)
+        log1p(bdata)
         #print('normalization and log1p are done!')
         #adata.raw = adata
         bdata = feature_selection(bdata, 
@@ -956,11 +1026,7 @@ def svg(adata,mode='prost',n_svgs=3000,target_sum=50*1e4,platform="visium",
         # `bdata` is a throwaway copy used only to pick genes — its result is mapped
         # back to `adata` by gene name — so dropping empty spots here does not touch
         # the returned object's cells.
-        import numpy as _np
-        import scipy.sparse as _spp
-        _counts = bdata.X
-        _cell_sums = _np.asarray(
-            _counts.sum(axis=1)).ravel() if _spp.issparse(_counts) else _np.asarray(_counts).sum(axis=1)
+        _cell_sums = _row_sums(bdata.X)
         _nonzero = _cell_sums > 0
         if not _nonzero.all():
             n_drop = int((~_nonzero).sum())

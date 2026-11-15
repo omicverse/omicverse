@@ -93,9 +93,9 @@ class _RNGIgraph:
             self._rng = np.random.RandomState(random_state)
 
     def getrandbits(self, k: int) -> int:
-        # Generate a random integer using the RandomState
-        max_val = (1 << k)
-        return self._rng.randint(0, max_val)
+        # Same draw as scanpy's _RNGIgraph, so flavor='igraph' labels match scanpy
+        # for the same seed (randint(0, 2**k) consumed the stream differently).
+        return self._rng.tomaxint() & ((1 << k) - 1)
 
     def randint(self, a: int, b: int) -> int:
         return self._rng.randint(a, b + 1)

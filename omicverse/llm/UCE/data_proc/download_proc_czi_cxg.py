@@ -6,7 +6,7 @@ warnings.filterwarnings('ignore')
 
 import cellxgene_census
 from tqdm import tqdm
-import scanpy as sc
+import anndata
 
 from collections import defaultdict
 from typing import Dict, List, Optional, Tuple
@@ -15,14 +15,13 @@ import torch
 import torch.utils.data as data
 import torch
 import numpy as np
-import scanpy as sc
 from numpy import array
 import os
 import pickle as pkl
 import glob
 
 def data_to_torch_X(X):
-    if isinstance(X, sc.AnnData):
+    if isinstance(X, anndata.AnnData):
         X = X.X
     if not isinstance(X, np.ndarray):
             X = X.toarray()
@@ -34,7 +33,9 @@ sys.path.append('../')
 from gene_embeddings import load_gene_embeddings_adata
 import pandas as pd
 import numpy as np
-from scanpy import AnnData
+from anndata import AnnData
+from omicverse.pp import filter_cells, filter_genes, highly_variable_genes
+from omicverse.pp._highly_variable_genes import check_nonnegative_integers
 from multiprocessing import Pool, Process, Manager
 
 import multiprocessing.pool as mpp
@@ -103,7 +104,7 @@ def process_row(row, num_genes, num_cells, paths, all_species, covar_cols, datas
     if os.path.exists(proc_path) and os.path.exists(npz_path):
         print("Already Proc")
         try:
-            ad = sc.read(proc_path)
+            ad = anndata.read_h5ad(proc_path)
         except:
             print()
             print()
@@ -134,16 +135,16 @@ def process_row(row, num_genes, num_cells, paths, all_species, covar_cols, datas
         
         return # Skip everything else
     # Read the raw AD
-    ad = sc.read(save_path)
+    ad = anndata.read_h5ad(save_path)
     
     # Change to counts
-    if not sc._utils.check_nonnegative_integers(ad.X):
+    if not check_nonnegative_integers(ad.X):
         # don't have counts yet, need raw
         if ad.raw is None:
             print("Skipped, no counts")
             return
         ad.X = ad.raw.X.toarray()
-    if not sc._utils.check_nonnegative_integers(ad.X):
+    if not check_nonnegative_integers(ad.X):
         print("Skipped, no counts")
         return
         
@@ -177,35 +178,35 @@ def process_row(row, num_genes, num_cells, paths, all_species, covar_cols, datas
     
     ad = ad.copy()
     # Simple filtering by counts
-    sc.pp.filter_cells(ad, min_genes=200)
-    sc.pp.filter_genes(ad, min_cells=10)
+    filter_cells(ad, min_genes=200)
+    filter_genes(ad, min_cells=10)
     
     #print(ad)
     
     if "sample" in ad.obs.columns:
         try:
-            sc.pp.highly_variable_genes(ad, flavor="seurat_v3", n_top_genes=N_TOP_GENES, subset=True, batch_key="sample")
+            highly_variable_genes(ad, flavor="seurat_v3", n_top_genes=N_TOP_GENES, subset=True, batch_key="sample")
         except:
             try:
-                sc.pp.highly_variable_genes(ad, flavor="seurat_v3", n_top_genes=N_TOP_GENES, subset=True, batch_key="sample", span=1)
+                highly_variable_genes(ad, flavor="seurat_v3", n_top_genes=N_TOP_GENES, subset=True, batch_key="sample", span=1)
             except:
                 print(f"can't hv gene subset {dataset_title}")
         covar_cols[dataset_title] = "sample"
     elif "batch" in ad.obs.columns:
         try:
-            sc.pp.highly_variable_genes(ad, flavor="seurat_v3", n_top_genes=N_TOP_GENES, subset=True, batch_key="batch")
+            highly_variable_genes(ad, flavor="seurat_v3", n_top_genes=N_TOP_GENES, subset=True, batch_key="batch")
         except:
             try:
-                sc.pp.highly_variable_genes(ad, flavor="seurat_v3", n_top_genes=N_TOP_GENES, subset=True, batch_key="batch", span=1)
+                highly_variable_genes(ad, flavor="seurat_v3", n_top_genes=N_TOP_GENES, subset=True, batch_key="batch", span=1)
             except:
                 print(f"can't hv gene subset {dataset_title}")
         covar_cols[dataset_title] = "batch"
     else:
         try:
-            sc.pp.highly_variable_genes(ad, flavor="seurat_v3", n_top_genes=N_TOP_GENES, subset=True)
+            highly_variable_genes(ad, flavor="seurat_v3", n_top_genes=N_TOP_GENES, subset=True)
         except:
             try:
-                sc.pp.highly_variable_genes(ad, flavor="seurat_v3", n_top_genes=N_TOP_GENES, subset=True, span=1)
+                highly_variable_genes(ad, flavor="seurat_v3", n_top_genes=N_TOP_GENES, subset=True, span=1)
             except:
                 print(f"can't hv gene subset {dataset_title}")
         covar_cols[dataset_title] = ""

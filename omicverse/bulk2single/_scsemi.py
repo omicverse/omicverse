@@ -60,7 +60,6 @@ class scSemiProfiler:
         >>> scSemiProfiler.initsetup(name, bulk,logged,normed,geneselection,batch)
 
         """
-        import scanpy as sc
         name = self.name
         print('Start initial setup')
 
@@ -95,17 +94,16 @@ class scSemiProfiler:
             f.write(sid+'\n')
         f.close()
         
-        import scanpy as sc
+        from ..pp import highly_variable_genes
+        from .._sc_compat import pca_X
         if geneselection == False:
             hvgenes = np.array(bulkdata.var.index)
         elif geneselection == True:
-            sc.pp.highly_variable_genes(bulkdata, n_top_genes=6000)
-            #sc.pp.highly_variable_genes(bulkdata, min_mean=0.0125, max_mean=3, min_disp=0.5)
+            highly_variable_genes(bulkdata, n_top_genes=6000)
             bulkdata = bulkdata[:, bulkdata.var.highly_variable]
             hvgenes = (np.array(bulkdata.var.index))[bulkdata.var.highly_variable]
         else:
-            sc.pp.highly_variable_genes(bulkdata, n_top_genes = int(geneselection))
-            #sc.pp.highly_variable_genes(bulkdata, min_mean=0.0125, max_mean=3, min_disp=0.5)
+            highly_variable_genes(bulkdata, n_top_genes = int(geneselection))
             bulkdata = bulkdata[:, bulkdata.var.highly_variable]
             hvgenes = (np.array(bulkdata.var.index))[bulkdata.var.highly_variable]
         np.save(name+'/hvgenes.npy',hvgenes)
@@ -117,7 +115,7 @@ class scSemiProfiler:
         else:
             n_comps = bulkdata.X.shape[0]-1
         
-        sc.tl.pca(bulkdata,n_comps=n_comps)
+        pca_X(bulkdata,n_comps=n_comps)
         
         bulkdata.write(name + '/processed_bulkdata.h5ad')
         
@@ -209,7 +207,7 @@ class scSemiProfiler:
         
         """
         from ..external.bulk2single.scSemiProfiler.singlecell_process import hamster_to_human,getGeneSetMatrix,fast_cellgraph
-        import scanpy as sc
+        from .. import pp as _pp
         print('Processing representative single-cell data')
         
         #scdata = anndata.read_h5ad(singlecell)
@@ -222,9 +220,9 @@ class scSemiProfiler:
         # cell filtering
         if cellfilter == True:
             print('Filtering cells')
-            sc.pp.filter_cells(scdata, min_genes=200)
+            _pp.filter_cells(scdata, min_genes=200)
             scdata.var['mt'] = scdata.var_names.str.startswith('MT-')  # annotate the group of mitochondrial genes as 'mt'
-            sc.pp.calculate_qc_metrics(scdata, qc_vars=['mt'], percent_top=None, log1p=False, inplace=True)
+            _pp.calculate_qc_metrics(scdata, qc_vars=['mt'], percent_top=None, log1p=False, inplace=True)
             scdata = scdata[scdata.obs.n_genes_by_counts < 2500, :]
             scdata = scdata[scdata.obs.pct_counts_mt < 5, :]
         
@@ -240,7 +238,7 @@ class scSemiProfiler:
         
         if normed == False:
             print('Library size normalization.')
-            sc.pp.normalize_total(scdata, target_sum=1e4)    
+            _pp.normalize_total(scdata, target_sum=1e4)
         
         # convert to dense if sparse
         if scipy.sparse.issparse(scdata.X):
@@ -309,8 +307,8 @@ class scSemiProfiler:
             if 'hvset.npy' not in os.listdir(name):
                 zps=np.concatenate(zps,axis=0)
                 zdata = anndata.AnnData(zps)
-                sc.pp.log1p(zdata)
-                sc.pp.highly_variable_genes(zdata)
+                _pp.log1p(zdata)
+                _pp.highly_variable_genes(zdata)
                 hvset = zdata.var.highly_variable
                 np.save(name + '/hvset.npy',hvset)
             

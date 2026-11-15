@@ -9,7 +9,7 @@ import torch
 from tqdm import tqdm
 import scipy.sparse
 from scipy.sparse import issparse
-import scanpy as sc
+import anndata
 from load import *
 
 ####################################Settings#################################
@@ -76,7 +76,7 @@ def main():
         gexpr_feature = scipy.sparse.load_npz(args.data_path)
         gexpr_feature = pd.DataFrame(gexpr_feature.toarray())
     elif args.data_path[-4:]=='h5ad':
-        gexpr_feature = sc.read_h5ad(args.data_path)
+        gexpr_feature = anndata.read_h5ad(args.data_path)
         idx = gexpr_feature.obs_names.tolist()
         col = gexpr_feature.var.gene_name.tolist()
         if issparse(gexpr_feature.X):
@@ -96,9 +96,10 @@ def main():
         assert gexpr_feature.shape[1]>=19264
     
     if (args.pre_normalized == 'F') and (args.input_type == 'bulk'):
-        adata = sc.AnnData(gexpr_feature)
-        sc.pp.normalize_total(adata)
-        sc.pp.log1p(adata)
+        from omicverse.pp import normalize_total, log1p
+        adata = anndata.AnnData(gexpr_feature)
+        normalize_total(adata)
+        log1p(adata)
         gexpr_feature = pd.DataFrame(adata.X,index=adata.obs_names,columns=adata.var_names)
 
     if args.demo:

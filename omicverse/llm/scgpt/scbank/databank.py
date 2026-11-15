@@ -166,9 +166,9 @@ class DataBank:
         """
 
         if isinstance(adata, str) or isinstance(adata, Path):
-            import scanpy as sc
+            import anndata
 
-            adata = sc.read(adata, cache=True)
+            adata = anndata.read_h5ad(adata)
         elif not isinstance(adata, AnnData):
             raise ValueError("adata must points to an AnnData object.")
 

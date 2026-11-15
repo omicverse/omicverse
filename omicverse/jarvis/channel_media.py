@@ -36,11 +36,11 @@ def channel_image_hint(channel_label: str = "Mobile channel") -> str:
     return (
         f"[Channel: {label} — image delivery rules]\n"
         "1. If the user asks for a plot, figure, visualization, or any image output, "
-        "you MUST execute Python code that creates the figure with matplotlib/scanpy.\n"
+        "you MUST execute Python code that creates the figure with matplotlib/omicverse.\n"
         "2. If you save figures explicitly, save the final figure to "
         "figures/<descriptive_name>.png with plt.savefig(..., dpi=200, bbox_inches='tight'). "
         "If you create multiple figures, save the one that should be sent to the user LAST. "
-        "For ov.pl.*, sc.pl.*, scv.pl.*, or similar plotting helpers, set show=False before saving.\n"
+        "For ov.pl.*, scv.pl.*, or similar plotting helpers, set show=False before saving.\n"
         "3. After code runs, reply with plain text only. Do NOT output local paths, "
         "sandbox links, download links, or Markdown image syntax.\n"
         "4. The system will automatically save matplotlib figures generated during execution "

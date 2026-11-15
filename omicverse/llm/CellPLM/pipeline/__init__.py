@@ -7,7 +7,6 @@ from typing import List, Union
 from .experimental import symbol_to_ensembl
 import json
 import warnings
-import scanpy as sc
 
 def load_pretrain(
         pretrain_prefix: str,
@@ -65,7 +64,8 @@ class Pipeline(ABC):
         else:
             if hvg > 0:
                 if hvg < adata.shape[1]:
-                    sc.pp.highly_variable_genes(adata, n_top_genes=hvg, subset=True, flavor='seurat_v3')
+                    from ....pp import highly_variable_genes
+                    highly_variable_genes(adata, n_top_genes=hvg, subset=True, flavor='seurat_v3')
                 else:
                     warnings.warn('HVG number is larger than number of valid genes.')
             adata = adata[:, [x for x in adata.var.index.tolist() if x in self.model.gene_set]]

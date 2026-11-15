@@ -10,7 +10,11 @@ from tqdm import tqdm
 
 import pandas as pd
 import numpy as np
-from anndata import AnnData, read_h5ad, read_loom
+from anndata import AnnData, read_h5ad
+try:  # anndata >= 0.11 moved the readers to anndata.io
+    from anndata.io import read_loom
+except ImportError:  # pragma: no cover - older anndata
+    from anndata import read_loom
 import warnings
 from .._registry import register_function
 
@@ -469,30 +473,94 @@ def scnt_seq_neuron_labeling(
     return adata
 
 
+# 10x Genomics PBMC CITE-seq runs (TotalSeq-B), filtered for doublets and outliers
+# as in the totalVI paper (Gayoso et al. 2021); the same files scvi-tools'
+# ``pbmcs_10x_cite_seq`` reads.  RNA counts in X (dense float32), ADT counts in
+# obsm['protein_expression'] and protein names in uns['protein_names'].
+CITE_SEQ_PBMC_FILES = (
+    ("PBMC10k", "pbmc_10k_protein_v3.h5ad",
+     "https://exampledata.scverse.org/scvi-tools/pbmc_10k_protein_v3.h5ad"),
+    ("PBMC5k", "pbmc_5k_protein_v3.h5ad",
+     "https://exampledata.scverse.org/scvi-tools/pbmc_5k_protein_v3.h5ad"),
+)
+
+
+def _cite_seq_run(path: str, batch: str) -> AnnData:
+    """One CITE-seq run as AnnData: CSR counts, ADT counts as a DataFrame."""
+    from scipy import sparse
+    a = read_h5ad(path)
+    names = [str(n) for n in np.asarray(a.uns.pop("protein_names"))]
+    a.X = sparse.csr_matrix(np.asarray(a.X, dtype=np.float32)) \
+        if not sparse.issparse(a.X) else a.X.tocsr().astype(np.float32)
+    a.obsm["protein_expression"] = pd.DataFrame(
+        np.asarray(a.obsm["protein_expression"], dtype=np.float32),
+        index=a.obs_names, columns=names)
+    a.obs["batch"] = batch
+    return a
+
+
 @register_function(
-    aliases=['cite_seq', 'CITE-seq', '占位数据集_cite_seq'],
+    aliases=['cite_seq', 'CITE-seq', 'pbmcs_10x_cite_seq', 'pbmc_cite_seq', 'CITE-seq数据'],
     category="datasets",
-    description="Placeholder loader for CITE-seq dataset (currently not implemented).",
+    description="Load the 10x PBMC 5k + 10k CITE-seq runs (RNA counts + 14 ADT proteins, batch column) for totalVI / multimodal tutorials.",
     prerequisites={},
     requires={},
-    produces={},
+    produces={'layers': ['counts'], 'obsm': ['protein_expression'], 'obs': ['batch']},
     auto_fix='none',
-    examples=['ov.datasets.cite_seq()'],
-    related=['datasets.pbmc3k', 'datasets.pbmc8k']
+    examples=['adata = ov.datasets.cite_seq()',
+              "ov.single.batch_correction(adata, batch_key='batch', methods='totalVI', protein_expression_obsm_key='protein_expression')"],
+    related=['datasets.pbmc3k', 'datasets.pbmc8k', 'vi.TOTALVI']
 )
-def cite_seq():
-    """Placeholder for CITE-seq dataset loader.
+def cite_seq(protein_join: str = "inner", dir: str = "./data") -> AnnData:
+    """10x Genomics PBMC CITE-seq (5k + 10k runs, TotalSeq-B antibodies).
+
+    The two public 10x runs ``pbmc_10k_protein_v3`` and ``5k_pbmc_protein_v3``
+    after the doublet / outlier filtering of the totalVI paper — the same data
+    as scvi-tools' ``scvi.data.pbmcs_10x_cite_seq`` (no scvi-tools needed).
+    Files are downloaded once to ``dir`` and read from there afterwards.
 
     Parameters
     ----------
-    None
+    protein_join : str
+        ``'inner'`` keeps the 14 antibodies measured in both runs; ``'outer'``
+        keeps all 29 (absent proteins are 0 in the run that lacks them —
+        ``ov.vi.TOTALVI`` treats them as missing in that batch).
+    dir : str
+        Download / cache directory.
 
     Returns
     -------
-    None
-        Function is currently not implemented and returns ``None``.
+    AnnData
+        10 849 cells x 15 792 genes (genes shared by both runs):
+        ``X`` and ``layers['counts']`` raw RNA counts (CSR float32);
+        ``obsm['protein_expression']`` ADT counts (cells x proteins DataFrame);
+        ``uns['protein_names']``; ``obs['batch']`` in {``'PBMC10k'``, ``'PBMC5k'``}.
+        Cell names get a ``-PBMC10k`` / ``-PBMC5k`` suffix (the barcodes overlap).
+
+    References
+    ----------
+    Gayoso A, Steier Z, Lopez R, et al. Joint probabilistic modeling of
+    single-cell multi-omic data with totalVI. Nat Methods 18, 272-282 (2021).
     """
-    pass
+    import anndata
+    if protein_join not in ("inner", "outer"):
+        raise ValueError("protein_join must be 'inner' or 'outer'")
+    print(f"{Colors.HEADER}Loading 10x PBMC CITE-seq (5k + 10k){Colors.ENDC}")
+    runs = [_cite_seq_run(download_data_requests(url, fname, dir=dir), batch)
+            for batch, fname, url in CITE_SEQ_PBMC_FILES]
+    genes = runs[0].var_names.intersection(runs[1].var_names)
+    runs = [a[:, genes] for a in runs]
+    adata = anndata.concat(runs, join=protein_join,
+                           keys=[a.obs["batch"].iloc[0] for a in runs], index_unique="-")
+    pro = adata.obsm["protein_expression"].fillna(0).astype(np.float32)
+    adata.obsm["protein_expression"] = pro
+    adata.uns["protein_names"] = np.asarray(pro.columns, dtype=object)
+    adata.obs["batch"] = pd.Categorical(adata.obs["batch"],
+                                        categories=[b for b, _, _ in CITE_SEQ_PBMC_FILES])
+    adata.layers["counts"] = adata.X.copy()
+    print(f"{Colors.GREEN}{EMOJI['done']} {adata.n_obs} cells x {adata.n_vars} genes, "
+          f"{pro.shape[1]} proteins{Colors.ENDC}")
+    return adata
 
 
 @register_function(

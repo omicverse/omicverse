@@ -216,10 +216,10 @@ class DataStateInspector:
                     priority='HIGH',
                     suggestion_type='direct_fix',
                     description='Compute neighbor graph (required for clustering/UMAP)',
-                    code='sc.pp.neighbors(adata, n_neighbors=15, n_pcs=50)',
+                    code='ov.pp.neighbors(adata, n_neighbors=15, n_pcs=50)',
                     explanation=(
                         'The function requires a neighbor graph (connectivities and distances). '
-                        'Run sc.pp.neighbors() to compute the k-nearest neighbors graph.'
+                        'Run ov.pp.neighbors() to compute the k-nearest neighbors graph.'
                     ),
                     estimated_time='10-30 seconds',
                     estimated_time_seconds=20,

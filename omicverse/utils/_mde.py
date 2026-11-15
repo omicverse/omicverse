@@ -1,4 +1,5 @@
-"""copy from scvi-tools/scvi/utils/_mde.py"""
+"""Minimum-distortion embedding via pymde (port of scvi-tools' ``scvi.model.utils.mde``;
+no scvi-tools dependency)."""
 
 from __future__ import annotations
 
@@ -93,9 +94,8 @@ def mde(
     if isinstance(data, pd.DataFrame):
         data = data.values
 
-    device = "cpu"
-    if torch is not None and torch.cuda.is_available():
-        device = "cuda"
+    if device is None:  # auto: CUDA when available (an explicit device is honoured)
+        device = "cuda" if torch is not None and torch.cuda.is_available() else "cpu"
 
     _kwargs = {
         "embedding_dim": 2,

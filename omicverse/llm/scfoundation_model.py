@@ -20,7 +20,6 @@ from sklearn.model_selection import train_test_split
 from sklearn.metrics import accuracy_score, precision_score, recall_score, f1_score
 from anndata import AnnData
 from scipy.sparse import issparse
-import scanpy as sc
 
 try:
     from .base import SCLLMBase, ModelConfig, TaskConfig
@@ -469,8 +468,9 @@ class ScFoundationModel(SCLLMBase):
             if pre_normalized == 'F':
                 # Raw counts - need normalization
                 SCLLMOutput.status(f"Applying normalization and log transformation", 'preprocessing')
-                sc.pp.normalize_total(adata_processed, target_sum=1e4)
-                sc.pp.log1p(adata_processed)
+                from omicverse.pp import normalize_total, log1p
+                normalize_total(adata_processed, target_sum=1e4)
+                log1p(adata_processed)
             elif pre_normalized == 'T':
                 # Already normalized and log-transformed
                 SCLLMOutput.status(f"Data already normalized and log-transformed", 'info')
@@ -484,8 +484,9 @@ class ScFoundationModel(SCLLMBase):
             if pre_normalized == 'F':
                 # Raw bulk data - apply normalization
                 SCLLMOutput.status(f"Applying bulk data normalization", 'preprocessing')
-                sc.pp.normalize_total(adata_processed)
-                sc.pp.log1p(adata_processed)
+                from omicverse.pp import normalize_total, log1p
+                normalize_total(adata_processed)
+                log1p(adata_processed)
             elif pre_normalized == 'T':
                 # Already log10 normalized
                 SCLLMOutput.status(f"Bulk data already normalized", 'info')
@@ -896,29 +897,39 @@ class ScFoundationModel(SCLLMBase):
                             unique_batches, **kwargs) -> np.ndarray:
         """Apply MNN (Mutual Nearest Neighbors) correction to embeddings."""
         try:
-            import scanpy as sc
-            from anndata import AnnData
-        except ImportError:
-            raise ImportError("scanpy is required for MNN correction")
-        
+            import mnnpy
+        except ImportError as e:
+            raise ImportError(
+                "mnnpy is required for MNN correction "
+                "(https://github.com/chriscainx/mnnpy)."
+            ) from e
+        from anndata import AnnData
+
         SCLLMOutput.status(f"Applying MNN correction", 'preprocessing')
-        
-        # Create temporary AnnData object
-        temp_adata = AnnData(X=embeddings)
-        temp_adata.obs['batch'] = [f"batch_{code}" for code in batch_codes]
-        
-        # Apply MNN correction using scanpy
-        # Remove conflicting parameters from kwargs
+
+        # mnnpy corrects one AnnData per batch and returns the corrected,
+        # concatenated object (batches in the order given).
         mnn_kwargs = {k: v for k, v in kwargs.items() if k not in ['batch_key', 'correction_method', 'pre_normalized']}
-        
-        sc.external.pp.mnn_correct(
-            temp_adata,
+        batch_codes = np.asarray(batch_codes)
+        codes = [i for i in range(len(unique_batches)) if np.any(batch_codes == i)]
+        datas = [AnnData(X=np.asarray(embeddings[batch_codes == i])) for i in codes]
+        corrected = mnnpy.mnn_correct(
+            *datas,
             batch_key='batch',
-            batch_categories=[f"batch_{i}" for i in range(len(unique_batches))],
+            batch_categories=[f"batch_{i}" for i in codes],
+            do_concatenate=True,
             **mnn_kwargs
-        )
-        
-        return temp_adata.X
+        )[0]
+        corrected_X = corrected.X.toarray() if issparse(corrected.X) else np.asarray(corrected.X)
+
+        integrated = np.empty_like(np.asarray(embeddings, dtype=corrected_X.dtype))
+        start = 0
+        for i in codes:
+            mask = batch_codes == i
+            n = int(mask.sum())
+            integrated[mask] = corrected_X[start:start + n]
+            start += n
+        return integrated
     
     def _predict_generation(self, adata: AnnData, **kwargs) -> Dict[str, Any]:
         """Generate gene expression (placeholder)."""

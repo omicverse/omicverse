@@ -170,11 +170,11 @@ def predict_stflow(
         # stflow/model/transformer.py:63), i.e. the gene panel size is
         # baked into the architecture at 50. Until that assumption is
         # lifted upstream the default panel sits at 50 HVGs.
-        import scanpy as sc
+        from ...pp import normalize_total, log1p, highly_variable_genes
         ref_copy = reference.copy()
-        sc.pp.normalize_total(ref_copy, target_sum=1e4)
-        sc.pp.log1p(ref_copy)
-        sc.pp.highly_variable_genes(ref_copy, n_top_genes=50, flavor="seurat_v3")
+        normalize_total(ref_copy, target_sum=1e4)
+        log1p(ref_copy)
+        highly_variable_genes(ref_copy, n_top_genes=50, flavor="seurat_v3")
         gene_panel = ref_copy.var_names[ref_copy.var["highly_variable"]].tolist()
     else:
         gene_panel = [g for g in genes if g in reference.var_names]

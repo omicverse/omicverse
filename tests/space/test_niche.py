@@ -1,12 +1,9 @@
 """Tests for ``ov.space.niche`` — the spatial and molecular niche flavours.
 
-The interesting part here is not the clustering, which is Leiden over a
-feature matrix and is covered by scanpy's own tests. It is the call into
-scanpy: ``sc.tl.leiden(..., flavor='igraph')`` needs scanpy >= 1.10, while
-omicverse pins ``scanpy>=1.9``, so on a valid 1.9 install the whole module
-used to raise ``TypeError``. The keyword is now passed only when the
-signature has it, and both arms are exercised below with a stub — the
-installed scanpy can only ever be one of the two.
+The clustering is Leiden over a feature matrix, run through omicverse's own
+``ov.pp.neighbors`` / ``ov.pp.leiden`` (no scanpy). ``_cluster_rows`` must
+ask for scanpy's igraph flavour (two iterations, undirected) so labels match
+the earlier scanpy-backed release.
 """
 from __future__ import annotations
 
@@ -34,59 +31,27 @@ def _lattice(n_side: int = 10, step: float = 5.0, seed: int = 0) -> AnnData:
 
 
 # --------------------------------------------------------------------------- #
-# the scanpy version split
+# the Leiden call
 # --------------------------------------------------------------------------- #
-def _stub_leiden(with_flavor: bool, seen: dict):
-    """A stand-in for ``sc.tl.leiden`` with or without the 1.10 ``flavor=``."""
-    if with_flavor:
-        def leiden(adata, *, resolution=1.0, key_added="leiden", random_state=0,
-                   flavor="leidenalg", n_iterations=-1, directed=None):
-            seen.update(flavor=flavor, n_iterations=n_iterations,
-                        directed=directed)
-            adata.obs[key_added] = pd.Categorical(["0"] * adata.n_obs)
-    else:
-        # scanpy 1.9: no `flavor`, so passing it is a TypeError
-        def leiden(adata, *, resolution=1.0, key_added="leiden", random_state=0,
-                   n_iterations=-1, directed=True):
-            seen.update(n_iterations=n_iterations, directed=directed)
-            adata.obs[key_added] = pd.Categorical(["0"] * adata.n_obs)
-    return leiden
-
-
-def test_flavor_is_passed_when_scanpy_understands_it():
-    seen: dict = {}
-    kwargs = _niche._leiden_flavor_kwargs(_stub_leiden(True, seen))
-    assert kwargs == {"flavor": "igraph", "n_iterations": 2, "directed": False}
-
-
-def test_flavor_is_dropped_on_scanpy_1_9():
-    """The keyword is a 1.10 addition; omicverse pins >=1.9, so it has to go."""
-    seen: dict = {}
-    assert _niche._leiden_flavor_kwargs(_stub_leiden(False, seen)) == {}
-
-
-@pytest.mark.parametrize("with_flavor", [True, False])
-def test_cluster_rows_runs_on_both_scanpy_generations(monkeypatch, with_flavor):
-    """``_cluster_rows`` must not raise on either signature.
-
-    Before the fix the 1.9 arm raised ``TypeError: leiden() got an unexpected
-    keyword argument 'flavor'``, which took ``niche.neighborhood`` and
-    ``niche.utag`` down with it.
-    """
-    import scanpy as sc
+def test_cluster_rows_uses_igraph_flavour(monkeypatch):
+    import omicverse.pp as ovpp
 
     seen: dict = {}
-    monkeypatch.setattr(sc.tl, "leiden", _stub_leiden(with_flavor, seen))
 
+    def leiden(adata, *, resolution=1.0, key_added="leiden", random_state=0, **kw):
+        seen.update(kw)
+        adata.obs[key_added] = pd.Categorical(["0"] * adata.n_obs)
+
+    monkeypatch.setattr(ovpp, "leiden", leiden)
     rng = np.random.default_rng(0)
     labels = _niche._cluster_rows(rng.random((40, 5)), resolution=1.0, seed=0,
                                   n_neighbors=10)
     assert len(labels) == 40
-    assert ("flavor" in seen) is with_flavor
+    assert seen == {"flavor": "igraph", "n_iterations": 2, "directed": False}
 
 
 # --------------------------------------------------------------------------- #
-# end to end, against whatever scanpy is actually installed
+# end to end
 # --------------------------------------------------------------------------- #
 def test_neighborhood_labels_every_spot():
     adata = _lattice()

@@ -265,3 +265,18 @@ def _numba_threading_layer() -> Layer:
         f" ({available=}, {numba.config.THREADING_LAYER_PRIORITY=})"
     )
     raise ValueError(msg)
+
+class _ScanpyLikeSettings:
+    """Minimal stand-in for ``scanpy.settings`` (verbosity / n_jobs only).
+
+    Defaults mirror scanpy's ``ScanpyConfig`` (``verbosity=1`` i.e. warnings,
+    ``n_jobs=1``) so code paths ported from scanpy keep their behaviour
+    without importing scanpy.
+    """
+
+    def __init__(self) -> None:
+        self.verbosity = 1
+        self.n_jobs = 1
+
+
+sc_settings = _ScanpyLikeSettings()

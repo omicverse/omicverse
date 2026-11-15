@@ -18,7 +18,6 @@ from pathlib import Path
 import anndata
 import matplotlib.pyplot as plt
 import pandas as pd
-import scanpy as sc
 import seaborn as sns
 import torch
 
@@ -295,9 +294,13 @@ def plot_umap(embs_df, emb_dims, labels_clean, output_prefix, output_directory, 
         obs_dict[label_i] = list(embs_df[label_i])
 
     adata = anndata.AnnData(X=only_embs_df, obs=obs_dict, var=vars_dict)
-    sc.tl.pca(adata, svd_solver="arpack")
-    sc.pp.neighbors(adata, random_state=seed)
-    sc.tl.umap(adata, random_state=seed)
+    from ...pp._pca import pca as _pca
+    from ...pp import neighbors as _neighbors
+    from ...utils._compat import umap_like_scanpy as _umap
+    from ...pl import embedding as _embedding
+    _pca(adata, svd_solver="arpack")
+    _neighbors(adata, random_state=seed)
+    _umap(adata, random_state=seed)
     sns.set(rc={"figure.figsize": (10, 10)}, font_scale=2.3)
     sns.set_style("white")
     default_kwargs_dict = {"size": 200}
@@ -313,7 +316,8 @@ def plot_umap(embs_df, emb_dims, labels_clean, output_prefix, output_directory, 
         cats = set(embs_df[label_i])
 
         with plt.rc_context():
-            ax = sc.pl.umap(adata, color=label_i, show=False, **default_kwargs_dict)
+            ax = _embedding(adata, basis="X_umap", color=label_i, show=False,
+                            frameon=True, **default_kwargs_dict)
             ax.legend(
                 markerscale=2,
                 frameon=False,

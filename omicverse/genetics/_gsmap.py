@@ -385,7 +385,7 @@ class _gsmap_runner:
 
     def _get_latent_adata(self):
         """Load the latent-augmented AnnData used by downstream plotting."""
-        import scanpy as sc
+        import anndata
 
         latent_path = (
             Path(self.workdir)
@@ -393,7 +393,7 @@ class _gsmap_runner:
             / "find_latent_representations"
             / f"{self.sample_name}_add_latent.h5ad"
         )
-        return sc.read_h5ad(latent_path)
+        return anndata.read_h5ad(latent_path)
 
     def plot_manhattan(
         self,
@@ -431,8 +431,9 @@ class _gsmap_runner:
         """
         import numpy as np
         import pandas as pd
-        import scanpy as sc
         from scipy.stats import norm
+
+        from ..pp import normalize_total, log1p
 
         from ..external.gsmap._manhattan_plot import manhattan_plot
         from ..external.gsmap.diagnosis import compute_gene_diagnostic_info, load_gene_diagnostic_info
@@ -449,8 +450,8 @@ class _gsmap_runner:
 
         adata = self._get_latent_adata()
         if "log1p" not in adata.uns and adata.X.max() > 14:
-            sc.pp.normalize_total(adata, target_sum=1e4)
-            sc.pp.log1p(adata)
+            normalize_total(adata, target_sum=1e4)
+            log1p(adata)
 
         gene_info = load_gene_diagnostic_info(config, adata)
         if gene_info.empty:
@@ -730,8 +731,7 @@ class _gsmap_runner:
         list of matplotlib.axes.Axes
             Axes returned by ``ov.pl.embedding``.
         """
-        import scanpy as sc
-
+        from ..pp import normalize_total, log1p
         from ..external.gsmap.diagnosis import compute_gene_diagnostic_info, load_gene_diagnostic_info
         from ..external.gsmap._config import DiagnosisConfig
 
@@ -748,8 +748,8 @@ class _gsmap_runner:
         if "log1p" not in adata.uns:
             try:
                 if adata.X.max() > 14:
-                    sc.pp.normalize_total(adata, target_sum=1e4)
-                    sc.pp.log1p(adata)
+                    normalize_total(adata, target_sum=1e4)
+                    log1p(adata)
             except Exception:
                 pass
 
@@ -928,7 +928,7 @@ class _gsmap_runner:
         "ldsc_dir = runner.spatial_ldsc(gsmap_resource_dir='gsMap_resource', sumstats_file='trait.sumstats.gz', trait_name='trait')",
         "cauchy_file = runner.cauchy_combination(trait_name='trait', annotation='celltype')",
         "report_file = runner.report(trait_name='trait', sumstats_file='trait.sumstats.gz')",
-        "sc.pl.spatial(adata, color=['trait_gsmap_logp'], cmap='YlOrRd', spot_size=1.25)",
+        "ov.pl.spatial(adata, color=['trait_gsmap_logp'], cmap='YlOrRd', spot_size=1.25)",
         "runner.plot_cauchy_bar(trait_name='trait', cmap='Blues', save_path='cauchy_bar.png')",
         "runner.plot_gene_gss(trait_name='trait', gene='GENE', save_dir='gene_gss')",
         "runner.plot_top_genes(trait_name='trait', top_corr_genes=5, save_dir='top_genes')",

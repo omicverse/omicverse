@@ -3,8 +3,8 @@ import os
 from pathlib import Path
 from typing import Optional, Union
 
+import anndata
 import numpy as np
-import scanpy as sc
 import torch
 from anndata import AnnData
 from torch.utils.data import DataLoader, SequentialSampler
@@ -180,7 +180,7 @@ def embed_data(
     if isinstance(adata_or_file, AnnData):
         adata = adata_or_file
     else:
-        adata = sc.read_h5ad(adata_or_file)
+        adata = anndata.read_h5ad(adata_or_file)
 
     if isinstance(obs_to_save, str):
         assert obs_to_save in adata.obs, f"obs_to_save {obs_to_save} not in adata.obs"
@@ -275,7 +275,7 @@ def embed_data(
 
     if return_new_adata:
         obs_df = adata.obs[obs_to_save] if obs_to_save is not None else None
-        return sc.AnnData(X=_as_dtype(cell_embeddings, "float32"), obs=obs_df)
+        return anndata.AnnData(X=_as_dtype(cell_embeddings, "float32"), obs=obs_df)
 
     adata.obsm["X_scGPT"] = cell_embeddings
     return adata

@@ -764,7 +764,7 @@ IMPORTANT: Respond with ONLY the JSON array, nothing else."""
             "ov.Agent quick start (use only your provided adata):\n"
             "- " + "\n- ".join(examples) + "\n"
             "Notes: do not create new/dummy AnnData; prefer use_raw=False unless you need raw; "
-            "allowed libs: omicverse/scanpy/matplotlib."
+            "allowed libs: omicverse/matplotlib."
         )
 
     # =====================================================================

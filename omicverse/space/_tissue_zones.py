@@ -134,8 +134,8 @@ def nmf_tissue_zones(
     obsm_added
         Where to write the per-spot factor activations. Default
         ``X_tissue_zones``. Also written back to
-        ``adata.obsm[obsm_added]`` so downstream plotting (Scanpy
-        ``sc.pl.spatial``, ``ov.pl.embedding``) can colour spots by
+        ``adata.obsm[obsm_added]`` so downstream plotting (
+        ``ov.pl.spatial``, ``ov.pl.embedding``) can colour spots by
         zone directly. The run's metadata (``n_factors``,
         ``source_obsm``, ``cell_type_names``, ``factor_names``,
         ``reconstruction_err``) goes to

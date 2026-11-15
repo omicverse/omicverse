@@ -3,7 +3,6 @@ from typing import Dict, Optional, Union
 import numpy as np
 import torch
 from scipy.sparse import issparse
-import scanpy as sc
 from ...pp._scale import _get_obs_rep, _set_obs_rep
 from anndata import AnnData
 
@@ -58,7 +57,7 @@ class Preprocessor:
             genes. If :class:`None`, will use :attr:`adata.X`.
         hvg_flavor (:class:`str`, default: ``"seurat_v3"``):
             The flavor of highly variable genes selection. See
-            :func:`scanpy.pp.highly_variable_genes` for more details.
+            :func:`omicverse.pp.highly_variable_genes` for more details.
         binning (:class:`int`, optional):
             Whether to bin the data into discrete values of number of bins provided.
         result_binned_key (:class:`str`, default: ``"X_binned"``):
@@ -90,16 +89,24 @@ class Preprocessor:
             The key of :class:`AnnData.obs` to use for batch information. This arg
             is used in the highly variable gene selection step.
         """
+        from ...pp import (
+            filter_cells,
+            filter_genes,
+            highly_variable_genes,
+            log1p,
+            normalize_total,
+        )
+
         key_to_process = self.use_key
         # preliminary checks, will use later
         if key_to_process == "X":
-            key_to_process = None  # the following scanpy apis use arg None to use X
+            key_to_process = None  # the following ov.pp apis use arg None to use X
         is_logged = self.check_logged(adata, obs_key=key_to_process)
 
         # step 1: filter genes
         if self.filter_gene_by_counts:
             print("Filtering genes by counts ...")
-            sc.pp.filter_genes(
+            filter_genes(
                 adata,
                 min_counts=self.filter_gene_by_counts
                 if isinstance(self.filter_gene_by_counts, int)
@@ -112,7 +119,7 @@ class Preprocessor:
             and self.filter_cell_by_counts > 0
         ):
             print("Filtering cells by counts ...")
-            sc.pp.filter_cells(
+            filter_cells(
                 adata,
                 min_counts=self.filter_cell_by_counts
                 if isinstance(self.filter_cell_by_counts, int)
@@ -122,7 +129,7 @@ class Preprocessor:
         # step 3: normalize total
         if self.normalize_total:
             print("Normalizing total counts ...")
-            normed_ = sc.pp.normalize_total(
+            normed_ = normalize_total(
                 adata,
                 target_sum=self.normalize_total
                 if isinstance(self.normalize_total, float)
@@ -148,7 +155,7 @@ class Preprocessor:
                     layer=self.result_log1p_key,
                 )
                 key_to_process = self.result_log1p_key
-            sc.pp.log1p(adata, layer=key_to_process)
+            log1p(adata, layer=key_to_process)
 
         # step 5: subset hvg
         if self.subset_hvg:
@@ -157,7 +164,7 @@ class Preprocessor:
                 print(
                     "No batch_key is provided, will use all cells for HVG selection."
                 )
-            sc.pp.highly_variable_genes(
+            highly_variable_genes(
                 adata,
                 layer=self.hvg_use_key,
                 n_top_genes=self.subset_hvg

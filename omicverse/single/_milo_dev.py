@@ -807,7 +807,6 @@ class Milo:
 
         Examples:
             >>> import omicverse as ov
-            >>> import scanpy as sc
             >>> adata = ov.datasets.bhattacherjee()
             >>> milo = pt.tl.Milo()
             >>> mdata = milo.load(adata)
@@ -1028,11 +1027,10 @@ class Milo:
             palette: Color palette to use for coloring.
             ax: Axes to plot on.
             {common_plot_args}
-            **kwargs: Additional arguments to `scanpy.pl.embedding`.
+            **kwargs: Additional arguments to `ov.pl.embedding`.
 
         Examples:
             >>> import omicverse as ov
-            >>> import scanpy as sc
             >>> adata = ov.datasets.bhattacherjee()
             >>> milo = ov.single.Milo()
             >>> mdata = milo.load(adata)

@@ -111,18 +111,16 @@ class ModelFactory:
         elif model_type.lower() == "cellplm":
             try:
                 import torch
-                import scanpy as sc
             except ImportError:
                 import warnings
-                warnings.warn("torch and scanpy are recommended for full CellPLM functionality.")
+                warnings.warn("torch is recommended for full CellPLM functionality.")
         
         elif model_type.lower() == "uce":
             try:
                 import torch
-                import scanpy as sc
             except ImportError:
                 import warnings
-                warnings.warn("torch and scanpy are recommended for full UCE functionality.")
+                warnings.warn("torch is recommended for full UCE functionality.")
             try:
                 from accelerate import Accelerator
             except ImportError:
@@ -131,11 +129,10 @@ class ModelFactory:
         elif model_type.lower() == "scmulan":
             try:
                 import torch
-                import scanpy as sc
                 from scipy.sparse import csc_matrix  # noqa: F401
             except ImportError:
                 import warnings
-                warnings.warn("torch, scanpy and scipy are recommended for scMulan functionality.")
+                warnings.warn("torch and scipy are recommended for scMulan functionality.")
             
         # Extract UCE-specific asset paths from kwargs
         uce_assets = {}
@@ -192,7 +189,7 @@ class ModelFactory:
         "SCLLMManager", "scllm manager",
         # Foundation-model / single-cell language model identifiers — narrow
         # so that generic queries like "cell type annotation" or "batch
-        # integration" go to the canonical scanpy / ov.single.Annotation /
+        # integration" go to the canonical ov.pp / ov.single.Annotation /
         # ov.pp.batch_correction wrappers, and only foundation-model-explicit
         # queries land here.
         "single-cell foundation model", "single cell foundation model",

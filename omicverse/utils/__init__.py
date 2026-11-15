@@ -121,6 +121,7 @@ from ._sample_metadata_alignment import (
 )
 from ._metabolights import load_metabolights
 from ._seed import set_seed
+from ._oom import to_memory
 from ._versions import installed_version, version_lt, version_at_least
 from ._ovagent_lookup import (
     RegistryScanner,
@@ -202,6 +203,8 @@ verifier = _verifier_module
 __all__ = [
     # @ _seed
     "set_seed",
+    # @ _oom
+    "to_memory",
     # @ _metabolights
     "load_metabolights",
     # @ _data

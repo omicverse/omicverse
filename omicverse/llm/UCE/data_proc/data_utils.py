@@ -1,7 +1,6 @@
 import warnings
 warnings.filterwarnings("ignore")
 
-import scanpy as sc
 import torch
 
 from torch import nn, Tensor
@@ -27,7 +26,7 @@ from torch.utils.data import dataset
 from torch.utils.data import DataLoader, TensorDataset, dataset
 from scipy.stats import binom
 from typing import Dict, List, Optional, Tuple
-from scanpy import AnnData
+from anndata import AnnData
 
 
 # Import moved to function to allow path patching first
@@ -117,7 +116,7 @@ def load_gene_embeddings_adata_inline(adata, species, embedding_model, protein_e
     return adata, species_to_gene_embeddings
 
 def data_to_torch_X(X):
-    if isinstance(X, sc.AnnData):
+    if isinstance(X, AnnData):
         X = X.X
     if not isinstance(X, np.ndarray):
             X = X.toarray()
@@ -188,14 +187,14 @@ class SincleCellDataset(data.Dataset):
 
 
 def data_to_torch_X(X):
-    if isinstance(X, sc.AnnData):
+    if isinstance(X, AnnData):
         X = X.X
     if not isinstance(X, np.ndarray):
             X = X.toarray()
     return torch.from_numpy(X).float()
 
 
-def anndata_to_sc_dataset(adata:sc.AnnData, 
+def anndata_to_sc_dataset(adata:AnnData, 
                                  species:str="human", 
                                  labels:list=[],
                                  covar_col:str=None,
@@ -213,7 +212,8 @@ def anndata_to_sc_dataset(adata:sc.AnnData,
     )
     
     if hv_genes is not None:
-        sc.pp.highly_variable_genes(adata, flavor='seurat_v3', n_top_genes=hv_genes)  # Expects Count Data
+        from omicverse.pp import highly_variable_genes
+        highly_variable_genes(adata, flavor='seurat_v3', n_top_genes=hv_genes)  # Expects Count Data
     
         hv_index = adata.var["highly_variable"]
         adata = adata[:, hv_index] # Subset to hv genes only
@@ -278,7 +278,7 @@ def process_raw_anndata(row, h5_folder_path, npz_folder_path, scp, skip,
         species = row.species
         covar_col = row.covar_col
 
-        ad = sc.read(root + "/" + path)
+        ad = anndata.read_h5ad(root + "/" + path)
         labels = []
         if "cell_type" in ad.obs.columns:
             labels.append("cell_type")

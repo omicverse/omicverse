@@ -28,7 +28,7 @@ from anndata import AnnData
 from .._registry import register_function
 
 
-_COPYKAT_INSTALL = "  pip install -U git+https://github.com/omicverse/py-CopyKAT.git"
+_COPYKAT_INSTALL = "  pip install -U 'pycopykat>=0.2.0'"
 
 
 def _check_copykat_data() -> None:
@@ -203,7 +203,8 @@ class CNV:
             the SmartSeq2 default 1.0 drops ~3/4 of bins on 10x data, giving an
             over-smoothed heatmap). Ignored by CopyKAT.
         n_jobs : int
-            Parallel workers (CopyKAT only).
+            Threads for the CopyKAT steps without random numbers (CopyKAT only; the
+            result does not depend on it).
         verbose : bool
             Stream progress logs from the underlying backend.
         **kwargs
@@ -273,12 +274,12 @@ class CNV:
         )
         result = copykat(mat, config=cfg)
 
-        # cna_mat: bins (MultiIndex chrom/start/end) × cells. Transpose to cells × bins
+        # cna_mat: bins (MultiIndex chrom/chrompos/abspos, as R's CNAmat) × cells. Transpose to cells × bins
         # and align ordering with adata.obs_names so the obsm assignment is safe.
         cna = result.cna_mat
         cell_to_col = {c: i for i, c in enumerate(cna.columns)}
-        # Some upstream cells get filtered by stage-1 chrom coverage; we right-pad
-        # those rows with NaN so the obsm matrix still has shape (n_obs, n_bins).
+        # Cells removed by CopyKAT's filters have no column; their rows stay NaN so
+        # the obsm matrix still has shape (n_obs, n_bins).
         n_bins = cna.shape[0]
         X_cnv = np.full((self.adata.n_obs, n_bins), np.nan, dtype=np.float32)
         for i, name in enumerate(self.adata.obs_names):
@@ -288,10 +289,17 @@ class CNV:
 
         chr_pos = _chr_pos_from_bin_index(cna.index)
         bin_meta = pd.DataFrame(cna.index.to_frame(index=False))
+        if "chrompos" in bin_meta and "start" not in bin_meta:
+            # a bin spans from the previous bin's end on its chromosome to its own chrompos
+            end = bin_meta["chrompos"].astype(float)
+            bin_meta["start"] = end.groupby(bin_meta.iloc[:, 0], sort=False).shift(1).fillna(0.0)
+            bin_meta["end"] = end
 
-        # Prediction (aneuploid / diploid). Missing for cells filtered out.
-        pred_col = "copykat.pred" if "copykat.pred" in result.prediction.columns else result.prediction.columns[-1]
-        pred = result.prediction.set_index("cell")[pred_col].reindex(self.adata.obs_names)
+        # Prediction (aneuploid / diploid; "not.defined" for cells removed by the
+        # chromosome-coverage filters). Missing for cells dropped before (too few genes).
+        p = result.prediction
+        cell_col = "cell.names" if "cell.names" in p.columns else "cell"
+        pred = p.set_index(cell_col)["copykat.pred"].reindex(self.adata.obs_names)
 
         self.adata.obsm["X_cnv"] = X_cnv
         self.adata.obs["cnv_prediction"] = pd.Categorical(pred)

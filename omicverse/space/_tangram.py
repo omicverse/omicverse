@@ -8,7 +8,6 @@ imputation.
 from typing import Any
 import pandas as pd
 import numpy as np
-import scanpy as sc
 from anndata import AnnData
 from .._settings import add_reference
 from .._registry import register_function
@@ -93,11 +92,10 @@ class Tangram(object):
             Mapping results after training
 
     Examples:
-        >>> import scanpy as sc
         >>> import omicverse as ov
         >>> # Load data
-        >>> adata_sc = sc.read_h5ad("sc_data.h5ad")
-        >>> adata_sp = sc.read_visium("spatial_data")
+        >>> adata_sc = ov.read("sc_data.h5ad")
+        >>> adata_sp = ov.io.read_visium("spatial_data")
         >>> # Initialize Tangram
         >>> tangram = ov.space.Tangram(
         ...     adata_sc=adata_sc,
@@ -169,7 +167,7 @@ class Tangram(object):
 
         Notes:
             - Automatically filters genes present in at least one cell
-            - Identifies marker genes using scanpy's rank_genes_groups
+            - Identifies marker genes with a t-test (``ov.single.find_markers``)
             - Prepares data structures for Tangram mapping
             - Adds reference annotation to both AnnData objects
         """
@@ -182,9 +180,11 @@ class Tangram(object):
 
         adata_sc.uns['log1p']={}
         adata_sc.uns['log1p']['base']=None
-        sc.pp.filter_genes(adata_sc, min_cells=1)
-        sc.tl.rank_genes_groups(adata_sc, groupby=clusters,
-                                key_added=f'{clusters}_rank_genes_groups',use_raw=False)
+        from ..pp import filter_genes
+        from .._sc_compat import rank_genes_groups
+        filter_genes(adata_sc, min_cells=1)
+        rank_genes_groups(adata_sc, groupby=clusters,
+                          key_added=f'{clusters}_rank_genes_groups',use_raw=False)
         markers_df = pd.DataFrame(adata_sc.uns[f"{clusters}_rank_genes_groups"]["names"]).iloc[0:marker_size, :]
 
         markers = list(np.unique(markers_df.melt().value.values))

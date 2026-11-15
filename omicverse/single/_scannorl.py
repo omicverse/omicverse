@@ -1,7 +1,6 @@
 import pandas as pd
 import numpy as np
 import anndata
-import scanpy as sc
 import torch
 from typing import Union
 

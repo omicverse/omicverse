@@ -206,7 +206,6 @@ def predict_hest_fm(
         often a bit more accurate on small panels).
     """
     import anndata as ad
-    import scanpy as sc
     from sklearn.decomposition import PCA
     from sklearn.linear_model import Ridge
 

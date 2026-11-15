@@ -69,9 +69,9 @@ from ._datasets import (
     nascseq,
     scslamseq,
     scifate,
-    cite_seq,
     
     # Real dataset functions
+    cite_seq,
     scnt_seq_neuron_splicing,
     scnt_seq_neuron_labeling,
     zebrafish,

@@ -161,12 +161,12 @@ def read_visium_with_image(
     count_file
         Count file inside ``outs/``.
     source_image_path
-        Forwarded to :func:`scanpy.read_visium`.
+        Forwarded to :func:`omicverse.io.read_visium`.
     """
-    import scanpy as sc
+    from ...io import read_visium
 
     visium_path = Path(visium_path)
-    adata = sc.read_visium(
+    adata = read_visium(
         visium_path,
         count_file=count_file,
         library_id=library_id,

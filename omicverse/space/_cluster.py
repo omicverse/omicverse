@@ -3,7 +3,6 @@ import torch
 from torch_geometric.loader import DataLoader
 from tqdm import tqdm
 import torch.nn.functional as F
-import scanpy as sc
 from anndata import AnnData
 import numpy as np
 import os
@@ -106,9 +105,8 @@ class pySTAGATE:
         spatial information through a graph attention autoencoder architecture.
 
     Examples:
-        >>> import scanpy as sc
         >>> import omicverse as ov
-        >>> adata = sc.read_h5ad('spatial_data.h5ad')
+        >>> adata = ov.read('spatial_data.h5ad')
         >>> stagate = ov.space.pySTAGATE(adata, num_batch_x=3, num_batch_y=2)
         >>> stagate.train()
         >>> stagate.predicted()
@@ -346,11 +344,13 @@ class pySTAGATE:
         from scipy.spatial import distance_matrix
         import numpy as np
 
-        sc.pp.neighbors(self.adata, n_neighbors=n_neighbors,
-               use_rep='STAGATE')
-        sc.tl.umap(self.adata)
-        sc.tl.leiden(self.adata, resolution=resolution)
-        sc.tl.paga(self.adata)
+        from .._sc_compat import neighbors, umap, leiden, paga
+        from .. import pp as _pp
+
+        neighbors(self.adata, n_neighbors=n_neighbors, use_rep='STAGATE')
+        umap(self.adata)
+        leiden(self.adata, resolution=resolution)
+        paga(self.adata)
        # max_cell_for_subsampling = max_cell_for_subsampling
         if self.adata.shape[0] < max_cell_for_subsampling:
             sub_adata_x = self.adata.obsm['STAGATE']
@@ -366,14 +366,35 @@ class pySTAGATE:
             if self.adata.shape[0] < max_cell_for_subsampling
             else int(selected_ind[root_in_subset])
         )
-        sc.tl.diffmap(self.adata)
-        sc.tl.dpt(self.adata)
+        _pp.diffmap(self.adata)
+        _pp.dpt(self.adata)
         self.adata.obs.rename({"dpt_pseudotime": psm_key}, axis=1, inplace=True)
         print(f'The pseudo-spatial map values are stored in adata.obs["{psm_key}"].')
 
         psm_values = self.adata.obs[psm_key].to_numpy()
         return psm_values
         # End-of-file (EOF)
+
+
+def _plot_dendrogram(adata, groupby, ax=None, **kwargs):
+    """Draw ``adata.uns[f'dendrogram_{groupby}']`` (as computed by
+    :func:`omicverse.pp.dendrogram`) and return the axes."""
+    import matplotlib.pyplot as plt
+    from scipy.cluster.hierarchy import dendrogram as _sch_dendrogram
+
+    info = adata.uns[f'dendrogram_{groupby}']
+    if ax is None:
+        _, ax = plt.subplots(figsize=(max(3, 0.4 * len(info['categories_ordered'])), 3))
+    # Labels in the original category order (the order of the linkage leaves).
+    labels = [None] * len(info['categories_ordered'])
+    for idx, name in zip(info['categories_idx_ordered'], info['categories_ordered']):
+        labels[idx] = name
+    kwargs.setdefault('color_threshold', 0)
+    kwargs.setdefault('above_threshold_color', 'black')
+    _sch_dendrogram(info['linkage'], labels=labels, ax=ax, **kwargs)
+    ax.spines[['top', 'right', 'bottom']].set_visible(False)
+    ax.grid(False)
+    return ax
 
 
 @register_function(
@@ -450,9 +471,8 @@ def clusters(adata,
         - For BINARY: Can handle both raw counts and normalized data
 
     Examples:
-        >>> import scanpy as sc
         >>> import omicverse as ov
-        >>> adata = sc.read_h5ad('spatial_data.h5ad')
+        >>> adata = ov.read('spatial_data.h5ad')
         >>> methods = ['STAGATE', 'GraphST']
         >>> methods_kwargs = {
         ...     'STAGATE': {'num_batch_x': 3, 'num_batch_y': 2},
@@ -477,8 +497,9 @@ def clusters(adata,
                                            'weight_decay':1e-4,'hidden_dims':[512, 30],'device':'cuda:0',
                                            'n_top_genes':2000}
             if 'n_top_genes' in methods_kwargs['STAGATE']:
-                sc.pp.highly_variable_genes(adata_copy, flavor="seurat_v3", 
-                                            n_top_genes=methods_kwargs['STAGATE']['n_top_genes'])
+                from ..pp import highly_variable_genes
+                highly_variable_genes(adata_copy, flavor="seurat_v3",
+                                      n_top_genes=methods_kwargs['STAGATE']['n_top_genes'])
                 del methods_kwargs['STAGATE']['n_top_genes']
 
             STA_obj=pySTAGATE(adata_copy,**methods_kwargs['STAGATE'])
@@ -538,8 +559,10 @@ def clusters(adata,
             coords_raw = {sample_t: np.array(adata.obs[['X','Y']])[adata.obs['CAST_sample'] == sample_t] for sample_t in samples}
             
             if ('norm_1e4' not in adata.layers) and ('counts' in adata.layers):
-                adata.layers['norm_1e4'] = sc.pp.normalize_total(adata, target_sum=1e4, layer='counts',
-                                                 inplace=False)['X'].toarray() # we use normalized counts for each cell as input gene expression
+                from ..pp import normalize_total
+                _norm = normalize_total(adata, target_sum=1e4, layer='counts',
+                                        inplace=False)['X']
+                adata.layers['norm_1e4'] = _norm.toarray() if issparse(_norm) else np.asarray(_norm) # we use normalized counts for each cell as input gene expression
                 exp_dict = {sample_t: adata[adata.obs['CAST_sample'] == sample_t].layers['norm_1e4'] for sample_t in samples}
             else:
                 exp_dict = {sample_t: adata[adata.obs['CAST_sample'] == sample_t].X for sample_t in samples}
@@ -602,7 +625,8 @@ def clusters(adata,
                 #recover_counts(adata_copy.X, mult_value, max_range, log_base=None, chunk_size=1000)
             adata_copy = BINARY.Count2Binary(adata_copy)
             if 'n_top_genes' in methods_kwargs['BINARY']:
-                sc.pp.highly_variable_genes(adata_copy, flavor="seurat_v3", n_top_genes=methods_kwargs['BINARY']['n_top_genes'])
+                from ..pp import highly_variable_genes
+                highly_variable_genes(adata_copy, flavor="seurat_v3", n_top_genes=methods_kwargs['BINARY']['n_top_genes'])
 
             BINARY.Mutil_Construct_Spatial_Graph(adata_copy,
                                            use_method=methods_kwargs['BINARY']['use_method'],
@@ -745,7 +769,8 @@ def merge_cluster(adata,
     start_idx : int, default=0
         Index offset applied to original cluster IDs before remapping.
     **kwargs
-        Extra arguments passed to ``scanpy.pl.dendrogram``.
+        Extra arguments passed to :func:`scipy.cluster.hierarchy.dendrogram`
+        (``ax`` selects the axes to draw on).
 
     Returns
     -------
@@ -759,9 +784,8 @@ def merge_cluster(adata,
         - Cluster labels in the output are prefixed with 'c'
 
     Examples:
-        >>> import scanpy as sc
         >>> import omicverse as ov
-        >>> adata = sc.read_h5ad('clustered_data.h5ad')
+        >>> adata = ov.read('clustered_data.h5ad')
         >>> # Merge clusters using STAGATE representation
         >>> cluster_map = ov.space.merge_cluster(adata, 
         ...                                      groupby='leiden',
@@ -770,7 +794,8 @@ def merge_cluster(adata,
         >>> # Access merged clusters
         >>> print(adata.obs['leiden_tree'])
     """
-    sc.tl.dendrogram(adata,groupby=groupby,use_rep=use_rep)
+    from ..pp import dendrogram
+    dendrogram(adata,groupby=groupby,use_rep=use_rep)
     import numpy as np
     from scipy.cluster.hierarchy import fcluster
 
@@ -801,6 +826,6 @@ def merge_cluster(adata,
     adata.obs[f'{groupby}_tree']=adata.obs[groupby].map(reversed_dict)
     print(f'The merged cluster information is stored in adata.obs["{groupby}_tree"].')
     if plot:
-        ax=sc.pl.dendrogram(adata,groupby=groupby,show=False,**kwargs)
+        ax=_plot_dendrogram(adata,groupby=groupby,**kwargs)
         ax.plot((ax.get_xticks().min(),ax.get_xticks().max()),(threshold,threshold))
     return reversed_dict

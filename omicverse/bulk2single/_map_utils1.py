@@ -35,7 +35,7 @@ def create_st(generate_sc_data, generate_sc_meta, spot_num, cell_num, gene_num, 
     Returns:
         tuple: (sc_data, sc_meta, spots_data, spots_meta)
     """
-    sc = generate_sc_data
+    sc_df = generate_sc_data
     sc_ct = generate_sc_meta
     cell_name = sorted(list(set(sc_ct.Cell)))
 
@@ -48,7 +48,7 @@ def create_st(generate_sc_data, generate_sc_meta, spot_num, cell_num, gene_num, 
         while set(cell_pool) == set(last_cell_pool):
             cell_pool = random.sample(cell_name, cell_num)
         last_cell_pool = cell_pool
-        syn_spot = sc[cell_pool].sum(axis=1)
+        syn_spot = sc_df[cell_pool].sum(axis=1)
         if syn_spot.sum() > 25000:
             syn_spot *= 20000 / syn_spot.sum()
         spot_name = f'spot_{i + 1}'
@@ -62,20 +62,21 @@ def create_st(generate_sc_data, generate_sc_meta, spot_num, cell_num, gene_num, 
             #meta = meta.append(row, ignore_index=True)
 
     if marker_used:
-        import scanpy as sc
-        adata = sc.AnnData(sc.T)
+        from anndata import AnnData
+        from .._sc_compat import rank_genes_groups
+        adata = AnnData(sc_df.T)
 
         adata.obs = sc_ct[['Cell_type']]
-        sc.tl.rank_genes_groups(adata, 'Cell_type', method='wilcoxon')
+        rank_genes_groups(adata, 'Cell_type', method='wilcoxon')
         marker_df = pd.DataFrame(adata.uns['rank_genes_groups']['names']).head(gene_num)
         marker_array = np.array(marker_df)
         marker_array = np.ravel(marker_array)
         marker_array = np.unique(marker_array)
         marker = list(marker_array)
-        sc = sc.loc[marker, :]
+        sc_df = sc_df.loc[marker, :]
         spots = spots.loc[marker, :]
         
-    return sc, sc_ct, spots, meta
+    return sc_df, sc_ct, spots, meta
 
 
 def create_sample(sc, st, meta, multiple):
@@ -425,7 +426,8 @@ class DFRunner:
         Returns:
             None
         """
-        import scanpy as sc
+        from anndata import AnnData
+        from .._sc_compat import rank_genes_groups
 
         self.sc_test_allgene = generate_sc_data  # pandas.DataFrame, generated gene-cell expression data
         self.cell_type = generate_sc_meta  # pandas.DataFrame, cell type
@@ -445,10 +447,10 @@ class DFRunner:
         if marker_used:
             print('select top %d marker genes of each cell type...' % top_marker_num)
 
-            sc = sc.AnnData(self.sc_test.T)
-            sc.obs = self.cell_type[['Cell_type']]
-            sc.tl.rank_genes_groups(sc, 'Cell_type', method='wilcoxon')
-            marker_df = pd.DataFrame(sc.uns['rank_genes_groups']['names']).head(top_marker_num)
+            adata_sc = AnnData(self.sc_test.T)
+            adata_sc.obs = self.cell_type[['Cell_type']]
+            rank_genes_groups(adata_sc, 'Cell_type', method='wilcoxon')
+            marker_df = pd.DataFrame(adata_sc.uns['rank_genes_groups']['names']).head(top_marker_num)
             marker_array = np.array(marker_df)
             marker_array = np.ravel(marker_array)
             marker_array = np.unique(marker_array)

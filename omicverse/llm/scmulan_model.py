@@ -57,7 +57,6 @@ class ScMulanModel(SCLLMBase):
 
         try:
             import torch  # noqa: F401
-            import scanpy as sc  # noqa: F401
             from scipy.sparse import csc_matrix  # noqa: F401
             from omicverse.external import scMulan  # noqa: F401
         except Exception as exc:
@@ -67,9 +66,9 @@ class ScMulanModel(SCLLMBase):
         self.is_loaded = True
 
     def preprocess(self, adata: AnnData, **kwargs) -> AnnData:
-        import scanpy as sc
         from scipy.sparse import csc_matrix
         from omicverse.external import scMulan
+        from omicverse.pp import normalize_total, log1p
 
         working = adata.copy()
         if not isinstance(working.X, csc_matrix):
@@ -82,8 +81,8 @@ class ScMulanModel(SCLLMBase):
                 output_prefix="scmulan",
             )
         if unified.X.max() > 10:
-            sc.pp.normalize_total(unified, target_sum=1e4)
-            sc.pp.log1p(unified)
+            normalize_total(unified, target_sum=1e4)
+            log1p(unified)
         return unified
 
     def _infer(self, adata: AnnData, *, annotate: bool = False, **kwargs) -> AnnData:

@@ -383,14 +383,14 @@ class UCEModel(SCLLMBase):
         filter_genes = kwargs.get('filter_genes', False)
         
         if filter_cells:
-            import scanpy as sc
+            from omicverse.pp import filter_cells as _filter_cells
             min_genes = kwargs.get('min_genes', 25)
-            sc.pp.filter_cells(adata_processed, min_genes=min_genes)
+            _filter_cells(adata_processed, min_genes=min_genes)
         
         if filter_genes:
-            import scanpy as sc
+            from omicverse.pp import filter_genes as _filter_genes
             min_cells = kwargs.get('min_cells', 10)
-            sc.pp.filter_genes(adata_processed, min_cells=min_cells)
+            _filter_genes(adata_processed, min_cells=min_cells)
         
         # Load gene embeddings using our inline function
         try:
@@ -987,14 +987,14 @@ class UCEModel(SCLLMBase):
         
         if filter_cells:
             min_genes = kwargs.get('min_genes', 200)
-            import scanpy as sc
-            sc.pp.filter_cells(adata_processed, min_genes=min_genes)
+            from omicverse.pp import filter_cells as _filter_cells
+            _filter_cells(adata_processed, min_genes=min_genes)
             SCLLMOutput.status(f"Filtered cells with < {min_genes} genes", 'preprocessing')
         
         if filter_genes:
             min_cells = kwargs.get('min_cells', 3)
-            import scanpy as sc
-            sc.pp.filter_genes(adata_processed, min_cells=min_cells)
+            from omicverse.pp import filter_genes as _filter_genes
+            _filter_genes(adata_processed, min_cells=min_cells)
             SCLLMOutput.status(f"Filtered genes expressed in < {min_cells} cells", 'preprocessing')
         
         SCLLMOutput.status(f"Preprocessed data: {adata_processed.n_obs} cells × {adata_processed.n_vars} genes", 'preprocessing')

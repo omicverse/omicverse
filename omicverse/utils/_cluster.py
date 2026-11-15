@@ -1,7 +1,6 @@
 #聚类
 from sklearn.mixture import GaussianMixture
 from sklearn.cluster import KMeans
-import scanpy as sc
 import pandas as pd
 import numpy as np
 import anndata
@@ -111,7 +110,7 @@ def mclust_py(adata,  n_components=None,use_rep:str='X_pca',
     auto_fix='escalate',
     examples=[
         "# Leiden clustering (recommended)",
-        "sc.pp.neighbors(adata, n_neighbors=15, n_pcs=50)",
+        "ov.pp.neighbors(adata, n_neighbors=15, n_pcs=50)",
         "ov.utils.cluster(adata, method='leiden', resolution=1.0)",
         "# Gaussian Mixture Model clustering",
         "ov.utils.cluster(adata, method='GMM', n_components=10,",
@@ -167,7 +166,7 @@ def cluster(adata:anndata.AnnData,method:str='leiden',
 
     Examples
     --------
-    >>> sc.pp.neighbors(adata, n_neighbors=15, n_pcs=50)
+    >>> ov.pp.neighbors(adata, n_neighbors=15, n_pcs=50)
     >>> cluster(adata, method='leiden', resolution=1.0)
     >>> cluster(adata, method='GMM', n_components=10, use_rep='X_pca')
     >>> scice_model = cluster(adata, method='scICE', use_rep='X_pca')
@@ -175,10 +174,12 @@ def cluster(adata:anndata.AnnData,method:str='leiden',
     """
 
     if method=='leiden':
-        sc.tl.leiden(adata,**kwargs)
+        from ._compat import leiden_like_scanpy
+        leiden_like_scanpy(adata,**kwargs)
         add_reference(adata,'leiden','clustering with Leiden')
     elif method=='louvain':
-        sc.tl.louvain(adata,**kwargs)
+        from ..pp import louvain
+        louvain(adata,**kwargs)
         add_reference(adata,'louvain','clustering with Louvain')
     elif method=='kmeans':
         if n_components is None:

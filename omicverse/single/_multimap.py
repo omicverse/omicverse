@@ -3454,7 +3454,7 @@ def tfidf(X, n_components, binarize=True, random_state=0):
 import scipy
 import numpy as np
 import anndata
-import scanpy as sc
+from ._sc_compat import pca_X as _pca_X, scale_X as _scale_X
 
 def TFIDF_LSI(adata, n_comps=50, binarize=True, random_state=0):
 	'''
@@ -3506,7 +3506,7 @@ def Wrapper(flagged, use_reps, embedding, seed, **kwargs):
 			subset = (ind1, ind2)
 			#collapse into a single object and run a PCA
 			adata = flagged[ind1].concatenate(flagged[ind2], join='inner')
-			sc.tl.pca(adata)
+			_pca_X(adata)
 			#preserve space by deleting the intermediate object and just keeping its PCA
 			#and multimap index thing
 			X_pca = adata.obsm['X_pca'].copy()
@@ -3630,7 +3630,7 @@ def Integration(adatas, use_reps, scale=True, embedding=True, seed=0, **kwargs):
 		flagged.append(adata.copy())
 		#while we're at it, may as well potentially scale our data copy
 		if scale:
-			sc.pp.scale(flagged[-1])
+			_scale_X(flagged[-1])
 		flagged[-1].obs['multimap_index'] = i
 	
 	#call the wrapper. returns (params, connectivities, embedding), with embedding optional
@@ -3677,16 +3677,16 @@ def Batch(adata, batch_key='batch', scale=True, embedding=True, seed=0, dimred_f
 	dimred_func : function or ``None``, optional (default: ``None``)
 		The function to use to compute dimensionality reduction on a per-dataset basis. Must 
 		accept an ``AnnData`` on input and modify it by inserting its dimensionality reduction 
-		into ``.obsm``. If ``None``, ``scanpy.tl.pca()`` will be used.
+		into ``.obsm``. If ``None``, a scanpy-equivalent PCA on ``.X`` is used.
 	rep_name : ``str``, optional (default: "X_pca")
 		The ``.obsm`` field that the dimensionality reduction function stores its output under.
 	
 	All other arguments as described in ``Integration()``.
 	'''
 	
-	#as promised in the docstring, set dimred_func to scanpy PCA if not provided
+	#as promised in the docstring, set dimred_func to PCA if not provided
 	if dimred_func is None:
-		dimred_func = sc.tl.pca
+		dimred_func = _pca_X
 	
 	#essentially what this function does is preps data to run through the other wrapper
 	#so what needs to happen is the object needs to be partitioned up, have DR ran,
@@ -3699,7 +3699,7 @@ def Batch(adata, batch_key='batch', scale=True, embedding=True, seed=0, dimred_f
 		flagged.append(adata[adata.obs[batch_key]==batch].copy())
 		#potentially scale
 		if scale:
-			sc.pp.scale(flagged[-1])
+			_scale_X(flagged[-1])
 		#and run DR
 		dimred_func(flagged[-1])
 		#and stick on the index for multimap to pull stuff apart later

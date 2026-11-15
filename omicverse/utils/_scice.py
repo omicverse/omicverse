@@ -1,6 +1,5 @@
 import numpy as np
 import pandas as pd
-import scanpy as sc
 import anndata as ad
 from joblib import Parallel, delayed
 
@@ -204,7 +203,6 @@ class scICE:
         """Check if required Python packages are installed"""
         try:
             import igraph
-            import scanpy
             import joblib
             import tqdm
             print("All required Python packages are properly installed.")
@@ -217,7 +215,7 @@ class scICE:
             return True
         except ImportError as e:
             print(f"Missing required package: {e}")
-            print("Please install: pip install igraph-python scanpy joblib tqdm")
+            print("Please install: pip install igraph joblib tqdm")
             if self.use_gpu:
                 print("For GPU support: pip install torch")
             return False
@@ -620,19 +618,21 @@ class scICE:
         
         # Ensure graph is built
         print("Building neighborhood graph...")
+        from ..pp import neighbors as _neighbors
+        from ._compat import umap_like_scanpy as _umap
         if graph_type == 'umap':
             if 'connectivities' not in adata.obsp:
-                sc.pp.neighbors(adata, use_rep=use_rep, random_state=self.random_state)
+                _neighbors(adata, use_rep=use_rep, random_state=self.random_state)
             if 'X_umap' not in adata.obsm:
-                sc.tl.umap(adata, random_state=self.random_state)
+                _umap(adata, random_state=self.random_state)
             graph = adata.obsp['connectivities']
         elif graph_type == 'snn':
             if 'connectivities' not in adata.obsp:
-                sc.pp.neighbors(adata, use_rep=use_rep, random_state=self.random_state)
+                _neighbors(adata, use_rep=use_rep, random_state=self.random_state)
             graph = adata.obsp['connectivities']
         elif graph_type == 'knn':
             if 'distances' not in adata.obsp:
-                sc.pp.neighbors(adata, use_rep=use_rep, random_state=self.random_state)
+                _neighbors(adata, use_rep=use_rep, random_state=self.random_state)
             graph = adata.obsp['distances']
         else:
             raise ValueError(f"Unknown graph_type: {graph_type}")

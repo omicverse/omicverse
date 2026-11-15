@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import importlib
 import inspect
 
 import numpy as np
@@ -211,7 +212,7 @@ def test_auto_mapping_needs_no_magic_obs_column_or_cwd_temp_files(monkeypatch):
         return ax
 
     monkeypatch.setattr(_tools.plt, "subplots", small_subplots)
-    monkeypatch.setattr(_tools.sc.pl, "embedding", fake_embedding)
+    monkeypatch.setattr(importlib.import_module("omicverse.pl"), "embedding", fake_embedding)
     monkeypatch.setattr(
         _tools,
         "find_image_offset_phase_correlation_array_input",
@@ -269,7 +270,7 @@ def test_auto_mapping_moves_centered_coordinates_and_only_selected_library(monke
         return ax
 
     monkeypatch.setattr(_tools.plt, "subplots", small_subplots)
-    monkeypatch.setattr(_tools.sc.pl, "embedding", fake_embedding)
+    monkeypatch.setattr(importlib.import_module("omicverse.pl"), "embedding", fake_embedding)
     monkeypatch.setattr(
         _tools,
         "find_image_offset_phase_correlation_array_input",
@@ -303,7 +304,7 @@ def test_auto_mapping_renders_spots_in_the_selected_image_pixel_frame(monkeypatc
         return ax
 
     monkeypatch.setattr(_tools.plt, "subplots", small_subplots)
-    monkeypatch.setattr(_tools.sc.pl, "embedding", fake_embedding)
+    monkeypatch.setattr(importlib.import_module("omicverse.pl"), "embedding", fake_embedding)
     monkeypatch.setattr(
         _tools,
         "find_image_offset_phase_correlation_array_input",

@@ -7,7 +7,6 @@ import traceback
 import numpy as np
 
 from anndata import AnnData
-import scanpy as sc
 from typing import List, Tuple, Dict, Optional
 from .tokenizer import tokenize_and_pad_batch, random_mask_value
 from .data_sampler import SubsetsBatchSampler
@@ -653,10 +652,15 @@ def eval_testdata(
             traceback.print_exc()
             logger.error(e)
 
-        sc.pp.neighbors(adata_t, use_rep="X_scGPT")
-        sc.tl.umap(adata_t, min_dist=0.3)
-        fig = sc.pl.umap(
+        from ...pp import neighbors
+        from ...utils._compat import umap_like_scanpy as umap
+        from ...pl import embedding
+
+        neighbors(adata_t, use_rep="X_scGPT")
+        umap(adata_t, min_dist=0.3)
+        fig = embedding(
             adata_t,
+            basis="X_umap",
             color=["str_batch"],
             title=[f"batch, avg_bio = {results.get('avg_bio', 0.0):.4f}"],
             frameon=False,
@@ -666,10 +670,11 @@ def eval_testdata(
 
         results["batch_umap"] = fig
 
-        sc.pp.neighbors(adata_t, use_rep="X_scGPT")
-        sc.tl.umap(adata_t, min_dist=0.3)
-        fig = sc.pl.umap(
+        neighbors(adata_t, use_rep="X_scGPT")
+        umap(adata_t, min_dist=0.3)
+        fig = embedding(
             adata_t,
+            basis="X_umap",
             color=["celltype"],
             title=[
                 f"celltype, avg_bio = {results.get('avg_bio', 0.0):.4f}",

@@ -1,4 +1,4 @@
-import scanpy as sc
+import anndata
 import os
 import torch
 import time
@@ -532,7 +532,7 @@ class scDiffusion(object):
         )
         cell_gen = autoencoder(torch.tensor(arr).cuda(),return_decoded=True).cpu().detach().numpy()
 
-        adata=sc.AnnData(cell_gen)
+        adata=anndata.AnnData(cell_gen)
         adata.var.index=self.adata.var_names
         logger.log("sampling complete")
         return adata
@@ -860,7 +860,7 @@ class scDiffusion(object):
         )
         cell_gen = autoencoder(torch.tensor(arr).cuda(),return_decoded=True).cpu().detach().numpy()
 
-        adata=sc.AnnData(cell_gen)
+        adata=anndata.AnnData(cell_gen)
         adata.var.index=self.adata.var_names
         logger.log("sampling complete")
         return adata

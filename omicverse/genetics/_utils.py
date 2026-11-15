@@ -273,7 +273,7 @@ def scan_cis_genes(
         "PCA) and runs PCA, returning the sample PC scores and the "
         "variance explained by each component. The top PCs are then used "
         "as covariates in ``gwas_association`` to correct for population "
-        "stratification. Wraps scanpy's PCA."
+        "stratification. Uses omicverse's scanpy-compatible scaling and PCA."
     ),
     examples=[
         "pcs, var_ratio = ov.genetics.genotype_pca(geno_qc, n_comps=10)",
@@ -296,7 +296,7 @@ def genotype_pca(
     n_comps
         Number of principal components to compute.
     max_value
-        Clip value passed to :func:`scanpy.pp.scale`.
+        Clip value applied after z-scoring each SNP.
 
     Returns
     -------
@@ -304,11 +304,11 @@ def genotype_pca(
         ``(pcs, variance_ratio)`` — the ``samples x n_comps`` PC-score
         matrix and the per-component variance-explained vector.
     """
-    import scanpy as sc
+    from .._sc_compat import scale_X, pca_X
 
     work = adata.copy()
-    sc.pp.scale(work, max_value=max_value)
-    sc.tl.pca(work, n_comps=n_comps)
+    scale_X(work, max_value=max_value)
+    pca_X(work, n_comps=n_comps)
     pcs = np.asarray(work.obsm["X_pca"])
     var_ratio = np.asarray(work.uns["pca"]["variance_ratio"])
     return pcs, var_ratio

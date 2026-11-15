@@ -78,7 +78,6 @@ class omicverseConfig:
             >>> ov.settings.gpu_init(devices=[0, 1, 2, 3], dask=True)
         """
 
-        import scanpy as sc
         import cupy as cp
 
         import time

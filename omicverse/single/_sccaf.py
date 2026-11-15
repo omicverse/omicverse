@@ -29,8 +29,6 @@ import scipy
 import seaborn as sns
 #import patsy
 
-from scanpy import settings as sett
-
 import logging as _logging
 
 
@@ -57,12 +55,12 @@ class _SccafLogger:
 
 logg = _SccafLogger()
 
-import scanpy as sc
+import anndata
 # for color
-from scanpy.plotting.palettes import *
+from ._sc_compat import default_20
 
 import matplotlib.pyplot as plt
-from matplotlib import rcParams
+from matplotlib import rcParams, cm
 
 # for reading/saving clf model
 from sklearn.mixture import BayesianGaussianMixture
@@ -222,14 +220,16 @@ def cluster_adjmat(xmat,
     """
     if method == 'louvain':
         import louvain
-        g = sc._utils.get_igraph_from_adjacency((xmat > cutoff).astype(int), directed=False)
+        from ..utils._compat import _get_igraph_from_adjacency
+        g = _get_igraph_from_adjacency((xmat > cutoff).astype(int), directed=False)
         print(g)
         part = louvain.find_partition(g, louvain.RBConfigurationVertexPartition,
                                     resolution_parameter=resolution)
         groups = np.array(part.membership)
     elif method=='leiden':
         import leidenalg
-        g = sc._utils.get_igraph_from_adjacency((xmat > cutoff).astype(int), directed=False)
+        from ..utils._compat import _get_igraph_from_adjacency
+        g = _get_igraph_from_adjacency((xmat > cutoff).astype(int), directed=False)
         part = leidenalg.find_partition(g, leidenalg.RBConfigurationVertexPartition,
                                         resolution_parameter=resolution)
         groups = np.array(part.membership)
@@ -600,7 +600,8 @@ def find_high_resolution(ad, resolution=4, n=100):
     cut = resolution
     while cut > 0.5:
         print("clustering with resolution: %.1f" % cut)
-        sc.tl.leiden(ad, resolution=cut)
+        from ..pp import leiden
+        leiden(ad, resolution=cut, random_state=0, backend='python')
         ad.obs['leiden_res%.1f' % cut] = ad.obs['leiden']
         if ad.obs['leiden'].value_counts().min() > n:
             break
@@ -837,7 +838,7 @@ def SCCAF_optimize(ad,
         X = ad.raw.X
     elif use == 'pca':
         if 'X_pca' not in ad.obsm.keys():
-            raise ValueError("`adata.obsm['X_pca']` doesn't exist. Run `sc.pp.pca` first.")
+            raise ValueError("`adata.obsm['X_pca']` doesn't exist. Run `ov.pp.pca` first.")
         X = ad.obsm['X_pca']
     elif 'X_%s'%use in ad.obsm.keys():
         X = ad.obsm['X_%s'%use]
@@ -865,7 +866,8 @@ def SCCAF_optimize(ad,
             aucs = plot_roc(y_prob, y_test, clf, cvsm=cvsm, acc=acc, title="Self-project ROC {}".format(old_id),
                             axes=axes)
 
-            sc.pl.embedding(ad, basis=basis, color=['%s_self-projection' % old_id], show=(mplotlib_backend is None),
+            from ..pl import embedding
+            embedding(ad, basis=basis, color=['%s_self-projection' % old_id], show=(mplotlib_backend is None),
                           color_map="RdYlBu_r", legend_loc='on data', frameon=False,ax=axes[2])
             if mplotlib_backend:
                 mplotlib_backend.savefig()
@@ -930,7 +932,8 @@ def SCCAF_optimize(ad,
         merge_cluster(ad, old_id1, new_id, groups)
         
         if plot:
-            sc.pl.embedding(ad, basis=basis, color=[new_id], color_map="RdYlBu_r", legend_loc='on data',
+            from ..pl import embedding
+            embedding(ad, basis=basis, color=[new_id], color_map="RdYlBu_r", legend_loc='on data',
                           show=(mplotlib_backend is None))
             if mplotlib_backend:
                 mplotlib_backend.savefig()
@@ -992,7 +995,8 @@ def plot_center(ad, groupby, ax, basis='tsne', size=20):
 def plot_link_scatter(ad, ymat, basis='pca', group='cell', title=''):
     fig, ax = plt.subplots()
     ax = plot_link(ad, ymat=ymat, old_id=group, basis=basis, ax=ax)
-    sc.pl.scatter(ad, basis=basis, color=[group], color_map="RdYlBu_r", legend_loc='on data',
+    from ..pl import embedding
+    embedding(ad, basis=basis, color=[group], color_map="RdYlBu_r", legend_loc='on data',
                   ax=ax, legend_fontsize=20, frameon=False, title=title)
     return ax
 
@@ -1111,9 +1115,11 @@ def plot_roc(y_prob, y_test, clf, plot='both', save=None, title='',
             if len(clf.classes_) < 21:
                 colors = default_20
             elif len(clf.classes_) < 27:
-                colors = default_28
+                from ._sc_compat import palette_28
+                colors = palette_28()
             else:
-                colors = default_102
+                from ._sc_compat import palette_102
+                colors = palette_102()
         if plot == 'both':
             if axes is None:
                 fig, ax = plt.subplots(1, 2, sharey=True,figsize=(8, 4))
@@ -1416,7 +1422,7 @@ def readHCA(fin):
                 np.array(data.get("indices")), 
                 np.array(data.get("indptr"))), 
                 shape=np.array(data.get("shape"))[::-1])
-    ad = sc.AnnData(X)
+    ad = anndata.AnnData(X)
     ad.obs_names = np.array(data.get("barcodes")).astype(str)
     ad.var_names = np.array(data.get("gene_names")).astype(str)
     ad.var['ensembl_gene'] = np.array(data.get("genes")).astype(str)
@@ -1424,20 +1430,28 @@ def readHCA(fin):
     
     
 def sc_workflow(ad, prefix='L1', resolution=1.5, n_pcs=15, do_tsne=True):
-    sc.pp.normalize_per_cell(ad, counts_per_cell_after=1e4)
-    filter_result = sc.pp.filter_genes_dispersion(
-        ad.X, min_mean=0.0125, max_mean=10, min_disp=0.25)
-    sc.pl.filter_genes_dispersion(filter_result)
-    print("n_HVGs: %d" % sum(filter_result.gene_subset))
-    ad = ad[:, filter_result.gene_subset]
-    sc.pp.log1p(ad)
-    sc.pp.scale(ad, max_value=10)
-    sc.tl.pca(ad)
+    from ..pp import (normalize_total, log1p, highly_variable_genes, tsne,
+                      neighbors, umap, louvain)
+    from ._sc_compat import scale_X, pca_X
+    normalize_total(ad, target_sum=1e4)
+    # seurat-flavour dispersion filter on the normalised (non-log) counts,
+    # i.e. the former ``filter_genes_dispersion(ad.X, ...)``
+    _tmp = anndata.AnnData(ad.X.copy())
+    log1p(_tmp)
+    gene_subset = highly_variable_genes(
+        _tmp, flavor='seurat', min_mean=0.0125, max_mean=10, min_disp=0.25,
+        inplace=False)['highly_variable'].to_numpy()
+    del _tmp
+    print("n_HVGs: %d" % sum(gene_subset))
+    ad = ad[:, gene_subset].copy()
+    log1p(ad)
+    scale_X(ad, max_value=10)
+    pca_X(ad)
     if do_tsne:
-        sc.tl.tsne(ad, n_pcs=n_pcs, random_state=2)
-    sc.pp.neighbors(ad, n_neighbors=10, n_pcs=n_pcs)
-    sc.tl.umap(ad)
-    sc.tl.louvain(ad, resolution=resolution)
+        tsne(ad, n_pcs=n_pcs, random_state=2)
+    neighbors(ad, n_neighbors=10, n_pcs=n_pcs)
+    umap(ad)
+    louvain(ad, resolution=resolution)
     ad.obs["%s_res%.f" % (prefix, resolution)] = ad.obs["louvain"]
     return ad
 
@@ -1471,7 +1485,7 @@ def sc_pp_regress_out(adata, keys, n_jobs=None, copy=False):
         adata.X = adata.X.toarray()
     if n_jobs is not None:
         logg.warning('Parallelization is currently broke, will be restored soon. Running on 1 core.')
-    n_jobs = sett.n_jobs if n_jobs is None else n_jobs
+    n_jobs = 1 if n_jobs is None else n_jobs
 
     cat_keys = []
     var_keys = []
@@ -1540,7 +1554,7 @@ def sc_pp_regress_out(adata, keys, n_jobs=None, copy=False):
         for i_column, column in enumerate(chunk):
             adata.X[:, column] = result_lst[i_column]
     logg.info('finished')
-    logg.hint('after `sc.pp.regress_out`, consider rescaling the adata using `sc.pp.scale`')
+    logg.hint('after regressing out, consider rescaling the adata using `ov.pp.scale`')
     return adata if copy else None
 
 

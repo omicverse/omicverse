@@ -516,7 +516,7 @@ class SCENIC:
                 file=_sys.stderr,
             )
             print(
-                f"{Colors.WARNING}    sc.pp.highly_variable_genes("
+                f"{Colors.WARNING}    ov.pp.highly_variable_genes("
                 f"adata, n_top_genes=3000, flavor='seurat_v3', "
                 f"layer='counts')\n"
                 f"    adata = adata[:, adata.var.highly_variable].copy()"
@@ -779,7 +779,7 @@ class SCENIC:
         if len(regulons) > 0:
             print(f"   {Colors.GREEN}✓ Analysis successful! You can now:{Colors.ENDC}")
             print(f"     {Colors.CYAN}• Use scenic.ad_auc_mtx for downstream analysis{Colors.ENDC}")
-            print(f"     {Colors.CYAN}• Visualize regulon activity with: sc.pl.heatmap(scenic.ad_auc_mtx, ...){Colors.ENDC}")
+            print(f"     {Colors.CYAN}• Visualize regulon activity with: ov.pl.heatmap(scenic.ad_auc_mtx, ...){Colors.ENDC}")
             print(f"     {Colors.CYAN}• Calculate regulon specificity scores{Colors.ENDC}")
         else:
             print(f"   {Colors.WARNING}⚠️  No regulons detected. Consider:{Colors.ENDC}")

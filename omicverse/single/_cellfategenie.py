@@ -3,7 +3,6 @@ from sklearn.linear_model import Ridge
 import numpy as np
 from sklearn.model_selection import train_test_split
 from sklearn.metrics import mean_squared_error, root_mean_squared_error, mean_absolute_error, r2_score
-import scanpy as sc
 import anndata
 import matplotlib.pyplot as plt
 from sklearn.preprocessing import MinMaxScaler
@@ -833,9 +832,11 @@ class Fate(object):
                             self.adata.uns['{}_colors'.format(cluster_key)]))
         else:
             if len(self.adata.obs[cluster_key].cat.categories)>28:
-                color_dict=dict(zip(self.adata.obs[cluster_key].cat.categories,sc.pl.palettes.default_102))
+                from ._sc_compat import palette_102
+                color_dict=dict(zip(self.adata.obs[cluster_key].cat.categories,palette_102()))
             else:
-                color_dict=dict(zip(self.adata.obs[cluster_key].cat.categories,sc.pl.palettes.zeileis_28))
+                from ._sc_compat import palette_28
+                color_dict=dict(zip(self.adata.obs[cluster_key].cat.categories,palette_28()))
 
         for i in self.adata.obs[cluster_key].cat.categories:
             ax.scatter(y_test[list(set(self.adata.obs.loc[self.adata.obs[cluster_key]==i].index)&set(y_test.index))],

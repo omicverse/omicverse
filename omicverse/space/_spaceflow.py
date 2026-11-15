@@ -3,7 +3,6 @@ import copy
 import random
 import numpy as np
 import pandas as pd
-import scanpy as sc
 import torch
 from tqdm import tqdm
 import torch.nn as nn
@@ -104,10 +103,9 @@ class pySpaceFlow(object):
             Learned spatial-aware embeddings after training
 
     Examples:
-        >>> import scanpy as sc
         >>> import omicverse as ov
         >>> # Load spatial data
-        >>> adata = sc.read_visium(...)
+        >>> adata = ov.io.read_visium(...)
         >>> # Initialize SpaceFlow
         >>> spaceflow = ov.space.pySpaceFlow(adata)
         >>> # Train model
@@ -328,11 +326,13 @@ class pySpaceFlow(object):
             - Useful for ordering cells along spatial axes
             - Handles large datasets through subsampling
         """
-        sc.pp.neighbors(self.adata, n_neighbors=n_neighbors,
-               use_rep='spaceflow')
-        sc.tl.umap(self.adata)
-        sc.tl.leiden(self.adata, resolution=resolution)
-        sc.tl.paga(self.adata)
+        from .._sc_compat import neighbors, umap, leiden, paga
+        from .. import pp as _pp
+
+        neighbors(self.adata, n_neighbors=n_neighbors, use_rep='spaceflow')
+        umap(self.adata)
+        leiden(self.adata, resolution=resolution)
+        paga(self.adata)
 
         if self.adata.shape[0] < max_cell_for_subsampling:
             sub_adata_x = self.adata.obsm['spaceflow']
@@ -348,8 +348,8 @@ class pySpaceFlow(object):
             if self.adata.shape[0] < max_cell_for_subsampling
             else int(selected_ind[root_in_subset])
         )
-        sc.tl.diffmap(self.adata)
-        sc.tl.dpt(self.adata)
+        _pp.diffmap(self.adata)
+        _pp.dpt(self.adata)
         self.adata.obs.rename({"dpt_pseudotime": psm_key}, axis=1, inplace=True)
         print(f'The pseudo-spatial map values are stored in adata.obs["{psm_key}"].')
         add_reference(self.adata,'SpaceFlow','pseudo-spatial map with SpaceFlow')

@@ -40,39 +40,21 @@ def _graph_and_codes(adata, cluster_key, connectivity_key):
     return _get_graph(adata, connectivity_key), *_cluster_codes(adata, cluster_key)
 
 
-def _leiden_flavor_kwargs(leiden) -> dict:
-    """``flavor='igraph'`` when this scanpy has the keyword, nothing when not.
-
-    ``flavor=`` arrived in scanpy 1.10; omicverse pins ``scanpy>=1.9``, so on
-    an otherwise valid 1.9 install passing it unconditionally is a TypeError
-    and the whole niche module is unusable. Ask the signature rather than the
-    version string: a distro backport or a fork can carry the keyword without
-    the version number admitting it, and the signature is what actually
-    decides whether the call succeeds.
-
-    On 1.10+ we keep igraph — it is scanpy's own announced future default and
-    1.10 warns when the flavour is left unset. On 1.9 we fall back to the
-    leidenalg default. Both optimise the same objective over the same graph,
-    so the fallback is a different partition of equal standing, not a
-    degraded one; only the exact labels can differ between the two.
-    """
-    import inspect
-
-    if "flavor" in inspect.signature(leiden).parameters:
-        return {"flavor": "igraph", "n_iterations": 2, "directed": False}
-    return {}
+# scanpy's announced future Leiden default (igraph, two iterations,
+# undirected); kept so niche labels match the earlier scanpy-backed release.
+_LEIDEN_KWARGS = {"flavor": "igraph", "n_iterations": 2, "directed": False}
 
 
 def _cluster_rows(matrix: np.ndarray, resolution: float, seed: int, n_neighbors: int):
     """Leiden over the rows of a feature matrix, via a temporary AnnData."""
-    import scanpy as sc
     from anndata import AnnData
+    from .. import pp as _pp
 
     tmp = AnnData(np.asarray(matrix, dtype=np.float32))
-    sc.pp.neighbors(tmp, n_neighbors=min(n_neighbors, max(tmp.n_obs - 1, 2)),
-                    use_rep="X", random_state=seed)
-    sc.tl.leiden(tmp, resolution=resolution, key_added="niche", random_state=seed,
-                 **_leiden_flavor_kwargs(sc.tl.leiden))
+    _pp.neighbors(tmp, n_neighbors=min(n_neighbors, max(tmp.n_obs - 1, 2)),
+                  use_rep="X", random_state=seed, method="umap")
+    _pp.leiden(tmp, resolution=resolution, key_added="niche", random_state=seed,
+               **_LEIDEN_KWARGS)
     return tmp.obs["niche"].to_numpy()
 
 

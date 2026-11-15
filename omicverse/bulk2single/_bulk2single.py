@@ -279,7 +279,7 @@ class Bulk2Single:
         r"""
         Preprocess single-cell reference data.
         
-        Normalizes single-cell data using scanpy's standard preprocessing pipeline
+        Normalizes single-cell data using the standard normalize/log1p preprocessing pipeline
         including total count normalization and log1p transformation.
 
         Parameters
@@ -576,14 +576,15 @@ class Bulk2Single:
             Filtered generated AnnData.
         """
         generate_adata.raw = generate_adata
-        import scanpy as sc
+        from ..pp import highly_variable_genes as hvg
+        from .._sc_compat import scale_X, pca_X, neighbors, leiden
         if highly_variable_genes:
-            sc.pp.highly_variable_genes(generate_adata, min_mean=0.0125, max_mean=3, min_disp=0.5)
+            hvg(generate_adata, min_mean=0.0125, max_mean=3, min_disp=0.5)
             generate_adata = generate_adata[:, generate_adata.var.highly_variable]
-        sc.pp.scale(generate_adata, max_value=max_value)
-        sc.tl.pca(generate_adata, n_comps=n_comps, svd_solver=svd_solver)
-        sc.pp.neighbors(generate_adata, use_rep="X_pca")
-        sc.tl.leiden(generate_adata)
+        scale_X(generate_adata, max_value=max_value)
+        pca_X(generate_adata, n_comps=n_comps, svd_solver=svd_solver)
+        neighbors(generate_adata, use_rep="X_pca")
+        leiden(generate_adata)
         filter_leiden=list(generate_adata.obs['leiden'].value_counts()[generate_adata.obs['leiden'].value_counts()<leiden_size].index)
         print("The filter leiden is ",filter_leiden)
         generate_adata=generate_adata[~generate_adata.obs['leiden'].isin(filter_leiden)]

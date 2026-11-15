@@ -1,6 +1,5 @@
 r"""Module providing encapsulation of STT for spatial transition tensor analysis."""
 from typing import Any
-import scanpy as sc
 import numpy as np
 import pandas as pd
 from .._settings import add_reference
@@ -74,10 +73,9 @@ class STT(object):
             Key for region annotations.
 
     Examples:
-        >>> import scanpy as sc
         >>> import omicverse as ov
         >>> # Load data with spliced/unspliced counts
-        >>> adata = sc.read_h5ad('spatial_velocity.h5ad')
+        >>> adata = ov.read('spatial_velocity.h5ad')
         >>> # Initialize STT object
         >>> stt = ov.space.STT(
         ...     adata,
@@ -136,10 +134,12 @@ class STT(object):
             u = u.toarray()
             s = s.toarray()
         x_all = np.concatenate((u,s),axis = 1)
-        adata_aggr = sc.AnnData(X=x_all)
-        sc.tl.pca(adata_aggr, svd_solver='arpack')
-        sc.pp.neighbors(adata_aggr)
-        sc.tl.leiden(adata_aggr,resolution = 0.15)
+        from anndata import AnnData
+        from .._sc_compat import pca_X, neighbors, leiden
+        adata_aggr = AnnData(X=x_all)
+        pca_X(adata_aggr, svd_solver='arpack')
+        neighbors(adata_aggr)
+        leiden(adata_aggr,resolution = 0.15)
         self.adata.obs['joint_leiden'] = adata_aggr.obs['leiden'].values
         print(f"...estimate stage: {len(self.adata.obs['joint_leiden'].unique())}")
         add_reference(self.adata,'STT','spatial transition tensor with STT')
