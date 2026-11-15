@@ -28,8 +28,10 @@ def _categories(values) -> list:
     *same* file would otherwise disagree on which code means which label,
     breaking the cross-backend identical-minibatches guarantee)."""
     s = pd.Series(values)
-    vals = s.astype(str) if s.dtype == object or isinstance(s.dtype, pd.CategoricalDtype) else s
-    return list(pd.Categorical(np.asarray(vals)).categories)
+    vals = np.asarray(s)  # a categorical column yields its values in the categories' dtype
+    if vals.dtype == object:
+        vals = vals.astype(str)
+    return list(pd.Categorical(vals).categories)
 
 
 def _codes(values, categories, key) -> np.ndarray:
