@@ -67,20 +67,32 @@ def spatial_knn(coords: np.ndarray, batch_codes: np.ndarray | None, n_neighbors:
 # ---------------------------------------------------------------------------
 class _DiffusionEncoder(nn.Module):
     """Amortised per-cell ``(true, diffusion, background)`` mixture weights
-    from ``log1p(x)`` (scvi-tools ResolVI's ``diffusion_encoder``, reusing the
-    shape of :class:`Encoder` but with a softmax output)."""
+    from ``log1p(x)`` (scvi-tools ResolVI's ``diffusion_encoder``: a
+    :class:`~omicverse.vi._nn.Encoder`-shaped network whose "variance" head is
+    reused as the mixture logits, ``var_activation=Softmax``, ``var_eps=1e-3``).
+
+    The reference's ``Encoder.forward`` always computes
+    ``var_activation(var_encoder(q)) + var_eps`` — i.e. a ``1e-3`` floor is
+    added to *every* output channel, not just the one extra ``diffusion_eps``
+    added on top of the diffusion channel afterwards. Without that floor here,
+    a channel whose raw softmax output is driven near 0 (typically
+    ``background``, since there is little reward for the network to predict
+    any background) reports a value many orders of magnitude smaller than the
+    reference instead of saturating at the same ``~1e-3`` floor."""
 
     def __init__(self, n_input, n_cat_list=None, n_layers=2, n_hidden=128, dropout_rate=0.0,
-                 use_batch_norm=False, use_layer_norm=True, diffusion_eps=0.01):
+                 use_batch_norm=False, use_layer_norm=True, diffusion_eps=0.01,
+                 var_eps=1e-3):
         super().__init__()
         self.trunk = FCLayers(n_input, n_hidden, n_cat_list=n_cat_list, n_layers=n_layers,
                               n_hidden=n_hidden, dropout_rate=dropout_rate,
                               use_batch_norm=use_batch_norm, use_layer_norm=use_layer_norm)
         self.head = nn.Linear(n_hidden, 3)
         self.diffusion_eps = float(diffusion_eps)
+        self.var_eps = float(var_eps)
 
     def forward(self, x_log, *cats):
-        p = torch.softmax(self.head(self.trunk(x_log, *cats)), dim=-1)
+        p = torch.softmax(self.head(self.trunk(x_log, *cats)), dim=-1) + self.var_eps
         true, diffusion, background = p.split(1, dim=-1)
         diffusion = diffusion + self.diffusion_eps  # scvi-tools quirk: not renormalised
         return true, diffusion, background
