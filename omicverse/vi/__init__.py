@@ -33,8 +33,10 @@ The API mirrors scvi-tools, but configuration goes to the constructor::
     adata.obsm["X_scVI"] = m.get_latent_representation()
 
 Helpers: ``plot_history`` (training curves), ``integration_metrics``
-(scib-metrics batch-removal / bio-conservation scores of embeddings) and
-``MemoryMonitor`` (wall time, host RSS and GPU memory of a block).
+(scib-metrics batch-removal / bio-conservation scores of embeddings),
+``plot_dimension_heatmap`` (per-latent-dimension profile across a grouping,
+e.g. cell type — disentanglement at a glance) and ``MemoryMonitor`` (wall
+time, host RSS and GPU memory of a block).
 
 ``torch`` is imported only when a model is used.
 """
@@ -62,13 +64,14 @@ _LAZY_ATTRS = {
     "mde": ("..utils._mde", "mde"),
     "plot_history": ("._utils", "plot_history"),
     "integration_metrics": ("._utils", "integration_metrics"),
+    "plot_dimension_heatmap": ("._utils", "plot_dimension_heatmap"),
     "MemoryMonitor": ("._utils", "MemoryMonitor"),
     "distributions": ("._distributions", None),
     "nn": ("._nn", None),
     "priors": ("._priors", None),
 }
 
-__all__ = ["SCVI", "SCANVI", "TOTALVI", "DRVI", "RESOLVI", "MRVI", "plot_sample_distances", "sample_distance_ratio", "Decipher", "Trajectory", "rotate_decipher_components", "compute_decipher_time", "SysVI", "BaseVIModel", "build_source", "train_distributed", "mde", "plot_history", "integration_metrics", "MemoryMonitor"]
+__all__ = ["SCVI", "SCANVI", "TOTALVI", "DRVI", "RESOLVI", "MRVI", "plot_sample_distances", "sample_distance_ratio", "Decipher", "Trajectory", "rotate_decipher_components", "compute_decipher_time", "SysVI", "plot_dimension_heatmap", "BaseVIModel", "build_source", "train_distributed", "mde", "plot_history", "integration_metrics", "MemoryMonitor"]
 
 
 def __getattr__(name):
