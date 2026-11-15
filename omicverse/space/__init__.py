@@ -145,6 +145,15 @@ bind_optional_symbols(
     dependencies=("torch",),
 )
 
+bind_optional_symbols(
+    globals(),
+    "._resolvi",
+    ["resolvi"],
+    package=__name__,
+    feature="omicverse.space.resolvi",
+    dependencies=("torch",),
+)
+
 # H&E → spatial transcriptomics prediction.
 # Sub-package: ov.space.histo (lazy-loaded; see histo/__init__.py).
 from . import histo  # noqa: E402,F401
@@ -194,7 +203,10 @@ __all__ = [
     
     # Spatial deconvolution
     'GASTON',
-    
+
+    # Spatial expression denoising
+    'resolvi',
+
     # Utility functions (imported from _tools)
     'create_communication_anndata',
     'run_commot',

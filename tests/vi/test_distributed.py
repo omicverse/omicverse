@@ -100,3 +100,25 @@ def test_torchrun_launch(data, tmp_path):
     w0, w1 = np.load(tmp_path / "w0.npy"), np.load(tmp_path / "w1.npy")
     assert np.allclose(w0, w1)  # DDP keeps the ranks' weights identical
     assert np.isfinite(np.load(tmp_path / "z.npy")).all()
+
+
+@pytest.mark.skipif(not torch.cuda.is_available() or torch.cuda.device_count() < 2,
+                    reason="needs >=2 CUDA devices")
+def test_ddp_dask_cupy_two_gpus(tmp_path):
+    """NCCL DDP (devices=[0, 1]) on a Dask(cupy)-backed source: every non-zero
+    rank's cupy block must be computed on *that rank's* device, not cupy's
+    default (device 0) -- a rank>0 using the wrong device previously crashed
+    with a CUDA illegal-memory-access inside DaskSource._block_tensors."""
+    import omicverse as ov
+    from omicverse.vi import SCVI
+    from omicverse.pp._dask import read_h5ad
+    path = tmp_path / "ddp_dask.h5ad"
+    _counts(n=4000, g=200, seed=4).write_h5ad(path)
+    ov.settings.mode = "gpu"
+    da_ad = read_h5ad(str(path), chunk_size=512, device="gpu")
+    m = SCVI(da_ad, batch_key="batch", n_hidden=16, n_latent=4, seed=0)
+    m.train(max_epochs=3, devices=[0, 1], batch_size=128, progress=False, seed=0,
+            latent_key="X_ddp_dask")
+    assert m.is_trained_ and m._world_size == 2
+    z = m.get_latent_representation()
+    assert np.isfinite(z).all()

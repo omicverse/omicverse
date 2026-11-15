@@ -43,6 +43,8 @@ class TrainConfig:
     compile: bool | str = "auto"  # torch.compile the step (static shapes, dense likelihood)
     cuda_graph: bool | str = "auto"  # capture the whole training step (CUDA, single process)
     gradient_clip_val: float | None = None
+    clip_norm: float = 10.0        # element-wise gradient clamp of ``optimizer='ClippedAdam'``
+    drop_last: bool = False        # drop the last incomplete training minibatch of an epoch
     extra: dict = field(default_factory=dict)  # model-specific (e.g. classification ratio)
 
     @classmethod
@@ -65,9 +67,79 @@ def kl_weight(cfg: TrainConfig, epoch: int, step: int) -> float:
     return cfg.max_kl_weight
 
 
+class ClippedAdam(torch.optim.Optimizer):
+    """Pyro's ``ClippedAdam``: every gradient element is clamped to
+    ``[-clip_norm, clip_norm]``, L2 weight decay is added to the gradient, then a
+    bias-corrected Adam step is taken (learning rate multiplied by ``lrd`` each step).
+
+    The step counter lives in a device tensor, so the update can be captured in a
+    CUDA graph."""
+
+    def __init__(self, params, lr: float = 1e-3, betas=(0.9, 0.999), eps: float = 1e-8,
+                 weight_decay: float = 0.0, clip_norm: float = 10.0, lrd: float = 1.0):
+        super().__init__(params, dict(lr=lr, betas=betas, eps=eps, weight_decay=weight_decay,
+                                      clip_norm=clip_norm, lrd=lrd))
+
+    @torch.no_grad()
+    def step(self, closure=None):
+        loss = None
+        if closure is not None:
+            with torch.enable_grad():
+                loss = closure()
+        for group in self.param_groups:
+            if group["lrd"] != 1.0:
+                group["lr"] *= group["lrd"]
+            params = [p for p in group["params"] if p.grad is not None]
+            if not params:
+                continue
+            b1, b2 = group["betas"]
+            c, wd, lr = group["clip_norm"], group["weight_decay"], group["lr"]
+            grads = [p.grad for p in params]
+            torch._foreach_clamp_min_(grads, -c)
+            torch._foreach_clamp_max_(grads, c)
+            if wd:
+                grads = torch._foreach_add(grads, params, alpha=wd)
+            for p in params:
+                st = self.state[p]
+                if not st:
+                    st["step"] = torch.zeros((), dtype=torch.float32, device=p.device)
+                    st["exp_avg"] = torch.zeros_like(p)
+                    st["exp_avg_sq"] = torch.zeros_like(p)
+            m = [self.state[p]["exp_avg"] for p in params]
+            v = [self.state[p]["exp_avg_sq"] for p in params]
+            steps = [self.state[p]["step"] for p in params]
+            torch._foreach_add_(steps, 1.0)
+            torch._foreach_mul_(m, b1)
+            torch._foreach_add_(m, grads, alpha=1 - b1)
+            torch._foreach_mul_(v, b2)
+            torch._foreach_addcmul_(v, grads, grads, value=1 - b2)
+            denom = torch._foreach_sqrt(v)
+            torch._foreach_add_(denom, group["eps"])
+            upd = torch._foreach_div(m, denom)
+            for p, u, t in zip(params, upd, steps):
+                # lr * sqrt(1 - b2^t) / (1 - b1^t)
+                size = lr * torch.sqrt(1 - torch.pow(b2, t)) / (1 - torch.pow(b1, t))
+                p.sub_(u * size)
+        return loss
+
+
 def make_optimizer(params, cfg: TrainConfig, device, capturable: bool = False):
+    """``params``: a flat iterable of ``nn.Parameter`` (the common case) or
+    ``module.optim_parameters()``'s pre-built param groups (dicts with a
+    ``'params'`` list and optionally their own ``'lr'`` / etc. overrides, e.g.
+    RESOLVI's faster-lr group for its per-cell / per-component point
+    estimates) -- the latter pass straight to the optimiser, filtered the
+    same way."""
+    params = list(params)
+    if params and isinstance(params[0], dict):
+        groups = [{**g, "params": [p for p in g["params"] if p.requires_grad]} for g in params]
+        params = [g for g in groups if g["params"]]
+    else:
+        params = [p for p in params if p.requires_grad]
+    if cfg.optimizer.lower() == "clippedadam":
+        return ClippedAdam(params, lr=cfg.lr, eps=cfg.eps, weight_decay=cfg.weight_decay,
+                           clip_norm=cfg.clip_norm)
     opt_cls = {"adam": torch.optim.Adam, "adamw": torch.optim.AdamW}[cfg.optimizer.lower()]
-    params = [p for p in params if p.requires_grad]
     kw = dict(lr=cfg.lr, eps=cfg.eps, weight_decay=cfg.weight_decay)
     if capturable:
         kw["capturable"] = True
@@ -266,12 +338,20 @@ class _Compiled:
 
 def evaluate(module, batches, device, cfg: TrainConfig | None = None, kl_w: float = 1.0,
              reduce=None, suffix="validation") -> dict:
-    """Mean ELBO terms of ``module`` over ``batches`` (eval mode, no grad)."""
+    """Mean ELBO terms of ``module`` over ``batches`` (eval mode, no grad).
+
+    Reparameterised sampling inside the forward pass (and any
+    importance-weighted NLL, e.g. Decipher's ``marginal_ll``) draws from the
+    global torch RNG even in eval mode; forking it here keeps a validation
+    pass from perturbing the training-noise stream of the epochs that follow
+    (``fit`` would otherwise produce a different, validation-frequency-
+    dependent trajectory for the same ``seed``)."""
     cfg = cfg or TrainConfig()
     was = module.training
     module.eval()
     meter = _Meter(device)
-    with torch.no_grad(), _autocast(cfg, device):
+    devs = [device] if device.type == "cuda" else []
+    with torch.random.fork_rng(devices=devs), torch.no_grad(), _autocast(cfg, device):
         for b in batches:
             out = module(b, kl_weight=kl_w)
             meter.add(out, b["x"].shape[0])
@@ -295,7 +375,9 @@ def fit(model, source, train_rows, val_rows, *, max_epochs, batch_size, shuffle,
     if fast is not None and not fast.enabled:
         fast = None
     use_graph = (device.type == "cuda" and world == 1 and cfg.cuda_graph not in (False, None)
-                 and not cfg.gradient_clip_val and not getattr(module, "has_extra_step", False))
+                 and not cfg.gradient_clip_val and not getattr(module, "has_extra_step", False)
+                 and getattr(module, "cuda_graph_safe", True))
+    epoch_hook = getattr(module, "on_train_epoch_start", None)
     params = module.optim_parameters() if hasattr(module, "optim_parameters") else \
         module.parameters()
     opt = make_optimizer(params, cfg, device, capturable=use_graph)
@@ -342,6 +424,8 @@ def fit(model, source, train_rows, val_rows, *, max_epochs, batch_size, shuffle,
         epoch = start_epoch + e
         t0 = time.perf_counter()
         module.train()
+        if epoch_hook is not None:
+            epoch_hook(epoch)
         meter = _Meter(device)
         n_batches = None
         if world > 1:
@@ -351,7 +435,8 @@ def fit(model, source, train_rows, val_rows, *, max_epochs, batch_size, shuffle,
         aux = aux_fn(epoch, "train") if aux_fn is not None else None
         for b in source.iterate(train_rows, batch_size=batch_size, shuffle=shuffle, seed=seed,
                                 epoch=epoch, buffer_blocks=buffer_blocks, rank=rank,
-                                world=world, n_batches=n_batches, drop_last=world > 1,
+                                world=world, n_batches=n_batches,
+                                drop_last=cfg.drop_last or world > 1,
                                 aux_rows=aux):
             if cfg.n_steps_kl_warmup:
                 kw = kl_weight(cfg, epoch, step)
@@ -422,4 +507,4 @@ def fit(model, source, train_rows, val_rows, *, max_epochs, batch_size, shuffle,
     return history
 
 
-__all__ = ["TrainConfig", "fit", "evaluate", "kl_weight", "make_optimizer"]
+__all__ = ["TrainConfig", "ClippedAdam", "fit", "evaluate", "kl_weight", "make_optimizer"]

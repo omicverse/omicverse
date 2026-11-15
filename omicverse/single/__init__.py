@@ -121,6 +121,7 @@ from ._multimap import TFIDF_LSI,Wrapper,Integration,Batch
 from ._perturbation import assign_guides, mixscape, perturbation_distance
 from ._cellvote import get_cluster_celltype,CellVote,cellvote_consensus_score
 from ._lemur import lemur
+from ._mrvi import mrvi
 from ._deg_ct import DCT,DEG
 from ._lazy_function import lazy
 from ._lazy_report import generate_scRNA_report
@@ -143,7 +144,9 @@ from ._scissor import Scissor
 # Single-cell metabolism — scMetabolism / Compass / scFEA + MEBOCOST.
 # Usage: met = ov.single.Metabolism(adata, method='scmetabolism'); met.run()
 from ._metabolism import Metabolism, MetaboliteCCC, differential_metabolism
+from ._drvi import drvi
 
+from ._decipher import decipher
 from ._stavia import StaVIA
 from ._lazy_step_by_step import (
     lazy_step_qc, lazy_step_preprocess, lazy_step_scale, lazy_step_pca,
@@ -332,6 +335,7 @@ __all__ = [
     'plot_weights',
     
     # Trajectory and pseudotime analysis
+    'decipher',
     'StaVIA',
     'pyVIA',
     'hematopoiesis',
@@ -361,6 +365,7 @@ __all__ = [
     'mixscape',
     'perturbation_distance',
     'lemur',
+    'mrvi',
     'perturbation_effect',
     'cell_fate_perturbation',
     'velocity_effect',
@@ -482,4 +487,5 @@ __all__ = [
     # Marker gene utilities
     'find_markers',
     'get_markers',
+    'drvi',
 ]
