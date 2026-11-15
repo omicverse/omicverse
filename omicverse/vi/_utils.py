@@ -121,6 +121,66 @@ def integration_metrics(adata, obsm_keys, batch_key: str = "batch",
     return df
 
 
+def plot_dimension_heatmap(adata, latent_key: str, groupby: str, dims=None,
+                           agg: str = "mean", zscore: bool = True, ax=None,
+                           cmap: str = "coolwarm", figsize=None):
+    """Per-latent-dimension profile across groups, as a heatmap.
+
+    The disentanglement claim of models like :class:`~omicverse.vi.DRVI`
+    (every latent dimension is an independent, additive generator of gene
+    expression) is easiest to see by checking which *groups* (cell types,
+    conditions, ...) each dimension responds to: a dimension whose
+    group-aggregated value stands out in one or a few groups and is flat
+    elsewhere tracks something close to that group's identity; a dimension
+    that varies smoothly across many groups more likely encodes a continuum
+    (a differentiation axis, batch, cell cycle, ...).
+
+    Arguments:
+        adata: AnnData with the embedding in ``.obsm[latent_key]`` and the
+            grouping column in ``.obs[groupby]``.
+        latent_key: ``obsm`` key, e.g. ``'X_drvi'``.
+        groupby: Categorical ``obs`` column, e.g. ``'cell_type'``.
+        dims: Which latent dimensions to show (default: all).
+        agg: ``'mean'`` or ``'median'`` within each group.
+        zscore: Z-score each dimension (column) across groups before
+            plotting, so every dimension uses the same colour scale
+            regardless of its raw range (recommended: a VAE's dimensions
+            can have different scales even though the prior is shared).
+        ax: Matplotlib axes (new figure if None).
+        cmap, figsize: Passed to the heatmap / figure.
+
+    Returns:
+        ``(ax, table)``: the axes and the group x dimension
+        :class:`pandas.DataFrame` actually plotted.
+    """
+    import matplotlib.pyplot as plt
+
+    Z = np.asarray(adata.obsm[latent_key])
+    n_latent = Z.shape[1]
+    dims = np.arange(n_latent) if dims is None else np.asarray(dims)
+    groups = np.asarray(adata.obs[groupby].astype(str).values)
+    df = pd.DataFrame(Z[:, dims], columns=[f"dim{d}" for d in dims])
+    df[groupby] = groups
+    table = df.groupby(groupby).agg(agg)
+    if zscore:
+        sd = table.std(axis=0).replace(0, 1)
+        table = (table - table.mean(axis=0)) / sd
+    if ax is None:
+        figsize = figsize or (max(6.0, 0.28 * len(dims)), max(3.0, 0.3 * table.shape[0]))
+        _, ax = plt.subplots(figsize=figsize)
+    vmax = float(np.abs(table.values).max()) if zscore else None
+    vmin = -vmax if zscore else None
+    im = ax.imshow(table.values, aspect="auto", cmap=cmap, vmin=vmin, vmax=vmax)
+    ax.set_xticks(range(len(dims)))
+    ax.set_xticklabels(table.columns, rotation=90, fontsize=6)
+    ax.set_yticks(range(table.shape[0]))
+    ax.set_yticklabels(table.index, fontsize=7)
+    ax.set_xlabel("latent dimension")
+    ax.set_ylabel(groupby)
+    plt.colorbar(im, ax=ax, label=("z-scored " if zscore else "") + agg, shrink=0.8)
+    return ax, table
+
+
 class MemoryMonitor:
     """Track wall time, host RSS and GPU memory of a block of code.
 
@@ -203,4 +263,4 @@ class MemoryMonitor:
                 f"peak {self.rss_peak_gb:.2f} GB (+{self.rss_growth_gb:.2f}){gpu})")
 
 
-__all__ = ["plot_history", "integration_metrics", "MemoryMonitor"]
+__all__ = ["plot_history", "integration_metrics", "plot_dimension_heatmap", "MemoryMonitor"]

@@ -1,4 +1,5 @@
-"""ov.vi helpers: plot_history, integration_metrics, MemoryMonitor."""
+"""ov.vi helpers: plot_history, integration_metrics, plot_dimension_heatmap,
+MemoryMonitor."""
 import numpy as np
 import pytest
 
@@ -48,6 +49,33 @@ def test_memory_monitor_reports_rss_and_time():
     s = mon.summary()
     assert s["wall_s"] > 0 and s["rss_peak_gb"] >= s["rss_start_gb"] > 0
     assert s["gpu_peak_gb"] is None and "RSS" in repr(mon)
+
+
+def test_plot_dimension_heatmap_shape_and_zscore(trained):
+    import matplotlib
+    matplotlib.use("Agg")
+    import omicverse as ov
+    a, _ = trained
+    ax, table = ov.vi.plot_dimension_heatmap(a, "X_scVI", groupby="label")
+    n_latent = a.obsm["X_scVI"].shape[1]
+    assert table.shape == (5, n_latent)  # 5 synthetic cell types x all dims
+    assert list(table.index) == sorted(a.obs["label"].unique())
+    # z-scored columns have mean ~0 and std ~1 across groups.
+    assert np.allclose(table.mean(axis=0).values, 0.0, atol=1e-6)
+    assert np.allclose(table.std(axis=0).values, 1.0, atol=1e-6)
+    assert ax.get_xlabel() == "latent dimension" and ax.get_ylabel() == "label"
+
+
+def test_plot_dimension_heatmap_dims_subset_and_no_zscore(trained):
+    import matplotlib
+    matplotlib.use("Agg")
+    import omicverse as ov
+    a, _ = trained
+    _, table = ov.vi.plot_dimension_heatmap(a, "X_scVI", groupby="label",
+                                            dims=[0, 2, 4], zscore=False, agg="median")
+    assert list(table.columns) == ["dim0", "dim2", "dim4"]
+    # un-zscored table keeps the raw per-group median scale (not 0-mean).
+    assert not np.allclose(table.mean(axis=0).values, 0.0, atol=1e-6)
 
 
 def test_integration_metrics_columns(trained):
