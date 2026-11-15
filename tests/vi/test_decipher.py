@@ -117,6 +117,42 @@ def test_compute_imputed_expression_and_gene_patterns():
     assert np.isfinite(pat["mean"]).all() and (pat["mean"] >= 0).all()
 
 
+def test_compute_gene_patterns_rotation_undo():
+    """Regression for a real trap hit in practice: overwriting the obsm key used
+    to build a ``Trajectory`` with the *rotated* Decipher space (from
+    ``rotate_decipher_components``, meant for plotting) and feeding that
+    trajectory straight into ``compute_gene_patterns`` silently decodes
+    meaningless coordinates, because ``decoder_v_to_z`` only understands the
+    native (un-rotated) ``v``. ``compute_gene_patterns(..., rotation=rot)``
+    must undo the rotation and recover the native-space result exactly."""
+    from omicverse.vi import Trajectory, rotate_decipher_components
+    a = _traj_counts(n=600, g=80, seed=2)
+    m = _train(a, max_epochs=30)
+    a.obsm["decipher_v"] = m.get_latent_representation()
+    a.obsm["decipher_z"] = m.get_latent_representation(give_z=True)
+    stages = ["early", "mid", "late"]
+
+    traj_native = Trajectory.from_clusters(a, "decipher_v", "stage", stages)
+    pat_native = m.compute_gene_patterns(trajectory=traj_native, n_samples=5)
+
+    v_rot, z_rot, rot = rotate_decipher_components(
+        a, "decipher_v", "decipher_z", v1_obs_col="stage", v1_order=stages)
+    assert not np.allclose(rot, np.eye(2), atol=1e-2), "test needs a non-trivial rotation"
+    a.obsm["decipher_v_rot"] = v_rot
+    traj_rot = Trajectory.from_clusters(a, "decipher_v_rot", "stage", stages)
+
+    # decoding the rotated trajectory directly (no `rotation=`) is the bug: it
+    # feeds the decoder coordinates it never saw in training, and must not
+    # match the native-space pattern.
+    pat_wrong = m.compute_gene_patterns(trajectory=traj_rot, n_samples=5)
+    assert not np.allclose(pat_wrong["mean"], pat_native["mean"], atol=1.0)
+
+    # passing `rotation=rot` undoes it and exactly recovers the native-space
+    # trajectory's decoded pattern (same points, same z_mean, deterministic).
+    pat_fixed = m.compute_gene_patterns(trajectory=traj_rot, n_samples=5, rotation=rot)
+    np.testing.assert_allclose(pat_fixed["mean"], pat_native["mean"], atol=1e-2, rtol=1e-4)
+
+
 def test_decipher_oom_and_dask_match_in_memory(tmp_path):
     import omicverse as ov
     a = _traj_counts(n=800, g=100, seed=4)
