@@ -41,6 +41,7 @@ _LAZY_ATTRS = {
     "SCANVI": ("._scanvi", "SCANVI"),
     "TOTALVI": ("._totalvi", "TOTALVI"),
     "DRVI": ("._drvi", "DRVI"),
+    "RESOLVI": ("._resolvi", "RESOLVI"),
     "MRVI": ("._mrvi", "MRVI"),
     "BaseVIModel": ("._base", "BaseVIModel"),
     "build_source": ("._data", "build_source"),
@@ -54,7 +55,7 @@ _LAZY_ATTRS = {
     "priors": ("._priors", None),
 }
 
-__all__ = ["SCVI", "SCANVI", "TOTALVI", "DRVI", "MRVI", "BaseVIModel", "build_source", "train_distributed", "mde", "plot_history", "integration_metrics", "MemoryMonitor"]
+__all__ = ["SCVI", "SCANVI", "TOTALVI", "DRVI", "RESOLVI", "MRVI", "BaseVIModel", "build_source", "train_distributed", "mde", "plot_history", "integration_metrics", "MemoryMonitor"]
 
 
 def __getattr__(name):
