@@ -60,6 +60,8 @@ OOM_NATIVE: set = {
     "omicverse.vi._scvi.SCVI",
     "omicverse.vi._scanvi.SCANVI",
     "omicverse.vi._totalvi.TOTALVI",
+    "omicverse.vi._drvi.DRVI",
+    "omicverse.single._drvi.drvi",
     "omicverse.vi._mrvi.MRVI",
     "omicverse.single._mrvi.mrvi",
     # ---- ov.space ----

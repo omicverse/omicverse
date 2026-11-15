@@ -143,6 +143,7 @@ from ._scissor import Scissor
 # Single-cell metabolism — scMetabolism / Compass / scFEA + MEBOCOST.
 # Usage: met = ov.single.Metabolism(adata, method='scmetabolism'); met.run()
 from ._metabolism import Metabolism, MetaboliteCCC, differential_metabolism
+from ._drvi import drvi
 
 from ._stavia import StaVIA
 from ._lazy_step_by_step import (
@@ -482,4 +483,5 @@ __all__ = [
     # Marker gene utilities
     'find_markers',
     'get_markers',
+    'drvi',
 ]
