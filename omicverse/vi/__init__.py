@@ -36,6 +36,7 @@ _LAZY_ATTRS = {
     "SCVI": ("._scvi", "SCVI"),
     "SCANVI": ("._scanvi", "SCANVI"),
     "TOTALVI": ("._totalvi", "TOTALVI"),
+    "MRVI": ("._mrvi", "MRVI"),
     "BaseVIModel": ("._base", "BaseVIModel"),
     "build_source": ("._data", "build_source"),
     "train_distributed": ("._distributed", "train_distributed"),
@@ -48,7 +49,7 @@ _LAZY_ATTRS = {
     "priors": ("._priors", None),
 }
 
-__all__ = ["SCVI", "SCANVI", "TOTALVI", "BaseVIModel", "build_source", "train_distributed", "mde",
+__all__ = ["SCVI", "SCANVI", "TOTALVI", "MRVI", "BaseVIModel", "build_source", "train_distributed", "mde",
            "plot_history", "integration_metrics", "MemoryMonitor"]
 
 
