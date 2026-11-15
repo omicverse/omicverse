@@ -15,6 +15,10 @@ Models
 ``SCVI``     unsupervised VAE (ZINB / NB / Poisson likelihood).
 ``SCANVI``   semi-supervised scANVI (label transfer, ``predict``).
 ``TOTALVI``  joint RNA + protein (CITE-seq) model.
+``DRVI``     disentangled representation VI: additive, per-latent-dimension
+             decoder (log-sum-exp aggregation); pnb/nb/zinb/poisson
+             likelihoods; ``latent_traverse`` / ``differential_vars`` for
+             per-dimension gene-effect interpretability.
 
 The API mirrors scvi-tools, but configuration goes to the constructor::
 
@@ -36,6 +40,7 @@ _LAZY_ATTRS = {
     "SCVI": ("._scvi", "SCVI"),
     "SCANVI": ("._scanvi", "SCANVI"),
     "TOTALVI": ("._totalvi", "TOTALVI"),
+    "DRVI": ("._drvi", "DRVI"),
     "BaseVIModel": ("._base", "BaseVIModel"),
     "build_source": ("._data", "build_source"),
     "train_distributed": ("._distributed", "train_distributed"),
@@ -48,8 +53,8 @@ _LAZY_ATTRS = {
     "priors": ("._priors", None),
 }
 
-__all__ = ["SCVI", "SCANVI", "TOTALVI", "BaseVIModel", "build_source", "train_distributed", "mde",
-           "plot_history", "integration_metrics", "MemoryMonitor"]
+__all__ = ["SCVI", "SCANVI", "TOTALVI", "DRVI", "BaseVIModel", "build_source",
+           "train_distributed", "mde", "plot_history", "integration_metrics", "MemoryMonitor"]
 
 
 def __getattr__(name):

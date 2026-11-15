@@ -55,6 +55,19 @@ def log_zinb_positive(x, mu, theta, pi, eps: float = EPS):
     return (x < eps).to(mu.dtype) * case_zero + (x > eps).to(mu.dtype) * case_non_zero
 
 
+def log_pnb_positive(x, log_mu, log_theta, eps: float = EPS):
+    """log of the log-mean-parameterised NB (DRVI's ``'pnb'`` likelihood): ``log_theta``
+    is used directly as ``log(theta)`` (not exponentiated), unlike :func:`log_nb_positive`'s
+    ``theta``.  Numerically stable softplus form (``drvi.nn_modules.noise_model
+    .LogNegativeBinomial.negative_binomial_log_ver``); agrees with
+    ``log_nb_positive(x, mu=exp(log_mu), theta=exp(log_theta))`` to float precision."""
+    theta = torch.exp(log_theta)
+    choice = torch.lgamma(x + theta + eps) - torch.lgamma(x + 1 + eps) - torch.lgamma(theta + eps)
+    log_pow_k = -x * F.softplus(log_theta - log_mu + eps)
+    log_pow_r = -theta * F.softplus(log_mu - log_theta + eps)
+    return choice + log_pow_k + log_pow_r
+
+
 def log_poisson(x, rate, eps: float = 0.0):
     """log Poisson(x; rate) element-wise (as ``torch.distributions.Poisson``)."""
     return torch.xlogy(x, rate) - rate - torch.lgamma(x + 1)
@@ -185,7 +198,7 @@ def sample_zinb(mu, theta, pi):
 
 
 __all__ = [
-    "log_nb_positive", "log_zinb_positive", "log_poisson", "log_normal", "log_mixture_nb",
-    "nb_rowsum", "zinb_rowsum", "kl_normal_standard", "kl_normal_normal",
+    "log_nb_positive", "log_pnb_positive", "log_zinb_positive", "log_poisson", "log_normal",
+    "log_mixture_nb", "nb_rowsum", "zinb_rowsum", "kl_normal_standard", "kl_normal_normal",
     "sample_nb", "sample_zinb",
 ]
