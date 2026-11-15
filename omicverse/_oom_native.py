@@ -63,6 +63,8 @@ OOM_NATIVE: set = {
     "omicverse.vi._resolvi.RESOLVI",
     "omicverse.vi._drvi.DRVI",
     "omicverse.single._drvi.drvi",
+    "omicverse.vi._mrvi.MRVI",
+    "omicverse.single._mrvi.mrvi",
     # ---- ov.space ----
     "omicverse.space._svg.spatial_neighbors",
     "omicverse.space._svg.spatial_autocorr",
