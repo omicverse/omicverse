@@ -69,6 +69,28 @@ stochastic MC estimates of a per-cell statistic, not a systematic bias (DA, whic
 analytically integrates over all cells per sample rather than MC-sampling per cell,
 correlates at r > 0.90 throughout).
 
+## Baseline: is ours-vs-ref within each implementation's own seed-to-seed spread?
+
+`benchmarks/vi/mrvi/compare.py` now also computes every concordance metric
+**within** each implementation across its own 3 seeds (3 seed-pairs), as the baseline
+for how much two runs of the *same* code already disagree from nothing but weight
+init / minibatch order / MC sampling -- then compares that to ours-vs-ref (same seed).
+
+| metric | ours-vs-ref (mean +/- sd, n=3 seeds) | within-ours seed-pairs (n=3 pairs) | within-ref seed-pairs (n=3 pairs) |
+|---|---|---|---|
+| sample-distance r | 0.9208 +/- 0.0146 | 0.8899 +/- 0.0125 | 0.8944 +/- 0.0250 |
+| DE effect-size rho | 0.6912 +/- 0.1047 | 0.6818 +/- 0.0138 | 0.6032 +/- 0.1245 |
+| DE mean-log2FC-per-gene r | 0.9659 +/- 0.0018 | 0.9663 +/- 0.0044 | 0.9596 +/- 0.0034 |
+| DA log_probs r | 0.9209 +/- 0.0136 | 0.8811 +/- 0.0293 | 0.8824 +/- 0.0128 |
+
+**Ours-vs-ref is at or above both within-implementation baselines for every metric**
+(e.g. sample-distance r: cross 0.921 > within-ours 0.890 > within-ref 0.894; DE
+mean-log2FC r: cross 0.966, between within-ours 0.966 and within-ref 0.960). The
+per-cell DE effect-size/p-value rank correlation that looked "merely moderate" in
+isolation (0.55-0.80) is explained by this baseline: the reference's *own* seed-pairs
+only agree at rho=0.603 +/- 0.125 on that noisy per-cell statistic -- our agreement with
+the reference is not below that. No further investigation needed.
+
 ## A instability specific to `labels_key` + a label-conditioned mixture prior
 
 With `labels_key='cell_type'` (13 categories) passed to `setup_anndata`, MrVI overrides
@@ -86,18 +108,41 @@ labels) removes it: both implementations then converge to `kl_local` ~23-45 with
 same trajectory shape (checked at seed 0, `max_epochs=60`, printed every 6 epochs; not
 re-run for all 3 seeds given the time budget).
 
+## AnnDataOOM and Dask-backed training on the real cohort (`run_disk.py`, seed 0)
+
+Same hyperparameters, GPU, seed 0; AnnDataOOM (`ov.read(storage='disk')`, `kind='h5'`,
+pread-streamed) and Dask-backed (`omicverse.pp._dask.read_h5ad`, scipy CPU blocks)
+training against in-memory, all three compared (not just ours-vs-ref):
+
+| | memory | AnnDataOOM | Dask |
+|---|---|---|---|
+| elbo_train | 225.806 | 225.748 | 225.772 |
+| ARI (KMeans on `u` vs cell_type) | 0.578 | 0.610 | 0.598 |
+| sample-distance r vs memory | -- | 0.9320 | 0.9312 |
+| wall time (s, same GPU load) | 147.3 | 192.8 | 149.2 |
+
+ELBO agrees to <0.03%, ARI is within the seed-to-seed range already seen above, and the
+grouped sample-distance matrices correlate with the in-memory run at r > 0.93 for both
+disk-backed paths -- same conclusion as the synthetic-data test
+(`tests/vi/test_mrvi.py::test_mrvi_disk_and_dask_match_memory`), now also confirmed on
+the real cohort. (One prep fix needed: the HVG-subsetted, donor-stratified h5ad had
+unsorted sparse minor indices after double fancy-indexing, which `anndata-rs`/AnnDataOOM
+rejects; `prep_data.py` now calls `.sort_indices()` before writing.)
+
+## `cuda_graph="auto"` crashes (no eager fallback) -- now off by default for MRVI
+
+Confirmed by code inspection of `ov.vi._train._GraphedStep`: the warm-up phase (which
+runs *before* the actual `torch.cuda.graph(...)` capture, and is the one that failed
+here) is not wrapped in the try/except that gives every other model a graceful
+eager-mode fallback on capture failure -- so `cuda_graph="auto"` (the shared core's
+default for any single-process CUDA run) reliably crashes training for this model,
+it does not silently fall back. `ov.vi.MRVI.train()` now overrides the default to
+`cuda_graph=False` (pass `cuda_graph=True` explicitly to try it anyway); the shared
+`_train.py` is unchanged. `benchmarks/vi/mrvi/common.py`'s explicit
+`cuda_graph=False` is now redundant but kept for clarity.
+
 ## Not done / known limitations
 
 - `get_outlier_cell_sample_pairs` and admissibility-filtered DE (`filter_inadmissible_samples`,
   `add_batch_specific_offsets`) are not ported; `differential_expression`'s `lfc_std` /
   `pde` outputs are not computed.
-- `cuda_graph=False` was required for `ov.vi.MRVI.train(device="cuda", ...)`: the default
-  `cuda_graph="auto"` path (enabled by `ov.vi`'s core for any single-process CUDA run,
-  unconditionally -- not gated by step count the way `torch.compile`'s own `"auto"` is)
-  fails with `RuntimeError: Offset increment outside graph capture encountered
-  unexpectedly` inside `inference()`'s reparameterisation `torch.randn` calls; not
-  investigated further (training correctness and speed are unaffected; only the CUDA-graph
-  fast path is unavailable for this model).
-- AnnDataOOM and Dask-backed training (matching in-memory ELBO) are validated on
-  synthetic multi-sample data in `tests/vi/test_mrvi.py::test_mrvi_disk_and_dask_match_memory`,
-  not re-run on the real Wilk cohort here.

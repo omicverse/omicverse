@@ -559,6 +559,20 @@ class MRVI(BaseVIModel):
             self.module = self._module_cls(**self._module_args)
         self.module.to(self._device)
 
+    def train(self, *args, cuda_graph="auto", **kwargs):
+        """As :meth:`BaseVIModel.train`, but ``cuda_graph`` defaults to ``False``.
+
+        ``inference()``'s reparameterisation (``torch.randn`` during the CUDA-graph
+        warm-up, before the capturable try/except) raises
+        ``RuntimeError: Offset increment outside graph capture encountered
+        unexpectedly`` and crashes (no eager fallback) when ``cuda_graph`` is enabled
+        for this model, unlike ``torch.compile``'s own step-gated ``"auto"``. Pass
+        ``cuda_graph=True`` explicitly to try it anyway.
+        """
+        if cuda_graph == "auto":
+            cuda_graph = False
+        return super().train(*args, cuda_graph=cuda_graph, **kwargs)
+
     # ------------------------------------------------------------------
     # latent representations
     # ------------------------------------------------------------------

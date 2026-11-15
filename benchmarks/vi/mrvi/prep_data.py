@@ -73,6 +73,8 @@ def main():
     a.var = a.var[["feature_name"]].copy()
     del a.obsm["X_pca"], a.obsm["X_umap"]
     a.X = a.layers["counts"]  # keep X == counts too (some tooling reads X by default)
+    a.X.sort_indices()        # anndata-rs / AnnDataOOM rejects unsorted minor indices
+    a.layers["counts"].sort_indices()
     a.write_h5ad(OUT)
     print(f"wrote {OUT}: {a.shape}")
 
