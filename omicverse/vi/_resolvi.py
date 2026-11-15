@@ -122,9 +122,11 @@ class ResolVIModule(nn.Module):
                  classifier_parameters=None, prior_true_amount=1.0, prior_diffusion_amount=0.3,
                  sparsity_diffusion=3.0, background_ratio=0.1, prior_proportions_rate=10.0,
                  median_distance=1.0, diffusion_eps=0.01,
-                 downsample_counts_mean=None, downsample_counts_std=1.0, n_particles=5):
+                 downsample_counts_mean=None, downsample_counts_std=1.0, n_particles=5,
+                 lr_extra=1e-2):
         super().__init__()
         self.n_particles = int(n_particles)
+        self.lr_extra = float(lr_extra)
         if dispersion not in ("gene", "gene-batch"):
             raise ValueError("dispersion must be 'gene' or 'gene-batch'")
         if gene_likelihood not in ("nb", "poisson"):
@@ -196,6 +198,21 @@ class ResolVIModule(nn.Module):
 
         self.full_counts = None  # set by RESOLVI._build: (n_obs, n_input) CPU buffer
         self.train_config = None
+
+    # the reference trains `per_neighbor_diffusion_map` / `u_prior_means` (the per-cell
+    # diffusion weights and the latent mixture prior's component locations) at a 10x faster
+    # rate than every other parameter (`extra_lr_parameters`, `lr_extra`); the two are
+    # structurally per-cell / per-component point estimates with no amortising network
+    # feeding them a gradient from many cells at once, so they adapt slowly at the base lr.
+    _EXTRA_LR_PARAMS = ("per_neighbor_diffusion_map", "u_prior_means")
+
+    def optim_parameters(self):
+        extra, normal = [], []
+        for name, p in self.named_parameters():
+            if not p.requires_grad:
+                continue
+            (extra if name in self._EXTRA_LR_PARAMS else normal).append(p)
+        return [{"params": normal}, {"params": extra, "lr": self.lr_extra}]
 
     # ------------------------------------------------------------------
     @staticmethod
@@ -662,7 +679,13 @@ class RESOLVI(BaseVIModel):
         table, ``per_neighbor_diffusion_map``, so ``train_size`` is always 1.0)."""
         if max_epochs is None:
             max_epochs = 50
-        kwargs.setdefault("plan_kwargs", {}).setdefault("lr", 3e-3)
+        plan_kwargs = kwargs.setdefault("plan_kwargs", {})
+        plan_kwargs.setdefault("lr", 3e-3)
+        # scvi-tools' RESOLVI.train() default (`n_epochs_kl_warmup=20`, independent of
+        # max_epochs); ov.vi's own TrainConfig default (400) would leave the latent almost
+        # unregularised over a short run and was found to measurably hurt latent cluster
+        # purity (ARI/NMI) vs the reference without changing marker-specificity.
+        plan_kwargs.setdefault("n_epochs_kl_warmup", 20)
         # the CUDA-graph / torch.compile fast paths strip "idx" from the minibatch dict
         # (other ov.vi models never need a cell's row index inside forward()); RESOLVI
         # indexes `per_neighbor_diffusion_map` by it, so both fast paths are disabled here.

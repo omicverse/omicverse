@@ -66,8 +66,19 @@ def kl_weight(cfg: TrainConfig, epoch: int, step: int) -> float:
 
 
 def make_optimizer(params, cfg: TrainConfig, device, capturable: bool = False):
+    """``params``: a flat iterable of ``nn.Parameter`` (the common case) or
+    ``module.optim_parameters()``'s pre-built param groups (dicts with a
+    ``'params'`` list and optionally their own ``'lr'`` / etc. overrides, e.g.
+    RESOLVI's faster-lr group for its per-cell / per-component point
+    estimates) -- the latter pass straight to the optimiser, filtered the
+    same way."""
     opt_cls = {"adam": torch.optim.Adam, "adamw": torch.optim.AdamW}[cfg.optimizer.lower()]
-    params = [p for p in params if p.requires_grad]
+    params = list(params)
+    if params and isinstance(params[0], dict):
+        groups = [{**g, "params": [p for p in g["params"] if p.requires_grad]} for g in params]
+        params = [g for g in groups if g["params"]]
+    else:
+        params = [p for p in params if p.requires_grad]
     kw = dict(lr=cfg.lr, eps=cfg.eps, weight_decay=cfg.weight_decay)
     if capturable:
         kw["capturable"] = True

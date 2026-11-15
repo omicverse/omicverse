@@ -78,6 +78,7 @@ def run_ours(a, epochs, seed, device, mode="memory", tmp_path=None):
     import omicverse as ov
     from omicverse.vi import RESOLVI
 
+    layer_arg = "counts"
     if mode == "memory":
         data = a
     elif mode == "oom":
@@ -86,15 +87,23 @@ def run_ours(a, epochs, seed, device, mode="memory", tmp_path=None):
         ov.settings.cpu_init()
         data = ov.read(str(path), storage="disk")
     elif mode == "dask":
+        # Dask-backed AnnData without scanpy/rapids: `omicverse.pp._dask.read_h5ad` builds
+        # a lazy dask-array X of row blocks (cupy CSR blocks on device="gpu", handed to
+        # torch via DLPack by ov.vi's DaskSource) -- this is how omicverse's own t_vi
+        # tutorial / tests/vi exercise Dask, no `ov.settings.gpu_init()` (RAPIDS) needed.
+        # It does not read obsm/layers, so `layer="counts"` is read directly as X, and the
+        # spatial coordinates are copied over from the (already in-memory) source AnnData.
+        from omicverse.pp._dask import read_h5ad as dask_read_h5ad
         path = tmp_path / f"ours_dask_{seed}.h5ad"
         a.write_h5ad(path)
-        ov.settings.gpu_init()
-        data = ov.read(str(path), storage="disk")
+        data = dask_read_h5ad(str(path), chunk_size=512, device="cpu", layer="counts")
+        data.obsm["spatial"] = np.asarray(a.obsm["spatial"])
+        layer_arg = None
     else:
         raise ValueError(mode)
 
     t0 = time.perf_counter()
-    m = RESOLVI(data, layer="counts", spatial_key="spatial", n_neighbors=10, mixture_k=50,
+    m = RESOLVI(data, layer=layer_arg, spatial_key="spatial", n_neighbors=10, mixture_k=50,
                n_hidden=32, n_hidden_encoder=128, n_layers=2, dropout_rate=0.05, seed=seed)
     m.train(max_epochs=epochs, device=device, progress=False, batch_size=512, seed=seed)
     wall = time.perf_counter() - t0
