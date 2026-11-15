@@ -146,6 +146,34 @@ def _vi_kwargs(kwargs):
     return kwargs
 
 
+def _run_sysvi(adata, batch_key, kwargs):
+    """omicverse's own SysVI (``ov.vi.SysVI``): cVAE + VampPrior + latent
+    cycle-consistency on normalized expression. ``batch_key`` is the *system*
+    covariate; ``categorical_covariate_keys='donor'``-style weaker covariates
+    go through ``**kwargs``."""
+    from .. import vi
+    kwargs = _vi_kwargs(kwargs)
+    layer = kwargs.pop("layer", None)  # SysVI expects normalized expression, not counts
+    from ..vi._train import TrainConfig
+    from ..vi._base import BaseVIModel
+    init_named = set(inspect.signature(vi.SysVI.__init__).parameters)
+    train_named = (set(TrainConfig.__dataclass_fields__)
+                  | set(inspect.signature(BaseVIModel.train).parameters)) - {"self", "kwargs"}
+    plan = {k: kwargs.pop(k) for k in list(kwargs)
+            if k in train_named and k not in init_named}
+    init_kwargs, train_kwargs = _split_kwargs_by_signature(
+        kwargs,
+        ("ov.vi.SysVI.__init__", vi.SysVI.__init__),
+        ("ov.vi.SysVI.train", vi.SysVI.train),
+    )
+    train_kwargs.update(plan)
+    model = vi.SysVI(adata, layer=layer, batch_key=batch_key, **init_kwargs)
+    model.train(**train_kwargs)
+    adata.obsm["X_sysVI"] = model.get_latent_representation()
+    add_reference(adata, "SysVI", "cross-system batch correction with SysVI")
+    return model
+
+
 def _run_vi(adata, batch_key, methods, kwargs):
     """scVI / scANVI / totalVI through :mod:`omicverse.vi` (same outputs as before:
     ``obsm['X_scVI' | 'X_scANVI' | 'X_totalVI']``, scANVI predictions in
@@ -230,6 +258,9 @@ _BATCH_OBSM = {
     "rpca":       "X_rpca",
     "seurat_rpca": "X_rpca",
     "RPCA":       "X_rpca",
+    "sysVI":      "X_sysVI",
+    "SysVI":      "X_sysVI",
+    "sysvi":      "X_sysVI",
 }
 
 @monitor
@@ -288,7 +319,11 @@ def batch_correction(adata:anndata.AnnData,batch_key:str,
         ``'combat'``, ``'scanorama'``, ``'scVI'``, ``'scANVI'``
         (semi-supervised VAE; requires ``labels_key=``),
         ``'totalVI'`` (joint RNA+protein; requires
-        ``protein_expression_obsm_key=``), ``'scPoli'`` (scArches
+        ``protein_expression_obsm_key=``), ``'sysVI'`` (cVAE + VampPrior +
+        latent cycle-consistency for integrating *systems* — species,
+        protocol, modality...; ``batch_key`` is the system, weaker
+        covariates such as donor go through ``categorical_covariate_keys=``),
+        ``'scPoli'`` (scArches
         conditional VAE; supports ``cell_type_keys=`` for prototype
         learning), ``'CellANOVA'``, ``'Concord'``, ``'cca'`` /
         ``'seurat_cca'`` — the pure-Python port of ``Seurat::RunCCA``
@@ -329,7 +364,8 @@ def batch_correction(adata:anndata.AnnData,batch_key:str,
     from ..pp._qc import _is_oom
     _oom = _is_oom(adata)
 
-    if _oom and methods not in ('harmony', 'scVI', 'scANVI', 'SCANVI', 'totalVI', 'TOTALVI'):
+    if _oom and methods not in ('harmony', 'scVI', 'scANVI', 'SCANVI', 'totalVI', 'TOTALVI',
+                                 'sysVI', 'SysVI', 'sysvi'):
         print(
             f"[AnnDataOOM] '{methods}' requires the full expression matrix in memory.\n"
             f"  Converting to in-memory AnnData automatically.\n"
@@ -441,6 +477,11 @@ def batch_correction(adata:anndata.AnnData,batch_key:str,
         # omicverse's own scVI family (ov.vi): no scvi-tools needed, trains on
         # in-memory AnnData, AnnDataOOM (disk) and Dask-backed AnnData alike.
         model = _run_vi(adata, batch_key, methods, kwargs)
+        return model
+    elif methods in ('sysVI', 'SysVI', 'sysvi'):
+        # omicverse's own SysVI (ov.vi.SysVI): cVAE + VampPrior + latent
+        # cycle-consistency for integrating systems (species, protocol...).
+        model = _run_sysvi(adata, batch_key, kwargs)
         return model
     elif methods in ('scPoli', 'SCPOLI'):
         try:

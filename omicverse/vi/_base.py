@@ -20,10 +20,16 @@ from ._train import TrainConfig, evaluate, fit
 
 
 def _categories(values) -> list:
+    """Canonical (content-sorted) categories of a batch / label / covariate
+    column, **not** whatever order an already-categorical dtype happens to
+    carry: AnnDataOOM / Dask readers can reconstruct a categorical column's
+    ``categories`` in a different order than pandas' own h5ad round trip (the
+    codes stay internally consistent either way, but two backends of the
+    *same* file would otherwise disagree on which code means which label,
+    breaking the cross-backend identical-minibatches guarantee)."""
     s = pd.Series(values)
-    if isinstance(s.dtype, pd.CategoricalDtype):
-        return [c for c in s.cat.categories]
-    return list(pd.Categorical(s.astype(str) if s.dtype == object else s).categories)
+    vals = s.astype(str) if s.dtype == object or isinstance(s.dtype, pd.CategoricalDtype) else s
+    return list(pd.Categorical(np.asarray(vals)).categories)
 
 
 def _codes(values, categories, key) -> np.ndarray:
