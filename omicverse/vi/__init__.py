@@ -15,6 +15,9 @@ Models
 ``SCVI``     unsupervised VAE (ZINB / NB / Poisson likelihood).
 ``SCANVI``   semi-supervised scANVI (label transfer, ``predict``).
 ``TOTALVI``  joint RNA + protein (CITE-seq) model.
+``Decipher`` two-level VAE with a 2-D interpretable trajectory space ``v``
+             (plus ``Trajectory``, ``rotate_decipher_components``,
+             ``compute_decipher_time``).
 
 The API mirrors scvi-tools, but configuration goes to the constructor::
 
@@ -36,6 +39,10 @@ _LAZY_ATTRS = {
     "SCVI": ("._scvi", "SCVI"),
     "SCANVI": ("._scanvi", "SCANVI"),
     "TOTALVI": ("._totalvi", "TOTALVI"),
+    "Decipher": ("._decipher", "Decipher"),
+    "Trajectory": ("._decipher", "Trajectory"),
+    "rotate_decipher_components": ("._decipher", "rotate_decipher_components"),
+    "compute_decipher_time": ("._decipher", "compute_decipher_time"),
     "BaseVIModel": ("._base", "BaseVIModel"),
     "build_source": ("._data", "build_source"),
     "train_distributed": ("._distributed", "train_distributed"),
@@ -48,7 +55,8 @@ _LAZY_ATTRS = {
     "priors": ("._priors", None),
 }
 
-__all__ = ["SCVI", "SCANVI", "TOTALVI", "BaseVIModel", "build_source", "train_distributed", "mde",
+__all__ = ["SCVI", "SCANVI", "TOTALVI", "Decipher", "Trajectory", "rotate_decipher_components",
+           "compute_decipher_time", "BaseVIModel", "build_source", "train_distributed", "mde",
            "plot_history", "integration_metrics", "MemoryMonitor"]
 
 

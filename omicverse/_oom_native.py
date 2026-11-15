@@ -60,6 +60,8 @@ OOM_NATIVE: set = {
     "omicverse.vi._scvi.SCVI",
     "omicverse.vi._scanvi.SCANVI",
     "omicverse.vi._totalvi.TOTALVI",
+    "omicverse.vi._decipher.Decipher",
+    "omicverse.single._decipher.decipher",
     # ---- ov.space ----
     "omicverse.space._svg.spatial_neighbors",
     "omicverse.space._svg.spatial_autocorr",
