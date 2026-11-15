@@ -22,6 +22,9 @@ Models
 ``Decipher`` two-level VAE with a 2-D interpretable trajectory space ``v``
              (plus ``Trajectory``, ``rotate_decipher_components``,
              ``compute_decipher_time``).
+``SysVI``    cVAE with a VampPrior and a latent cycle-consistency loss for
+             integrating multiple *systems* (species, protocol, modality...)
+             on normalized expression (Gaussian likelihood).
 
 The API mirrors scvi-tools, but configuration goes to the constructor::
 
@@ -50,6 +53,7 @@ _LAZY_ATTRS = {
     "Trajectory": ("._decipher", "Trajectory"),
     "rotate_decipher_components": ("._decipher", "rotate_decipher_components"),
     "compute_decipher_time": ("._decipher", "compute_decipher_time"),
+    "SysVI": ("._sysvi", "SysVI"),
     "BaseVIModel": ("._base", "BaseVIModel"),
     "build_source": ("._data", "build_source"),
     "train_distributed": ("._distributed", "train_distributed"),
@@ -62,7 +66,7 @@ _LAZY_ATTRS = {
     "priors": ("._priors", None),
 }
 
-__all__ = ["SCVI", "SCANVI", "TOTALVI", "DRVI", "RESOLVI", "MRVI", "Decipher", "Trajectory", "rotate_decipher_components", "compute_decipher_time", "BaseVIModel", "build_source", "train_distributed", "mde", "plot_history", "integration_metrics", "MemoryMonitor"]
+__all__ = ["SCVI", "SCANVI", "TOTALVI", "DRVI", "RESOLVI", "MRVI", "Decipher", "Trajectory", "rotate_decipher_components", "compute_decipher_time", "SysVI", "BaseVIModel", "build_source", "train_distributed", "mde", "plot_history", "integration_metrics", "MemoryMonitor"]
 
 
 def __getattr__(name):

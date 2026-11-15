@@ -67,6 +67,10 @@ OOM_NATIVE: set = {
     "omicverse.single._mrvi.mrvi",
     "omicverse.vi._decipher.Decipher",
     "omicverse.single._decipher.decipher",
+    "omicverse.vi._sysvi.SysVI",
+    # ov.single.sysvi is a plain function (not a class), so it IS wrapped by the
+    # guard unless listed: it streams AnnDataOOM / Dask through vi.SysVI itself.
+    "omicverse.single._sysvi.sysvi",
     # ---- ov.space ----
     "omicverse.space._svg.spatial_neighbors",
     "omicverse.space._svg.spatial_autocorr",
