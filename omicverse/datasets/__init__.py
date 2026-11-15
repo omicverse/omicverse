@@ -172,4 +172,4 @@ from ._ccc import (
     slidetags_mouse_brain,
 )
 from ._signatures import load_signatures_from_file, predefined_signatures
-from ._crossspecies import saturn_frog_zebrafish
+from ._crossspecies import saturn_frog_zebrafish, baron_pancreas_human_mouse
