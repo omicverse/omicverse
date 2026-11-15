@@ -200,3 +200,16 @@ regression here.
   suite (`test_ddp_matches_single_process_quality`,
   `test_ddp_uneven_blocks_no_deadlock`, `test_torchrun_launch`); not re-run
   here since this task is specifically about the GPU/NCCL path.
+
+
+## Addendum: single-GPU Dask scheduler regression check
+
+Measured 1-GPU Dask epoch time, SEA-AD 300k, 8 epochs, same settings,
+scheduler='threads' (pre-fix) vs scheduler='synchronous' (current fix),
+back-to-back: 4.84s/epoch vs 4.83s/epoch (ratio 1.00x) -- no regression.
+Reason: each dask block is a single `dask.delayed(_read_block)` leaf task
+(`omicverse/pp/_dask.py` `read_h5ad`), so `dask.compute(blk, ...)` has
+exactly one task to run regardless of scheduler; 'threads' vs 'synchronous'
+only differ when a graph has multiple concurrent tasks to spread across
+threads, which never applies here. No idx!=0 special-case needed; kept the
+fix as committed.
