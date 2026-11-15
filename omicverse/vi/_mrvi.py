@@ -938,4 +938,90 @@ class MRVI(BaseVIModel):
         return result
 
 
-__all__ = ["MRVI", "MRVAEModule", "DecoderZXAttention", "EncoderUZ", "EncoderXU"]
+def _dist_groupby(dist, groupby):
+    groups = dist["groups"]
+    if groupby is None:
+        if len(groups) != 1:
+            raise ValueError("groupby= is required when dist['groups'] has more than one key "
+                             f"(got {list(groups)})")
+        groupby = next(iter(groups))
+    return groups[groupby]
+
+
+def plot_sample_distances(dist, value, *, groupby=None, sample_annotation=None, palette=None,
+                          cmap="viridis", **clustermap_kwargs):
+    """Clustered heatmap of one group's ``(n_sample, n_sample)`` matrix from
+    :meth:`MRVI.get_local_sample_distances`, optionally row/col-annotated by a
+    per-sample covariate (e.g. disease status).
+
+    Arguments:
+        dist: dict returned by ``MRVI.get_local_sample_distances(groupby=...)``.
+        value: which group's matrix to plot (e.g. a cell type).
+        groupby: which ``groupby`` key to use if ``dist['groups']`` has more than
+            one (defaults to the only one present).
+        sample_annotation: per-sample covariate (``pandas.Series`` or dict), indexed
+            like ``dist['sample_order']``; colours the clustermap's row/column bars.
+        palette: optional dict mapping ``sample_annotation`` categories to colours
+            (default: ``seaborn``'s ``tab10``).
+        cmap: colormap for the distance matrix itself.
+        **clustermap_kwargs: forwarded to :func:`seaborn.clustermap`.
+
+    Returns:
+        The :class:`seaborn.matrix.ClusterGrid`.
+
+    Example::
+
+        dist = model.get_local_sample_distances(groupby="cell_type")
+        plot_sample_distances(dist, "CD14 Monocyte", sample_annotation=donor_disease)
+    """
+    import pandas as pd
+    import seaborn as sns
+
+    mat = _dist_groupby(dist, groupby)[value]
+    order = dist["sample_order"]
+    df = pd.DataFrame(mat, index=order, columns=order)
+    row_colors = col_colors = None
+    if sample_annotation is not None:
+        ann = pd.Series(sample_annotation).reindex(order)
+        if palette is None:
+            cats = pd.unique(ann)
+            palette = dict(zip(cats, sns.color_palette("tab10", len(cats))))
+        row_colors = col_colors = ann.map(palette)
+    kw = dict(cmap=cmap, row_colors=row_colors, col_colors=col_colors)
+    kw.update(clustermap_kwargs)
+    return sns.clustermap(df, **kw)
+
+
+def sample_distance_ratio(dist, sample_annotation, *, groupby=None):
+    """For every group's distance matrix from :meth:`MRVI.get_local_sample_distances`,
+    the ratio of the mean pairwise sample distance *across* ``sample_annotation``
+    values to the mean pairwise distance *within* the same value (upper triangle,
+    diagonal excluded) -- a quick per-group score of how strongly a covariate (e.g.
+    disease status) structures sample-to-sample variation.
+
+    Arguments:
+        dist: dict returned by ``MRVI.get_local_sample_distances(groupby=...)``.
+        sample_annotation: per-sample covariate (``pandas.Series`` or dict), indexed
+            like ``dist['sample_order']``.
+        groupby: which ``groupby`` key to use if ``dist['groups']`` has more than
+            one (defaults to the only one present).
+
+    Returns:
+        ``pandas.Series`` indexed by group (e.g. cell type), sorted descending.
+
+    Example::
+
+        sample_distance_ratio(dist, donor_disease, groupby="cell_type")
+    """
+    groups = _dist_groupby(dist, groupby)
+    order = dist["sample_order"]
+    ann = np.asarray(pd.Series(sample_annotation).reindex(order).astype(str))
+    same = ann[:, None] == ann[None, :]
+    iu = np.triu_indices(len(order), k=1)
+    ratio = {cat: mat[iu][~same[iu]].mean() / mat[iu][same[iu]].mean()
+            for cat, mat in groups.items()}
+    return pd.Series(ratio).sort_values(ascending=False)
+
+
+__all__ = ["MRVI", "MRVAEModule", "DecoderZXAttention", "EncoderUZ", "EncoderXU",
+          "plot_sample_distances", "sample_distance_ratio"]

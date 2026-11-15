@@ -204,3 +204,39 @@ def test_mrvi_disk_and_dask_match_memory(tmp_path):
 
     assert abs(oom_elbo - mem_elbo) < 0.2 * abs(mem_elbo)
     assert abs(dask_elbo - mem_elbo) < 0.2 * abs(mem_elbo)
+
+
+def _toy_dist():
+    """A tiny synthetic `get_local_sample_distances`-shaped dict: 4 samples, 2
+    disease groups {s0, s1} vs {s2, s3}; 'typeA' has a strong across-group gap,
+    'typeB' has none, so the expected `sample_distance_ratio` is analytically known."""
+    order = ["s0", "s1", "s2", "s3"]
+    disease = pd.Series(["covid", "covid", "ctrl", "ctrl"], index=order)
+    base = np.array([[0, 1, 1, 1], [1, 0, 1, 1], [1, 1, 0, 1], [1, 1, 1, 0]], dtype=float)
+    matA = np.where(base > 0, np.where(
+        (disease.values[:, None] == disease.values[None, :]), 1.0, 4.0), 0.0)
+    matB = base.copy()  # uniform -> ratio should be 1.0
+    dist = {"sample_order": order, "groups": {"cell_type": {"typeA": matA, "typeB": matB}}}
+    return dist, disease
+
+
+def test_sample_distance_ratio():
+    from omicverse.vi import sample_distance_ratio
+    dist, disease = _toy_dist()
+    ratio = sample_distance_ratio(dist, disease, groupby="cell_type")
+    assert list(ratio.index[:1]) == ["typeA"]  # typeA has the larger across/within gap
+    assert ratio["typeA"] == pytest.approx(4.0)
+    assert ratio["typeB"] == pytest.approx(1.0)
+    # groupby= is optional when there is only one key
+    assert sample_distance_ratio({"sample_order": dist["sample_order"],
+                                  "groups": {"ct": dist["groups"]["cell_type"]}},
+                                 disease).equals(ratio)
+
+
+def test_plot_sample_distances():
+    pytest.importorskip("seaborn")
+    from omicverse.vi import plot_sample_distances
+    dist, disease = _toy_dist()
+    g = plot_sample_distances(dist, "typeA", groupby="cell_type", sample_annotation=disease)
+    assert g.data2d.shape == (4, 4)
+    assert list(g.data2d.index) == dist["sample_order"]
