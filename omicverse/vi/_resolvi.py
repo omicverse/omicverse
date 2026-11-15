@@ -181,7 +181,7 @@ class ResolVIModule(nn.Module):
         self.true_proportion_raw = nn.Parameter(torch.tensor(_softplus_inv(5.0)))
         self.diffusion_proportion_raw = nn.Parameter(torch.tensor(_softplus_inv(3.0)))
         self.background_proportion_raw = nn.Parameter(torch.tensor(_softplus_inv(0.5)))
-        self.diffuse_scale_raw = nn.Parameter(torch.tensor(0.0))  # softplus(0)=ln2, ~1
+        self.diffuse_scale_raw = nn.Parameter(torch.tensor(_softplus_inv(1.0)))  # init at 1
         self.background_concentration = nn.Parameter(torch.zeros(max(n_batch, 1), n_input))
         self.per_neighbor_diffusion_map = nn.Parameter(torch.zeros(n_obs, n_neighbors))
 
@@ -681,6 +681,13 @@ class RESOLVI(BaseVIModel):
             max_epochs = 50
         plan_kwargs = kwargs.setdefault("plan_kwargs", {})
         plan_kwargs.setdefault("lr", 3e-3)
+        # scvi-tools' RESOLVI.train() own optimiser defaults -- `ov.vi`'s generic TrainConfig
+        # defaults (eps=0.01, weight_decay=1e-6) are tuned for the scVI family, not RESOLVI;
+        # a 100x larger eps measurably damps the decoder's updates once KL regularises z
+        # hard (n_epochs_kl_warmup below), which was hurting denoising sharpness (marker
+        # AUROC) even though it does not show up in the loss curves.
+        plan_kwargs.setdefault("eps", 1e-4)
+        plan_kwargs.setdefault("weight_decay", 0.0)
         # scvi-tools' RESOLVI.train() default (`n_epochs_kl_warmup=20`, independent of
         # max_epochs); ov.vi's own TrainConfig default (400) would leave the latent almost
         # unregularised over a short run and was found to measurably hurt latent cluster

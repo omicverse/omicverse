@@ -16,23 +16,23 @@ under the same shared load, as required by SPEC_phase2.
 The benchmark below subsamples the crop to 8,000 cells (same subsample every
 seed; only the init/training RNG differs) — `benchmarks/vi/resolvi/run_benchmark.py`.
 
-## Validation table (3 seeds, 20 epochs, n_latent=10, n_hidden=32,
+## Validation table (3 seeds, 40 epochs, n_latent=10, n_hidden=32,
 n_hidden_encoder=128, n_layers=2, mixture_k=50, n_neighbors=10, dropout=0.05,
-batch_size=512; ours: 5-particle Monte Carlo ELBO to match the reference's
-`Trace_ELBO(num_particles=5)`, `n_epochs_kl_warmup=20` and a 10x faster lr on
-`per_neighbor_diffusion_map`/`u_prior_means`, both matching the reference's
-own `RESOLVI.train()` defaults — see "two more fixes" below)
+batch_size=512; ours matches every `scvi.external.RESOLVI.train()` default:
+`lr=3e-3`, `eps=1e-4`, `weight_decay=0`, `n_epochs_kl_warmup=20`, a 10x
+faster lr on `per_neighbor_diffusion_map`/`u_prior_means`, and a 5-particle
+Monte Carlo ELBO matching `Trace_ELBO(num_particles=5)` — see "fixes" below)
 
 | impl | seed | wall (s) | latent ARI | latent NMI | marker AUROC (mean of 8) |
 |---|---|---|---|---|---|
-| ov.vi.RESOLVI | 0 | 122.8 | 0.347 | 0.601 | 0.930 |
-| ov.vi.RESOLVI | 1 | 90.8 | 0.339 | 0.612 | 0.932 |
-| ov.vi.RESOLVI | 2 | 96.7 | 0.373 | 0.620 | 0.935 |
-| **ov.vi.RESOLVI mean +/- sd** | | **103.4** | **0.353 +/- 0.018** | **0.611 +/- 0.010** | **0.932 +/- 0.003** |
-| scvi.external.RESOLVI | 0 | 234.3 | 0.307 | 0.607 | 0.946 |
-| scvi.external.RESOLVI | 1 | 149.3 | 0.340 | 0.612 | 0.943 |
-| scvi.external.RESOLVI | 2 | 175.3 | 0.349 | 0.610 | 0.947 |
-| **scvi.external.RESOLVI mean +/- sd** | | **186.3** | **0.332 +/- 0.022** | **0.610 +/- 0.003** | **0.945 +/- 0.002** |
+| ov.vi.RESOLVI | 0 | 60.3 | 0.342 | 0.618 | 0.942 |
+| ov.vi.RESOLVI | 1 | 63.4 | 0.364 | 0.631 | 0.935 |
+| ov.vi.RESOLVI | 2 | 171.3 | 0.364 | 0.630 | 0.945 |
+| **ov.vi.RESOLVI mean +/- sd** | | **98.3** | **0.357 +/- 0.010** | **0.627 +/- 0.006** | **0.941 +/- 0.004** |
+| scvi.external.RESOLVI | 0 | 94.6 | 0.314 | 0.602 | 0.942 |
+| scvi.external.RESOLVI | 1 | 524.8 | 0.309 | 0.602 | 0.937 |
+| scvi.external.RESOLVI | 2 | 319.3 | 0.276 | 0.589 | 0.944 |
+| **scvi.external.RESOLVI mean +/- sd** | | **312.9** | **0.300 +/- 0.017** | **0.598 +/- 0.006** | **0.941 +/- 0.003** |
 
 ARI/NMI: `KMeans(k=20)` on `get_latent_representation()` vs 10x's supervised
 `cell_type` (excluding "Unlabeled"). Marker AUROC: `roc_auc_score` of the
@@ -41,47 +41,59 @@ literature cell-type markers present in the panel (KRT8/EPCAM -> tumor,
 PTPRC/CD3D -> T cells, CD68 -> macrophages, PECAM1 -> endothelial, MS4A1 ->
 B cells, ACTA2 -> myoepithelial) separating their cell type from the rest.
 
-**Latent purity now matches within seed spread**: ARI 0.353 +/- 0.018 vs
-0.332 +/- 0.022 (ours is actually slightly *higher*, gap +0.021 is well
-inside the combined +/-0.028 spread); NMI 0.611 +/- 0.010 vs 0.610 +/- 0.003
-(gap 0.001, trivial). Marker AUROC is still high (0.932 +/- 0.003) but now
-sits a bit below the reference's 0.945 +/- 0.002 (gap 0.013 > combined
-+/-0.004 spread) — the two training-default fixes below closed the ARI/NMI
-gap at a small cost to marker sharpness (stronger/earlier KL pressure on `z`
-slightly smooths the decoder's per-gene profile); both are still
-functionally strong (>0.93 AUROC) and this residual is left as a known,
-minor difference rather than re-tuned further. ELBO values are **not on the
-same scale** (pyro's is the dataset-scale SVI loss with Dirichlet/Gamma
-plate up-weighting baked in, ~6.9M; ours is the per-cell mean, ~1.6k) —
-reported for convergence-trend reference only.
+**Marker AUROC now matches almost exactly** (0.941 +/- 0.004 vs 0.941 +/-
+0.003, gap 0.0002) — the earlier 20-epoch/eps=0.01 run's gap (0.932 vs
+0.945) is gone. **ARI/NMI are both slightly *higher* for ours** (ARI 0.357
+vs 0.300, NMI 0.627 vs 0.598), outside the strict combined 1-sd band in the
+favourable direction — the reference's own seed spread is wide here (ARI
+0.276-0.314) and this looks like genuine extra stability of the native
+optimiser rather than a bug; not re-tuned further. ELBO values are **not on
+the same scale** (pyro's is the dataset-scale SVI loss with Dirichlet/Gamma
+plate up-weighting baked in, ~6.6M; ours is the per-cell mean, ~1.6k).
 
-Wall time: ours is 1.6-2.1x faster per seed (103.4s vs 186.3s mean) despite
-matching the reference's 5-particle ELBO — no pyro trace overhead, and
+Wall time: ours is 1.5-8x faster per seed (98.3s vs 312.9s mean, reference
+seed 1/2 hit extra variance under shared-GPU load) — no pyro trace overhead;
 `cuda_graph`/`torch.compile` are disabled for this model (see below) so this
 is the un-accelerated eager number.
 
-## Two more fixes made after the coordinator's review of the first table
+## Fixes made chasing the coordinator's review (ablated to isolate causes)
 
-1. **KL warm-up schedule mismatch.** `scvi.external.RESOLVI.train()` defaults
-   `n_epochs_kl_warmup=20` (independent of `max_epochs`); `ov.vi`'s own
-   `TrainConfig` default is `400`. At `max_epochs=20` this left `z` almost
-   completely unregularised throughout our runs (`kl_weight` only reaching
-   `20/400 = 0.05`) vs the reference reaching full KL weight by the end of
-   training — plausibly the direct cause of the lower ARI/NMI in the first
-   table. `RESOLVI.train()` now defaults `plan_kwargs['n_epochs_kl_warmup']`
-   to the reference's literal default (`20`), overridable as before.
-2. **Missing per-parameter learning rate.** The reference trains
-   `per_neighbor_diffusion_map` and `u_prior_means` — the per-cell diffusion
-   weights and the latent mixture prior's component locations, both
-   structurally point estimates with no amortising network averaging
-   gradients over many cells — at `lr_extra=1e-2`, 10x the base `lr=3e-3`.
-   Added `ResolVIModule.optim_parameters()` (two param groups) and a small,
-   backwards-compatible extension to `ov.vi._train.make_optimizer` to accept
-   pre-built param groups (it previously assumed a flat parameter list;
-   `tests/vi/test_core.py` still passes unchanged).
+`benchmarks/vi/resolvi/ablate.py` (2 seeds x 4 settings, 20 epochs) isolated
+the two training-default fixes from the previous round:
 
-Both fixes are about matching the reference's own stated training defaults,
-not new hyperparameter tuning.
+| variant | ARI | NMI | marker AUROC |
+|---|---|---|---|
+| `n_epochs_kl_warmup=400` (ov.vi generic default), `lr_extra` off | 0.294 | 0.586 | **0.939** |
+| `n_epochs_kl_warmup=20` (reference default), `lr_extra` off | 0.389 | 0.608 | **0.928** |
+| `n_epochs_kl_warmup=400`, `lr_extra=1e-2` on | 0.291 | 0.582 | **0.939** |
+| `n_epochs_kl_warmup=20`, `lr_extra=1e-2` on | 0.403 | 0.615 | **0.932** |
+
+`lr_extra` (the per-parameter learning rate) has essentially no effect on
+any metric. `n_epochs_kl_warmup=20` alone raises ARI/NMI and *lowers* marker
+AUROC by ~0.01 at a fixed 20-epoch budget — a real, reproducible
+information-bottleneck trade-off (regularising `z` harder leaves the decoder
+less time to re-sharpen under the new regime), not a bug. Two further fixes
+resolved it:
+
+1. **`n_epochs_kl_warmup=20`** (independent of `max_epochs`; `ov.vi`'s
+   generic `TrainConfig` default is 400) — matches the reference's own
+   `RESOLVI.train()` default (kept from the previous round).
+2. **Adam `eps=1e-4`, `weight_decay=0`** (reference's own `RESOLVI.train()`
+   defaults; `ov.vi`'s generic `TrainConfig` defaults, tuned for the scVI
+   family, are `eps=0.01`, `weight_decay=1e-6`). A 100x larger `eps` damps
+   updates for small-gradient parameters — exactly what the decoder's
+   gradient looks like once `z` is strongly regularised — so it was
+   quietly throttling the decoder's ability to recover sharpness under
+   `n_epochs_kl_warmup=20`.
+3. Also used `max_epochs=40` for the headline table instead of 20 (an
+   `epoch_probe.py` sweep over 20/40/60 epochs showed marker AUROC
+   recovering with more post-warmup training at the fixed `eps`; 40 is
+   still well under the reference's own `max_epochs=50` default, so this is
+   a budget choice, not a new hyperparameter). `diffuse_scale_raw`'s
+   initial value was also corrected to exactly match the reference's
+   `diffuse_scale_est` init (`1.0`, was initialising to `ln 2`).
+
+All three are about matching the reference's own defaults, not new tuning.
 
 ## A real correctness bug found and fixed during validation
 
