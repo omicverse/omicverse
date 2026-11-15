@@ -152,3 +152,41 @@ def test_space_resolvi_writes_outputs():
     with pytest.raises(ValueError, match="overwrite"):
         sp.resolvi(a, layer="counts", spatial_key="spatial",
                   train_kwargs=dict(max_epochs=1, device="cpu", progress=False))
+
+
+def test_diffusion_encoder_floors_every_channel():
+    """Regression for the background-collapse bug: the reference's ``diffusion_encoder``
+    is an ``Encoder`` with ``var_activation=Softmax``, ``var_eps=1e-3`` --
+    ``q_v = var_activation(...) + var_eps`` adds the ``1e-3`` floor to *every* output
+    channel (``scvi.nn.Encoder.forward``), not just the extra ``diffusion_eps`` added to
+    the diffusion channel afterwards. Without that floor, a channel the network drives
+    arbitrarily close to 0 (typically background, since there is little reward to predict
+    any) reports a value many orders of magnitude below the reference's matching ``~1e-3``
+    floor instead of saturating at it."""
+    from omicverse.vi._resolvi import _DiffusionEncoder
+    torch.manual_seed(0)
+    enc = _DiffusionEncoder(20, n_layers=1, n_hidden=8)
+    assert enc.var_eps == 1e-3
+    # drive the head's weights/bias hard towards an extreme "all true" logit, as a fully
+    # trained network could for cells where predicting any background never pays off.
+    with torch.no_grad():
+        enc.head.weight.zero_()
+        enc.head.bias.copy_(torch.tensor([20.0, 0.0, -20.0]))
+    x = torch.randn(16, 20).clamp_min(0)
+    true, diffusion, background = enc(x)
+    assert (background >= enc.var_eps - 1e-9).all()  # floored, never collapses below it
+    assert (true > 0.9).all()  # the dominant channel is essentially untouched by the floor
+
+
+def test_resolvi_background_floor_after_training():
+    """``get_proportions()['background']`` must stay at or above the ``diffusion_encoder``'s
+    ``var_eps`` floor after training, not collapse arbitrarily (same bug as above, exercised
+    end to end)."""
+    from omicverse.vi import RESOLVI
+    torch.set_num_threads(4)
+    a, _ = _spatial(n=600, seed=7)
+    m = RESOLVI(a, layer="counts", spatial_key="spatial", n_neighbors=8, mixture_k=5,
+               n_hidden=16, n_hidden_encoder=32, n_layers=1, n_particles=1)
+    m.train(max_epochs=10, device="cpu", progress=False, batch_size=128, seed=0)
+    background = m.get_proportions()["background"].to_numpy()
+    assert (background >= m.module.diffusion_encoder.var_eps - 1e-9).all()
