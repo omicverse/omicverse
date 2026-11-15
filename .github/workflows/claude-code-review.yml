@@ -2,7 +2,9 @@ name: Claude Code Review
 
 on:
   pull_request:
-    types: [opened, synchronize]
+    # Review once when the PR is opened; later pushes do not re-run it
+    # (each run uses the subscription quota). Ask "@claude" for a re-review.
+    types: [opened]
     # Optional: Only run on specific file changes
     # paths:
     #   - "src/**/*.ts"
