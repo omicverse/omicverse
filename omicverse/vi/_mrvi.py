@@ -785,7 +785,17 @@ class MRVI(BaseVIModel):
             sel = np.isin(unique_samples, cols)
             sub = log_probs[:, sel]
             if omit_original:
-                one_hot = np.isin(samples[:, None], np.asarray(unique_samples)[sel][None, :])
+                # Exact per-column match of each cell's own sample against the
+                # *selected* samples, not membership-in-the-whole-group: `np.isin`
+                # here returns one bool per cell (True iff the cell's own sample is
+                # *anywhere* in `cols`), which `np.where` then broadcast across every
+                # column of `sub` -- blanking a cell's entire row (not just the one
+                # matching column) to -inf whenever its own sample belongs to the
+                # aggregated group, making `aggregate()` return -inf for every cell
+                # of its own covariate value. Elementwise `==` against the selected
+                # sample names gives the intended (n_cells, n_selected) mask with
+                # True only in the single column equal to the cell's own sample.
+                one_hot = samples[:, None] == np.asarray(unique_samples)[sel][None, :]
                 sub = np.where(one_hot, -np.inf, sub)
                 denom = np.log(np.maximum((~one_hot).sum(1), 1))
             else:

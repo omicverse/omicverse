@@ -128,9 +128,21 @@ def test_mrvi_trains_and_runs_downstream_analyses(tmp_path):
     ap = m.get_aggregated_posterior(sample="s0")
     assert ap.sample((4,)).shape == (4, 5)
 
-    da = m.differential_abundance(sample_cov_keys=["disease"])
+    da = m.differential_abundance(sample_cov_keys=["disease"], compute_log_enrichment=True)
     assert da["log_probs"].shape == (a.n_obs, 8)
     assert set(da["disease_log_probs"].keys()) == {"covid", "ctrl"}
+    # regression test for a bug where `aggregate()`'s `omit_original_sample` masking
+    # (`np.isin(samples[:, None], ...)`, shape (n_obs, 1)) broadcast a *single* True
+    # across every column of the per-covariate `sub` matrix instead of only the one
+    # column matching the cell's own sample -- so every cell belonging to a given
+    # covariate value got `-inf` for that value's own aggregate (log_probs/log_enrichs
+    # all `-inf`/`nan` for, e.g., every covid cell under `disease_log_probs["covid"]`).
+    for v in ("covid", "ctrl"):
+        assert np.isfinite(da["disease_log_probs"][v]).all(), f"{v}: non-finite log_probs"
+        assert np.isfinite(da["disease_log_enrichs"][v]).all(), f"{v}: non-finite log_enrichs"
+    is_covid_cell = a.obs["disease"].values == "covid"
+    covid_enrich = da["disease_log_enrichs"]["covid"]
+    assert covid_enrich[is_covid_cell].mean() > covid_enrich[~is_covid_cell].mean()
 
     torch.manual_seed(123)  # differential_expression draws MC samples from the global RNG
     de = m.differential_expression(sample_cov_keys=["disease"], mc_samples=25, store_lfc=True,
