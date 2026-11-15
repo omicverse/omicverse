@@ -727,6 +727,20 @@ class OOMSource(DataSource):
         return buf
 
 
+def _cupy_device_ctx(dev):
+    """``cupy.cuda.Device(dev.index)`` as a context manager, or a no-op.
+
+    cupy's "current device" is thread-local and defaults to 0; a DDP rank
+    other than 0 (or any non-default device) must pin it explicitly before
+    computing / converting a dask block, otherwise the cupy allocations
+    silently land on the wrong GPU (see ``DaskSource._compute``)."""
+    import contextlib
+    if dev.type != "cuda":
+        return contextlib.nullcontext()
+    import cupy as cp
+    return cp.cuda.Device(dev.index)
+
+
 class DaskSource(DataSource):
     """Dask-backed AnnData: the dask row chunks are the blocks."""
 
@@ -741,7 +755,8 @@ class DaskSource(DataSource):
         if device.type == "cuda":  # give back cupy pool blocks cached by earlier dask passes
             try:
                 import cupy
-                cupy.get_default_memory_pool().free_all_blocks()
+                with cupy.cuda.Device(device.index):
+                    cupy.get_default_memory_pool().free_all_blocks()
             except ImportError:
                 pass
         bounds = np.concatenate([[0], np.cumsum(X.chunks[0])]).astype(np.int64)
@@ -757,6 +772,13 @@ class DaskSource(DataSource):
     def _compute(self, j):
         import dask
         blk = self.X.blocks[int(self._block_index[j]), 0]
+        if self.device.type == "cuda":
+            # cupy's "current device" is thread-local and defaults to 0; dask's
+            # "threads" scheduler runs tasks in its own pool threads, which never
+            # see this rank's device (set on the worker's main thread only) --
+            # on any rank other than 0 that silently allocates the cupy block on
+            # the wrong GPU. Run synchronously, in this (correctly-set) thread.
+            return dask.compute(blk, scheduler="synchronous")[0]
         return dask.compute(blk, scheduler="threads")[0]
 
     def _block_tensors(self, b):
@@ -786,13 +808,15 @@ class DaskSource(DataSource):
         dev = self.device
         ips, inds, dats, offs = [], [], [], 0
         hosts = []
-        for j in blocks:
-            ip, ind, dat, iph = self._block_tensors(self._compute(j))
-            ips.append(ip[:-1] + offs)
-            hosts.append(iph)
-            offs += int(dat.shape[0])
-            inds.append(ind)
-            dats.append(dat)
+        ctx = _cupy_device_ctx(dev)
+        with ctx:
+            for j in blocks:
+                ip, ind, dat, iph = self._block_tensors(self._compute(j))
+                ips.append(ip[:-1] + offs)
+                hosts.append(iph)
+                offs += int(dat.shape[0])
+                inds.append(ind)
+                dats.append(dat)
         indptr_raw = torch.cat(ips + [torch.tensor([offs], device=dev)])
         indptr_host = indptr_raw.cpu().numpy()
         indices = torch.cat(inds).to(torch.int32)
