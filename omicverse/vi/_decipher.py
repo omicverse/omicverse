@@ -303,6 +303,16 @@ def rotate_decipher_components(adata, v_obsm_key: str, z_obsm_key: str,
     scvi-tools (100 angles x 2 reflections).  ``auto_flip_decipher_z`` flips each
     z dimension to correlate positively with the rotated v.
 
+    The returned ``decipher_v`` is for **display** (plots, ``Trajectory`` built
+    only to draw a path over a rotated embedding). The model's decoders
+    (``decoder_v_to_z``, used by :meth:`Decipher.compute_gene_patterns`) only
+    understand the native, un-rotated ``v`` -- if you overwrite
+    ``adata.obsm[v_obsm_key]`` with this rotated array and then build a
+    ``Trajectory`` from it for :meth:`Decipher.compute_gene_patterns`, pass the
+    returned ``rotation`` to ``compute_gene_patterns(..., rotation=rotation)``
+    so it can be undone before decoding; otherwise the imputed gene patterns
+    are decoded from meaningless (rotated) coordinates.
+
     Returns ``(decipher_v, decipher_z, rotation)``."""
     def process(col, order):
         if col is None:
@@ -540,18 +550,33 @@ class Decipher(BaseVIModel):
         return compute_decipher_time(adata, cluster_obs_key, trajectory, n_neighbors)
 
     def compute_gene_patterns(self, adata=None, trajectory: Trajectory = None,
-                              l_scale: float = 10_000, n_samples: int = 100) -> dict:
+                              l_scale: float = 10_000, n_samples: int = 100,
+                              rotation: np.ndarray | None = None) -> dict:
         """Gene expression along a trajectory of the Decipher space: the trajectory
         points go through the v -> z -> x decoders.  Returns ``mean`` (z at its
         mean), ``q25`` / ``q75`` (quantiles over ``n_samples`` z samples), all
-        times ``l_scale``, and ``times``."""
+        times ``l_scale``, and ``times``.
+
+        ``decoder_v_to_z`` only understands the model's *native* (un-rotated) ``v``
+        -- the one straight out of :meth:`get_latent_representation`.  If
+        ``trajectory`` was built from a Decipher space rotated for display with
+        :func:`rotate_decipher_components` (e.g. the obsm key you plotted
+        ``adata.obsm[key]`` into also got overwritten with the rotated array, or
+        you built the ``Trajectory`` directly from the rotated array), decoding
+        those points directly is meaningless -- pass the same ``rotation`` matrix
+        returned by :func:`rotate_decipher_components` here and it is undone
+        before decoding. Leave ``None`` if ``trajectory`` is already in the
+        model's native space."""
         if trajectory is None:
             raise ValueError("pass a Trajectory")
         mod = self.module
         was = mod.training
         mod.eval()
+        pts = trajectory.trajectory_latent
+        if rotation is not None:
+            pts = pts @ np.asarray(rotation).T
         with torch.no_grad():
-            t = torch.as_tensor(trajectory.trajectory_latent, dtype=torch.float32,
+            t = torch.as_tensor(pts, dtype=torch.float32,
                                 device=self.device)
             z_mean, z_scale = mod.decode_z(t)
             zs = torch.distributions.Normal(z_mean, z_scale).sample((n_samples,))
