@@ -49,7 +49,7 @@ Use SIMBA for multi-batch single-modality data (e.g., multiple pancreas studies)
 2. Initialise `pySIMBA(adata, workdir)` and run the preprocessing pipeline
 3. Call `gen_graph()` then `train(num_workers=...)` to learn embeddings
 4. Apply `batch_correction()` to get harmonised AnnData with `X_simba`
-5. Dependencies: `simba`, `simba_pbg`; GPU optional, needs adequate CPU threads
+5. Dependencies: none (native `ov.ge.SIMBA`, pure PyTorch -- no `simba`/`simba_pbg` install); GPU optional
 
 ### 4. TOSICA reference transfer
 
@@ -148,7 +148,7 @@ assert 'neighbors' in adata.uns, "Neighbor graph required. Run ov.pp.neighbors(a
 - **SIMBA `gen_graph()` runs out of memory**: Reduce `n_top_genes` (try 2000) or increase `n_bins` to compress the feature space. SIMBA graph construction scales with gene count.
 - **TOSICA `FileNotFoundError` after `download_tosica_gmt()`**: The download writes to `genesets/` in the current working directory. Verify the file exists at the expected path, or pass an absolute path.
 - **StaVIA `root_user` mismatch**: The root must be a value that exists in the `true_label` array. Check `adata.obs['clusters'].unique()` to find valid root names.
-- **`ImportError: No module named 'mofapy2'`**: Install with `pip install mofapy2`. Similarly, SIMBA needs `pip install simba simba_pbg`.
+- **`ImportError: No module named 'mofapy2'`**: Install with `pip install mofapy2`. SIMBA (`ov.single.pySIMBA`) needs no separate install -- it runs on omicverse's own `ov.ge` graph-embedding package (pure PyTorch).
 - **MOFA factors all zero or NaN**: Input AnnData may have constant or all-zero features. Filter genes with `sc.pp.filter_genes(adata, min_cells=10)` before MOFA.
 
 ## Examples

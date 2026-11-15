@@ -74,6 +74,17 @@ OOM_NATIVE: set = {
     # ---- ov.space ----
     "omicverse.space._svg.spatial_neighbors",
     "omicverse.space._svg.spatial_autocorr",
+    # ---- ov.ge: no entries needed ----
+    # `ov.ge.SIMBA` / `ov.ge.BaseGraphModel` are classes (never wrapped by
+    # the registry, see above). Their graph-building methods
+    # (`HeteroGraph.add_edges_from_sparse` / `add_discretized_relations`)
+    # already stream AnnDataOOM / Dask row blocks directly (`_graph.py`'s
+    # `_iter_row_blocks`) without ever going through the registry wrapper.
+    # The registered module-level helpers (`ov.ge.normalize`,
+    # `log_transform`, `discretize`, `select_variable_genes`, `gen_graph`,
+    # `infer_edges`) operate on `.X`/`.layers` in memory (as SIMBA's own
+    # preprocessing does) and are intentionally left to the default OOM
+    # guard (materialise, run, copy back) rather than allow-listed here.
 }
 
 
