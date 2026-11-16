@@ -22,7 +22,7 @@ def _reference_discretize(X, n_bins=5, max_bins=100, seed=2021):
     nonzero = X.data
     hist_count, hist_edges = np.histogram(nonzero, bins=max_bins, density=False)
     hist_centroids = (hist_edges[:-1] + hist_edges[1:]) / 2
-    km = KMeans(n_clusters=n_bins, random_state=seed, n_init=10).fit(
+    km = KMeans(n_clusters=n_bins, random_state=seed, n_init="auto").fit(
         hist_centroids.reshape(-1, 1), sample_weight=hist_count)
     cluster_centers = np.sort(km.cluster_centers_.flatten())
     padding = (hist_edges[-1] - hist_edges[0]) / (max_bins * 10)

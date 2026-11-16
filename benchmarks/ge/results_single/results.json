@@ -1,0 +1,371 @@
+{
+ "graph": {
+  "n_entities_C": 2638,
+  "ref_n_entities_C": 2638,
+  "n_entities_G": 3000,
+  "ref_n_entities_G": 3000,
+  "n_relations": 5,
+  "ref_n_relations": 5,
+  "edges_per_relation": [
+   124714,
+   324260,
+   161313,
+   66486,
+   43655
+  ],
+  "ref_edges_per_relation": [
+   124714,
+   324260,
+   161313,
+   66486,
+   43655
+  ],
+  "n_edges": 720428,
+  "ref_n_edges": 720428,
+  "edges_match": true,
+  "auto_wd": 0.049186,
+  "ref_wd": 0.049186,
+  "wd_match": true
+ },
+ "seeds": [
+  {
+   "seed": 1,
+   "train_time_sec": 26.545567750930786,
+   "ari": 0.8417064329212003,
+   "nmi": 0.8265323245961146,
+   "knn_acc": 0.9423789603818067,
+   "eval_mrr": 0.0696103423833847,
+   "eval_loss": 21.41419583828921,
+   "ref_eval_mrr": 0.07236700925006682,
+   "ref_eval_loss": 21.390594063897026,
+   "compare_entities_corr": {
+    "max": 0.9777096743429471,
+    "std": 0.9907114985862221,
+    "gini": 0.9895096247079729,
+    "entropy": 0.98480995838819
+   },
+   "compare_entities_top50_jaccard": {
+    "max": 0.8181818181818182,
+    "std": 0.7241379310344828,
+    "gini": 0.7857142857142857,
+    "entropy": 0.16279069767441862
+   },
+   "markers": {
+    "B cells": {
+     "n_cells": 342,
+     "markers_in_hvg": [
+      "MS4A1"
+     ],
+     "markers_not_in_hvg": [],
+     "top_k_contains_all_present_markers": false,
+     "marker_ranks": {
+      "MS4A1": 436
+     }
+    },
+    "CD14+ Monocytes": {
+     "n_cells": 480,
+     "markers_in_hvg": [
+      "CD14",
+      "LYZ"
+     ],
+     "markers_not_in_hvg": [],
+     "top_k_contains_all_present_markers": false,
+     "marker_ranks": {
+      "CD14": 109,
+      "LYZ": 1712
+     }
+    },
+    "CD4 T cells": {
+     "n_cells": 1144,
+     "markers_in_hvg": [
+      "IL7R"
+     ],
+     "markers_not_in_hvg": [],
+     "top_k_contains_all_present_markers": false,
+     "marker_ranks": {
+      "IL7R": 202
+     }
+    },
+    "CD8 T cells": {
+     "n_cells": 316,
+     "markers_in_hvg": [],
+     "markers_not_in_hvg": [
+      "CD8A"
+     ],
+     "top_k_contains_all_present_markers": null,
+     "marker_ranks": {}
+    },
+    "Dendritic cells": {
+     "n_cells": 37,
+     "markers_in_hvg": [],
+     "markers_not_in_hvg": [],
+     "top_k_contains_all_present_markers": null,
+     "marker_ranks": {}
+    },
+    "FCGR3A+ Monocytes": {
+     "n_cells": 150,
+     "markers_in_hvg": [
+      "FCGR3A",
+      "MS4A7"
+     ],
+     "markers_not_in_hvg": [],
+     "top_k_contains_all_present_markers": false,
+     "marker_ranks": {
+      "FCGR3A": 7,
+      "MS4A7": 66
+     }
+    },
+    "Megakaryocytes": {
+     "n_cells": 15,
+     "markers_in_hvg": [
+      "PPBP"
+     ],
+     "markers_not_in_hvg": [],
+     "top_k_contains_all_present_markers": false,
+     "marker_ranks": {
+      "PPBP": 71
+     }
+    },
+    "NK cells": {
+     "n_cells": 154,
+     "markers_in_hvg": [
+      "GNLY",
+      "NKG7"
+     ],
+     "markers_not_in_hvg": [],
+     "top_k_contains_all_present_markers": false,
+     "marker_ranks": {
+      "GNLY": 432,
+      "NKG7": 761
+     }
+    }
+   }
+  },
+  {
+   "seed": 2,
+   "train_time_sec": 24.794901609420776,
+   "ari": 0.8449698836781375,
+   "nmi": 0.8279249904692108,
+   "knn_acc": 0.9408638088666551,
+   "eval_mrr": 0.07032199949026108,
+   "eval_loss": 21.360606771158665,
+   "ref_eval_mrr": 0.0742945508186836,
+   "ref_eval_loss": 21.340968234770493,
+   "compare_entities_corr": {
+    "max": 0.9876875642198326,
+    "std": 0.9940414803319485,
+    "gini": 0.993351358426734,
+    "entropy": 0.9860135689040651
+   },
+   "compare_entities_top50_jaccard": {
+    "max": 0.8518518518518519,
+    "std": 0.7857142857142857,
+    "gini": 0.8181818181818182,
+    "entropy": 0.2987012987012987
+   },
+   "markers": {
+    "B cells": {
+     "n_cells": 342,
+     "markers_in_hvg": [
+      "MS4A1"
+     ],
+     "markers_not_in_hvg": [],
+     "top_k_contains_all_present_markers": false,
+     "marker_ranks": {
+      "MS4A1": 217
+     }
+    },
+    "CD14+ Monocytes": {
+     "n_cells": 480,
+     "markers_in_hvg": [
+      "CD14",
+      "LYZ"
+     ],
+     "markers_not_in_hvg": [],
+     "top_k_contains_all_present_markers": false,
+     "marker_ranks": {
+      "CD14": 62,
+      "LYZ": 1312
+     }
+    },
+    "CD4 T cells": {
+     "n_cells": 1144,
+     "markers_in_hvg": [
+      "IL7R"
+     ],
+     "markers_not_in_hvg": [],
+     "top_k_contains_all_present_markers": false,
+     "marker_ranks": {
+      "IL7R": 175
+     }
+    },
+    "CD8 T cells": {
+     "n_cells": 316,
+     "markers_in_hvg": [],
+     "markers_not_in_hvg": [
+      "CD8A"
+     ],
+     "top_k_contains_all_present_markers": null,
+     "marker_ranks": {}
+    },
+    "Dendritic cells": {
+     "n_cells": 37,
+     "markers_in_hvg": [],
+     "markers_not_in_hvg": [],
+     "top_k_contains_all_present_markers": null,
+     "marker_ranks": {}
+    },
+    "FCGR3A+ Monocytes": {
+     "n_cells": 150,
+     "markers_in_hvg": [
+      "FCGR3A",
+      "MS4A7"
+     ],
+     "markers_not_in_hvg": [],
+     "top_k_contains_all_present_markers": false,
+     "marker_ranks": {
+      "FCGR3A": 6,
+      "MS4A7": 78
+     }
+    },
+    "Megakaryocytes": {
+     "n_cells": 15,
+     "markers_in_hvg": [
+      "PPBP"
+     ],
+     "markers_not_in_hvg": [],
+     "top_k_contains_all_present_markers": false,
+     "marker_ranks": {
+      "PPBP": 59
+     }
+    },
+    "NK cells": {
+     "n_cells": 154,
+     "markers_in_hvg": [
+      "GNLY",
+      "NKG7"
+     ],
+     "markers_not_in_hvg": [],
+     "top_k_contains_all_present_markers": false,
+     "marker_ranks": {
+      "GNLY": 123,
+      "NKG7": 550
+     }
+    }
+   }
+  },
+  {
+   "seed": 3,
+   "train_time_sec": 24.08211588859558,
+   "ari": 0.8624155671007115,
+   "nmi": 0.84476135284533,
+   "knn_acc": 0.9480614973262032,
+   "eval_mrr": 0.07253493368625641,
+   "eval_loss": 21.317850326784203,
+   "ref_eval_mrr": 0.07426139026452519,
+   "ref_eval_loss": 21.390100374018203,
+   "compare_entities_corr": {
+    "max": 0.9879765676215793,
+    "std": 0.9934573109110677,
+    "gini": 0.9917602140054991,
+    "entropy": 0.9803992810363552
+   },
+   "compare_entities_top50_jaccard": {
+    "max": 0.8181818181818182,
+    "std": 0.7857142857142857,
+    "gini": 0.7857142857142857,
+    "entropy": 0.26582278481012656
+   },
+   "markers": {
+    "B cells": {
+     "n_cells": 342,
+     "markers_in_hvg": [
+      "MS4A1"
+     ],
+     "markers_not_in_hvg": [],
+     "top_k_contains_all_present_markers": false,
+     "marker_ranks": {
+      "MS4A1": 206
+     }
+    },
+    "CD14+ Monocytes": {
+     "n_cells": 480,
+     "markers_in_hvg": [
+      "CD14",
+      "LYZ"
+     ],
+     "markers_not_in_hvg": [],
+     "top_k_contains_all_present_markers": false,
+     "marker_ranks": {
+      "CD14": 71,
+      "LYZ": 1353
+     }
+    },
+    "CD4 T cells": {
+     "n_cells": 1144,
+     "markers_in_hvg": [
+      "IL7R"
+     ],
+     "markers_not_in_hvg": [],
+     "top_k_contains_all_present_markers": false,
+     "marker_ranks": {
+      "IL7R": 132
+     }
+    },
+    "CD8 T cells": {
+     "n_cells": 316,
+     "markers_in_hvg": [],
+     "markers_not_in_hvg": [
+      "CD8A"
+     ],
+     "top_k_contains_all_present_markers": null,
+     "marker_ranks": {}
+    },
+    "Dendritic cells": {
+     "n_cells": 37,
+     "markers_in_hvg": [],
+     "markers_not_in_hvg": [],
+     "top_k_contains_all_present_markers": null,
+     "marker_ranks": {}
+    },
+    "FCGR3A+ Monocytes": {
+     "n_cells": 150,
+     "markers_in_hvg": [
+      "FCGR3A",
+      "MS4A7"
+     ],
+     "markers_not_in_hvg": [],
+     "top_k_contains_all_present_markers": false,
+     "marker_ranks": {
+      "FCGR3A": 4,
+      "MS4A7": 87
+     }
+    },
+    "Megakaryocytes": {
+     "n_cells": 15,
+     "markers_in_hvg": [
+      "PPBP"
+     ],
+     "markers_not_in_hvg": [],
+     "top_k_contains_all_present_markers": true,
+     "marker_ranks": {
+      "PPBP": 50
+     }
+    },
+    "NK cells": {
+     "n_cells": 154,
+     "markers_in_hvg": [
+      "GNLY",
+      "NKG7"
+     ],
+     "markers_not_in_hvg": [],
+     "top_k_contains_all_present_markers": false,
+     "marker_ranks": {
+      "GNLY": 65,
+      "NKG7": 131
+     }
+    }
+   }
+  }
+ ]
+}

@@ -150,7 +150,12 @@ def discretize(adata, layer=None, n_bins: int = 5, max_bins: int = 100, seed: in
     hist_count, hist_edges = np.histogram(nonzero, bins=max_bins, density=False)
     hist_centroids = (hist_edges[:-1] + hist_edges[1:]) / 2
 
-    km = KMeans(n_clusters=n_bins, random_state=seed, n_init=10).fit(
+    # n_init='auto': matches the installed bioconda simba 1.2 release (which
+    # sets this explicitly; the GitHub dev clone this was first ported from
+    # left n_init unset, which resolves to the same 'auto' on sklearn>=1.4
+    # anyway -- but pinning it here keeps this independent of sklearn's
+    # default-value history).
+    km = KMeans(n_clusters=n_bins, random_state=seed, n_init="auto").fit(
         hist_centroids.reshape(-1, 1), sample_weight=hist_count)
     cluster_centers = np.sort(km.cluster_centers_.flatten())
 
@@ -402,9 +407,14 @@ def embed(adata_ref, list_adata_query: list, *, T: float = 0.5, list_T=None,
     return ad.AnnData(X=X_all, obs=obs_all)
 
 
-def compare_entities(adata_ref, adata_query, n_top_cells: int = 50, T: float = 1.0):
+def compare_entities(adata_ref, adata_query, n_top: int = 50, T: float = 1.0):
     """Per-query-entity SIMBA metrics against a reference embedding --
-    ``max``/``std``/``gini``/``entropy`` (``simba.tl.compare_entities``)."""
+    ``max``/``std``/``gini``/``entropy`` (``simba.tl.compare_entities``).
+
+    ``n_top`` (bioconda simba >=1.2's kwarg name; the dev clone this was
+    first ported from called it ``n_top_cells`` -- same parameter, same
+    formula, renamed here to match what released-package users got).
+    """
     import anndata as ad
     from scipy.stats import entropy
 
@@ -416,7 +426,7 @@ def compare_entities(adata_ref, adata_query, n_top_cells: int = 50, T: float = 1
     adata_cmp.layers["norm"] = X_cmp - np.log(np.exp(X_cmp).mean(axis=0)).reshape(1, -1)
     adata_cmp.layers["softmax"] = np.exp(X_cmp / T) / np.exp(X_cmp / T).sum(axis=0).reshape(1, -1)
     adata_cmp.var["max"] = np.clip(
-        np.sort(adata_cmp.layers["norm"], axis=0)[-n_top_cells:, ], a_min=0, a_max=None
+        np.sort(adata_cmp.layers["norm"], axis=0)[-n_top:, ], a_min=0, a_max=None
     ).mean(axis=0)
     adata_cmp.var["std"] = np.std(X_cmp, axis=0, ddof=1)
     adata_cmp.var["gini"] = np.array([_gini(adata_cmp.layers["softmax"][:, i])
