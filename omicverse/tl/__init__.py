@@ -12,9 +12,12 @@ re-identification from images (:func:`reid_embed`, :func:`reid_local_verify`,
 :func:`reid_open_set_cluster`), data-entry error audits of linked clinical / EHR
 tables (:func:`audit_clinical_tables`) and study-level effect-size extraction for
 meta-analysis (:func:`extract_group_stats`, :func:`group_comparisons`,
-:func:`meta_effect_sizes`), and per-survey species-set prediction from
+:func:`meta_effect_sizes`), per-survey species-set prediction from
 presence-absence / presence-only data (:func:`sdm_community_pipeline` and its
-steps).
+steps),
+and morphometry of boxed objects in stained bright-field smears with shape-vs-stain
+field calls that transfer to unseen groups (:func:`smear_measure`,
+:func:`two_axis_classifier_fit`).
 """
 from ._cross_species import cross_species_align
 from ._bonsai import bonsai
@@ -45,6 +48,10 @@ from ._sdm import (sdm_sample_f1, sdm_decode_sets, sdm_sets_to_strings, sdm_spat
                    sdm_neighbor_composition, sdm_presence_only_histogram, sdm_cube_summary,
                    sdm_read_tensor_dir, sdm_standardize, sdm_fit_mlp, sdm_fuse,
                    sdm_community_pipeline)
+from ._smear_morph import (smear_measure, smear_stain_vectors, smear_field_features,
+                           two_axis_classifier_fit, two_axis_classifier_predict,
+                           group_holdout_two_axis, species_balanced_recall, group_laplace_prior,
+                           smear_morphometry_source, smear_fit_predictor, smear_export_predictor)
 
 __all__ = ["cross_species_align", "bonsai", "bandpass_filter", "channel_qc_table",
            "bridged_channel_pairs", "erp_channel_outliers",
@@ -68,6 +75,10 @@ __all__ = ["cross_species_align", "bonsai", "bandpass_filter", "channel_qc_table
            "sdm_sample_f1", "sdm_decode_sets", "sdm_sets_to_strings", "sdm_spatial_holdout",
            "sdm_neighbor_composition", "sdm_presence_only_histogram", "sdm_cube_summary",
            "sdm_read_tensor_dir", "sdm_standardize", "sdm_fit_mlp", "sdm_fuse",
-           "sdm_community_pipeline"]
+           "sdm_community_pipeline",
+           "smear_measure", "smear_stain_vectors", "smear_field_features",
+           "two_axis_classifier_fit", "two_axis_classifier_predict", "group_holdout_two_axis",
+           "species_balanced_recall", "group_laplace_prior", "smear_morphometry_source",
+           "smear_fit_predictor", "smear_export_predictor"]
 from ._meta_analysis import to_mean_sd  # noqa: E402  (summary statistics -> mean / SD)
 __all__ += ["to_mean_sd"]
