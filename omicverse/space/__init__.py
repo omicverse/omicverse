@@ -68,7 +68,7 @@ from ._cmap import CMAP
 from ._stt import STT
 from ._svg import svg,spatial_neighbors,spatial_autocorr,moranI
 from ._niche import molecular as _niche_molecular
-from . import geom, nb, niche, seg
+from . import geom, nb, niche, seg, track
 from ._neighborhood import (
     interaction_matrix,
     nhood_enrichment,
@@ -160,6 +160,7 @@ from . import histo  # noqa: E402,F401
 
 __all__ = [
     'histo',
+    'track',
 
     # Cluster-level marker statistics / signature scoring
     'cluster_marker_profile',
