@@ -1,0 +1,22 @@
+{
+ "single": {
+  "ov_ge_on_pbg_holdout": {
+   "loss": 21.40872811104872,
+   "mrr": 0.07223111391067505
+  },
+  "ref_self_report": {
+   "loss": 21.391,
+   "mrr": 0.0724
+  }
+ },
+ "batch": {
+  "ov_ge_on_pbg_holdout": {
+   "loss": 21.06647741134266,
+   "mrr": 0.122833251953125
+  },
+  "ref_self_report": {
+   "loss": 21.06,
+   "mrr": 0.1231
+  }
+ }
+}

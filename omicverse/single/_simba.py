@@ -1,24 +1,16 @@
-import matplotlib.pyplot as plt
-import numpy as np
-import pandas as pd
-import anndata
-import os
-import torch
-import scipy.sparse as sp
-from sklearn.preprocessing import normalize
-from tqdm import tqdm
+"""``ov.single.pySIMBA`` -- thin convenience wrapper over :class:`ov.ge.SIMBA`.
+
+Keeps the original ``pySIMBA`` public API (constructor + ``preprocess`` /
+``gen_graph`` / ``train`` / ``load`` / ``batch_correction``), but it is now
+backed end to end by omicverse's own ``ov.ge`` graph-embedding package --
+no ``import simba`` / ``import simba_pbg`` anywhere. See
+``ovfast/ge/SPEC_ge_simba.md`` for the full design.
+"""
+from __future__ import annotations
+
 from .._settings import add_reference
 from .._registry import register_function
 
-simba_install=False
-
-def global_imports(modulename,shortname = None, asfunction = False):
-    if shortname is None: 
-        shortname = modulename
-    if asfunction is False:
-        globals()[shortname] = __import__(modulename)
-    else:        
-        globals()[shortname] = __import__(modulename)
 
 @register_function(
     aliases=['SIMBA整合器', 'pySIMBA', 'single-cell batch integration simba'],
@@ -29,47 +21,34 @@ def global_imports(modulename,shortname = None, asfunction = False):
     produces={'obsm': ['X_simba'], 'uns': ['simba graph/model']},
     auto_fix='none',
     examples=['simba_object = ov.single.pySIMBA(adata, workdir)', 'simba_object.preprocess(batch_key="batch")'],
-    related=['single.batch_correction', 'pp.neighbors', 'pp.umap']
+    related=['single.batch_correction', 'pp.neighbors', 'pp.umap', 'ge.SIMBA']
 )
 class pySIMBA(object):
     """
     SIMBA wrapper for single-cell batch integration and graph-embedding construction.
-    
+
+    Backed by :class:`omicverse.ge.SIMBA` (a native, pure-PyTorch
+    re-implementation of SIMBA/PyTorch-BigGraph) -- no external ``simba`` /
+    ``simba_pbg`` install required.
+
     Parameters
     ----------
     adata:AnnData
         Input AnnData with batch labels in ``obs``.
     workdir:str, optional
-        Directory used by SIMBA to store intermediate files and outputs.
-    
+        Directory used to persist the trained graph/model (``save``/``load``).
+
     Returns
     -------
     None
         Initializes SIMBA runtime and stores input data/workspace.
-    
+
     Examples
     --------
     >>> simba_object = ov.single.pySIMBA(adata, workdir)
     """
 
-    def check_simba(self):
-        r"""Check if SIMBA package has been installed.
-        
-        Raises:
-            ImportError: If SIMBA package is not installed
-        """
-        global simba_install
-        try:
-            import simba as si
-            simba_install=True
-            print('simba have been install version:',si.__version__)
-        except ImportError:
-            raise ImportError(
-                """Please install the simba and simba_pdg: `conda install -c bioconda simba` or 
-                `pip install git+https://github.com/huidongchen/simba and pip install git+https://github.com/pinellolab/simba_pbg`.'"""
-            )
-
-    def __init__(self,adata,workdir="simba_result") -> None:
+    def __init__(self, adata, workdir="simba_result") -> None:
         r"""Initialize SIMBA object for batch correction and multimodal analysis.
 
         Parameters
@@ -77,20 +56,16 @@ class pySIMBA(object):
         adata:anndata.AnnData
             Input AnnData containing single-cell profiles and batch labels.
         workdir:str
-            Working directory used by SIMBA for intermediate files.
-        
+            Working directory used to persist the trained model.
         """
+        self.adata = adata
+        self.workdir = workdir
+        self.simba_model = None
+        self._batch_key = "batch"
+        self._ref_batch = None
 
-        self.check_simba()
-        global simba_install
-        if simba_install==True:
-            global_imports("simba","si")
-        self.adata=adata
-        self.workdir=workdir
-        pass
-
-    def preprocess(self,batch_key='batch',min_n_cells=3,
-                    method='lib_size',n_top_genes=3000,n_bins=5):
+    def preprocess(self, batch_key='batch', min_n_cells=3,
+                  method='lib_size', n_top_genes=3000, n_bins=5, span=0.3):
         r"""Preprocess the AnnData object for SIMBA analysis.
 
         Parameters
@@ -100,29 +75,37 @@ class pySIMBA(object):
         min_n_cells:int
             Minimum number of cells required to keep a gene.
         method:str
-            Normalization method used by SIMBA preprocessing.
+            Normalization method used by SIMBA preprocessing (``'lib_size'``
+            or ``'tf_idf'``).
         n_top_genes:int
             Number of variable genes selected per batch.
         n_bins:int
             Number of bins used in discretization.
-
-        
+        span:float
+            Loess smoothing span for highly-variable-gene selection (SIMBA's
+            default is ``0.3``; raise it if ``select_variable_genes`` raises
+            a loess near-singularity error on a very small/sparse batch).
         """
-        adata=self.adata
-        adata_dict={}
-        adata.obs[batch_key]=adata.obs[batch_key].astype('category')
-        for batch in adata.obs[batch_key].cat.categories:
-            adata_dict[batch]=adata[adata.obs[batch_key]==batch].copy()
-            si.pp.filter_genes(adata_dict[batch],min_n_cells=min_n_cells)
-            si.pp.cal_qc_rna(adata_dict[batch])
-            si.pp.normalize(adata_dict[batch],method=method)
-            si.pp.log_transform(adata_dict[batch])
-            si.pp.select_variable_genes(adata_dict[batch], n_top_genes=n_top_genes)
-            si.tl.discretize(adata_dict[batch],n_bins=n_bins)
-        adata.uns['simba_batch_dict']=adata_dict
+        from .. import ge
 
-    def gen_graph(self,n_components=15, k=15,
-                    copy=False,dirname='graph0'):
+        self._batch_key = batch_key
+        adata = self.adata
+        adata.obs[batch_key] = adata.obs[batch_key].astype('category')
+        adata_dict = {}
+        for batch in adata.obs[batch_key].cat.categories:
+            sub = adata[adata.obs[batch_key] == batch].copy()
+            n_cells_expr = (sub.X > 0).sum(axis=0)
+            import numpy as np
+            keep = (np.asarray(n_cells_expr).flatten() >= min_n_cells)
+            sub = sub[:, keep].copy()
+            ge.normalize(sub, method=method)
+            ge.log_transform(sub)
+            ge.select_variable_genes(sub, n_top_genes=min(n_top_genes, sub.n_vars - 1), span=span)
+            ge.discretize(sub, n_bins=n_bins)
+            adata_dict[batch] = sub
+        adata.uns['simba_batch_dict'] = adata_dict
+
+    def gen_graph(self, n_components=15, k=15, copy=False, dirname='graph0'):
         r"""Generate the graph structure for batch correction.
 
         Parameters
@@ -132,112 +115,98 @@ class pySIMBA(object):
         k:int
             Number of neighbors in inter-batch edge inference.
         copy:bool
-            Whether SIMBA graph generation should operate on a copy.
+            Unused (kept for API compatibility with the original wrapper).
         dirname:str
-            Output directory name for generated graph files.
-        
+            Unused (kept for API compatibility with the original wrapper).
         """
+        from .. import ge
 
+        batch_dict = self.adata.uns['simba_batch_dict']
+        sizes = {b: a.shape[0] for b, a in batch_dict.items()}
+        result_max = max(sizes, key=sizes.get)
+        self._ref_batch = result_max
 
-        batch_size=dict(zip(list(self.adata.uns['simba_batch_dict'].keys()),
-                            [self.adata.uns['simba_batch_dict'][i].shape[0] for i in self.adata.uns['simba_batch_dict'].keys()]))
-        result_max = max(batch_size,key=lambda x:batch_size[x])
-        adata_edge_dict={}
-        for batch in self.adata.obs['batch'].cat.categories:
-            if batch==result_max:
+        edge_dict = {}
+        for batch in batch_dict:
+            if batch == result_max:
                 continue
-            else:
-                adata_edge_dict[batch]=si.tl.infer_edges(self.adata.uns['simba_batch_dict'][result_max], 
-                                                        self.adata.uns['simba_batch_dict'][batch], n_components=n_components, k=k)
-        self.adata.uns['simba_batch_edge_dict']=adata_edge_dict
-        si.tl.gen_graph(list_CG=[self.adata.uns['simba_batch_dict'][i] for i in self.adata.uns['simba_batch_dict'].keys()],
-                    list_CC=[self.adata.uns['simba_batch_edge_dict'][i] for i in self.adata.uns['simba_batch_edge_dict'].keys()],
-                    copy=copy,
-                    dirname=dirname)
-        
-    def train(self,num_workers=12,auto_wd=True, save_wd=True, output='model'):
+            edge_dict[batch] = ge.infer_edges(batch_dict[result_max], batch_dict[batch],
+                                              n_components=n_components, k=k)
+        self.adata.uns['simba_batch_edge_dict'] = edge_dict
+
+        model = ge.SIMBA()
+        for batch, sub in batch_dict.items():
+            model.add_cg(sub, cell_type=str(batch), gene_type='G')
+        for batch, edge_adata in edge_dict.items():
+            model.add_cc(edge_adata, lhs_type=str(result_max), rhs_type=str(batch))
+        model.build()
+        self.simba_model = model
+
+    def train(self, num_workers=12, auto_wd=True, save_wd=True, output='model'):
         r"""Train the SIMBA model for batch correction.
 
         Parameters
         ----------
         num_workers:int
-            Number of workers used by PBG training.
+            Unused: ``ov.ge`` trains with one vectorised process (CPU/GPU
+            tensor ops) rather than PBG's Hogwild multi-process workers.
         auto_wd:bool
-            Whether to enable automatic weight-decay tuning.
+            Whether to enable automatic weight-decay tuning (SIMBA/PBG's
+            sample-size-scaled rule, see ``ge.HeteroGraph.auto_wd``).
         save_wd:bool
-            Whether to persist tuned weight-decay configuration.
+            Unused (kept for API compatibility).
         output:str
-            Output directory for trained model artifacts.
-
+            Unused (kept for API compatibility).
         """
+        if self.simba_model is None:
+            raise RuntimeError("call gen_graph() before train()")
+        self.simba_model.train(num_epochs=10, batch_size=1000, lr=0.1, auto_wd=auto_wd,
+                               num_batch_negs=50, num_uniform_negs=50)
+        add_reference(self.adata, 'SIMBA', 'batch correction with SIMBA')
 
-        # modify parameters
-        dict_config = si.settings.pbg_params.copy()
-        # dict_config['wd'] = 0.00477
-        dict_config['workers'] = num_workers
-        ## start training
-        si.tl.pbg_train(pbg_params = dict_config, auto_wd=auto_wd, save_wd=save_wd, output=output)
-        add_reference(self.adata,'SIMBA','batch correction with SIMBA')
-
-    def load(self,model_path=None):
+    def load(self, model_path=None):
         r"""Load a pre-trained SIMBA model for batch correction.
 
         Parameters
         ----------
         model_path:str or None
-            Path to saved SIMBA model directory. If ``None``, default path is used.
-
-        
+            Path to a model directory saved by ``ge.SIMBA.save``. If
+            ``None``, the already-trained in-process model (from
+            ``train()`` in this session) is used as-is.
         """
-        # load in graph ('graph0') info
-        if model_path==None:
-            si.load_graph_stats()
-            si.load_pbg_config()
-        else:
-            si.load_graph_stats(path=model_path)
-            si.load_pbg_config(path=model_path+'/model/')
-       
+        if model_path is None:
+            if self.simba_model is None:
+                raise RuntimeError("no trained model in this session; pass model_path=")
+            return
+        from .. import ge
+        self.simba_model = ge.SIMBA.load(model_path)
 
-    def batch_correction(self,use_precomputed=False):
+    def batch_correction(self, use_precomputed=False):
         r"""Perform batch correction using the trained SIMBA model.
 
         Parameters
         ----------
         use_precomputed:bool
-            Whether to reuse precomputed embeddings during SIMBA embedding merge.
+            Reuse an already-computed softmax projection
+            (``adata_query.layers['softmax']``) instead of recomputing it.
 
         Returns
         -------
         anndata.AnnData
             Batch-corrected AnnData with integrated embedding in ``obsm['X_simba']``.
         """
-        dict_adata = si.read_embedding()
-        adata_dict={}
-        for batch,key in zip(self.adata.obs['batch'].cat.categories,range(1,len(dict_adata.keys()))):
-            if key==1:
-                key=''
-            #adata.uns['simba_batch_dict'][batch].obsm['X_simba']=dict_adata['C{}'.format(key)][adata.uns['simba_batch_dict'][batch].obs.index].to_df().values
-            adata_dict[batch]=dict_adata['C{}'.format(key)]
-        self.adata.uns['simba_Gen']=adata_dict
-        for batch in self.adata.obs['batch'].cat.categories:
-            self.adata.uns['simba_Gen'][batch].obsm['X_simba']=self.adata.uns['simba_Gen'][batch].to_df().values
-        
-        # we choose the largest dataset as a reference
-        dict_adata2 = dict_adata.copy()
-        dict_adata2.pop("G") # remove genes
-        batch_size_si = dict(zip(list(dict_adata2.keys()),
-                [dict_adata2[i].shape[0] for i in dict_adata2.keys()]))
-        max_dict_label = max(batch_size_si, key=batch_size_si.get)
-        adata_ref_si = dict_adata2[max_dict_label] # select largest dataset
-        dict_adata2.pop(max_dict_label) # remove largest dataset
-        list_adata_query = list(dict_adata2.values())
-        adata_all = si.tl.embed(adata_ref = adata_ref_si,
-                            list_adata_query = list_adata_query,
-                            use_precomputed = use_precomputed)
-        
-        #all_adata=anndata.concat([adata.uns['simba_Gen'][batch] for batch in adata.uns['simba_Gen'].keys()],merge='same')
-        cell_idx=adata_all.obs.index
-        self.adata=self.adata[cell_idx]
-        self.adata.obsm['X_simba']=adata_all[cell_idx].to_df().values
+        if self.simba_model is None:
+            raise RuntimeError("call gen_graph() and train() before batch_correction()")
+        batches = list(self.adata.obs[self._batch_key].cat.categories)
+        ref_batch = self._ref_batch or batches[0]
+        query_batches = [str(b) for b in batches if b != ref_batch]
+
+        adata_all = self.simba_model.embed_query(str(ref_batch), query_batches)
+
+        import numpy as np
+        order = adata_all.obs_names.get_indexer(self.adata.obs_names.astype(str))
+        if (order < 0).any():
+            missing = int((order < 0).sum())
+            raise ValueError(f"{missing} cells are missing from the SIMBA embedding")
+        self.adata.obsm['X_simba'] = np.asarray(adata_all.X)[order]
         return self.adata
-        
