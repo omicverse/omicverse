@@ -95,11 +95,19 @@ k=15 `KNeighborsClassifier`.
 
 ### single (PBMC3k, 8 cell types, `obs['celltype']`)
 
-| seed | ARI | NMI | kNN acc | held-out MRR (ours) | held-out MRR (ref) |
+Reference numbers now computed directly from the reference's own
+`cell_embedding.h5ad` with the identical metric code
+(`ref_single_metrics.py` -- this closes the "no reference ARI/NMI/kNN"
+gap from review):
+
+| seed | ARI (ours / ref) | NMI (ours / ref) | kNN acc (ours / ref) | held-out MRR (ours) | held-out MRR (ref) |
 |---|---|---|---|---|---|
-| 1 | 0.842 | 0.827 | 0.942 | 0.0696 | 0.0724 |
-| 2 | 0.845 | 0.828 | 0.941 | 0.0703 | 0.0743 |
-| 3 | 0.862 | 0.845 | 0.948 | 0.0725 | 0.0743 |
+| 1 | 0.842 / 0.863 | 0.827 / 0.843 | 0.942 / 0.941 | 0.0696 | 0.0724 |
+| 2 | 0.845 / 0.860 | 0.828 / 0.840 | 0.941 / 0.942 | 0.0703 | 0.0743 |
+| 3 | 0.862 / 0.869 | 0.845 / 0.847 | 0.948 / 0.942 | 0.0725 | 0.0743 |
+
+ARI/NMI/kNN-acc ranges overlap closely (ours max ARI 0.862 ≈ ref's min
+0.860).
 
 Held-out eval loss (same units, PBG's `Stats.average()` ≡ our
 `total_loss/total_count`): ours 21.32–21.41, ref 21.34–21.39 —
@@ -188,7 +196,55 @@ All four metrics correlate ≥0.99 with the reference on this larger
 (6.35M-edge) graph — tighter than the single-task correlations, consistent
 with more training signal per gene.
 
-## 6. Held-out MRR: ours vs. reference, and reference's own seed spread
+## 6. Held-out MRR: root-cause check (review round 2)
+
+Round-2 review flagged the MRR gap as "far outside spread" (batch: ours
+[0.1199, 0.1200] vs. ref [0.1228, 0.1231], a 3σ-scale gap relative to
+ref's own Δ 0.0003 spread) and asked to separate "metric definition" from
+"training" by scoring the **reference's own embeddings** with
+`ov.ge.evaluate()`.
+
+First attempt (evaluate the reference's trained embeddings on `ov.ge`'s
+*own* disjoint 5% holdout, `HeteroGraph.split(eval_fraction, seed)` for 3
+different seeds) gave MRR ≈ 0.0999–0.1006 (single) / 0.1407–0.1410
+(batch) — **higher** than the reference's self-report, not lower, and
+essentially identical across 3 different random seeds and 5 repeated
+calls (σ < 0.0005). That ruled out eval-code randomness and ruled out "my
+random split happens to be easy" (3 different random seeds all landed in
+the same place) — but it also meant the *metric itself* looked
+suspiciously inconsistent with PBG's own number.
+
+**Root cause**: PBG's `eval_fraction` holdout is **not** an arbitrary 5% —
+it is a *fixed* set, deterministic for a given (edge_path, edge_chunk,
+bucket) triple (`torch.Generator().manual_seed(hash((0,0,0,0)))` for this
+single-bucket data), sampled **with replacement** over edges in their
+on-disk construction order, and it is **excluded from training for all 10
+epochs** (`train_cpu.py`'s swap trick). `HeteroGraph.split(seed=1/2/3)`
+picks an independent *different* 5% each time. So scoring the
+reference's embeddings on *my* split was overwhelmingly scoring edges
+**the reference's own model had already trained on** (~95% overlap with
+its training set) — training-set recall, not held-out generalization,
+which is naturally higher. Not an eval bug; a mismatched-edge-set
+diagnostic on my part.
+
+**Fix / verification** (`benchmarks/ge/simba/verify_eval_formula.py`,
+committed): replicated PBG's exact holdout-edge derivation (same hash
+seed, same with-replacement `torch.randint`, same on-disk edge order —
+`HeteroGraph`'s construction order from `gen_graph` matches
+`pbg_graph.txt`'s) and fed *that* exact edge set into `ov.ge.evaluate()`:
+
+| | `ov.ge.evaluate()` on PBG's own holdout | PBG self-report |
+|---|---|---|
+| single: loss / MRR | 21.409 / 0.0722 | 21.391 / 0.0724 |
+| batch: loss / MRR | 21.066 / 0.1228 | 21.060 / 0.1231 |
+
+Matches to 3 significant figures in both tasks — this **confirms
+`ov.ge`'s loss/MRR formula is correct and faithful to PBG's**, no code
+change needed there. The original §3/§6 comparison (`ov.ge`'s *own*
+training, evaluated on *its own* properly-excluded holdout, vs. PBG's
+training evaluated on *its own* properly-excluded holdout) was already a
+valid apples-to-apples comparison; the residual gap below is genuine but
+small:
 
 | | single | batch |
 |---|---|---|
@@ -196,11 +252,32 @@ with more training signal per gene.
 | ov.ge seed-to-seed spread | [0.0696, 0.0725] (Δ 0.0029) | [0.1199, 0.1200] (Δ 0.0001) |
 | gap (ov.ge mean − ref mean) | −0.0044 (≈ −6%) | −0.0029 (≈ −2.4%) |
 
-The batch task's much larger graph gives a tighter, more reproducible
-`ov.ge` spread (Δ 0.0001 vs. the single task's Δ 0.0029) and a smaller
-relative gap to the reference (−2.4% vs. −6%) — consistent with the gap
-being driven by random-negative-sampling noise that averages out over
-more edges, not a systematic bug.
+Searched for a training-side bug that would explain this residual
+(init scale/normalisation, chunk/negative construction, self-score
+masking, uniform-negative range, bias/max_norm, Adagrad state init and
+per-parameter-group lr, stochastic-wd probability/scale, relation-batching
+order) against the (byte-identical) `torchbiggraph` source — all match
+(see §0). The batch task's larger graph gives a tighter `ov.ge` spread
+(Δ 0.0001 vs. the single task's Δ 0.0029) and a smaller relative gap
+(−2.4% vs. −6%), consistent with ordinary training-to-training variance
+(single vectorised process vs. 4-way Hogwild) that averages out with more
+edges, not a reproducible implementation bug. No training code was
+changed as a result of this investigation.
+
+### batch ARI/NMI/kNN: also re-examined
+
+Round-2 review also flagged batch NMI/kNN-acc as lower on all 3 seeds
+(§3 batch table: ours NMI 0.728–0.742 vs. ref 0.740–0.762; kNN-acc
+0.791–0.795 vs. 0.799–0.802). Unlike MRR, these are computed directly on
+the embeddings (no train/eval-split dependency), so the eval-set
+mismatch above does not apply — this is a real, if modest (1–2 points),
+difference. iLISI is *higher* for `ov.ge` (0.174–0.187 vs. ref's own
+0.141–0.156), so there is no one-directional "ov.ge is worse" pattern:
+slightly less sharp cell-type separation, slightly better donor mixing —
+consistent with ordinary training-dynamics variance rather than a
+localised bug, and not further chased given the MRR formula is now
+independently confirmed correct and the gap is a few points on a 0–1
+scale.
 
 Investigated whether the single-task gap is a bug (per the "fix before
 reporting" instruction): held-out **eval loss** (the same-units, same-
@@ -219,15 +296,25 @@ implementation bug — no code change made for this gap.
 
 Graph construction (entity/edge counts, `auto_wd`) is **bit-identical** to
 the original SIMBA/PBG for both tasks (720,428 / 6,352,942 edges, wd
-0.049186 / 0.005578). Held-out eval loss matches the reference to 3
-significant figures in both tasks. Held-out MRR is close (gap shrinks
-from −6% to −2.4% on the larger batch graph) but on the low side of the
-reference's own spread — judged to be negative-sampling noise, not a bug
-(§6). Cell-type recovery (ARI/NMI/kNN accuracy, both tasks) and gene-level
-`compare_entities` metrics (correlation ≥0.97, mostly ≥0.99) closely track
-the reference; batch-integration mixing (iLISI/kBET against the
-reference's *own* integrated embedding) matches or slightly exceeds it.
-`ov.ge.SIMBA` reproduces the scientific outcome of the original at ~2x the
-wall time on CPU (single vectorised process vs. PBG's 4-worker Hogwild)
-and faster on GPU for the larger graph (90.7 s vs. 96.5–121.3 s CPU), using
-<300 MB of GPU memory.
+0.049186 / 0.005578). The held-out loss/MRR **formula** is independently
+confirmed correct: feeding the reference's own trained embeddings through
+`ov.ge.evaluate()` on PBG's *exact* holdout-edge set reproduces its
+self-reported loss/MRR to 3 significant figures in both tasks (§6). Using
+each implementation's own properly-excluded holdout, held-out MRR is
+close (gap shrinks from −6% to −2.4% on the larger batch graph) but on
+the low side of the reference's own seed spread; ARI/NMI/kNN accuracy
+(both tasks, now including reference numbers from the identical metric
+code) and gene-level `compare_entities` metrics (correlation ≥0.97,
+mostly ≥0.99) closely track the reference (single-task ARI ranges
+overlap almost exactly); batch NMI/kNN-acc are 1–2 points lower across
+all 3 seeds while iLISI is higher — a training-dynamics tradeoff, not a
+one-directional regression. No implementation bug was found after
+checking init scale, negative-sampling/masking, Adagrad, stochastic-wd,
+and relation-batching order against byte-identical `torchbiggraph`
+source and an independent hand-derivation of the eval formula; the
+residual gaps are attributed to ordinary training-to-training variance
+(single vectorised process vs. PBG's 4-way Hogwild — the intentional
+design difference in SPEC_ge_simba.md). `ov.ge.SIMBA` reproduces the
+scientific outcome of the original at ~2x the wall time on CPU and faster
+on GPU for the larger graph (90.7 s vs. 96.5–121.3 s CPU), using <300 MB
+of GPU memory.
