@@ -77,7 +77,8 @@ class BaseGraphModel:
               wd: float | None = None, auto_wd: bool = True, wd_interval: int = 50,
               loss_fn: str = "softmax", num_batch_negs: int = 50, num_uniform_negs: int = 50,
               eval_fraction: float = 0.05, seed: int = 0, device=None, progress: bool = True,
-              early_stopping: bool = False, patience: int = 5) -> "BaseGraphModel":
+              early_stopping: bool = False, patience: int = 5, split_method: str = "random",
+              holdout_idx=None) -> "BaseGraphModel":
         """Train the embeddings.
 
         ``wd=None, auto_wd=True`` (the default) reproduces SIMBA/PBG's
@@ -85,6 +86,10 @@ class BaseGraphModel:
         (:meth:`HeteroGraph.auto_wd`); pass ``wd=`` directly to override.
         Calling ``train`` again resumes training (extends ``history``, does
         not reinitialise embeddings) unless :meth:`build` is called first.
+        ``split_method='pbg'`` (or ``holdout_idx=(train_idx, eval_idx)``)
+        trains against PyTorch-BigGraph's exact, training-seed-independent
+        holdout instead of a fresh disjoint split per seed -- see
+        :meth:`~omicverse.ge._graph.HeteroGraph.split`.
         """
         if device is not None:
             self.to_device(device)
@@ -97,7 +102,8 @@ class BaseGraphModel:
                   lr=lr, wd=wd, wd_interval=wd_interval, loss_fn=loss_fn,
                   num_batch_negs=num_batch_negs, num_uniform_negs=num_uniform_negs,
                   eval_fraction=eval_fraction, seed=seed, device=self._device,
-                  progress=progress, early_stopping=early_stopping, patience=patience)
+                  progress=progress, early_stopping=early_stopping, patience=patience,
+                  split_method=split_method, holdout_idx=holdout_idx)
         if self.history_:
             for k, v in hist.items():
                 if k == "_time":

@@ -262,15 +262,45 @@ class HeteroGraph:
             wd = 0.0004 * 59103481 / n
         return float(np.around(wd, decimals=6))
 
-    def split(self, eval_fraction: float = 0.05, seed: int = 0):
-        """Disjoint train / held-out-eval edge indices (a determinism
-        improvement over PBG's with-replacement eval sampling, see spec)."""
+    def split(self, eval_fraction: float = 0.05, seed: int = 0, method: str = "random"):
+        """Train / held-out-eval edge indices.
+
+        ``method="random"`` (default): a disjoint permutation split, reseeded
+        per ``seed`` -- simpler and seed-independent-of-each-other, a
+        deliberate determinism improvement over PBG's own scheme.
+
+        ``method="pbg"``: PyTorch-BigGraph's *exact* holdout derivation
+        (``torchbiggraph/train_cpu.py``) -- a single, **training-seed-
+        independent** sample fixed by ``hash(bucket)`` (default
+        ``(edge_path_idx, edge_chunk_idx, bucket.lhs, bucket.rhs) = (0,0,0,0)``,
+        the only case for this package's always-single-partition entities),
+        drawn **with replacement** over edge *positions* in construction
+        order and excluded from training for the whole run (not resampled
+        per epoch). ``seed`` is ignored for this method -- use it to
+        reproduce a PBG run's held-out set exactly (see
+        ``benchmarks/ge/simba/verify_eval_formula.py``), or to compare
+        multiple training seeds against one fixed, shared holdout the way
+        PBG's own 3-seed runs do.
+        """
         self.build()
         n = self.n_edges
-        rng = np.random.default_rng(seed)
         n_eval = int(round(n * eval_fraction))
-        perm = rng.permutation(n)
-        return perm[n_eval:], perm[:n_eval]
+        if method == "random":
+            rng = np.random.default_rng(seed)
+            perm = rng.permutation(n)
+            return perm[n_eval:], perm[:n_eval]
+        if method == "pbg":
+            import torch
+
+            g = torch.Generator()
+            g.manual_seed(hash((0, 0, 0, 0)))
+            eval_idx = torch.randint(n, (n_eval,), dtype=torch.long, generator=g)
+            n_train = n - n_eval
+            train_idx = torch.arange(n)
+            train_idx[eval_idx] = torch.arange(n_train, n)
+            train_idx = train_idx[:n_train]
+            return train_idx.numpy(), eval_idx.numpy()
+        raise ValueError(f"unknown split method {method!r}; choose 'random' or 'pbg'")
 
     # ------------------------------------------------------------------
     # persistence

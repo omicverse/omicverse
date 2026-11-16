@@ -92,15 +92,26 @@ def fit(graph, kge, *, num_epochs: int = 10, batch_size: int = 1000, lr: float =
         wd: float = 0.0, wd_interval: int = 50, loss_fn: str = "softmax",
         num_batch_negs: int = 50, num_uniform_negs: int = 50, eval_fraction: float = 0.05,
         seed: int = 0, device=None, progress: bool = True, early_stopping: bool = False,
-        patience: int = 5) -> dict:
+        patience: int = 5, split_method: str = "random", holdout_idx=None) -> dict:
     """Train ``kge`` on ``graph`` for ``num_epochs`` passes. Returns a history
-    dict with per-epoch ``train_loss``, ``eval_loss``, ``eval_mrr``."""
+    dict with per-epoch ``train_loss``, ``eval_loss``, ``eval_mrr``.
+
+    ``split_method``: passed to :meth:`HeteroGraph.split` (``"random"``
+    disjoint-per-seed, or ``"pbg"`` for PyTorch-BigGraph's exact,
+    training-seed-independent holdout -- see its docstring). Ignored if
+    ``holdout_idx=(train_idx, eval_idx)`` is given directly (e.g. to share
+    one fixed holdout across several training seeds, as PBG's own 3-seed
+    runs do).
+    """
     graph.build()
     device = device if device is not None else next(iter(kge.embeddings.values())).device
     rng = np.random.default_rng(seed)
     torch.manual_seed(seed)
 
-    train_idx, eval_idx = graph.split(eval_fraction, seed)
+    if holdout_idx is not None:
+        train_idx, eval_idx = holdout_idx
+    else:
+        train_idx, eval_idx = graph.split(eval_fraction, seed, method=split_method)
     rel_weights = torch.as_tensor(graph.relation_weights(), dtype=torch.float32, device=device)
     loss_function = LOSS_FUNCTIONS[loss_fn]
 
