@@ -1,6 +1,15 @@
 """Compare the optional facade and independent package on the same small array.
 
-Install the optional extra only once a supported candidate wheel is available.
+Use an environment where this OmicVerse checkout is installed or importable.
+Before registry publication, install the accepted local wheel for your platform:
+
+    python -m pip install '<path-to-accepted-ov-radiomics-wheel.whl>'
+
+The radiomics extra is a commented metadata placeholder. After registry
+publication and activation of the extra, the future command will be:
+
+    pip install 'omicverse[radiomics]'
+
 This example requires the Rust-backed ov-radiomics wheel and does not read or
 download patient images, import DICOM readers, or construct an AnnData object.
 """

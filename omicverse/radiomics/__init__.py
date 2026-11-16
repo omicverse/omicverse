@@ -17,7 +17,12 @@ _EXPORTS = (
 )
 __all__ = list(_EXPORTS)
 
-_INSTALL = "Install it with: pip install 'omicverse[radiomics]'"
+_INSTALL = (
+    "First install an accepted local wheel for your platform with: "
+    "python -m pip install '<path-to-accepted-ov-radiomics-wheel.whl>'. "
+    "After registry publication and activation of the extra, the future command "
+    "will be: pip install 'omicverse[radiomics]'."
+)
 
 
 def _load() -> ModuleType:
