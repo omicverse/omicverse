@@ -14,10 +14,10 @@ class omicverseConfig:
         # anndataoom-fast kernels when installed, 'python' the reference code.
         # Each of those functions also accepts ``backend=`` to override this.
         self.backend = 'cpp'
-        from .utils._analytics_sender import send_analytics_full_silent
+        from .utils._analytics_sender import send_analytics_in_background
         import datetime
         test_id_full = f"FULL-{datetime.datetime.now().strftime('%Y%m%d-%H%M%S')}"
-        send_analytics_full_silent(test_id_full)
+        send_analytics_in_background(test_id_full)
 
     def set_seed(self, seed: int = 0, *, deterministic: bool = False,
                  verbose: bool = True) -> int:
