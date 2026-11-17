@@ -12,12 +12,39 @@ import os
 from datetime import datetime
 from urllib.parse import urlencode
 import uuid
+import threading
+
+
+# Analytics collector. omicverse.org (Cloudflare) proxies /analytics/* to the
+# collector service hosted on omicos.cn, so the client only ever talks to a
+# stable, HTTPS domain instead of a hard-coded server IP.
+DEFAULT_ANALYTICS_BASE = 'https://omicverse.org/analytics'
+
+# Keep analytics from ever slowing down ``import omicverse``.
+_GEO_TIMEOUT = 3
+_SEND_TIMEOUT = 5
+
+
+def _analytics_base():
+    """Base URL of the analytics collector (override: ``OMICVERSE_ANALYTICS_BASE``)."""
+    return os.environ.get('OMICVERSE_ANALYTICS_BASE', DEFAULT_ANALYTICS_BASE).rstrip('/')
+
+
+def _track_endpoint():
+    """Tracking-pixel URL (override: ``OMICVERSE_ANALYTICS_ENDPOINT``)."""
+    return os.environ.get('OMICVERSE_ANALYTICS_ENDPOINT', f'{_analytics_base()}/track.gif')
+
+
+def analytics_disabled():
+    """True when the user opted out via ``OMICVERSE_DISABLE_ANALYTICS=1``."""
+    value = os.environ.get('OMICVERSE_DISABLE_ANALYTICS', '').strip().lower()
+    return value in ('1', 'true', 'yes', 'on')
 
 
 def get_geolocation():
     """获取完整的地理位置信息"""
     try:
-        response = requests.get('http://ip-api.com/json/', timeout=5)
+        response = requests.get('http://ip-api.com/json/', timeout=_GEO_TIMEOUT)
         if response.status_code == 200:
             geo_data = response.json()
             # 返回完整的地理位置数据
@@ -117,7 +144,7 @@ def send_analytics(analytics_id, event_type='report_view', **kwargs):
     print(f"⏰ 时间: {timestamp}")
     
     # 发送请求 - 模拟lzy_tt.html中的方式
-    analytics_endpoint = os.environ.get('OMICVERSE_ANALYTICS_ENDPOINT', 'http://8.130.139.217/track.gif')
+    analytics_endpoint = _track_endpoint()
     
     try:
         # 方法1: 使用GET请求（模拟img.src方式）
@@ -128,7 +155,7 @@ def send_analytics(analytics_id, event_type='report_view', **kwargs):
         print(f"📋 参数数量: {len(data)} 个字段")
         print(f"🔍 关键参数: lang={data['lang']}, tz={data['tz']}, country={data['country']}")
         
-        response = requests.get(url, timeout=10)
+        response = requests.get(url, timeout=_SEND_TIMEOUT)
         
         if response.status_code == 200:
             print("✅ Analytics数据发送成功!")
@@ -281,7 +308,7 @@ def send_analytics_full(analytics_id, event_type='report_view', **kwargs):
     print(f"⏰ 时间: {timestamp}")
     
     # 发送请求
-    analytics_endpoint = os.environ.get('OMICVERSE_ANALYTICS_ENDPOINT', 'http://8.130.139.217/track.gif')
+    analytics_endpoint = _track_endpoint()
     
     try:
         params = urlencode(data)
@@ -293,7 +320,7 @@ def send_analytics_full(analytics_id, event_type='report_view', **kwargs):
         print(f"🌍 地理详情: city={data['city']}, region={data['region']}, regionName={data['regionName']}")
         print(f"📍 坐标与ISP: lat={data['lat']}, lon={data['lon']}, isp={data['isp']}")
         
-        response = requests.get(url, timeout=10)
+        response = requests.get(url, timeout=_SEND_TIMEOUT)
         
         if response.status_code == 200:
             print("✅ 完整Analytics数据发送成功!")
@@ -315,7 +342,7 @@ def test_analytics_connection():
     print("🧪 测试Analytics服务器连接...")
     
     # 测试健康检查端点
-    health_endpoint = 'http://8.130.139.217/health'
+    health_endpoint = f'{_analytics_base()}/health'
     try:
         response = requests.get(health_endpoint, timeout=5)
         if response.status_code == 200:
@@ -330,7 +357,7 @@ def test_analytics_connection():
         return False
     
     # 测试debug端点
-    debug_endpoint = 'http://8.130.139.217/debug'
+    debug_endpoint = f'{_analytics_base()}/debug'
     try:
         test_params = {'test': 'connection', 'country': 'TestCountry'}
         response = requests.get(debug_endpoint, params=test_params, timeout=5)
@@ -399,12 +426,12 @@ def send_analytics_silent(analytics_id, event_type='report_view', **kwargs):
             data['event_type'] = event_type
         
         # 发送请求
-        analytics_endpoint = os.environ.get('OMICVERSE_ANALYTICS_ENDPOINT', 'http://8.130.139.217/track.gif')
+        analytics_endpoint = _track_endpoint()
         
         params = urlencode(data)
         url = f"{analytics_endpoint}?{params}"
         
-        response = requests.get(url, timeout=10)
+        response = requests.get(url, timeout=_SEND_TIMEOUT)
         return response.status_code == 200
         
     except:
@@ -481,12 +508,12 @@ def send_analytics_full_silent(analytics_id, event_type='report_view', **kwargs)
             data['event_type'] = event_type
         
         # 发送请求
-        analytics_endpoint = os.environ.get('OMICVERSE_ANALYTICS_ENDPOINT', 'http://8.130.139.217/track.gif')
+        analytics_endpoint = _track_endpoint()
         
         params = urlencode(data)
         url = f"{analytics_endpoint}?{params}"
         
-        response = requests.get(url, timeout=10)
+        response = requests.get(url, timeout=_SEND_TIMEOUT)
         return response.status_code == 200
         
     except:
@@ -508,3 +535,27 @@ def send_analytics_simple_silent(analytics_id):
     """
     return send_analytics_silent(analytics_id)
 
+
+def send_analytics_in_background(analytics_id, event_type='report_view', **kwargs):
+    """
+    Fire-and-forget version of :func:`send_analytics_full_silent`.
+
+    Runs in a daemon thread so a slow or unreachable collector never blocks
+    the caller (e.g. ``import omicverse``). Does nothing when
+    ``OMICVERSE_DISABLE_ANALYTICS`` is set.
+
+    Returns
+    -------
+    threading.Thread or None
+    """
+    if analytics_disabled():
+        return None
+    thread = threading.Thread(
+        target=send_analytics_full_silent,
+        args=(analytics_id, event_type),
+        kwargs=kwargs,
+        name='omicverse-analytics',
+        daemon=True,
+    )
+    thread.start()
+    return thread
