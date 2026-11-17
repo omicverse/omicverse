@@ -173,7 +173,10 @@ def scslide(
     if not isinstance(adata, AnnData):
         raise TypeError("adata must be an in-memory anndata.AnnData")
     if adata.isbacked:
-        raise ValueError("Backed AnnData is not supported by this adapter; use an explicit in-memory subset or standalone scslide API")
+        raise ValueError(
+            "Backed AnnData is not supported by this adapter; use an explicit "
+            "in-memory subset or standalone scslide API"
+        )
     if adata.n_obs == 0 or adata.n_vars == 0:
         raise ValueError("adata must contain cells and genes")
     for axis_name, index in (("obs_names", adata.obs_names), ("var_names", adata.var_names)):

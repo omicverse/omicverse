@@ -17,9 +17,11 @@ def test_real_scslide_matches_direct_workflow_without_mutating_input():
     obs = pd.DataFrame({"sample": [f"s{i}" for i in samples],
                         "subject": [f"p{i}" for i in samples],
                         "response": samples.astype(float)}, index=[f"c{i}" for i in range(360)])
-    data = ad.AnnData(sparse.csr_matrix(counts), obs=obs,
-                     var=pd.DataFrame({"highly_variable": np.ones(40, dtype=bool)},
-                                      index=[f"g{i}" for i in range(40)]))
+    data = ad.AnnData(
+        sparse.csr_matrix(counts), obs=obs,
+        var=pd.DataFrame({"highly_variable": np.ones(40, dtype=bool)},
+                         index=[f"g{i}" for i in range(40)]),
+    )
     data.layers["counts"] = data.X.copy()
     data.layers["data"] = sparse.csr_matrix(np.log1p(counts / counts.sum(axis=1, keepdims=True) * 1e4))
     data.obsm["X_pca"] = rng.normal(size=(360, 5))

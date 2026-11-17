@@ -28,6 +28,7 @@ class MiniAnnData:
         self.obsm = {"X_pca": np.arange(24, dtype=float).reshape(12, 2)}
         self.uns = {}
         self.isbacked = False
+
     @property
     def obs_names(self): return self.obs.index
     @property
@@ -47,6 +48,7 @@ def adapter(monkeypatch):
         mod.__path__ = []
         monkeypatch.setitem(sys.modules, name, mod)
     reg = ModuleType("ov_contract._registry")
+
     def register_function(**values):
         def decorate(func):
             func.registration = values
@@ -61,6 +63,7 @@ def adapter(monkeypatch):
     spec = importlib.util.spec_from_file_location("ov_contract.single._scslide", path)
     module = importlib.util.module_from_spec(spec)
     real_import = builtins.__import__
+
     def guard(name, *args, **kwargs):
         if name == "scslide" or name.startswith("scslide."):
             raise AssertionError("Optional backend imported during module import")
@@ -74,6 +77,7 @@ def adapter(monkeypatch):
 @pytest.fixture
 def backend(adapter, monkeypatch):
     calls = []
+
     def run(working, **kwargs):
         calls.append((working, kwargs))
         ids = pd.Index(["s3", "s2", "s1", "s0"])
@@ -136,7 +140,7 @@ def test_counts_from_x(adapter, backend):
     (lambda a: a.layers.pop("data"), "Normalized data layer"),
     (lambda a: a.obs.__setitem__("response", np.nan), "missing values"),
     (lambda a: a.obs.__setitem__("response", 1), "two distinct"),
-    (lambda a: a.var.__setitem__("highly_variable", [1,1,1,1]), "boolean"),
+    (lambda a: a.var.__setitem__("highly_variable", [1, 1, 1, 1]), "boolean"),
     (lambda a: a.var.__setitem__("highly_variable", False), "boolean"),
     (lambda a: a.obsm.pop("X_pca"), "Missing cell embedding"),
     (lambda a: setattr(a, "isbacked", True), "Backed"),
@@ -166,8 +170,11 @@ def test_duplicate_feature_ids(adapter, backend):
         call(adapter, data)
 
 
-@pytest.mark.parametrize("key,value", [("de_inference_mode", "confirmatory_oof_countsplit"),
-                                        ("sample_col", "other"), ("n_jobs", 99), ("seed", 8)])
+@pytest.mark.parametrize(
+    "key,value",
+    [("de_inference_mode", "confirmatory_oof_countsplit"),
+     ("sample_col", "other"), ("n_jobs", 99), ("seed", 8)],
+)
 def test_reserved_native_overrides_rejected(adapter, backend, key, value):
     with pytest.raises(ValueError, match="reserved"):
         call(adapter, workflow_kwargs={"ncomp_diffusion": 2, key: value})
@@ -204,9 +211,19 @@ def test_missing_backend_has_actionable_error(adapter, monkeypatch):
 
 
 def test_returned_wrong_sample_axis_rejected(adapter, monkeypatch):
-    sample = SimpleNamespace(obs_names=pd.Index(["wrong"]), obsm={}, obs=pd.DataFrame(index=["wrong"]), uns={})
-    wrong = SimpleNamespace(sample_adata=sample, diffusion=SimpleNamespace(embeddings=pd.DataFrame([[1.]], index=["s0"])), principal_curve=None)
-    monkeypatch.setattr(adapter, "_require_backend", lambda: (SimpleNamespace(run_scslide_workflow=lambda *a, **k: wrong), "0.3.3"))
+    sample = SimpleNamespace(
+        obs_names=pd.Index(["wrong"]), obsm={},
+        obs=pd.DataFrame(index=["wrong"]), uns={},
+    )
+    wrong = SimpleNamespace(
+        sample_adata=sample,
+        diffusion=SimpleNamespace(embeddings=pd.DataFrame([[1.]], index=["s0"])),
+        principal_curve=None,
+    )
+    monkeypatch.setattr(
+        adapter, "_require_backend",
+        lambda: (SimpleNamespace(run_scslide_workflow=lambda *a, **k: wrong), "0.3.3"),
+    )
     with pytest.raises(RuntimeError, match="IDs disagree"):
         call(adapter)
 
