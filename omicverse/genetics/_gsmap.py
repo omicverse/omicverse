@@ -283,6 +283,119 @@ class _gsmap_runner:
         ov_print_done("spatial_ldsc")
         return config.ldsc_save_dir
 
+    @tracked('spatial_ldsc', 'ov.genetics.gsmap.spatial_ldsc_by_chunk',
+             adata_attr='adata')
+    def spatial_ldsc_by_chunk(self, *, trait_name: str, resume: bool = True,
+                              **overrides) -> Path:
+        """Run spatial LDSC one chunk at a time, resumably, then assemble.
+
+        :meth:`spatial_ldsc` processes every chunk and calls the upstream
+        ``save_results`` **after** the loop, so an interrupted stage leaves
+        nothing at all on disk — no partial file, and no progress to resume
+        from. On a 45,312-spot section (46 chunks of
+        ``spots_per_chunk_quick_mode``) that cost 5.5 hours of completed work
+        when the surrounding process ended. Each chunk on its own takes of the
+        order of a minute, so the stage is not inherently long; it is only
+        indivisible.
+
+        This drives the same computation chunk by chunk. Every chunk's result
+        is written as ``<sample>_<trait>_chunk<i>-<i>.csv.gz`` as soon as it
+        finishes, so the work survives an interruption, and with
+        ``resume=True`` a second call skips the chunks whose file already
+        exists. When all of them are present they are concatenated into
+        ``<sample>_<trait>.csv.gz`` — the name the rest of the pipeline reads —
+        and the p-values are written back to the latent ``adata`` exactly as
+        :meth:`spatial_ldsc` does.
+
+        That assembly step matters: upstream writes the combined file only when
+        one call covered *every* chunk, so a hand-rolled loop over
+        ``chunk_range`` produces slices that nothing downstream can find, and
+        ``{trait}_gsmap_p`` / ``{trait}_gsmap_logp`` never appear on the
+        object.
+
+        Parameters
+        ----------
+        trait_name
+            The trait to run. One per call, since the output file names and the
+            ``obs`` columns are keyed by it.
+        resume
+            Skip chunks whose output file is already on disk. Leave this on
+            unless the inputs changed under you.
+        **overrides
+            Forwarded to :meth:`build_spatial_ldsc_config`, e.g.
+            ``gsmap_resource_dir``, ``sumstats_file``.
+
+        Returns
+        -------
+        pathlib.Path
+            The spatial-LDSC output directory.
+
+        Examples
+        --------
+        >>> runner.spatial_ldsc_by_chunk(
+        ...     trait_name='AD', gsmap_resource_dir=RES, sumstats_file=SUM,
+        ... )
+        """
+
+        import numpy as np
+        import pandas as pd
+
+        from ..external.gsmap import run_spatial_ldsc
+        from ..external.gsmap.spatial_ldsc import determine_total_chunks
+        from ..external.gsmap._style import (
+            ov_print_done, ov_print_start, ov_print_time,
+        )
+
+        ov_print_start("spatial_ldsc (by chunk)")
+        t0 = time()
+
+        config = self.build_spatial_ldsc_config(trait_name=trait_name,
+                                                **overrides)
+        n_chunks = determine_total_chunks(config)
+        out_dir = Path(config.ldsc_save_dir)
+        out_dir.mkdir(parents=True, exist_ok=True)
+
+        def chunk_path(i: int) -> Path:
+            return out_dir / f"{self.sample_name}_{trait_name}_chunk{i}-{i}.csv.gz"
+
+        done = 0
+        for i in range(1, n_chunks + 1):
+            if resume and chunk_path(i).exists():
+                done += 1
+                continue
+            cfg = self.build_spatial_ldsc_config(trait_name=trait_name,
+                                                 chunk_range=(i, i), **overrides)
+            run_spatial_ldsc(cfg)
+            done += 1
+            print(f"{EMOJI.get('start', '')} chunk {i}/{n_chunks} saved "
+                  f"({done}/{n_chunks} complete)", flush=True)
+
+        missing = [i for i in range(1, n_chunks + 1) if not chunk_path(i).exists()]
+        if missing:
+            raise RuntimeError(
+                f"{len(missing)} of {n_chunks} chunks produced no file "
+                f"(first missing: {missing[0]}). Nothing was assembled; rerun "
+                "to pick up where this stopped."
+            )
+
+        combined = out_dir / f"{self.sample_name}_{trait_name}.csv.gz"
+        frames = [pd.read_csv(chunk_path(i), compression="gzip",
+                              dtype={"spot": str}) for i in range(1, n_chunks + 1)]
+        allspots = pd.concat(frames, axis=0, ignore_index=True)
+        allspots.to_csv(combined, compression="gzip", index=False)
+
+        adata = self._get_latent_adata()
+        ldsc = allspots.set_index("spot")
+        ldsc["logp"] = -np.log10(ldsc["p"].clip(lower=1e-300))
+        adata.obs[f"{trait_name}_gsmap_p"] = ldsc.reindex(adata.obs_names)["p"]
+        adata.obs[f"{trait_name}_gsmap_logp"] = ldsc.reindex(adata.obs_names)["logp"]
+        adata.write_h5ad(self.hdf5_with_latent_path)
+
+        note(backend='omicverse · gsMap')
+        ov_print_time(time() - t0)
+        ov_print_done("spatial_ldsc (by chunk)")
+        return out_dir
+
     def build_cauchy_combination_config(self, **overrides):
         """Build the config object for the gsMap cauchy-combination step."""
 
