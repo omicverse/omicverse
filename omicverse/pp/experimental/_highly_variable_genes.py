@@ -42,51 +42,71 @@ def _calculate_res_sparse(
     n_genes: int,
     n_cells: int,
 ) -> NDArray[np.float64]:
-    def get_value(cell: int, sparse_idx: int, stop_idx: int) -> np.float64:
-        """
-        This function navigates the sparsity of the CSC (Compressed Sparse Column) matrix,
-        returning the value at the specified cell location if it exists, or zero otherwise.
-        """
-        if sparse_idx < stop_idx and index[sparse_idx] == cell:
-            return data[sparse_idx]
-        else:
-            return np.float64(0.0)
+    def clipped_residual(value, mu, denominator):
+        pre_res = (value - mu) / denominator
+        return np.float64(min(max(pre_res, -clip), clip))
 
-    def clac_clipped_res_sparse(gene: int, cell: int, value: np.float64) -> np.float64:
-        mu = sums_genes[gene] * sums_cells[cell] / sum_total
-        mu_sum = value - mu
-        pre_res = mu_sum / sqrt(mu + mu * mu / theta)
-        res = np.float64(min(max(pre_res, -clip), clip))
-        return res
+    # Equal cell totals give identical expected counts and denominators.
+    cell_order = np.argsort(sums_cells[:n_cells])
+    cell_groups = np.empty(n_cells, dtype=np.int64)
+    representatives = np.empty(n_cells, dtype=np.int64)
+    n_groups = 0
+    for position in range(n_cells):
+        cell = cell_order[position]
+        if position == 0 or sums_cells[cell] != sums_cells[cell_order[position - 1]]:
+            representatives[n_groups] = cell
+            n_groups += 1
+        cell_groups[cell] = n_groups - 1
 
     residuals = np.zeros(n_genes, dtype=np.float64)
-    for gene in nb.prange(n_genes):
+    # Reuse model terms for genes with the same total count.
+    gene_order = np.argsort(sums_genes[:n_genes])
+    expected_counts = np.empty(n_groups, dtype=np.float64)
+    denominators = np.empty(n_groups, dtype=np.float64)
+    zero_residuals = np.empty(n_groups, dtype=np.float64)
+    clipped_residuals = np.empty(len(range(n_cells)), dtype=np.float64)
+    cell_zero_residuals = np.empty(n_cells, dtype=np.float64)
+    for position in range(n_genes):
+        gene = gene_order[position]
         start_idx = indptr[gene]
         stop_idx = indptr[gene + 1]
 
+        if position == 0 or sums_genes[gene] != sums_genes[gene_order[position - 1]]:
+            for group in range(n_groups):
+                cell = representatives[group]
+                mu = sums_genes[gene] * sums_cells[cell] / sum_total
+                expected_counts[group] = mu
+                denominators[group] = sqrt(mu + mu * mu / theta)
+                zero_residuals[group] = clipped_residual(0.0, mu, denominators[group])
+            for cell in range(n_cells):
+                cell_zero_residuals[cell] = zero_residuals[cell_groups[cell]]
+
         sparse_idx = start_idx
+        next_cell = index[sparse_idx] if sparse_idx < stop_idx else n_cells
         var_sum = np.float64(0.0)
         sum_clipped_res = np.float64(0.0)
         for cell in range(n_cells):
-            value = get_value(cell, sparse_idx, stop_idx)
-            clipped_res = clac_clipped_res_sparse(gene, cell, value)
-            if value > 0:
-                sparse_idx += 1
+            clipped_res = cell_zero_residuals[cell]
+            if cell == next_cell:
+                group = cell_groups[cell]
+                value = data[sparse_idx]
+                if value != 0:
+                    clipped_res = clipped_residual(
+                        value, expected_counts[group], denominators[group]
+                    )
+                if value > 0:
+                    sparse_idx += 1
+                    next_cell = index[sparse_idx] if sparse_idx < stop_idx else n_cells
+            clipped_residuals[cell] = clipped_res
             sum_clipped_res += clipped_res
 
         mean_clipped_res = sum_clipped_res / n_cells
-        sparse_idx = start_idx
         for cell in range(n_cells):
-            value = get_value(cell, sparse_idx, stop_idx)
-            clipped_res = clac_clipped_res_sparse(gene, cell, value)
-            if value > 0:
-                sparse_idx += 1
-            diff = clipped_res - mean_clipped_res
+            diff = clipped_residuals[cell] - mean_clipped_res
             var_sum += diff * diff
 
         residuals[gene] = var_sum / n_cells
     return residuals
-
 
 @njit
 def _calculate_res_dense(
