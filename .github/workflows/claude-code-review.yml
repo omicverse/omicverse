@@ -2,7 +2,9 @@ name: Claude Code Review
 
 on:
   pull_request:
-    types: [opened, synchronize]
+    # Review once when the PR is opened; later pushes do not re-run it
+    # (each run uses the subscription quota). Ask "@claude" for a re-review.
+    types: [opened]
     # Optional: Only run on specific file changes
     # paths:
     #   - "src/**/*.ts"
@@ -52,3 +54,18 @@ jobs:
           # See https://github.com/anthropics/claude-code-action/blob/main/docs/usage.md
           # or https://docs.anthropic.com/en/docs/claude-code/sdk#command-line for available options
           claude_args: '--allowed-tools "Bash(gh issue view:*),Bash(gh search:*),Bash(gh issue list:*),Bash(gh pr comment:*),Bash(gh pr diff:*),Bash(gh pr view:*),Bash(gh pr list:*)"'
+
+      # claude-code-action hides Claude's output, so a failed run only says
+      # "result is_error:true". The reason (auth, credit, usage limit, ...)
+      # is in the `result` field of the execution file; print just that.
+      - name: Show why Claude failed
+        if: failure() && steps.claude-review.outcome == 'failure'
+        env:
+          EXEC_FILE: ${{ steps.claude-review.outputs.execution_file }}
+        run: |
+          f="${EXEC_FILE:-$RUNNER_TEMP/claude-execution-output.json}"
+          if [ ! -f "$f" ]; then echo "No execution file at $f"; exit 0; fi
+          reason=$(jq -r '(if type=="array" then .[] else . end) | select(.type? == "result") | "\(.subtype // "?"): \((.result // "(no result text)")[:2000])"' "$f")
+          reason="${reason//$'\n'/ }"; reason="${reason//$'\r'/ }"
+          echo "Claude result: ${reason:-<none>}"
+          echo "::error title=Claude review failed::${reason//%/%25}"
