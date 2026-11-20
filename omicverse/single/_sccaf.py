@@ -68,6 +68,7 @@ from sklearn import metrics
 from sklearn.metrics.pairwise import euclidean_distances, pairwise_distances
 from sklearn.model_selection import cross_val_score, cross_val_predict, cross_validate, train_test_split
 from sklearn.linear_model import LogisticRegression, SGDClassifier
+from sklearn.multiclass import OneVsRestClassifier
 from sklearn.naive_bayes import GaussianNB
 from sklearn.gaussian_process import GaussianProcessClassifier
 from sklearn.tree import DecisionTreeClassifier
@@ -364,7 +365,7 @@ def self_projection(X,
                              stratify=cell_types, test_size=fraction)  # fraction means test size
     # set the classifier
     if classifier == 'LR':
-        clf = LogisticRegression(random_state=1, penalty=penalty, C=sparsity, multi_class="ovr", solver=solver)
+        clf = OneVsRestClassifier(LogisticRegression(random_state=1, penalty=penalty, C=sparsity, solver=solver))
     elif classifier == 'RF':
         clf = RandomForestClassifier(random_state=1, n_jobs=n_jobs)
     elif classifier == 'GNB':
@@ -506,10 +507,14 @@ def get_topmarkers(clf, names, topn=10):
     -----
     list of markers for each of the cluster.
     """
+    if hasattr(clf, 'estimators_'):
+        coef = np.vstack([est.coef_ for est in clf.estimators_])
+    else:
+        coef = clf.coef_
     marker_genes = pd.DataFrame({
-        'cell_type': clf.classes_[clf.coef_.argmax(0)],
+        'cell_type': clf.classes_[coef.argmax(0)],
         'gene': names,
-        'weight': clf.coef_.max(0)
+        'weight': coef.max(0)
     })
 
     top_markers = \
