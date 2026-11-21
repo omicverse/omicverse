@@ -159,6 +159,8 @@ def channel_qc_table(
     step_sec: float = 1.0,
     flat_floor: float = 0.5,
     flat_min_frac: float = 0.02,
+    flat_win_sec: float = 0.5,
+    flat_min_sec: float = 2.0,
     extreme_ptp: Optional[float] = None,
     extreme_ratio: float = 20.0,
     extreme_min_episodes: int = 2,
@@ -180,6 +182,13 @@ def channel_qc_table(
     real scalp EEG does not go that quiet over a window of seconds) counts as
     dropout whether or not the samples are exactly constant — dropouts often
     hold a small residual noise floor at a DC offset.
+
+    Intermittent dropouts (contact loss for a fraction of a second, repeated a
+    few times) never fill a whole analysis window and are a vanishing fraction
+    of a long recording, yet each one corrupts the epochs it falls in.  Flat
+    time is therefore also counted on short windows (``flat_win_sec``, half
+    overlap) and a channel is flagged when the *total* flat time reaches
+    ``flat_min_sec`` seconds, independent of the recording length.
 
     All amplitude statistics other than dropout use the band-passed signal
     (``filtered``; if ``None`` and ``band`` is given, a 4th-order zero-phase
@@ -203,6 +212,12 @@ def channel_qc_table(
         Raw window SD below which a window counts as dropout.
     flat_min_frac
         Flag ``dropout`` when at least this fraction of windows is flat.
+    flat_win_sec
+        Short window (s) on which brief dropouts are measured (half overlap).
+    flat_min_sec
+        Also flag ``dropout`` when the short flat windows add up to at least
+        this many seconds of flat signal (absolute, not a fraction of the
+        recording). ``None`` disables the absolute criterion.
     extreme_ptp
         Absolute windowed peak-to-peak limit for ``saturation``; if ``None``,
         ``extreme_ratio`` × the median over channels of each channel's median
@@ -286,6 +301,23 @@ def channel_qc_table(
 
     flat = raw_wsd < flat_floor
     frac_flat = flat.mean(axis=1)
+
+    # brief dropouts: union of short flat windows, in seconds and episodes
+    swin = max(4, int(round(flat_win_sec * sfreq)))
+    sstep = max(1, swin // 2)
+    sflat = _windows(x, swin, sstep).std(axis=-1) < flat_floor      # (ch, nwin_short)
+    n_samp = x.shape[1]
+    flat_sec = np.zeros(n_ch)
+    flat_episodes = np.zeros(n_ch, dtype=int)
+    for c in range(n_ch):
+        idx = np.flatnonzero(sflat[c])
+        if idx.size == 0:
+            continue
+        cover = np.zeros(n_samp, dtype=bool)
+        for i in idx:
+            cover[i * sstep:i * sstep + swin] = True
+        flat_sec[c] = cover.sum() / sfreq
+        flat_episodes[c] = int(np.sum(np.diff(np.concatenate([[0], cover.view(np.int8), [0]])) == 1))
 
     if extreme_ptp is None:
         ref_ptp = float(np.median(np.median(f_wptp, axis=1)))
@@ -387,6 +419,8 @@ def channel_qc_table(
         "raw_win_sd_min": raw_wsd.min(axis=1),
         "raw_win_sd_median": np.median(raw_wsd, axis=1),
         "frac_flat_windows": frac_flat,
+        "flat_sec": flat_sec,
+        "n_flat_episodes": flat_episodes,
         "max_win_ptp": f_wptp.max(axis=1),
         "median_win_ptp": np.median(f_wptp, axis=1),
         "n_extreme_ptp_episodes": n_extreme,
@@ -408,6 +442,8 @@ def channel_qc_table(
         "median_corr_with_others": med_corr,
     }, index=pd.Index(names, name="channel"))
     df["dropout"] = df["frac_flat_windows"] >= flat_min_frac
+    if flat_min_sec is not None:
+        df["dropout"] |= df["flat_sec"] >= float(flat_min_sec)
     df["saturation"] = df["n_extreme_ptp_episodes"] >= extreme_min_episodes
     df["noisy_sustained"] = df["filt_win_sd_ratio"] >= noise_ratio
     df["noisy_stretch"] = df["longest_noisy_run_sec"] >= noise_min_run_sec
@@ -417,6 +453,7 @@ def channel_qc_table(
     df["reversed_candidate"] = (~df["bad"]) & (df["median_corr_with_others"] <= reversed_max_corr)
     df["reason"] = [",".join(f for f in flags if df.at[c, f]) for c in df.index]
     df.attrs.update(window_sec=win_sec, step_sec=step_sec, flat_floor=flat_floor,
+                    flat_win_sec=flat_win_sec, flat_min_sec=flat_min_sec,
                     extreme_ptp_limit=extreme_lim, noise_ratio=noise_ratio)
     return df
 
