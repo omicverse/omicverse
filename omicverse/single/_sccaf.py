@@ -365,7 +365,13 @@ def self_projection(X,
                              stratify=cell_types, test_size=fraction)  # fraction means test size
     # set the classifier
     if classifier == 'LR':
-        clf = OneVsRestClassifier(LogisticRegression(random_state=1, penalty=penalty, C=sparsity, solver=solver))
+        if LogisticRegression().get_params().get('penalty', 'deprecated') == 'deprecated':
+            # scikit-learn >= 1.8 picks l1/l2 with l1_ratio; 1.10 drops penalty
+            lr = LogisticRegression(random_state=1, l1_ratio={'l1': 1.0, 'l2': 0.0}[penalty], C=sparsity, solver=solver)
+        else:
+            lr = LogisticRegression(random_state=1, penalty=penalty, C=sparsity, solver=solver)
+        # liblinear fits two classes at most since scikit-learn 1.8
+        clf = OneVsRestClassifier(lr)
     elif classifier == 'RF':
         clf = RandomForestClassifier(random_state=1, n_jobs=n_jobs)
     elif classifier == 'GNB':
