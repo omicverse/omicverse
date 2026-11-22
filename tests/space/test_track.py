@@ -70,6 +70,7 @@ def test_close_gaps_rejoins_missed_detections():
 
 
 def test_mitosis_signal_and_refinement():
+    pytest.importorskip("cv2")  # opencv is optional (mitosis_signal)
     movie, labels = _movie(div_frame=30)
     sig = mitosis_signal(movie, cell_diameter=14, downsample=2)
     ev = detect_mitoses(sig, cell_diameter=14, downsample=2, lag=4)

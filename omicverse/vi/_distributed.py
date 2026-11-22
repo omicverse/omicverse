@@ -30,6 +30,7 @@ source file is only ever read.
 from __future__ import annotations
 
 import os
+import warnings
 import socket
 import time
 
@@ -134,6 +135,7 @@ def _worker(rank, world, backend, port, payload, queue):
             queue.put({"state": state, "history": hist, "latent": latent,
                        "train_time": train_time, "epochs": m.__dict__.get("_epochs_done")})
         dist.barrier()
+        queue.put({"done": rank})  # past the last collective: only teardown remains
     except BaseException as e:
         if rank == 0:
             queue.put({"error": repr(e)})
@@ -200,15 +202,30 @@ def train_distributed(model, devices, max_epochs=None, *, train_size=None, valid
         # read rank 0's result while the workers run (a large state dict would
         # otherwise block rank 0 on a full pipe), then join
         import queue as _queue
-        res = None
-        while res is None:
-            try:
-                res = queue.get(timeout=1.0)
-            except _queue.Empty:
-                if pc.join(timeout=0):  # all exited (raises if one failed)
-                    break
-        while not pc.join():
-            pass
+        res, done = None, set()
+        try:
+            while res is None or len(done) < world:
+                try:
+                    msg = queue.get(timeout=1.0)
+                except _queue.Empty:
+                    if pc.join(timeout=0):  # all exited (raises if one failed)
+                        break
+                    continue
+                if "done" in msg:
+                    done.add(msg["done"])
+                elif res is None:
+                    res = msg
+            while not pc.join():
+                pass
+        except mp.ProcessExitedException:
+            # gloo can abort a rank while tearing down the process group
+            # ("terminate called without an active exception") after every rank
+            # has passed the final barrier; the result is complete by then
+            if res is None or "error" in res or len(done) < world:
+                raise
+            warnings.warn("ov.vi: a DDP worker crashed during process-group "
+                          "teardown after training completed; results are intact",
+                          RuntimeWarning, stacklevel=2)
     finally:
         if old is None:
             os.environ.pop("HDF5_USE_FILE_LOCKING", None)
