@@ -170,3 +170,84 @@ def test_fit_and_export_predictor_runs_without_omicverse(tmp_path):
     assert "two_axis" not in (tmp_path / "sub" / "predict.py").read_text()
     cfg = json.loads((tmp_path / "sub" / "predictor_config.json").read_text())
     assert cfg["object_out_cols"]["stain"] == "stain_index"
+
+
+# ------------------------------------------------ generalisation options (stain_feature / prior)
+
+def test_core_colour_features_are_amount_invariant():
+    rng = np.random.default_rng(5)
+    vec = np.vstack([VIOLET, PINK])
+    vals = {}
+    for amount in (0.4, 1.2):
+        img = np.full((80, 80, 3), 245.0) + rng.normal(0, 1.0, (80, 80, 3))
+        yy, xx = np.mgrid[:80, :80]
+        m = (np.abs(xx - 40) <= 12) & (np.abs(yy - 40) <= 4)
+        _paint(img, m, VIOLET, amount)
+        rec = core.measure_objects(np.clip(img, 0, 255), [(27, 35, 53, 45)], 0.1, stain_vectors=vec)[0]
+        vals[amount] = rec
+        for k in ("stain_core_primary_fraction", "stain_core_red_od_share", "stain_core_hsd_cx",
+                  "stain_core_hsd_cy"):
+            assert np.isfinite(rec[k])
+        assert rec["stain_core_primary_fraction"] > 0.85
+    for k in ("stain_core_primary_fraction", "stain_core_red_od_share", "stain_core_hsd_cx"):
+        assert abs(vals[0.4][k] - vals[1.2][k]) < 0.1
+    assert vals[1.2]["stain_core_od_mean"] > 2 * vals[0.4]["stain_core_od_mean"]
+
+
+def test_stain_feature_columns_presets():
+    names = ["cell_aspect_q50", "stain_od_mean_q50", "stain_primary_fraction_q50",
+             "stain_primary_fraction_std", "stain_core_red_od_share_q25", "stain_index_q50"]
+    assert core.stain_feature_columns(names, "all") == core.feature_columns(names, "stain")
+    assert core.stain_feature_columns(names, "fraction") == ["stain_primary_fraction_q50",
+                                                             "stain_primary_fraction_std"]
+    assert core.stain_feature_columns(names, ["stain_core_red_od_share"]) == ["stain_core_red_od_share_q25"]
+    with pytest.raises(ValueError):
+        core.stain_feature_columns(names, ["nothing_here"])
+
+
+def test_em_stain_prior_adapts_to_batch():
+    llr = np.r_[np.full(40, 3.0), np.full(10, -3.0)]          # 80 % of the batch looks positive
+    w = np.ones(50)
+    pi = core.em_stain_prior(llr, w, prior0=0.2, strength=2.0)
+    assert 0.7 < pi < 0.85
+    # no batch evidence (zero shape weight) -> anchored prior unchanged
+    assert core.em_stain_prior(llr, np.zeros(50), prior0=0.2) == pytest.approx(0.2)
+
+
+def _weak_colour_cohort(rng):
+    """rods mostly negative in training; colour evidence present but modest."""
+    specs = [("A_round", "round", "v")] * 3 + [("A_rod", "rod", "v")] + [("B_rod", "rod", "p")] * 4
+    return _cohort(rng, specs, per=3)
+
+
+def test_prior_modes_and_backward_compatibility():
+    rng = np.random.default_rng(6)
+    X, y, g = _weak_colour_cohort(rng)
+    axes = {"A_round": ("round", "A"), "A_rod": ("rod", "A"), "B_rod": ("rod", "B")}
+    models = {p: core.fit_two_axis_classifier(X, y, g, axes, positive_stain="A", prior=p,
+                                              stain_feature="core")
+              for p in ("group", "tempered", "flat", "em")}
+    lo = {}
+    for p, m in models.items():
+        _, info = core.predict_two_axis(m, X, return_scores=True)
+        lo[p] = info["stain_prior_logodds"]
+    assert lo["flat"]["rod"] == 0.0
+    assert lo["tempered"]["rod"] == pytest.approx(0.5 * lo["group"]["rod"])
+    assert lo["group"]["rod"] < 0 < lo["group"]["round"]
+    # a pickled model from before these options (no prior_mode key) keeps the group prior
+    old = {k: v for k, v in models["group"].items() if k not in ("prior_mode", "prior_weight", "em_strength")}
+    assert list(core.predict_two_axis(old, X)) == list(core.predict_two_axis(models["group"], X))
+    with pytest.raises(ValueError):
+        core.fit_two_axis_classifier(X, y, g, axes, positive_stain="A", prior="nope")
+
+
+def test_em_prior_recovers_unseen_positive_rods():
+    """New species of positive rods: the group prior (rods mostly negative) must not
+    override clear colour once the batch shows the shift."""
+    rng = np.random.default_rng(7)
+    X, y, g = _weak_colour_cohort(rng)
+    axes = {"A_round": ("round", "A"), "A_rod": ("rod", "A"), "B_rod": ("rod", "B")}
+    Xn, yn, _ = _cohort(rng, [("A_rod", "rod", "v")] * 3, per=3)
+    for p in ("tempered", "flat", "em"):
+        m = core.fit_two_axis_classifier(X, y, g, axes, positive_stain="A", prior=p, stain_feature="core")
+        assert np.mean(core.predict_two_axis(m, Xn) == "A_rod") >= 0.8
