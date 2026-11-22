@@ -845,9 +845,19 @@ def run_envelope(
     soup_stability_min: float = 0.8,
     seed: int = 0,
     verbose: bool = False,
+    override_level: bool = False,
     **kwargs,
 ):
     """``remove_ambient`` backend entry point for ``method='envelope'``.
+
+    ``level_shrink`` (0.75) and ``use_em`` (False) set the *level* of the
+    estimate; they are documented compromises chosen on independent
+    generators, and the level is not identified from a dataset's own
+    clusters (see the module notes). Changing either therefore requires
+    ``override_level=True``: a value picked because it looked better on a
+    simulator built from the same data has, in practice, produced corrections
+    worse than the uncorrected matrix. ``rounding`` is not guarded (the
+    function itself recommends ``'total'`` when per-gene rounding under-removes).
 
     Returns ``(corrected_cells_x_genes, rho, n_genes_corrected, meta)`` to
     match the other ``ov.pp.ambient`` runners.
@@ -878,6 +888,12 @@ def run_envelope(
     per-group panel statistics needed to see why. Also warns when per-gene
     rounding removed less than half of the counts the estimate implies.
     """
+    if (abs(float(level_shrink) - 0.75) > 1e-12 or use_em) and not override_level:
+        raise ValueError(
+            "envelope: level_shrink / use_em change the level of the contamination estimate, "
+            "which a dataset's own clusters cannot validate; keep the defaults (level_shrink=0.75, "
+            "use_em=False) and deliver that result. Pass override_level=True only with an "
+            "independent ground truth (e.g. a spike-in or species-mixing experiment).")
     X = adata.layers[layer] if layer else adata.X
     if batch_key is not None and batch_key in adata.obs:
         codes, uniq = _codes(adata.obs[batch_key])
