@@ -9,9 +9,15 @@ via :func:`pedigree_core_source`.
                                  two-phase (ascertained + validated) sample.
 ``haplotype_frequencies``        design-weighted (Hajek) haplotype catalog and
                                  population frequencies.
+``haplotype_frequencies_em``     weighted EM haplotype frequencies from
+                                 UNPHASED founders' genotype likelihoods
+                                 (phased founders as fixed diplotypes).
+``NoCallModel``                  genotype / site / neighbour-dependent
+                                 NO_CALL (call-failure) model.
 ``fit_haplotype_prior``          covariate- and group-dependent population
                                  haplotype prior with shared-family latent
-                                 classes, chosen on held-out families.
+                                 classes, chosen on held-out families;
+                                 phased and/or unphased founders.
 ``fit_crossover_intervals``      no-crossover / per-interval crossover masses
                                  from phased parents + ordered transmissions.
 ``gamete_sequences``             transmitted sequences with <= k crossovers.
@@ -35,7 +41,8 @@ from .._registry import register_function
 from . import _pedigree_core as _core
 
 __all__ = [
-    "two_phase_weights", "haplotype_frequencies", "fit_haplotype_prior", "HaplotypePrior",
+    "two_phase_weights", "haplotype_frequencies", "haplotype_frequencies_em", "NoCallModel",
+    "fit_haplotype_prior", "HaplotypePrior",
     "fit_crossover_intervals", "gamete_sequences", "gamete_distribution",
     "genotype_likelihood_arrays", "offspring_outcome_probability", "confident_copy_calls",
     "compatible_diplotypes", "structural_identifiability", "simulate_family_cohort",
@@ -43,6 +50,7 @@ __all__ = [
 ]
 
 HaplotypePrior = _core.HaplotypePrior
+NoCallModel = _core.NoCallModel
 
 two_phase_weights = register_function(
     aliases=["two_phase_weights", "inverse probability weights", "IPW sampling weights",
@@ -67,13 +75,31 @@ haplotype_frequencies = register_function(
     related=["ov.genetics.two_phase_weights", "ov.genetics.fit_haplotype_prior"],
 )(_core.haplotype_frequencies)
 
+haplotype_frequencies_em = register_function(
+    aliases=["haplotype_frequencies_em", "haplotype frequency EM", "Excoffier Slatkin EM",
+             "unphased genotype haplotype frequencies", "weighted haplotype EM", "NO_CALL missingness model",
+             "非定相单倍型频率", "单倍型EM"],
+    category="genetics",
+    description="Weighted maximum-likelihood haplotype frequencies over a known catalog from UNPHASED "
+                "founders: EM over the catalog diplotypes compatible with each person's genotype "
+                "likelihoods (dosages, (L,3) likelihood arrays or genotype_likelihood_arrays tuples; "
+                "NO_CALL allowed), phased founders as fixed diplotypes, per-person sampling (IPW) "
+                "weights, and an optional NO_CALL model whose failure probability depends on the "
+                "true genotype, the site and the previous locus' call (missing not at random).",
+    examples=["em = ov.genetics.haplotype_frequencies_em(gl, w, catalog=cat, phased=phased_or_none)",
+              "em['frequencies'], em['missingness'].params"],
+    related=["ov.genetics.fit_haplotype_prior", "ov.genetics.haplotype_frequencies",
+             "ov.genetics.genotype_likelihood_arrays"],
+)(_core.haplotype_frequencies_em)
+
 fit_haplotype_prior = register_function(
     aliases=["fit_haplotype_prior", "ancestry-dependent haplotype prior", "covariate haplotype frequency model",
              "founder mixture haplotype prior", "population haplotype prior", "单倍型先验",
              "祖源依赖单倍型频率", "家系单倍型先验"],
     category="genetics",
-    description="Learn a population haplotype prior p(h | covariates, group) from phased families "
-                "under a sampling design: latent shared-family (founder / community) classes whose "
+    description="Learn a population haplotype prior p(h | covariates, group) from phased and/or "
+                "unphased founders (hap=None + genotypes=..., EM over compatible diplotypes with a "
+                "genotype-dependent NO_CALL model) under a sampling design: latent shared-family (founder / community) classes whose "
                 "mixing depends on a family-level group label, and within classes a penalised "
                 "multinomial-logit surface on continuous covariates (ancestry, PCs). Class number, "
                 "basis (constant / linear / quadratic / quadratic+RBF), class-shared vs per-class "
@@ -82,6 +108,7 @@ fit_haplotype_prior = register_function(
                 "diplotype given the other's (shared class), joint candidate priors and "
                 "design-weighted population averages.",
     examples=["prior = ov.genetics.fit_haplotype_prior(h1, h2, ancestry, family_ids, groups=proxy, weights=w)",
+              "prior = ov.genetics.fit_haplotype_prior(h1_or_None, h2_or_None, x, fids, groups, w1, genotypes=gl)",
               "p = prior.haplotype_probs(x_new, group='Q2')",
               "pg = prior.conditional_diplotype_prob(pat_pair, x_father, mat_pair, x_mother, group='Q2')"],
     related=["ov.genetics.two_phase_weights", "ov.genetics.haplotype_frequencies"],
@@ -181,7 +208,8 @@ simulate_family_cohort = register_function(
     aliases=["simulate_family_cohort", "simulate pedigrees", "synthetic families haplotypes", "模拟家系"],
     category="genetics",
     description="Synthetic nuclear families with a known covariate- and class-dependent population "
-                "haplotype prior, ascertained first-phase inclusion, randomised phase validation and "
+                "haplotype prior, ascertained first-phase inclusion, randomised or biased phase "
+                "validation, parental genotype likelihoods with MCAR or genotype-dependent NO_CALL, and "
                 "children with <= 1 crossover per meiosis (tests / tutorials).",
     examples=["sim = ov.genetics.simulate_family_cohort(n_families=1500, seed=0)"],
     related=["ov.genetics.fit_haplotype_prior"],
