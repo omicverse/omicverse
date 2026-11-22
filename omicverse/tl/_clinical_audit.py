@@ -69,6 +69,14 @@ disagreeing duplicate) share it, so a reviewer reads incidents rather than
 rows.  The thresholds are screening thresholds: the audit is tuned to catch
 (missing an incident is costly, an extra flag is cheap), and ``min_score``
 or per-rule filtering trades recall for precision afterwards.
+
+Background: the rule families follow the conformance / plausibility (atemporal,
+temporal, uniqueness) categories of Kahn et al. 2016 (eGEMs 4:1244); the
+after-death / outside-stay rules are the data-derived counterparts of the OHDSI
+Data Quality Dashboard ``plausibleDuringLife`` / ``plausibleBeforeDeath`` checks,
+extended to relative (offset) time encodings, and the person-level rules check
+attributes that must not change across a person's stays (cross-stay
+consistency) on an id hierarchy discovered from the data.
 """
 from __future__ import annotations
 
