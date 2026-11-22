@@ -159,7 +159,7 @@ def channel_qc_table(
     step_sec: float = 1.0,
     flat_floor: float = 0.5,
     flat_min_frac: float = 0.02,
-    flat_win_sec: float = 0.5,
+    flat_win_sec: float = 0.25,
     flat_min_sec: float = 2.0,
     extreme_ptp: Optional[float] = None,
     extreme_ratio: float = 20.0,
@@ -186,9 +186,15 @@ def channel_qc_table(
     Intermittent dropouts (contact loss for a fraction of a second, repeated a
     few times) never fill a whole analysis window and are a vanishing fraction
     of a long recording, yet each one corrupts the epochs it falls in.  Flat
-    time is therefore also counted on short windows (``flat_win_sec``, half
-    overlap) and a channel is flagged when the *total* flat time reaches
-    ``flat_min_sec`` seconds, independent of the recording length.
+    time is therefore also measured with a short moving window
+    (``flat_win_sec``, every sample offset) and a channel is flagged when the
+    *total* flat time reaches ``flat_min_sec`` seconds, independent of the
+    recording length.  PREP / PyPREP (Bigdely-Shamlo et al. 2015, Front.
+    Neuroinform. 9:16; pyprep ``find_bad_by_correlation`` dropout) count
+    flat 1-s windows as a *fraction* (> 1 %) of the recording; on synthetic
+    recordings with 3-8 sub-second dropouts (10-30 min) neither that rule nor
+    a 2 %-of-2-s-windows rule flagged any channel, the absolute rule did, with
+    no false positives on clean channels.
 
     All amplitude statistics other than dropout use the band-passed signal
     (``filtered``; if ``None`` and ``band`` is given, a 4th-order zero-phase
@@ -213,7 +219,8 @@ def channel_qc_table(
     flat_min_frac
         Flag ``dropout`` when at least this fraction of windows is flat.
     flat_win_sec
-        Short window (s) on which brief dropouts are measured (half overlap).
+        Short window (s) for brief dropouts; its SD is evaluated at every
+        sample offset, so a dropout is measured at its true length.
     flat_min_sec
         Also flag ``dropout`` when the short flat windows add up to at least
         this many seconds of flat signal (absolute, not a fraction of the
@@ -302,22 +309,27 @@ def channel_qc_table(
     flat = raw_wsd < flat_floor
     frac_flat = flat.mean(axis=1)
 
-    # brief dropouts: union of short flat windows, in seconds and episodes
+    # brief dropouts: every sample covered by a flat short window (moving SD at
+    # every sample offset, so short dropouts are measured at their true length)
     swin = max(4, int(round(flat_win_sec * sfreq)))
-    sstep = max(1, swin // 2)
-    sflat = _windows(x, swin, sstep).std(axis=-1) < flat_floor      # (ch, nwin_short)
     n_samp = x.shape[1]
     flat_sec = np.zeros(n_ch)
     flat_episodes = np.zeros(n_ch, dtype=int)
-    for c in range(n_ch):
-        idx = np.flatnonzero(sflat[c])
-        if idx.size == 0:
-            continue
-        cover = np.zeros(n_samp, dtype=bool)
-        for i in idx:
-            cover[i * sstep:i * sstep + swin] = True
-        flat_sec[c] = cover.sum() / sfreq
-        flat_episodes[c] = int(np.sum(np.diff(np.concatenate([[0], cover.view(np.int8), [0]])) == 1))
+    if n_samp >= swin:
+        xc = x - x.mean(axis=1, keepdims=True)
+        c1 = np.concatenate([np.zeros((n_ch, 1)), np.cumsum(xc, axis=1)], axis=1)
+        c2 = np.concatenate([np.zeros((n_ch, 1)), np.cumsum(xc * xc, axis=1)], axis=1)
+        m1 = (c1[:, swin:] - c1[:, :-swin]) / swin
+        var = (c2[:, swin:] - c2[:, :-swin]) / swin - m1 * m1
+        start = var < flat_floor ** 2                                   # (ch, n - swin + 1)
+        cs = np.concatenate([np.zeros((n_ch, 1)), np.cumsum(start, axis=1)], axis=1)
+        t = np.arange(n_samp)
+        lo = np.clip(t - swin + 1, 0, start.shape[1])
+        hi = np.clip(t + 1, 0, start.shape[1])
+        cover = (cs[:, hi] - cs[:, lo]) > 0                            # sample inside a flat window
+        flat_sec = cover.sum(axis=1) / sfreq
+        edges = np.diff(np.concatenate([np.zeros((n_ch, 1), bool), cover], axis=1).astype(np.int8), axis=1)
+        flat_episodes = (edges == 1).sum(axis=1)
 
     if extreme_ptp is None:
         ref_ptp = float(np.median(np.median(f_wptp, axis=1)))
