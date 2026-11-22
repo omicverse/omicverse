@@ -587,7 +587,7 @@ def score_cluster_signatures(
     switch_rule: str = "specific",
     split_axis: str = "increment",
     identifiable: str = "defining",
-    granularity: str = "evidence",
+    granularity: str = "split",
     granularity_effect: float = 0.2,
     granularity_pos_gain: float = 0.2,
     granularity_alpha: float = 0.01,
@@ -808,7 +808,8 @@ def score_cluster_signatures(
             the residual label's share (default 2: a clear majority is needed
             to overturn the label of exclusion; ``1`` = simple majority).
         granularity: how deep in ``parents`` a cluster's label goes.
-            ``'evidence'`` (default) decides every cluster on its own
+            ``'split'`` (default) keeps the contrast-split behaviour.
+            ``'evidence'`` (opt-in) decides every cluster on its own
             evidence, top-down, one level at a time (a cluster whose
             parent has a single cluster can be refined; two clusters of the
             same child both are; a parent is never split just because the

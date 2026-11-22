@@ -484,7 +484,7 @@ def test_label_with_most_defining_markers_unmeasured_is_not_a_candidate():
     assert loose.at["x", "label"] == "F"
 
 
-# ---- granularity='evidence' (default): parent fallback / child refinement ----
+# ---- granularity='evidence' (opt-in): parent fallback / child refinement ----
 
 def _gran_df(spec, mk, n=200, seed=0, sd=0.05):
     """clusters from ``{cluster: [(fraction, {marker: mean}), ...]}`` (mixtures allowed)"""
@@ -510,6 +510,7 @@ GDEF = {"P": ["p"], "C1": ["c1"], "C2": ["c2"], "G": ["g"], "CX": ["absent"], "O
 
 def _gran(spec, **kw):
     prof = cs.cluster_marker_profile(_gran_df(spec, GMK), "cluster", transform="none")
+    kw.setdefault("granularity", "evidence")
     return cs.score_cluster_signatures(prof, GSIGS, parents=GPAR, defining=GDEF, **kw)
 
 
@@ -517,7 +518,7 @@ def test_evidence_refines_a_single_cluster_parent():
     df = _panel()
     p = cs.cluster_marker_profile(df[df.cluster != "b2"], "cluster")
     r = cs.score_cluster_signatures(p, SIGS, parents={"B_x": "B", "B_y": "B"},
-                                    children_support_parent=False)
+                                    children_support_parent=False, granularity="evidence")
     assert r.at["b1", "label"] == "B_x"
     assert r.at["b1", "granularity"] == "child refinement"
     assert "m3" in r.at["b1", "granularity_evidence"]
@@ -559,7 +560,8 @@ def test_evidence_parent_kept_when_no_child_is_measurable():
     sigs = {"P": {"p": 1.0}, "CX": {"absent": 1.0, "p": 0.2}, "O": {"o": 1.0}}
     prof = cs.cluster_marker_profile(_gran_df({"x": [(1, dict(p=0.8))], "o": [(1, dict(o=0.8))],
                                                "q": [(1, {})]}, GMK), "cluster", transform="none")
-    r = cs.score_cluster_signatures(prof, sigs, parents={"CX": "P"}, promote_min=-1)
+    r = cs.score_cluster_signatures(prof, sigs, parents={"CX": "P"}, promote_min=-1,
+                                    granularity="evidence")
     assert r.at["x", "label"] == "P" and r.at["x", "granularity"] == "parent kept"
 
 
