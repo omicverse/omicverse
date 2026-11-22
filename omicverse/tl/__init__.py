@@ -15,6 +15,9 @@ meta-analysis (:func:`extract_group_stats`, :func:`group_comparisons`,
 :func:`meta_effect_sizes`), per-survey species-set prediction from
 presence-absence / presence-only data (:func:`sdm_community_pipeline` and its
 steps),
+small-area estimation with reference-population priors, group-varying
+coefficients, cross-validated calibration and benchmarked joint draws
+(:func:`sae_grouped_model` and helpers, scored by :func:`crps_ensemble`),
 and morphometry of boxed objects in stained bright-field smears with shape-vs-stain
 field calls that transfer to unseen groups (:func:`smear_measure`,
 :func:`two_axis_classifier_fit`).
@@ -48,12 +51,16 @@ from ._sdm import (sdm_sample_f1, sdm_decode_sets, sdm_sets_to_strings, sdm_spat
                    sdm_neighbor_composition, sdm_presence_only_histogram, sdm_cube_summary,
                    sdm_read_tensor_dir, sdm_standardize, sdm_fit_mlp, sdm_fuse,
                    sdm_community_pipeline)
+from ._small_area import (sae_source, sae_longitudinal_design, sae_reference_prior, sae_grouped_model,
+                          sae_benchmark, crps_ensemble, energy_score, pit_histogram_tv)
 from ._smear_morph import (smear_measure, smear_stain_vectors, smear_field_features,
                            two_axis_classifier_fit, two_axis_classifier_predict,
                            group_holdout_two_axis, species_balanced_recall, group_laplace_prior,
                            smear_morphometry_source, smear_fit_predictor, smear_export_predictor)
 
-__all__ = ["cross_species_align", "bonsai", "bandpass_filter", "channel_qc_table",
+__all__ = ["sae_source", "sae_longitudinal_design", "sae_reference_prior", "sae_grouped_model",
+           "sae_benchmark", "crps_ensemble", "energy_score", "pit_histogram_tv",
+           "cross_species_align", "bonsai", "bandpass_filter", "channel_qc_table",
            "bridged_channel_pairs", "erp_channel_outliers",
            "repair_reject_epochs", "channel_erps", "trigger_onsets",
            "fit_choice_model", "choice_model_loglik",
