@@ -585,7 +585,10 @@ def measure_spine_alignment(series: Union[DicomSeries, DicomStudy], instance: Op
     slices = [{"instance": int(i), "n_bodies": len(per[i]["bodies"]), "sacrum": per[i]["sacrum"] is not None,
                "error": per[i].get("error")} for i in cand]
     if len(seg["bodies"]) < 1 or (len(seg["bodies"]) < 2 and seg["sacrum"] is None):
+        import pandas as _pd
         return {"found": False, "series": s.description, "series_instance_uid": s.uid, "slices": slices,
+                "levels": [], "table": _pd.DataFrame(), "bodies": [], "sacrum_found": False,
+                "label_confidence": "none",
                 "warnings": ["fewer than two vertebrae found on any searched slice"]}
     warn = []
     sac = seg["sacrum"]
