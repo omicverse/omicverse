@@ -105,3 +105,19 @@ def test_design_shapes_and_blocks():
     assert X.shape[0] == 7 and X.shape[1] == 8
     pb = X.shape[2] // 2
     assert np.all(X[:, 0, pb:] == 0) and np.all(X[:, 1, :pb] == 0)   # output blocks separate
+
+
+def test_vendored_source_runs_without_omicverse(tmp_path):
+    import os, subprocess, sys
+    from omicverse.tl._small_area import sae_source
+    text = sae_source(tmp_path / "sae_core.py")
+    assert "register_function" not in text and "omicverse" not in text.split("\n", 1)[1]
+    script = tmp_path / "run.py"
+    script.write_text("import numpy as np\nimport sae_core as s\n"
+                      "d = np.random.default_rng(0).normal(size=(50, 3, 2))\n"
+                      "print(s.crps_ensemble(d, np.zeros((3, 2))).shape)\n")
+    env = {k: v for k, v in os.environ.items() if k != "PYTHONPATH"}
+    out = subprocess.run([sys.executable, str(script)], cwd=tmp_path, capture_output=True,
+                         text=True, env=env)
+    assert out.returncode == 0, out.stderr
+    assert "(3, 2)" in out.stdout
