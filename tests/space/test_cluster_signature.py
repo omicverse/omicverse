@@ -72,8 +72,8 @@ def test_contrast_split_keeps_single_parent():
     df = df[df.cluster != "b2"]
     p = cs.cluster_marker_profile(df, "cluster")
     r = cs.score_cluster_signatures(p, SIGS, parents={"B_x": "B", "B_y": "B"},
-                                    children_support_parent=False)
-    assert r.at["b1", "label"] == "B"          # one cluster: generic parent stays
+                                    children_support_parent=False, granularity="split")
+    assert r.at["b1", "label"] == "B"          # legacy split: one cluster, generic parent stays
 
 
 def test_unmatched_and_alias_resolution():
@@ -189,7 +189,8 @@ def test_pole_axis_split():
     sigs = dict(SIGS)
     sigs["B_z"] = {"m2": 1.0, "m3": 0.6, "m4": 0.6}         # a broad child that is not a pole
     par = {"B_x": "B", "B_y": "B", "B_z": "B"}
-    r = cs.score_cluster_signatures(p, sigs, parents=par, polar={"B": ["B_x", "B_y"]})
+    r = cs.score_cluster_signatures(p, sigs, parents=par, polar={"B": ["B_x", "B_y"]},
+                                    granularity="split")
     assert r.at["b1", "label"] == "B_x" and r.at["b2", "label"] == "B_y"
     assert "by poles" in r.at["b1", "reason"]
 
@@ -429,8 +430,10 @@ def test_increment_split_axis_follows_what_a_child_adds():
             "O": {"o": 1.0}}
     par = {"C1": "P", "C2": "P"}
     d = {"P": ["p"], "C1": ["p"], "C2": ["p"], "O": ["o"]}
-    old = cs.score_cluster_signatures(p, sigs, parents=par, defining=d, split_axis="signature")
-    new = cs.score_cluster_signatures(p, sigs, parents=par, defining=d)
+    # split_axis only applies to the legacy contrast split
+    old = cs.score_cluster_signatures(p, sigs, parents=par, defining=d, split_axis="signature",
+                                      granularity="split")
+    new = cs.score_cluster_signatures(p, sigs, parents=par, defining=d, granularity="split")
     assert new.at["x", "label"] == "C1" and new.at["y", "label"] == "P"
     assert old.at["x", "label"] in ("C1", "C2")
 
@@ -479,3 +482,94 @@ def test_label_with_most_defining_markers_unmeasured_is_not_a_candidate():
     assert r.at["x", "label"] == "G"
     loose = cs.score_cluster_signatures(p, sigs, defining=d, residual_label="R", identifiable="any")
     assert loose.at["x", "label"] == "F"
+
+
+# ---- granularity='evidence' (default): parent fallback / child refinement ----
+
+def _gran_df(spec, mk, n=200, seed=0, sd=0.05):
+    """clusters from ``{cluster: [(fraction, {marker: mean}), ...]}`` (mixtures allowed)"""
+    rng = np.random.default_rng(seed)
+    parts = []
+    for cl, comps in spec.items():
+        for frac, mu in comps:
+            m = int(round(frac * n))
+            parts.append(pd.DataFrame({k: np.clip(rng.normal(mu.get(k, 0.03), sd, m), 0, None)
+                                       for k in mk}).assign(cluster=cl))
+    return pd.concat(parts, ignore_index=True)
+
+
+GMK = ["p", "c1", "c2", "g", "o"]
+GSIGS = {"P": {"p": 1.0, "c1": 0.15, "c2": 0.15},
+         "C1": {"c1": 1.0, "p": 0.2, "c2": -0.3}, "C2": {"c2": 1.0, "p": 0.2, "c1": -0.3},
+         "G": {"g": 1.0, "c1": 0.5, "p": 0.1},           # under C1, expects C1's marker
+         "CX": {"absent": 1.0, "p": 0.2},                # child not measured on the panel
+         "O": {"o": 1.0}}
+GPAR = {"C1": "P", "C2": "P", "CX": "P", "G": "C1"}
+GDEF = {"P": ["p"], "C1": ["c1"], "C2": ["c2"], "G": ["g"], "CX": ["absent"], "O": ["o"]}
+
+
+def _gran(spec, **kw):
+    prof = cs.cluster_marker_profile(_gran_df(spec, GMK), "cluster", transform="none")
+    return cs.score_cluster_signatures(prof, GSIGS, parents=GPAR, defining=GDEF, **kw)
+
+
+def test_evidence_refines_a_single_cluster_parent():
+    df = _panel()
+    p = cs.cluster_marker_profile(df[df.cluster != "b2"], "cluster")
+    r = cs.score_cluster_signatures(p, SIGS, parents={"B_x": "B", "B_y": "B"},
+                                    children_support_parent=False)
+    assert r.at["b1", "label"] == "B_x"
+    assert r.at["b1", "granularity"] == "child refinement"
+    assert "m3" in r.at["b1", "granularity_evidence"]
+    assert r.attrs["granularity"] == "evidence"
+
+
+def test_evidence_parent_fallback_and_refinement_cases():
+    spec = {"c1a": [(1, dict(p=0.8, c1=0.7))], "c1b": [(1, dict(p=0.75, c1=0.6))],   # same child twice
+            "mix": [(0.5, dict(p=0.8, c1=0.7)), (0.5, dict(p=0.8, c2=0.7))],          # C1 + C2 cells
+            "p0": [(1, dict(p=0.8))],                                                   # parent only
+            "spill": [(1, dict(p=0.8, c1=0.1))],                                        # dim spill-over
+            "g": [(1, dict(p=0.8, c1=0.7, g=0.7))],                                     # grandchild
+            "c2": [(1, dict(p=0.8, c2=0.7))], "o": [(1, dict(o=0.8))], "q": [(1, {})]}
+    r = _gran(spec)
+    assert r.at["c1a", "label"] == "C1" and r.at["c1b", "label"] == "C1"
+    assert r.at["c2", "label"] == "C2"
+    assert r.at["g", "label"] == "G" and "C1 -> G" in r.at["g", "granularity_evidence"]
+    for c in ("mix", "p0", "spill"):
+        assert r.at[c, "label"] == "P", c
+        assert r.at[c, "granularity"] == "parent fallback", c
+    assert "contradicted" in r.at["mix", "granularity_evidence"]
+    assert r.at["o", "granularity"] == ""                    # no children: nothing to decide
+    # the legacy contrast split gives a generic parent cluster a child / misses repeats
+    old = _gran(spec, granularity="split")
+    assert (old.loc[["c1a", "c1b", "g"], "label"] != r.loc[["c1a", "c1b", "g"], "label"]).any() or \
+        old.at["mix", "label"] != "P"
+
+
+def test_evidence_ignores_markers_without_a_positive_population():
+    # no cluster really carries c2 / g: their brightest cluster is noise and must
+    # not count as elevated
+    spec = {"c1": [(1, dict(p=0.8, c1=0.7))], "p0": [(1, dict(p=0.8))], "o": [(1, dict(o=0.8))],
+            "q": [(1, {})]}
+    r = _gran(spec)
+    assert r.at["c1", "label"] == "C1" and r.at["p0", "label"] == "P"
+
+
+def test_evidence_parent_kept_when_no_child_is_measurable():
+    sigs = {"P": {"p": 1.0}, "CX": {"absent": 1.0, "p": 0.2}, "O": {"o": 1.0}}
+    prof = cs.cluster_marker_profile(_gran_df({"x": [(1, dict(p=0.8))], "o": [(1, dict(o=0.8))],
+                                               "q": [(1, {})]}, GMK), "cluster", transform="none")
+    r = cs.score_cluster_signatures(prof, sigs, parents={"CX": "P"}, promote_min=-1)
+    assert r.at["x", "label"] == "P" and r.at["x", "granularity"] == "parent kept"
+
+
+def test_marker_elevation_binomial_test_uses_cluster_size():
+    prof = pd.DataFrame({"n_cells": [5, 500, 400, 400, 400],
+                         "mean:m": [0.6, 0.6, 0.05, 0.05, 0.05],
+                         "pos:m": [0.6, 0.6, 0.3, 0.3, 0.3]}, index=list("abcde"))
+    import sys
+    mod = sys.modules.get("omicverse.space._cluster_signature") or cs
+    _, _, pb, _, p_small = mod._marker_elevation(prof, "m", "a")
+    eff, pos, _, _, p_big = mod._marker_elevation(prof, "m", "b")
+    assert np.isclose(pb, 0.3) and np.isclose(eff, 0.55) and np.isclose(pos, 0.6)
+    assert p_small > 0.05 and p_big < 1e-10

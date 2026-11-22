@@ -11,9 +11,11 @@ in a reproducible way.
     markers on which each cluster stands out.
 ``score_cluster_signatures``
     scores the caller's signatures per cluster, assigns labels (presence test,
-    best contrast, margin), resolves child labels inside a parent by contrast
-    between that parent's clusters, and optionally assigns clusters that
-    support no signature by their spatial neighbourhood.
+    best contrast, margin), refines a parent to a child only where the
+    child's discriminating markers are significantly elevated in the cluster
+    (otherwise stays at the parent; per-cluster audit in ``granularity`` /
+    ``granularity_evidence``), and optionally assigns clusters that support
+    no signature by their spatial neighbourhood.
 ``cluster_neighbor_composition``
     for each cluster, the label / cluster composition of its cells'
     neighbourhoods.
@@ -343,6 +345,152 @@ def _contradiction(prof, cmap, signatures, stat="rel", expect_frac=0.0, skip=())
     return out
 
 
+def _marker_elevation(prof, col, cl):
+    """Evidence that cluster ``cl`` is elevated on panel column ``col``.
+
+    Returns ``(effect, pos, pos_bg, z, p)``: ``effect`` is the cluster mean
+    above the marker's background (``_background`` of the cluster means, or
+    the dimmest cluster when every cluster carries the marker), on
+    the profile's scale (each marker divided by its high quantile, so 1 = the
+    brightest cells).  It is deliberately *not* relative to the brightest
+    cluster: on a marker no population really carries, the brightest cluster
+    is noise and a relative effect would look large;
+    ``pos`` the cluster's fraction of marker-positive cells (per-marker
+    Otsu, see :func:`cluster_marker_profile`) and ``pos_bg`` the background
+    positive fraction (same robust rule applied to the ``pos:`` column);
+    ``z`` (normal approximation, for display) / ``p`` (exact one-sided
+    binomial tail) test of ``pos`` > ``pos_bg`` with the cluster's
+    ``n_cells`` (``nan`` when the profile has no ``n_cells`` / ``pos:``
+    columns).
+    """
+    x = prof[f"mean:{col}"]
+    # background: the dim mode of the cluster means; when every cluster carries
+    # the marker (no dim mode, ``_background`` returns 0) the dimmest cluster
+    eff = float(np.clip(float(x[cl]) - max(_background(x), float(x.min())), 0.0, 1.0))
+    pc = f"pos:{col}"
+    if pc not in prof.columns:
+        return eff, np.nan, np.nan, np.nan, np.nan
+    pos = float(prof.at[cl, pc])
+    pb = float(np.clip(max(_background(prof[pc]), float(prof[pc].min())), 1e-3, 1 - 1e-3))
+    n = float(prof.at[cl, "n_cells"]) if "n_cells" in prof.columns else np.nan
+    if not np.isfinite(n) or n <= 0:
+        return eff, pos, pb, np.nan, np.nan
+    z = (pos - pb) / np.sqrt(pb * (1 - pb) / n)
+    k = int(round(pos * n))
+    try:
+        from scipy.stats import binom
+        p = float(binom.sf(k - 1, int(round(n)), pb))      # P(X >= k), exact
+    except Exception:                                      # pragma: no cover
+        import math
+        p = 0.5 * math.erfc(z / math.sqrt(2.0))
+    return eff, pos, pb, float(z), p
+
+
+def _discriminating(signatures, cmap, child, parent, siblings, frac):
+    """Panel markers that discriminate ``child`` from its parent and its
+    siblings: positive markers whose weight in the child exceeds the largest
+    (positive) weight the parent or any sibling gives them by at least
+    ``frac`` × the child's strongest positive panel weight.  ``{panel
+    column: weight increment}``."""
+    sig = signatures[child]
+    strip = lambda m: m[4:] if m.startswith("pos:") else m
+    pos = {strip(m): w for m, w in sig.items() if w > 0 and strip(m) in cmap}
+    if not pos:
+        return {}
+    top = max(pos.values())
+    others = [signatures[parent]] if parent in signatures else []
+    others += [signatures[s] for s in siblings if s in signatures]
+    out: Dict[str, float] = {}
+    for m, w in pos.items():
+        o = max([max(float(s.get(m, 0.0)), float(s.get("pos:" + m, 0.0)), 0.0) for s in others] + [0.0])
+        d = w - o
+        if d >= frac * top:
+            c = cmap[m]
+            out[c] = max(out.get(c, 0.0), d)
+    return out
+
+
+def _granularity_step(prof, cmap, signatures, parent, kids, cl, *, disc_frac, effect_min,
+                      pos_gain, alpha, n_tests):
+    """One parent -> child decision for one cluster (see ``granularity`` in
+    :func:`score_cluster_signatures`).  Returns ``(child or None, rule,
+    evidence text)``."""
+    def elevated(col):
+        eff, pos, pb, z, p = _marker_elevation(prof, col, cl)
+        ok = eff >= effect_min
+        if np.isfinite(pos):
+            ok = ok and (pos - pb) >= pos_gain and (not np.isfinite(p) or p * max(n_tests, 1) <= alpha)
+        txt = f"{col} eff={eff:.2f}"
+        if np.isfinite(pos):
+            txt += f" pos={pos:.2f} vs bg {pb:.2f}"
+        if np.isfinite(z):
+            txt += f" z={z:.1f} p={min(1.0, p * max(n_tests, 1)):.1g}"
+        return ok, txt
+
+    strip = lambda m: m[4:] if m.startswith("pos:") else m
+    disc = {k: _discriminating(signatures, cmap, k, parent, [s for s in kids if s != k], disc_frac)
+            for k in kids}
+    testable = [k for k in kids if disc[k]]
+    if not testable:
+        return None, "parent kept", (f"no child of {parent} has a discriminating marker on the panel "
+                                     f"({', '.join(kids)})")
+    elev: Dict[str, Tuple[bool, str]] = {}
+    for k in testable:
+        for c in disc[k]:
+            if c not in elev:
+                elev[c] = elevated(c)
+    support = {}
+    for k in testable:
+        tot = sum(disc[k].values())
+        up = sum(d for c, d in disc[k].items() if elev[c][0])
+        support[k] = up / tot if tot > 0 else 0.0
+    supported = [k for k in testable if support[k] >= 0.5]
+    ev_txt = "; ".join(f"{k}: " + ", ".join(elev[c][1] for c in disc[k]) for k in testable)
+    if not supported:
+        return None, "parent fallback", (f"no child's discriminating markers are significantly "
+                                         f"elevated [{ev_txt}]")
+
+    # a supported child is contradicted by an elevated discriminating marker of
+    # another supported child that it does not itself expect (weight below
+    # disc_frac of its top weight), or by an elevated marker it lists as negative
+    def expects(k, col):
+        best = 0.0
+        for m, w in signatures[k].items():
+            if strip(m) in cmap and cmap[strip(m)] == col:
+                best = max(best, w)
+        return best
+
+    def topw(k):
+        return max([w for m, w in signatures[k].items() if w > 0 and strip(m) in cmap] + [0.0])
+    contra: Dict[str, List[str]] = {}
+    for k in supported:
+        bad = []
+        for s in supported:
+            if s == k:
+                continue
+            for c in disc[s]:
+                if elev[c][0] and expects(k, c) < disc_frac * topw(k):
+                    bad.append(f"{c} ({s})")
+        for m, w in signatures[k].items():
+            if w < 0 and strip(m) in cmap and -w >= disc_frac * topw(k):
+                c = cmap[strip(m)]
+                ok = elev[c][0] if c in elev else elevated(c)[0]
+                if ok:
+                    bad.append(f"{c} (negative for {k})")
+        contra[k] = bad
+    ok = [k for k in supported if not contra[k]]
+    if len(ok) == 1:
+        return ok[0], "child refinement", (f"{parent} -> {ok[0]}: " + ", ".join(
+            elev[c][1] for c in disc[ok[0]]) + (f" | other children: " + "; ".join(
+                f"{k}: " + ", ".join(elev[c][1] for c in disc[k]) for k in testable if k != ok[0])
+                if len(testable) > 1 else ""))
+    if not ok:
+        why = "; ".join(f"{k} contradicted by {', '.join(v)}" for k, v in contra.items())
+        return None, "parent fallback", f"children's evidence conflicts ({why}) [{ev_txt}]"
+    return None, "parent fallback", (f"several children supported and mutually compatible "
+                                     f"({', '.join(ok)}) [{ev_txt}]")
+
+
 def _review_state(lz, alt_z, rb, winner, alt_label, win_score, alt_score, defining_check,
                   exclusion=None) -> str:
     """Review state of a first-pass call from its lineage evidence.
@@ -392,7 +540,8 @@ def _review_state(lz, alt_z, rb, winner, alt_label, win_score, alt_score, defini
     category="space",
     description="Score caller-supplied marker signatures ({label: {marker: weight}}) on "
                 "cluster profiles: presence test, best contrast with margin, parent/child "
-                "granularity by within-parent contrast, neighbourhood assignment of "
+                "granularity by significant elevation of each child's discriminating markers "
+                "(parent fallback / child refinement, audited per cluster), neighbourhood assignment of "
                 "clusters that support no signature",
     requires={},
     produces={},
@@ -438,6 +587,11 @@ def score_cluster_signatures(
     switch_rule: str = "specific",
     split_axis: str = "increment",
     identifiable: str = "defining",
+    granularity: str = "evidence",
+    granularity_effect: float = 0.2,
+    granularity_pos_gain: float = 0.2,
+    granularity_alpha: float = 0.01,
+    granularity_disc: float = 0.25,
 ) -> pd.DataFrame:
     r"""Assign cluster labels from caller-defined marker signatures.
 
@@ -653,6 +807,69 @@ def score_cluster_signatures(
             alternative's neighbourhood share is at least ``residual_ratio`` ×
             the residual label's share (default 2: a clear majority is needed
             to overturn the label of exclusion; ``1`` = simple majority).
+        granularity: how deep in ``parents`` a cluster's label goes.
+            ``'evidence'`` (default) decides every cluster on its own
+            evidence, top-down, one level at a time (a cluster whose
+            parent has a single cluster can be refined; two clusters of the
+            same child both are; a parent is never split just because the
+            clustering split it):
+
+            1. *discriminating markers* of each child: its positive panel
+               markers weighted at least ``granularity_disc`` × its
+               strongest panel weight above the largest weight the parent
+               or any sibling gives them (e.g. CD8 for a CD8 T-cell child
+               of a T-cell parent; an inherited parent marker never
+               qualifies).  A child with none is not identifiable on this
+               panel; if no child has one the parent is kept
+               (``'parent kept'``);
+            2. a marker is *significantly elevated* in the cluster when
+               its mean is at least ``granularity_effect`` above the
+               marker's background (on the profile's 0..1 scale, not
+               relative to the brightest cluster, so a marker no population
+               carries cannot pass), its positive fraction exceeds the
+               background positive fraction by ``granularity_pos_gain``,
+               and an exact one-sided binomial test of that fraction with
+               the cluster's ``n_cells`` gives ``p × n_clusters <=
+               granularity_alpha`` (Bonferroni);
+            3. a child is *supported* when markers carrying at least half
+               of its discriminating weight are elevated, and *contradicted*
+               when another supported child's elevated discriminating marker
+               is one it does not itself expect (weight below
+               ``granularity_disc`` × its top weight) or when one of its own
+               negative markers is elevated;
+            4. exactly one supported, uncontradicted child: the cluster is
+               refined to it (``'child refinement'``) and step 1 repeats
+               below it; otherwise it stays at the parent (``'parent
+               fallback'``: no child elevated, or a mixed cluster whose
+               children's evidence conflicts — e.g. CD4 and CD8 both up).
+               A child that expects its sibling's marker (a regulatory
+               T-cell signature listing CD4) is compatible with it, so the
+               more specific child wins when both are elevated.
+
+            ``granularity`` / ``granularity_evidence`` columns record, per
+            cluster, the rule that decided and the markers with effect,
+            positive fraction vs background, z and adjusted p, so the call
+            can be audited instead of overridden.  Parents listed in
+            ``polar`` as a plain list (every cluster must take a child)
+            keep the forced polar split.  ``'split'``: the earlier
+            behaviour — ``split_rule`` (contrast between the parent's
+            clusters) decides.  ``split_rule='none'`` keeps parents in both.
+            The rule follows the partial-rejection idea of hierarchical
+            classifiers (stop at the internal node when no child is
+            confidently supported: scHPL, Michielsen et al., Nat. Commun.
+            12, 2799 (2021); Theunissen et al., Bioinformatics 40, btae128
+            (2024)), with marker-level presence decided against the
+            marker's own background as in marker-gated assignment (CELESTA,
+            Zhang et al., Nat. Methods 19, 759 (2022); Astir, Geuenich et
+            al., Cell Syst. 12, 1173 (2021); SCINA, Zhang et al., Genes 10,
+            531 (2019)); reimplemented here at cluster level.  On a
+            synthetic hierarchy and on MIBI-TNBC (Keren et al., Cell 2018)
+            it raised exact-granularity calls over ``'split'`` (and over a
+            softmax reject threshold on child scores) mainly by removing
+            too-coarse calls.
+        granularity_effect / granularity_pos_gain / granularity_alpha /
+            granularity_disc: thresholds of the ``'evidence'`` rule (see
+            above; defaults 0.2, 0.2, 0.01, 0.25).
 
     Defaults (one configuration for every panel): cross-cluster z statistic,
     l2 matched filter with ``min_weight=1`` (weights as
@@ -672,7 +889,10 @@ def score_cluster_signatures(
     Returns:
         ``DataFrame`` indexed by cluster: ``label``, ``top_label``,
         ``score``, ``runner_up``, ``lineage_z``, ``alt_lineage_z``,
-        ``alt_label``, ``review``, ``margin``, ``label_of_exclusion``,
+        ``alt_label``, ``review``, ``margin``, ``granularity`` (``'child
+        refinement'``, ``'parent fallback'``, ``'parent kept'`` or empty when
+        the label has no children), ``granularity_evidence``,
+        ``label_of_exclusion``,
         ``eligible``, ``candidates`` and ``reason``, plus
         ``score:<label>`` for every signature.  ``attrs['unmatched']`` lists
         signature markers not found in the panel.
@@ -1064,10 +1284,54 @@ def score_cluster_signatures(
         raise ValueError("split_axis must be 'increment' or 'signature'")
     if split_axis != "increment" or not inc:
         ssi, inc_mass = ss, {}
+    if granularity not in ("evidence", "split"):
+        raise ValueError("granularity must be 'evidence' or 'split'")
+    gran_rule = pd.Series("", index=out.index, dtype=object)
+    gran_ev = pd.Series("", index=out.index, dtype=object)
+
+    def _kids_of(pa):
+        ks = [k for k in children.get(pa, []) if k in ss.columns and np.isfinite(ss[k]).any()]
+        if pa in signatures:
+            pw = signatures[pa]
+            ks = [k for k in ks if any(w - pw.get(m, 0.0) >= promote_min and m in cmap
+                                       for m, w in signatures[k].items() if w > 0)]
+        return ks
+    if granularity == "evidence" and split_rule != "none":
+        # evidence rule: refine a parent to a child, one level at a time, only
+        # on the child's discriminating markers being significantly elevated in
+        # this cluster; otherwise stop at the parent (see the docstring)
+        for c in label.index:
+            if c in fixed:
+                continue
+            seen: set = set()
+            rules, evs = [], []
+            while True:
+                pa = label[c]
+                if pa not in children or pa in seen or (pa in polar and polar[pa] is None):
+                    break
+                seen.add(pa)
+                kids = _kids_of(pa)
+                if not kids:
+                    break
+                k, rule, ev = _granularity_step(
+                    profile, cmap, signatures, pa, kids, c, disc_frac=granularity_disc,
+                    effect_min=granularity_effect, pos_gain=granularity_pos_gain,
+                    alpha=granularity_alpha, n_tests=len(profile.index))
+                rules.append(rule)
+                evs.append(ev)
+                if k is None:
+                    break
+                label[c] = k
+                out.at[c, "reason"] = f"{out.at[c, 'reason']}; refined {pa} -> {k}"
+            if rules:
+                gran_rule[c] = "child refinement" if "child refinement" in rules else rules[-1]
+                gran_ev[c] = " || ".join(evs)
     split_done: set = set()
     for _ in range(4):
         changed = False
         for pa, kids in children.items():
+            if granularity == "evidence" and not (pa in polar and polar[pa] is None):
+                continue            # decided by the evidence rule above
             members = [c for c in label.index if label[c] == pa]
             kids = [k for k in kids if np.isfinite(ss[k]).any()]
             # a child can only be promoted on evidence of its own: a positive
@@ -1153,6 +1417,8 @@ def score_cluster_signatures(
     for c, lab in fixed.items():
         label[c] = lab
     out.insert(0, "label", label)
+    out["granularity"] = gran_rule
+    out["granularity_evidence"] = gran_ev
     out["label_of_exclusion"] = residual_label
     # lineage changes applied to clusters the review policy marks fixed
     out["lineage_forced"] = out.index.isin(forced)
@@ -1164,6 +1430,7 @@ def score_cluster_signatures(
     if rb_note:
         out.attrs["review_note"] = rb_note
     out.attrs["marker_map"] = cmap
+    out.attrs["granularity"] = granularity
     return out
 
 
