@@ -70,7 +70,7 @@ Every finding also carries ``severity`` (robust z of the flagged value against i
 NaN for logical rules) and ``rule_rate`` (share of the table's rows flagged by that rule);
 ``max_rule_rate`` keeps only the most severe rows of a rule that fires too broadly.
 
-Default output is *targeted* (``mode='targeted'``): ``confidence='high'`` findings -- logical
+``mode='targeted'`` (opt-in) keeps ``confidence='high'`` findings -- logical
 contradictions, deviations explained by a decimal shift / sign flip / unit factor, findings
 corroborated by an independent rule -- are all reported; graded-only findings (``'screen'``: a
 large z, a jump in the patient's history) only up to a small per-table budget, most severe first.
@@ -804,7 +804,7 @@ def drug_sex_reference(drugs: Optional[Iterable[str]] = None, *, timeout: float 
                 "changing between the stays of one person (nested ids discovered from the data), unit-"
                 "factor slips and exact duplicates. Targeted by default: findings with a second "
                 "signature (confidence='high') plus a small severity-ranked budget of graded-only ones; "
-                "mode='screen' returns every hit. All references are derived from the data or public "
+                "mode='screen' (default) returns every hit; mode='targeted' keeps high-confidence findings plus a small severity-ranked budget. All references are derived from the data or public "
                 "databases at run time.",
     examples=["tables = ov.tl.load_clinical_tables('/workspace/data/csv')",
               "f = ov.tl.audit_clinical_tables(tables)",
@@ -831,7 +831,7 @@ def audit_clinical_tables(
     person_tol: float = 4.0,
     max_duplicate_share: float = 0.05,
     max_rule_rate: Optional[float] = None,
-    mode: str = "targeted",
+    mode: str = "screen",
     screen_rate: float = 1e-4,
     out: Optional[str] = None,
     out_id_column: Optional[str] = None,
@@ -877,11 +877,11 @@ def audit_clinical_tables(
         copies of the other items are (numbers compared as numbers, the row id and the table's own
         surrogate key ignored).  Without an item column the share applies to the whole table.
     mode, screen_rate
-        ``'targeted'`` (default): every ``confidence='high'`` finding (logical contradiction,
+        ``'targeted'`` (opt-in): every ``confidence='high'`` finding (logical contradiction,
         explained deviation, corroborated by an independent rule) plus, per table, the
         ``max(3, screen_rate * len(table))`` most severe ``'screen'`` rows (round-robin over the
         graded rules by severity rank).
-        ``'screen'``: everything (the earlier behaviour; recall first).
+        ``'screen'`` (default): everything (the earlier behaviour; recall first).
     max_rule_rate
         Precision control. Every finding carries ``rule_rate`` (share of the table's rows the
         rule flagged) and ``severity`` (robust z of the flagged value against its reference;

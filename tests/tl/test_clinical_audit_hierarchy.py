@@ -306,7 +306,7 @@ def test_duplicate_stay_row_keeps_schema():
     assert "SDUP" in set(f.loc[f["rule"] == "exact_duplicate", "row_id"])
 
 
-def test_targeted_default_vs_screen():
+def test_targeted_vs_screen_default():
     T, truth = make_icu_cohort(9, "offset")
     # a heavy-tailed analyte: many large but genuine values (a deterministic function of the old
     # value, so that injected copies stay copies)
@@ -314,8 +314,8 @@ def test_targeted_default_vs_screen():
     cr = L["lab_name"] == "cr"
     u = (pd.to_numeric(L.loc[cr, "lab_result"]) * 1000 * 0.6180339887) % 1
     L.loc[cr, "lab_result"] = np.round(np.exp(0.6 * np.tan(np.pi * (u.clip(0.01, 0.99) - 0.5))), 2).astype(str)
-    f = audit_clinical_tables(T, external_reference=False, verbose=False)
-    g = audit_clinical_tables(T, external_reference=False, verbose=False, mode="screen")
+    f = audit_clinical_tables(T, external_reference=False, verbose=False, mode="targeted")
+    g = audit_clinical_tables(T, external_reference=False, verbose=False)            # screen (default)
     assert "confidence" in f.columns and set(f["confidence"]) <= {"high", "screen"}
     assert len(f.drop_duplicates(["table", "row_id"])) <= len(g.drop_duplicates(["table", "row_id"]))
     budget = max(3, int(np.ceil(1e-4 * len(T["lab"]))))
