@@ -237,3 +237,90 @@ def test_without_shared_row_id():
     T = {n: d.drop(columns="_row_id") for n, d in T.items()}
     f = audit_clinical_tables(T, external_reference=False, verbose=False)
     assert "after_death" in set(f["rule"])
+
+
+# ---------------------------------------------------------------------------
+# typed inputs, generic id names, duplicates, targeted output
+# ---------------------------------------------------------------------------
+
+def _typed_offset_cohort(seed=6):
+    """Offset layout as pandas would read it: integer stay ids in the event tables, float ids
+    (a missing value) in the stays table, generic id names, no shared row id."""
+    T, truth = make_icu_cohort(seed, "offset")
+    S = T["unit_stays"].rename(columns={"unit_stay_id": "stay_key", "hosp_adm_id": "hospital_stay_key",
+                                        "person_id": "pid_key"})
+    S["stay_key"] = S["stay_key"].astype(float)
+    S["hospital_stay_key"] = S["hospital_stay_key"].astype(float)
+    S.loc[S.index[0], "hospital_stay_key"] = np.nan
+    for c in ("age", "height_cm", "admit_weight", "discharge_weight", "hosp_admit_offset",
+              "unit_discharge_offset", "hosp_discharge_offset"):
+        S[c] = pd.to_numeric(S[c])
+    out = {"unit_stays": S}
+    for n in ("lab", "treatment"):
+        d = T[n].rename(columns={"unit_stay_id": "stay_key"})
+        d["stay_key"] = d["stay_key"].astype(int)
+        out[n] = d
+    out["lab"]["lab_result"] = pd.to_numeric(out["lab"]["lab_result"])
+    return out, truth
+
+
+def test_typed_generic_ids_hierarchy():
+    T, truth = _typed_offset_cohort()
+    s = infer_clinical_schema({n: d.drop(columns="_row_id") for n, d in T.items()})
+    assert s["subject"] == "stay_key"
+    assert s["id_hierarchy"] == ["stay_key", "hospital_stay_key", "pid_key"]
+    assert s["stays"]["unit_stays"]["key"] == "stay_key"
+    f = audit_clinical_tables(T, external_reference=False, verbose=False)
+    rec, prec, n = score(f, truth)
+    assert rec["after_death"] >= 0.99 and rec["demographic_change"] >= 0.6, rec
+    assert rec["duplicate"] >= 0.99, rec
+
+
+def test_duplicates_float_spelling_and_item_convention():
+    T, _ = make_icu_cohort(7, "offset", inject=False)
+    L = T["lab"]
+    # a source convention: every 'cr' row stored twice (fresh own key)
+    conv = L[L["lab_name"] == "cr"].copy()
+    conv["_row_id"] = "C" + conv["_row_id"]
+    conv["lab_id"] = (conv["lab_id"].astype(int) + 10 ** 6).astype(str)
+    # three re-entered rows of other items, numbers re-serialised as floats
+    cp = L[L["lab_name"] != "cr"].iloc[[3, 50, 120]].copy()
+    cp["_row_id"] = ["X0", "X1", "X2"]
+    cp["lab_id"] = ["9000001", "9000002", "9000003"]
+    cp["lab_result"] = cp["lab_result"].map(lambda v: f"{float(v):.4f}")
+    cp["lab_result_offset"] = cp["lab_result_offset"].map(lambda v: f"{float(v):.1f}")
+    T["lab"] = pd.concat([L, conv, cp], ignore_index=True)
+    f = audit_clinical_tables(T, external_reference=False, verbose=False, rules=["exact_duplicate"])
+    got = set(f.loc[f["rule"] == "exact_duplicate", "row_id"])
+    assert {"X0", "X1", "X2"} <= got
+    assert not any(r.startswith("C") for r in got)
+
+
+def test_duplicate_stay_row_keeps_schema():
+    T, _ = make_icu_cohort(8, "offset", inject=False)
+    S = T["unit_stays"]
+    T["unit_stays"] = pd.concat([S, S.iloc[[5]].assign(_row_id="SDUP")], ignore_index=True)
+    s = infer_clinical_schema(T)
+    assert s["demographics"]["table"] == "unit_stays" and "unit_stays" in s["stays"]
+    f = audit_clinical_tables(T, external_reference=False, verbose=False)
+    assert "SDUP" in set(f.loc[f["rule"] == "exact_duplicate", "row_id"])
+
+
+def test_targeted_default_vs_screen():
+    T, truth = make_icu_cohort(9, "offset")
+    # a heavy-tailed analyte: many large but genuine values (a deterministic function of the old
+    # value, so that injected copies stay copies)
+    L = T["lab"]
+    cr = L["lab_name"] == "cr"
+    u = (pd.to_numeric(L.loc[cr, "lab_result"]) * 1000 * 0.6180339887) % 1
+    L.loc[cr, "lab_result"] = np.round(np.exp(0.6 * np.tan(np.pi * (u.clip(0.01, 0.99) - 0.5))), 2).astype(str)
+    f = audit_clinical_tables(T, external_reference=False, verbose=False)
+    g = audit_clinical_tables(T, external_reference=False, verbose=False, mode="screen")
+    assert "confidence" in f.columns and set(f["confidence"]) <= {"high", "screen"}
+    assert len(f.drop_duplicates(["table", "row_id"])) <= len(g.drop_duplicates(["table", "row_id"]))
+    budget = max(3, int(np.ceil(1e-4 * len(T["lab"]))))
+    scr = f[f["confidence"] == "screen"].drop_duplicates(["table", "row_id"]).groupby("table").size()
+    assert (scr <= budget).all(), scr
+    rec, prec, _ = score(f, truth)
+    for k in ("after_death", "duplicate", "height_unit", "weight_lb"):
+        assert rec[k] >= 0.99, (k, rec)

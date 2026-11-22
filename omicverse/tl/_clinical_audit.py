@@ -18,6 +18,8 @@ impossible_value
                             value of the item
   ``sign_flip``             negative value of an item that is otherwise never
                             negative
+  ``range_bound``           value twice beyond the 99.9 % range of a bounded
+                            item (scores, saturations, vital signs)
   ``subject_jump``          value vs. the same patient's own history of the
                             item (power-of-ten slips, unit-conversion factors)
   ``dose_outlier``          a prescribed dose vs. every other prescription of
@@ -44,13 +46,18 @@ demographic_conflict
                             changes between the stays of one person
   ``person_numeric``        height / weight / age-minus-elapsed-time that
                             jumps between the stays of one person
+  ``death_vs_events``       many events of one subject after its death: the
+                            death record is flagged (once) instead of the events
 impossible_value (time)
   ``after_death``           event after death: a date of death, or a death
                             *status* ("Expired") at a dated / offset discharge
   ``outside_stay``          offset-stamped event outside the subject's window
+                            (``stay_vs_events`` / ``visit_vs_events`` when a
+                            whole batch of one stay / visit is outside)
   ``unit_factor``           value a unit factor (lb/kg, in/cm, x10) away from
-                            its column, a sibling column or the person's
-                            other stays
+                            its column, a sibling column, the person's other
+                            stays or the patient's other readings of a stable
+                            quantity (pooled over items of one quantity)
 duplicate
   ``exact_duplicate``       identical copy of another row (ids excluded)
 ==========================  =================================================
@@ -63,12 +70,19 @@ Every finding also carries ``severity`` (robust z of the flagged value against i
 NaN for logical rules) and ``rule_rate`` (share of the table's rows flagged by that rule);
 ``max_rule_rate`` keeps only the most severe rows of a rule that fires too broadly.
 
+Default output is *targeted* (``mode='targeted'``): ``confidence='high'`` findings -- logical
+contradictions, deviations explained by a decimal shift / sign flip / unit factor, findings
+corroborated by an independent rule -- are all reported; graded-only findings (``'screen'``: a
+large z, a jump in the patient's history) only up to a small per-table budget, most severe first.
+``mode='screen'`` returns everything.  Typed inputs are accepted (ids as int in one table and float
+in another are matched; numbers re-serialised as ``72.0`` equal ``72``).
+
 Every finding carries a ``cluster`` id: rows that are evidence for the same
 incident (a patient's sex contradicted by 40 lab rows, the two rows of a
 disagreeing duplicate) share it, so a reviewer reads incidents rather than
-rows.  The thresholds are screening thresholds: the audit is tuned to catch
-(missing an incident is costly, an extra flag is cheap), and ``min_score``
-or per-rule filtering trades recall for precision afterwards.
+rows.  The rule thresholds are screening thresholds; the targeted default
+then keeps the findings with a second signature and only the head of the
+graded-only tail (see ``_target_findings``).
 
 Background: the rule families follow the conformance / plausibility (atemporal,
 temporal, uniqueness) categories of Kahn et al. 2016 (eGEMs 4:1244); the
@@ -76,7 +90,13 @@ after-death / outside-stay rules are the data-derived counterparts of the OHDSI
 Data Quality Dashboard ``plausibleDuringLife`` / ``plausibleBeforeDeath`` checks,
 extended to relative (offset) time encodings, and the person-level rules check
 attributes that must not change across a person's stays (cross-stay
-consistency) on an id hierarchy discovered from the data.
+consistency) on an id hierarchy discovered from the data.  Duplicates follow the
+uniqueness-plausibility category (Kahn 2016) and the DQD ``isDuplicate`` idea; ``range_bound``
+is a learned ``plausibleValueHigh / Low``.  The precision controls follow DQD's per-check
+share-of-rows thresholds (Blacketer et al. 2021, JAMIA 28:2251) and the alert-fatigue evidence that
+alert volume, not alert count per se, drives non-response (Ancker et al. 2017, BMC Med Inform
+Decis Mak 17:36); EHR value-outlier screens are known to flag many correct extremes (Estiri et al.
+2019, BMC Med Inform Decis Mak 19:142), hence the second-signature requirement.
 """
 from __future__ import annotations
 
@@ -98,7 +118,7 @@ __all__ = ["load_clinical_tables", "infer_clinical_schema", "audit_clinical_tabl
            "drug_sex_reference"]
 
 _FINDING_COLS = ["table", "row_id", "family", "rule", "cluster", "score", "evidence", "severity",
-                 "rule_rate", "rule_rank"]
+                 "rule_rate", "rule_rank", "confidence"]
 
 
 # ---------------------------------------------------------------------------
@@ -138,6 +158,17 @@ def load_clinical_tables(path, pattern: str = "*") -> Dict[str, pd.DataFrame]:
     return out
 
 
+def _binom_cdf(k: int, n: int, p: float) -> float:
+    """P(X <= k) for X ~ Binomial(n, p) (log-space sum; n up to a few thousand)."""
+    if k >= n:
+        return 1.0
+    lp, lq = math.log(max(p, 1e-300)), math.log(max(1 - p, 1e-300))
+    terms = [math.lgamma(n + 1) - math.lgamma(i + 1) - math.lgamma(n - i + 1) + i * lp + (n - i) * lq
+             for i in range(0, k + 1)]
+    mx = max(terms)
+    return float(min(1.0, math.exp(mx) * sum(math.exp(t - mx) for t in terms)))
+
+
 def _num(s: pd.Series) -> pd.Series:
     return pd.to_numeric(s, errors="coerce")
 
@@ -168,6 +199,57 @@ _DEATH_RE = r"(expired|dead|deceased|died|death)"
 _PERSONISH_RE = r"(subject|patient|person|member|mrn|pid|uid|health|hadm|admission|encounter|visit|stay)"
 _FACILITY_RE = r"(hospital|ward|site|cent(er|re)|facility|provider|caregiver|physician|org|dept|department)"
 _MISSING = {"", "nan", "none", "null", "na", "n/a", "unknown", "unk", "?"}
+# attributes that belong to the person, not to the stay (cannot legitimately change between stays);
+# other categorical columns (marital status, insurance) must earn person-level status from the data
+_PERSON_ATTR_RE = r"(sex|gender|race|ethnic|birth|dob|blood_?(type|group))"
+# answers that withhold a category ("UNKNOWN", "UNABLE TO OBTAIN", "PATIENT DECLINED TO ANSWER"):
+# missing for consistency checks, not a contradicting value
+_MISSING_LIKE_RE = r"(?:unknown|unable|declin|refus|not (?:specified|stated|recorded|available|obtained|reported)|^unk$|missing)"
+
+
+def _cell_text(v) -> str:
+    """Canonical text of one typed cell: NaN -> '', 141765.0 -> '141765', 0.1 -> '0.1'."""
+    if v is None or v is pd.NA or v is pd.NaT:
+        return ""
+    if isinstance(v, (float, np.floating)):
+        if not np.isfinite(v):
+            return "" if np.isnan(v) else str(v)
+        return str(int(v)) if float(v).is_integer() and abs(v) < 1e15 else repr(float(v))
+    if isinstance(v, (bool, np.bool_)):
+        return str(bool(v))
+    if isinstance(v, (int, np.integer)):
+        return str(int(v))
+    return str(v)
+
+
+def _as_text_tables(tables: Mapping[str, pd.DataFrame]) -> Dict[str, pd.DataFrame]:
+    """Every cell as text, the representation :func:`load_clinical_tables` produces.
+
+    Typed inputs (ids read as ``int64`` in one table and as ``float64`` -- because of a missing value
+    -- in another, nullable ``Int64``, datetimes) are rendered canonically so that the same id or value
+    has one spelling across tables (``141765.0`` and ``141765`` are the same stay).  Tables that are
+    already all-text are returned unchanged (no copy).
+    """
+    out = {}
+    for n, df in tables.items():
+        conv = {}
+        for c in df.columns:
+            s = df[c]
+            if s.dtype == object:
+                kind = pd.api.types.infer_dtype(s, skipna=False)
+                if kind == "string":
+                    continue
+            conv[c] = s.map(_cell_text).astype(object)
+        out[n] = df.assign(**conv) if conv else df
+    return out
+
+
+def _nearly_unique(s: pd.Series, tol: float = 0.02) -> bool:
+    """Unique up to a few repeated values (exact-duplicate rows of a key table must not hide the key)."""
+    n = len(s)
+    if n == 0:
+        return False
+    return s.is_unique or (s.nunique() >= (1 - tol) * n and n - s.nunique() <= max(5, tol * n))
 
 
 def _is_numeric_col(s: pd.Series, min_share: float = 0.9) -> bool:
@@ -179,15 +261,20 @@ def _is_numeric_col(s: pd.Series, min_share: float = 0.9) -> bool:
 
 
 def _infer_id_hierarchy(tables: Mapping[str, pd.DataFrame], row_id, subject, skip=(),
-                        min_ratio: float = 0.2) -> List[str]:
+                        min_ratio: float = 0.2, max_violation: float = 0.01) -> List[str]:
     """Nested identifier levels connected to ``subject``, finest first.
 
     ``a`` is nested in ``b`` when, in every table holding both, each value of ``a`` maps to
-    exactly one value of ``b`` and ``b`` has fewer distinct values.  Facility-type ids (hospital,
-    ward) are also functions of a stay id but group hundreds of stays each; a person-type level
-    groups a few, so ``b`` must keep at least ``min_ratio`` of ``a``'s distinct values,
-    unless its name says it is a person / patient / admission level (``_PERSONISH_RE``); facility
-    names (``_FACILITY_RE``) are never accepted as a level.
+    one value of ``b`` (a functional dependency, tolerated up to ``max_violation`` of ``a``'s values
+    so that a handful of entry errors cannot hide the hierarchy) and ``b`` has fewer distinct
+    values.  Facility-type ids (hospital, ward) are also functions of a stay id but group hundreds
+    of stays each; a person-type level groups a few, so ``b`` must keep at least ``min_ratio`` of
+    ``a``'s distinct values, unless its name says it is a person / patient / admission level
+    (``_PERSONISH_RE``); facility names (``_FACILITY_RE``) are never accepted as a level.
+
+    The coarser levels may live in one table only (the stays table holds person and hospital-stay
+    ids, the event tables only the unit-stay id), ids may be numeric or text, and most persons may
+    have a single stay: only the dependency and the distinct-value counts are used.
     """
     if not subject:
         return []
@@ -196,8 +283,8 @@ def _infer_id_hierarchy(tables: Mapping[str, pd.DataFrame], row_id, subject, ski
     # a table's own surrogate row key (unique there, referenced nowhere else) is not a level
     holders = {c: [df for n, df in tables.items() if n not in skip and c in df.columns] for c in idc}
     idc = [c for c in idc if c == subject or not (len(holders[c]) == 1 and holders[c][0][c].is_unique)]
-    nuniq = {c: len(set().union(*[set(df[c].astype(str)) for n, df in tables.items()
-                                   if n not in skip and c in df.columns]) - {"", "nan"})
+    nuniq = {c: len(set().union(*[set(df[c].astype(str).str.strip()) for n, df in tables.items()
+                                   if n not in skip and c in df.columns]) - _MISSING)
              for c in idc}
     edges = {}
     for a in idc:
@@ -214,9 +301,10 @@ def _infer_id_hierarchy(tables: Mapping[str, pd.DataFrame], row_id, subject, ski
                 if n in skip or a not in df.columns or b not in df.columns:
                     continue
                 seen = True
-                pair = df[[a, b]].astype(str)
-                pair = pair[(pair[a] != "") & (pair[b] != "")]
-                if pair.groupby(a)[b].nunique().max() > 1:
+                pair = df[[a, b]].astype(str).apply(lambda s: s.str.strip())
+                pair = pair[~pair[a].str.lower().isin(_MISSING) & ~pair[b].str.lower().isin(_MISSING)]
+                k = pair.groupby(a)[b].nunique()
+                if len(k) == 0 or (k > 1).sum() > max(max_violation * len(k), 0):
                     ok = False
                     break
             if ok and seen:
@@ -229,6 +317,13 @@ def _infer_id_hierarchy(tables: Mapping[str, pd.DataFrame], row_id, subject, ski
             if d not in comp:
                 comp.add(d)
                 todo.append(d)
+    # a level finer than the subject must be an entity with its own table (a table in which it is
+    # unique next to a coarser level: admissions for an admission id, ICU stays for a stay id);
+    # specimen / order / line-item ids are nested in a stay too but are event attributes
+    def _entity(c):
+        return any(c in df.columns and _nearly_unique(df[c]) and any(o in df.columns for o in comp - {c})
+                   for n, df in tables.items() if n not in skip)
+    comp = {c for c in comp if c == subject or nuniq.get(c, 0) < nuniq.get(subject, 0) or _entity(c)}
     # keep a chain: every level must be nested in the next coarser one
     chain = sorted(comp, key=lambda c: -nuniq.get(c, 0))
     return chain if len(chain) > 1 else [subject]
@@ -285,6 +380,7 @@ def infer_clinical_schema(tables: Mapping[str, pd.DataFrame], overrides: Optiona
     item}} and ``time_pairs`` {table: [(start, end), ...]}.
     """
     overrides = dict(overrides or {})
+    tables = _as_text_tables(tables)
     names = list(tables)
     allcols = [set(df.columns) for df in tables.values()]
     common = set.intersection(*allcols) if allcols else set()
@@ -292,10 +388,22 @@ def infer_clinical_schema(tables: Mapping[str, pd.DataFrame], overrides: Optiona
                                               if c in common), None)
     # patient key: id-like column shared by most tables, unique in exactly one small table
     counts: Dict[str, int] = {}
+    loose: Dict[str, int] = {}
+    anyid: Dict[str, int] = {}
     for df in tables.values():
         for c in df.columns:
-            if re.search(r"(subject|patient|person|member|mrn)", c.lower()) and c != row_id:
-                counts[c] = counts.get(c, 0) + 1
+            if c == row_id:
+                continue
+            lc = c.lower()
+            if re.search(r"(subject|patient|person|member|mrn)", lc):
+                loose[c] = loose.get(c, 0) + 1
+                if re.search(_ID_RE, lc):
+                    counts[c] = counts.get(c, 0) + 1
+            if re.search(_ID_RE, lc) and re.search(_PERSONISH_RE, lc):
+                anyid[c] = anyid.get(c, 0) + 1
+    # name-matched id columns first ("patientweight" is not a key), then any person / stay-like id
+    # shared by several tables (``stay_key`` linking every event table to the stays table)
+    counts = counts or loose or {c: k for c, k in anyid.items() if k >= 2}
     subject = overrides.get("subject") or (max(counts, key=counts.get) if counts else None)
     # nested ids (person > admission > ICU stay): when the name-matched key lives in a minority of
     # the tables, the tables are linked by a finer level (a stay id nested in it) -- use that
@@ -315,7 +423,7 @@ def infer_clinical_schema(tables: Mapping[str, pd.DataFrame], overrides: Optiona
     if demo is None and subject:
         best = None
         for n, df in tables.items():
-            if subject not in df.columns or not df[subject].is_unique:
+            if subject not in df.columns or not _nearly_unique(df[subject]):
                 continue
             sexc = None
             for c in df.columns:
@@ -343,7 +451,8 @@ def infer_clinical_schema(tables: Mapping[str, pd.DataFrame], overrides: Optiona
         if drug and subject in cols:
             rx[n] = {"drug": drug,
                      "dose": _first(cols, [r"dose_val_rx", r"dose(_val(ue)?)?", r"dose_amount", r"amount"]),
-                     "dose_unit": _first(cols, [r"dose_unit_rx", r"dose_?unit", r"unit"]),
+                     "dose_unit": _first(cols, [r"dose_unit_rx", r"dose_?unit", r"unit", r"(amount|dose)_?(unit|uom)s?",
+                                                 r"amountuom", r"(dose|amount).*(unit|uom)"]),
                      "item": _first(cols, [r"ndc", r"gsn", r"formulary_drug_cd"])}
         value = _first(cols, [r"valuenum", r"value_?num(eric)?", r"result_?num(eric)?",
                               r"value_as_number"])
@@ -352,8 +461,10 @@ def infer_clinical_schema(tables: Mapping[str, pd.DataFrame], overrides: Optiona
         if value is None and subject in cols:
             # long tables keyed by a test *name* with a numeric result column (``lab_name`` /
             # ``lab_result``): accepted only when the result column is mostly numeric
-            it2 = _first(cols, [r"(lab|test|item|obs(ervation)?|measure(ment)?)_?name"])
-            v2 = _first(cols, [r"(lab|test|obs(ervation)?)_?result(_?num(eric)?)?", r"(lab|test)_?value"])
+            it2 = _first(cols, [r"(lab|test|item|obs(ervation)?|measure(ment)?)_?name", r"[a-z]+_?name",
+                                r".*(cell|chart|vital|sign|param(eter)?|observation)_?(name|label|type)"])
+            v2 = _first(cols, [r"(lab|test|obs(ervation)?)_?result(_?num(eric)?)?", r"(lab|test)_?value",
+                               r"[a-z]+_?(value|result)(_?num(eric)?)?"])
             if it2 and v2 and _is_numeric_col(df[v2].head(2000), 0.5):
                 item, value = it2, v2
         if item and value and subject in cols:
@@ -434,7 +545,7 @@ def infer_clinical_schema(tables: Mapping[str, pd.DataFrame], overrides: Optiona
     for n, df in tables.items():
         if n in dicts or person not in df.columns:
             continue
-        lev = next((c for c in hier if c != person and c in df.columns and df[c].is_unique), None)
+        lev = next((c for c in hier if c != person and c in df.columns and _nearly_unique(df[c])), None)
         if lev and not df[person].is_unique:
             stays[n] = {"key": lev, "person": person}
     # relative-time window of each subject: offset columns of the subject-level table
@@ -465,7 +576,10 @@ class _Findings:
     def __init__(self):
         self.parts: List[pd.DataFrame] = []
 
-    def add(self, table, row_ids, family, rule, cluster, score, evidence, severity=np.nan):
+    def add(self, table, row_ids, family, rule, cluster, score, evidence, severity=np.nan, strong=None):
+        """``strong``: the finding carries a second, independent signature (a power-of-ten / unit /
+        sign explanation, a logical contradiction); default: logical rules (NaN severity) are strong,
+        graded ones are not."""
         row_ids = pd.Series(row_ids).astype(str).reset_index(drop=True)
         if row_ids.empty:
             return
@@ -479,7 +593,8 @@ class _Findings:
         self.parts.append(pd.DataFrame({
             "table": table, "row_id": row_ids, "family": family, "rule": rule,
             "cluster": _vec(cluster).astype(str), "score": _vec(score).astype(float),
-            "evidence": _vec(evidence).astype(str), "severity": _vec(severity).astype(float)}))
+            "evidence": _vec(evidence).astype(str), "severity": _vec(severity).astype(float),
+            "_strong": (_vec(severity).astype(float).isna() if strong is None else _vec(strong).astype(bool))}))
 
     def frame(self) -> pd.DataFrame:
         if not self.parts:
@@ -487,7 +602,8 @@ class _Findings:
         out = pd.concat(self.parts, ignore_index=True)
         out["rule_rate"] = np.nan
         out["rule_rank"] = np.nan
-        return out[_FINDING_COLS]
+        out["confidence"] = ""
+        return out[_FINDING_COLS + ["_strong"]]
 
 
 def _rank_findings(out: pd.DataFrame, tables: Mapping[str, pd.DataFrame]) -> pd.DataFrame:
@@ -505,6 +621,60 @@ def _rank_findings(out: pd.DataFrame, tables: Mapping[str, pd.DataFrame]) -> pd.
     tmp["rule_rank"] = tmp.groupby(["table", "rule"]).cumcount() + 1
     out["rule_rank"] = tmp["rule_rank"].reindex(out.index).astype(float)
     return out
+
+
+_VALUE_RULES = {"item_extreme", "subject_jump", "dose_outlier", "duplicate_conflict"}
+
+
+def _target_findings(out: pd.DataFrame, tables: Mapping[str, pd.DataFrame], mode: str = "targeted",
+                     screen_rate: float = 1e-4, min_screen: int = 3) -> pd.DataFrame:
+    """Attach ``confidence`` and, in ``mode='targeted'``, drop the weak tail of graded rules.
+
+    ``confidence='high'``: the finding carries a second, independent signature -- a logical
+    contradiction (after death, duplicate, sex constant across stays ...), an explained deviation
+    (a decimal shift, sign flip or unit factor maps the value back onto the typical ones), or
+    corroboration (another rule flags the same row).  ``'screen'``: a graded deviation only (a
+    large robust z, a jump in the patient's history).
+
+    Real extracts carry a long natural tail of such deviations (heavy-tailed analytes, volatile
+    patients), and a graded rule tuned for recall fires on hundreds of correct rows: a reviewer
+    stops reading (alert fatigue: Ancker et al. 2017, BMC Med Inform Decis Mak 17:36; outlier
+    screens on EHR values: Estiri et al. 2019, BMC Med Inform Decis Mak 19:142).  The targeted
+    default therefore keeps every ``high`` finding and, per table, only ``max(min_screen,
+    screen_rate * n_rows)`` ``screen`` rows, taken round-robin over the graded rules by severity
+    rank -- a share-of-rows threshold in the spirit of the per-check thresholds of OHDSI DQD
+    (Blacketer et al. 2021, JAMIA 28:2251).
+    ``mode='screen'`` keeps everything (the earlier behaviour).
+    """
+    if out.empty:
+        out = out.drop(columns=["_strong"], errors="ignore")
+        return out
+    # corroboration counts independent evidence only: the value-distribution rules look at the same
+    # number from two angles (cohort, own history), so together they count once
+    cls = out["rule"].where(~out["rule"].isin(_VALUE_RULES), "value")
+    n_rules = cls.groupby([out["table"], out["row_id"]]).transform("nunique")
+    strong = out["_strong"].astype(bool) | (n_rules >= 2)
+    out["confidence"] = np.where(strong, "high", "screen")
+    if mode == "targeted":
+        scr = out[~strong]
+        if len(scr):
+            # one budget per table, filled round-robin over the graded rules (each rule's most severe
+            # finding first, then each rule's second ...): severities of different rules are not on
+            # one scale, their ranks are
+            key = scr["severity"].fillna(np.inf)
+            order = scr.assign(_k=key).sort_values(["_k", "score"], ascending=False)
+            order["_r"] = order.groupby(["table", "rule"]).cumcount()
+            order = order.sort_values(["table", "_r", "_k"], ascending=[True, True, False])
+            first = ~order.duplicated(["table", "row_id"])
+            slot = first.groupby(order["table"]).cumsum()
+            budget = order["table"].map({t: max(min_screen, int(math.ceil(screen_rate * len(df))))
+                                         for t, df in tables.items()})
+            keep_rows = set(zip(order.loc[first & (slot <= budget), "table"], order.loc[first & (slot <= budget), "row_id"]))
+            drop = [i for i, t, r in zip(scr.index, scr["table"], scr["row_id"]) if (t, r) not in keep_rows]
+            out = out.drop(index=drop)
+    elif mode != "screen":
+        raise ValueError("mode must be 'targeted' or 'screen'")
+    return out.drop(columns=["_strong"]).reset_index(drop=True)
 
 
 def _robust_center_scale(v: pd.Series, by: pd.Series):
@@ -630,7 +800,12 @@ def drug_sex_reference(drugs: Optional[Iterable[str]] = None, *, timeout: float 
                 "observations, cross-table conflicts on automatically discovered transcribed item pairs, "
                 "end-before-start times, and demographic contradictions (sex vs. sex-specific reference "
                 "bands learned from the cohort, single-sex items/drugs, FAERS drug sex ratios; isolated "
-                "ages). All references are derived from the data or public databases at run time.",
+                "ages), events after death / outside the stay (dates or relative offsets), attributes "
+                "changing between the stays of one person (nested ids discovered from the data), unit-"
+                "factor slips and exact duplicates. Targeted by default: findings with a second "
+                "signature (confidence='high') plus a small severity-ranked budget of graded-only ones; "
+                "mode='screen' returns every hit. All references are derived from the data or public "
+                "databases at run time.",
     examples=["tables = ov.tl.load_clinical_tables('/workspace/data/csv')",
               "f = ov.tl.audit_clinical_tables(tables)",
               "f.drop_duplicates(['table','row_id'])[['table','row_id']]"],
@@ -656,6 +831,8 @@ def audit_clinical_tables(
     person_tol: float = 4.0,
     max_duplicate_share: float = 0.05,
     max_rule_rate: Optional[float] = None,
+    mode: str = "targeted",
+    screen_rate: float = 1e-4,
     out: Optional[str] = None,
     out_id_column: Optional[str] = None,
     verbose: bool = True,
@@ -695,8 +872,16 @@ def audit_clinical_tables(
         flagged when it deviates from the person's other stays by more than ``person_tol``
         times the 90th percentile of within-person deviations seen in the cohort.
     max_duplicate_share
-        ``exact_duplicate`` is reported for a table when at most this share of its rows are
-        byte-identical copies (more is a storage convention, not an entry error).
+        ``exact_duplicate``: an item (lab name, chart item, drug) whose rows are copies of each
+        other more often than this share is a storage convention and its copies are not reported;
+        copies of the other items are (numbers compared as numbers, the row id and the table's own
+        surrogate key ignored).  Without an item column the share applies to the whole table.
+    mode, screen_rate
+        ``'targeted'`` (default): every ``confidence='high'`` finding (logical contradiction,
+        explained deviation, corroborated by an independent rule) plus, per table, the
+        ``max(3, screen_rate * len(table))`` most severe ``'screen'`` rows (round-robin over the
+        graded rules by severity rank).
+        ``'screen'``: everything (the earlier behaviour; recall first).
     max_rule_rate
         Precision control. Every finding carries ``rule_rate`` (share of the table's rows the
         rule flagged) and ``severity`` (robust z of the flagged value against its reference;
@@ -711,12 +896,13 @@ def audit_clinical_tables(
     Returns
     -------
     DataFrame with columns ``table, row_id, family, rule, cluster, score, evidence, severity,
-    rule_rate, rule_rank`` (one row per (finding, row); a row can carry several findings;
-    ``rule_rank`` 1 = most severe finding of the rule in that table). ``attrs`` holds
+    rule_rate, rule_rank, confidence`` (one row per (finding, row); a row can carry several
+    findings; ``rule_rank`` 1 = most severe finding of the rule in that table). ``attrs`` holds
     ``schema`` and ``summary`` (per-rule row and cluster counts). Deliver
     ``drop_duplicates(['table', 'row_id'])``.
     """
     out_path = out
+    tables = _as_text_tables(tables)
     schema = schema or infer_clinical_schema(tables)
     if not schema.get("row_id"):
         # no row id shared by all tables: address rows by their position in each table
@@ -738,15 +924,9 @@ def audit_clinical_tables(
 
     # ---------------- measurement tables ----------------
     prepared = {}
-    for tn, m in schema["measurements"].items():
-        df = tables[tn]
-        w = pd.DataFrame({"rid": df[rid].astype(str), "subj": df[subj].astype(str),
-                          "item": df[m["item"]].astype(str), "v": _num(df[m["value"]])})
-        w["unit"] = df[m["unit"]].astype(str).str.strip() if m.get("unit") else ""
-        w["time"] = df[m["time"]].astype(str) if m.get("time") else ""
-        if m.get("specimen"):
-            w["spec"] = df[m["specimen"]].astype(str)
-        prepared[tn] = w
+    for tn, m, w in _measurement_frames(tables, schema):
+        if not m.get("wide"):
+            prepared[tn] = w
 
         # unit label vs the item's own modal unit
         if on("unit_label") and m.get("unit"):
@@ -784,12 +964,68 @@ def audit_clinical_tables(
             n_far = far.groupby(x["item"]).transform("sum")
             few = n_far <= np.maximum(3, 0.002 * x.groupby("item")["v"].transform("size"))
             hit = x[far & ((iso >= isolation) | iso.isna() | few)]
+            # explained: a decimal shift (x10^k, k = 1..3) or a sign flip of the value lands in the
+            # bulk of the item (|z| <= 2) -- the signature of a keying slip, not of a sick patient
+            # (strict: the shifted value must sit at the centre, |z| <= 1, and the shift must be
+            # large against the item's spread, so that a broad item does not explain everything)
+            expl = pd.Series(False, index=hit.index)
+            ufac = pd.Series(np.nan, index=hit.index)
+            if len(hit):
+                hv, hpos = hit["v"], pos.loc[hit.index].astype(bool)
+                hm, hs = med.loc[hit.index], sc.loc[hit.index].replace(0, np.nan)
+                lg = hpos & (hv > 0)
+                # only a narrow item can explain a slip: one decade must span >= 2 * unit_z robust SDs
+                # (log items), or the bulk must be narrow around a non-zero centre (linear items)
+                narrow = np.where(lg, 1.0 / hs >= 2 * unit_z, hm.abs() / hs >= 2 * unit_z)
+                for k in (1, 2, 3, -1, -2, -3):
+                    tk = pd.Series(np.where(lg, np.log10(hv.clip(lower=1e-12)) - k, hv / 10.0 ** k), index=hit.index)
+                    expl |= (((tk - hm) / hs).abs() <= 2) & narrow
+                tk = pd.Series(np.where(hpos & (hv < 0), np.log10((-hv).clip(lower=1e-12)), -hv), index=hit.index)
+                expl |= (hv < 0) & (((tk - hm) / hs).abs() <= 2) & narrow
+                # unit factors (lb/kg, in/cm) on log-scale items
+                for f in unit_factors:
+                    if f == 10.0:
+                        continue
+                    lf = math.log10(f)
+                    for sgn in (1, -1):
+                        ok_ = lg & ((((np.log10(hv.clip(lower=1e-12)) - sgn * lf) - hm) / hs).abs() <= 1) & (lf / hs >= unit_z)
+                        ufac = ufac.where(ufac.notna() | ~ok_, f)
+                if on("unit_factor") and ufac.notna().any():
+                    hu = hit[ufac.notna()]
+                    F.add(tn, hu["rid"], "impossible_value", "unit_factor", tn + "|unitpop|" + hu["rid"],
+                          z.loc[hu.index].abs(), "value " + hu["v"].astype(str) + " for item " + hu["item"] + " "
+                          + hu["item"].map(labels).fillna("") + " is typical once divided/multiplied by "
+                          + ufac[ufac.notna()].astype(str), severity=z.loc[hu.index].abs(), strong=True)
             F.add(tn, hit["rid"], "impossible_value", "item_extreme", tn + "|ext|" + hit["rid"],
                   z.loc[hit.index].abs(),
                   "value " + hit["v"].astype(str) + " robust z=" + z.loc[hit.index].round(1).astype(str)
-                  + " for item " + hit["item"] + " " + hit["item"].map(labels).fillna(""),
-                  severity=z.loc[hit.index].abs())
+                  + " for item " + hit["item"] + " " + hit["item"].map(labels).fillna("")
+                  + np.where(expl, " (a decimal shift / sign flip of a typical value)", ""),
+                  severity=z.loc[hit.index].abs(), strong=expl)
             log(f"  {tn}: item_extreme {len(hit)}")
+
+        # bounded items (scores, saturations, electrolytes, vital signs): the item's own 99.9 %
+        # range sits within 3x of its median on both sides; a value twice beyond that range is
+        # outside what the item can take (a learned plausibleValueHigh / Low, OHDSI DQD)
+        if on("range_bound") and not x.empty:
+            xp = x[x["v"] > 0]
+            gq = xp.groupby("item")["v"]
+            nq = gq.transform("size")
+            q001, q50, q999 = gq.transform(lambda s: s.quantile(0.001)), gq.transform("median"), \
+                gq.transform(lambda s: s.quantile(0.999))
+            okn = nq >= 5 * min_item_rows
+            hi_ = okn & (q999 <= 3 * q50) & (xp["v"] >= 2 * q999)
+            lo_ = okn & (q50 <= 3 * q001) & (xp["v"] <= q001 / 2)
+            rare = (hi_ | lo_).groupby(xp["item"]).transform("sum") <= np.maximum(3, 0.001 * nq)
+            hb = xp[(hi_ | lo_) & rare]
+            if len(hb):
+                ratio = np.where(hi_.loc[hb.index], hb["v"] / q999.loc[hb.index], q001.loc[hb.index] / hb["v"])
+                F.add(tn, hb["rid"], "impossible_value", "range_bound", tn + "|rng|" + hb["rid"], ratio,
+                      "value " + hb["v"].astype(str) + " is x" + pd.Series(ratio, index=hb.index).round(2).astype(str)
+                      + " beyond the 99.9 % range [" + q001.loc[hb.index].round(3).astype(str) + ", "
+                      + q999.loc[hb.index].round(3).astype(str) + "] of the bounded item " + hb["item"] + " "
+                      + hb["item"].map(labels).fillna(""), severity=np.log10(ratio) * 10, strong=True)
+            log(f"  {tn}: range_bound {len(hb)}")
 
         if on("percent_bound") and not x.empty and m.get("unit"):
             pc = x[x["unit"].str.strip() == "%"]
@@ -834,20 +1070,31 @@ def audit_clinical_tables(
             # severity: deviation in units of the item's typical within-patient spread
             wmad = (lv - med).abs().groupby(key).transform("median").groupby(y["item"]).transform("median")
             wsev = dev.abs() / (1.4826 * wmad).clip(lower=0.01)
+            # explained: a whole number of decades (x10, x100, x1000) away from the patient's level,
+            # for an item that is stable within patients (typical within-patient spread <= 26 %)
+            kk = dev.round()
+            jexp = (kk.abs().between(1, 3)) & ((dev - kk).abs() <= 0.1) & (1.4826 * wmad <= 0.1)
             # a sustained level is the patient's state; a single excursion is a slip
             F.add(tn, hit["rid"], "impossible_value", "subject_jump", tn + "|jump|" + hit["rid"],
                   dev.loc[hit.index].abs(),
                   "value " + hit["v"].astype(str) + " is x" + (10 ** dev.loc[hit.index]).round(3).astype(str)
                   + " the patient's median for item " + hit["item"] + " " + hit["item"].map(labels).fillna(""),
-                  severity=wsev.loc[hit.index])
+                  severity=wsev.loc[hit.index], strong=jexp.loc[hit.index])
             log(f"  {tn}: subject_jump {len(hit)}")
+            # unit slips of stable quantities (weight, height): items whose readings barely move within
+            # a patient (p90 |log10 deviation| <= 0.05); a reading a unit factor (lb/kg, in/cm) away
+            # from the patient's other readings of the item
+            if on("unit_factor"):
+                _long_unit_factor(w, tn, F, log, labels, [f for f in unit_factors if f != 10.0])
 
         # disagreeing duplicates of one observation
         if on("duplicate_conflict"):
             # the observation is the specimen when the table has one (several specimens of one
             # analyte at one instant are legitimate); otherwise patient + item + instant
             keys = []
-            if "spec" in x.columns:
+            if m.get("wide"):
+                pass
+            elif "spec" in x.columns:
                 keys.append(["spec", "item"])
             elif m.get("time"):
                 keys.append(["subj", "item", "time"])
@@ -859,13 +1106,16 @@ def audit_clinical_tables(
                 # items for which disagreeing same-instant rows are routine are a source convention
                 gk = z_.assign(_c=nun > 1).drop_duplicates(k)
                 conv_rate = gk.groupby("item")["_c"].mean()
-                conv = set(conv_rate[(conv_rate > 0.05) & (gk.groupby("item")["_c"].sum() >= 3)].index)
+                conv = set(conv_rate[(conv_rate > 0.01) & (gk.groupby("item")["_c"].sum() >= 3)].index)
                 d = z_[(nun > 1) & ~z_["item"].isin(conv)]
                 clus = tn + "|dup|" + d[k].astype(str).agg("|".join, axis=1)
                 rng = d.groupby(k)["v"].transform(lambda s: (s.max() - s.min()) / max(abs(s).max(), 1e-12))
+                # one specimen with two results for one analyte is a contradiction; two rows of one
+                # patient + item + instant may be two draws or two devices: graded by the disagreement
                 F.add(tn, d["rid"], "inconsistency", "duplicate_conflict", clus, rng,
                       "rows of one observation (" + "+".join(k) + ") disagree; item " + d["item"]
-                      + " " + d["item"].map(labels).fillna("") + " value " + d["v"].astype(str))
+                      + " " + d["item"].map(labels).fillna("") + " value " + d["v"].astype(str),
+                      severity=np.nan if "spec" in k else rng * 10, strong="spec" in k)
                 log(f"  {tn}: duplicate_conflict[{'+'.join(k)}] {len(d)}")
 
     # cross-table conflicts on discovered transcribed pairs
@@ -933,14 +1183,23 @@ def audit_clinical_tables(
             n_same = w.groupby([key, w["v"]])["v"].transform("size")
             rare = (n_same == 1) | (n_same / cnt <= 0.05)
             slip &= (dec.abs() >= 1.0)
+            # a power-of-ten match to another recorded dose is evidence only when the drug is given in
+            # a few discrete doses; continuous amounts (infusions) match something by chance
+            ndist = w.groupby(key)["v"].transform("nunique")
+            slip &= ndist <= np.maximum(5, 0.2 * cnt)
             ext &= (cnt >= 5)
-            hit = w[(slip | ext) & rare]
+            flag = (slip | ext) & rare
+            # a drug whose doses spread over decades (infusion amounts scale with duration and rate)
+            # has no single-dose regime: more than 2 % of its rows flagged = a convention, not slips
+            nfl = flag.groupby(key).transform("sum")
+            flag &= nfl <= np.maximum(1, 0.02 * cnt)
+            hit = w[flag]
             dsev = dec.abs() / (iqr / 1.349).clip(lower=math.log10(2) / 1.349)
             F.add(tn, hit["rid"], "impossible_value", "dose_outlier", tn + "|dose|" + hit["rid"],
                   dec.loc[hit.index].abs(),
                   "dose " + hit["v"].astype(str) + " " + hit["unit"] + " is x"
                   + (10 ** dec.loc[hit.index]).round(3).astype(str) + " the usual dose of " + hit["drug"],
-                  severity=dsev.loc[hit.index])
+                  severity=dsev.loc[hit.index], strong=slip.loc[hit.index])
             log(f"  {tn}: dose_outlier {len(hit)}")
 
     # ---------------- time order within a row ----------------
@@ -1055,6 +1314,15 @@ def audit_clinical_tables(
                     allow_m = np.where(ct["F"] >= 8, np.maximum(2, np.floor(0.1 * ct["F"])), 1)
                     allow_f = np.where(ct["M"] >= 8, np.maximum(2, np.floor(0.1 * ct["M"])), 1)
                     cand = ct[((ct["M"] >= 5) & (ct["F"] <= allow_f)) | ((ct["F"] >= 5) & (ct["M"] <= allow_m))]
+                    # chance one-sidedness: with hundreds of items and a small cohort, some items are
+                    # seen in one sex only by chance.  Keep items whose split is significant against
+                    # the cohort sex ratio (binomial tail, Bonferroni over the items tested)
+                    p_m = float(np.mean([v == "M" for v in sex.values()])) if sex else 0.5
+                    n_test = int(((ct["M"] + ct["F"]) >= 5).sum())
+                    if len(cand) and 0 < p_m < 1:
+                        pv = [(_binom_cdf(int(r_.F), int(r_.M + r_.F), 1 - p_m) if r_.M > r_.F else
+                               _binom_cdf(int(r_.M), int(r_.M + r_.F), p_m)) for r_ in cand.itertuples()]
+                        cand = cand[np.asarray(pv) * max(n_test, 1) <= 0.05]
                     imp = pd.Series(np.where(cand["M"] > cand["F"], "M", "F"), index=cand.index)
                     hit = b[b["it"].isin(imp.index)].copy()
                     hit["implied"] = hit["it"].map(imp)
@@ -1166,6 +1434,7 @@ def audit_clinical_tables(
     if on("unit_factor"):
         _unit_factor_rules(tables, schema, F, log, unit_factors, unit_z, min_item_rows)
     out = _rank_findings(F.frame(), tables)
+    out = _target_findings(out, tables, mode, screen_rate)
     if max_rule_rate is not None and len(out):
         cap = out["table"].map({t: max(1, int(max_rule_rate * len(df))) for t, df in tables.items()})
         keep = out["severity"].isna() | (out["rule_rate"] <= max_rule_rate) | (out["rule_rank"] <= cap)
@@ -1186,17 +1455,262 @@ def audit_clinical_tables(
         log(f"  total distinct flagged rows: {len(flags)}"
             + (f" -> written to {out_path} (fingerprinted: finish with ov.tl.verify_deliverable('{out_path}'), "
                f"which must say 'unchanged')" if out_path is not None else ""))
-        log("  Deliver ALL of these rows. Every rule already requires a second signature (isolation, a "
-            "power-of-ten / unit relation, a disagreeing record of the same event, or the patient's "
-            "other records); small disagreements (duplicates 10-50 % apart, a lab vs chart value 1.3x "
-            "off) are the typical data-entry errors. Post-filtering by your own thresholds loses "
-            "incidents; add rows from extra checks if you like, never remove these.")
+        log("  Targeted output: 'high' findings carry a second signature (a logical contradiction, a "
+            "power-of-ten / sign / unit explanation, or an independent rule on the same row); 'screen' "
+            "findings are the most severe graded-only deviations within a small per-table budget. "
+            "mode='screen' returns the full screening list." if mode == "targeted" else
+            "  Screening output (mode='screen'): every rule hit; filter on confidence == 'high' for a "
+            "targeted list.")
     return out
+
+
+def _long_unit_factor(w: pd.DataFrame, tn, F, log, labels, factors, stable: float = 0.08,
+                      min_groups: int = 10):
+    """Unit slips of stable quantities in long tables (a weight keyed in lb, a height in inches).
+
+    Stable items barely move within a patient (90th percentile of |log10 deviation| from the
+    patient's other readings <= ``stable``, judged on >= ``min_groups`` patients with repeated
+    readings).  Items recording the same quantity (admission and daily weight) are pooled when the
+    patients' medians of the two agree (median |log10 ratio| <= 0.02, p90 <= 0.05).  A reading a unit
+    factor away from the patient's other readings of the quantity is flagged; with two readings the
+    one farther from the cohort is taken (both when undecidable).
+    """
+    y = w[w["v"].notna() & (w["v"] > 0)][["rid", "subj", "item", "v"]].copy()
+    if y.empty:
+        return
+    y["lv"] = np.log10(y["v"])
+    k = y["subj"] + "|" + y["item"]
+    nk = k.map(k.value_counts())
+    rep = y[nk >= 2]
+    if rep.empty:
+        return
+    dv = rep["lv"] - rep.groupby(["subj", "item"])["lv"].transform("median")
+    p90 = dv.abs().groupby(rep["item"]).quantile(0.9)
+    ng = rep.groupby("item")["subj"].nunique()
+    st = [i for i in p90.index if p90[i] <= stable and ng[i] >= min_groups]
+    if not st:
+        return
+    y = y[y["item"].isin(st)].copy()
+    # pool items of one quantity
+    pm = y.groupby(["subj", "item"])["lv"].median().unstack()
+    grp = {i: i for i in st}
+
+    def root(i):
+        while grp[i] != i:
+            i = grp[i]
+        return i
+    for i_, a in enumerate(st):
+        for b in st[i_ + 1:]:
+            if a not in pm or b not in pm:
+                continue
+            d = (pm[a] - pm[b]).dropna()
+            if len(d) >= min_groups and abs(d.median()) <= 0.02 and d.abs().quantile(0.9) <= 0.05:
+                grp[root(b)] = root(a)
+    y["q"] = y["item"].map(lambda i: root(i))
+    kq = y["subj"] + "|" + y["q"]
+    y = y[kq.map(kq.value_counts()) >= 2].copy()
+    if y.empty:
+        return
+    kq = y["subj"] + "|" + y["q"]
+    om = y["lv"].groupby(kq).transform(_others_median)
+    d3 = y["lv"] - om
+    tol = y["q"].map(lambda q: max(p90.reindex([i for i in st if root(i) == q]).max(), 0.005))
+    fac = _match_factor(10 ** d3, factors)
+    cand = fac.notna() & (d3.abs() >= 4 * tol)
+    if not cand.any():
+        return
+    popm = y.groupby("q")["lv"].transform("median")
+    zp = (y["lv"] - popm).abs()
+    nq = kq.map(kq.value_counts())
+    flag = cand & (nq >= 3)
+    for g in kq[cand & (nq == 2)].unique():
+        ix = list(y.index[kq == g])
+        za, zb = zp[ix[0]], zp[ix[1]]
+        if abs(za - zb) >= 0.05:
+            flag[ix[0] if za > zb else ix[1]] = True
+        else:
+            flag[ix] = True
+    h = y[flag]
+    F.add(tn, h["rid"], "impossible_value", "unit_factor", tn + "|unitlong|" + h["subj"] + "|" + h["q"],
+          d3[flag].abs(), "value " + h["v"].astype(str) + " is x" + (10 ** d3[flag]).round(3).astype(str)
+          + " the patient's other readings of item " + h["item"] + " " + h["item"].map(labels).fillna("")
+          + " (unit factor " + fac[flag].round(4).astype(str) + ")",
+          severity=d3[flag].abs() / tol[flag], strong=True)
+    log(f"  {tn}: unit_factor[long] {len(h)}")
+
+
+def _measurement_frames(tables, schema, min_distinct: int = 10):
+    """``(table, roles, long frame)`` for every measurement source.
+
+    Long tables (item + value columns) give one frame each.  Wide event tables -- one column per
+    quantity (heart rate, SpO2 ... next to the subject and a time) -- are melted so that the per-item
+    value rules see each numeric column as an item (``roles['wide'] = True``).  Id, time / offset and
+    low-cardinality (coded) columns are not quantities.
+    """
+    rid, subj = schema["row_id"], schema["subject"]
+    for tn, m in schema["measurements"].items():
+        df = tables[tn]
+        w = pd.DataFrame({"rid": df[rid].astype(str), "subj": df[subj].astype(str),
+                          "item": df[m["item"]].astype(str), "v": _num(df[m["value"]])})
+        w["unit"] = df[m["unit"]].astype(str).str.strip() if m.get("unit") else ""
+        w["time"] = df[m["time"]].astype(str) if m.get("time") else ""
+        if m.get("specimen"):
+            w["spec"] = df[m["specimen"]].astype(str)
+        yield tn, m, w
+    demo_t = (schema.get("demographics") or {}).get("table")
+    skip = set(schema["measurements"]) | set(schema.get("prescriptions") or {}) | \
+        set(schema.get("dictionaries") or {}) | {demo_t}
+    idcols = set(schema.get("id_hierarchy") or []) | {rid, subj}
+    for tn, e in (schema.get("events") or {}).items():
+        if tn in skip or tn not in tables:
+            continue
+        df = tables[tn]
+        vals = []
+        for c in df.columns:
+            lc = c.lower()
+            if c in idcols or re.search(_ID_RE, lc) or re.search(_TIMEISH_RE, lc) or c in (e.get("item"), e.get("label")):
+                continue
+            if not _is_numeric_col(df[c].head(5000)):
+                continue
+            x = _num(df[c])
+            if x.notna().sum() < 20 or x.nunique() <= min_distinct:
+                continue
+            vals.append(c)
+        if not vals:
+            continue
+        parts = [pd.DataFrame({"rid": df[rid].astype(str).values, "subj": df[subj].astype(str).values,
+                               "item": c, "v": _num(df[c]).values,
+                               "time": df[e["time"]].astype(str).values if e.get("time") else ""})
+                 for c in vals]
+        w = pd.concat(parts, ignore_index=True)
+        w = w[w["v"].notna()].reset_index(drop=True)
+        w["unit"] = ""
+        yield tn, {"item": None, "value": None, "unit": None, "time": e.get("time"), "wide": True,
+                   "columns": vals}, w
 
 
 def _dt(s: pd.Series) -> pd.Series:
     x = s.astype(str).str.strip().str.replace("T", " ", regex=False).str.replace("Z", "", regex=False)
     return pd.to_datetime(x.where(x != ""), errors="coerce")
+
+
+def _duplicate_key_frame(df: pd.DataFrame, cols: Sequence[str]) -> pd.DataFrame:
+    """Comparison form of ``cols``: numbers as rounded floats (``72``, ``72.0`` and ``7.2e1`` are one
+    value -- copies re-serialised through a float column differ only in spelling), text stripped,
+    every missing spelling ('', 'nan', 'NULL' ...) one token."""
+    K = {}
+    for c in cols:
+        x = df[c].astype(str).str.strip()
+        num = _num(x)
+        miss = x.str.lower().isin(_MISSING)
+        k = x.astype(object)
+        if num.notna().any():
+            k = k.where(num.isna(), num.round(9).astype(object))
+        K[c] = k.where(~miss, "")
+    return pd.DataFrame(K, index=df.index)
+
+
+def _duplicate_rule(tables, schema, F, log, max_duplicate_share=0.05, max_table_share=0.5):
+    """``exact_duplicate``: a row identical to an earlier row of the same table (uniqueness
+    plausibility, Kahn et al. 2016; OHDSI DQD ``isDuplicate``-type checks).
+
+    * Compared columns: all but the shared row id and the table's own surrogate key (an id-named
+      column that is unique -- up to the copies themselves -- and referenced by no other table): a
+      re-entered record gets a fresh key.  Numbers are compared as numbers (``72`` == ``72.0``).
+    * Conventions are learned, not assumed: an item (lab name, chart item, drug) whose rows are
+      duplicated more often than ``max_duplicate_share`` (and at least 3 times) is a source
+      convention (repeated charting of one value), and the duplicates of that item are not reported;
+      the other items' duplicates are.  A table that is duplicated wholesale (more than
+      ``max_table_share`` of its rows) is skipped.  Without an item column the table share is
+      compared with ``max_duplicate_share`` as a whole.
+    """
+    rid = schema["row_id"]
+    items = {}
+    for src in ("measurements", "events", "prescriptions"):
+        for tn, m in (schema.get(src) or {}).items():
+            it = m.get("item") or m.get("drug") or m.get("label")
+            if it and tn not in items:
+                items[tn] = it
+    for tn, df in tables.items():
+        if tn in (schema.get("dictionaries") or {}) or len(df) < 2:
+            continue
+        others = [d2 for m, d2 in tables.items() if m != tn]
+        surr = {c for c in df.columns if c != rid and re.search(_ID_RE, c.lower()) and _nearly_unique(df[c])
+                and not any(c in d2.columns for d2 in others)}
+        body = [c for c in df.columns if c != rid and c not in surr]
+        if len(body) < 3:
+            continue
+        K = _duplicate_key_frame(df, body)
+        dmask = K.duplicated(keep="first")
+        n_dup = int(dmask.sum())
+        if n_dup == 0 or n_dup > max_table_share * len(df):
+            continue
+        it = items.get(tn)
+        if it and it in df.columns:
+            grp = df[it].astype(str)
+            rate = dmask.groupby(grp).mean()
+            cnt = dmask.groupby(grp).sum()
+            conv = set(rate[(rate > max_duplicate_share) & (cnt >= 3)].index)
+            keep = dmask & ~grp.isin(conv)
+            why = f" (items with routine duplicates skipped: {len(conv)})" if conv else ""
+        else:
+            keep = dmask if n_dup <= max_duplicate_share * len(df) else dmask & False
+            why = ""
+        d = df[keep]
+        if d.empty:
+            continue
+        # the original each copy repeats (first occurrence of the same key tuple)
+        key = pd.util.hash_pandas_object(K, index=False)
+        first = pd.Series(df[rid].astype(str).values, index=key.values)
+        first = first[~first.index.duplicated()]
+        orig = key[keep].map(first).astype(str)
+        # record order: in a table stored grouped by subject, a copy inside the same contiguous block
+        # of rows as its original is how exports fan out (a join repeated a row); a copy elsewhere
+        # (appended / re-entered later) is a separate entry.  The former stay 'screen'.
+        strong = pd.Series(True, index=d.index)
+        subj = schema.get("subject")
+        if subj and subj in df.columns:
+            sv = df[subj].astype(str).reset_index(drop=True)
+            nblk = int(sv.ne(sv.shift()).sum())
+            if nblk <= 1.2 * max(sv.nunique(), 1):
+                blk = sv.ne(sv.shift()).cumsum().values
+                pos = pd.Series(np.arange(len(df)), index=df.index)
+                kv = key.values
+                first_pos = pd.Series(pos.values, index=kv)
+                first_pos = first_pos[~first_pos.index.duplicated()]
+                p_copy = pos[keep].values
+                p_orig = first_pos.reindex(kv[keep.values]).values.astype(int)
+                inblk = blk[p_copy] == blk[p_orig]
+                strong = pd.Series(~inblk, index=d.index)
+        F.add(tn, d[rid], "duplicate", "exact_duplicate", tn + "|xdup|" + orig.values, 1.0,
+              "identical copy of row " + orig.values + " (all columns but the row id / own key)"
+              + np.where(strong.values, "", "; in its original's block of rows (export fan-out?)"),
+              strong=strong.values)
+        log(f"  {tn}: exact_duplicate {len(d)}{why}")
+
+
+def _death_batches(aft: pd.Series, sid: pd.Series, P: pd.DataFrame, subj, rid, ptable, tn, F, log,
+                   reported=None, min_rows: int = 5) -> pd.Series:
+    """Split after-death rows into slips and wrong death records.
+
+    One event after death is a mistyped event time.  Many events of one subject after its death
+    (``>= min_rows`` in one table) say the *death* time is wrong (or the subject was not dead): the
+    subject's death record is flagged once (``death_vs_events``) and those rows are not.
+    """
+    reported = set() if reported is None else reported
+    if not aft.any():
+        return aft
+    n = aft.groupby(sid).sum()
+    many = set(n[n >= min_rows].index)
+    if not many:
+        return aft
+    for s_ in sorted(many - reported):
+        r_ = P.loc[P[subj].astype(str) == s_, rid]
+        F.add(ptable, r_, "demographic_conflict", "death_vs_events", "deathrec|" + s_, 1.0,
+              f"{int(n[s_])} rows of {tn} are recorded after this subject's death time")
+        reported.add(s_)
+    log(f"  {tn}: {len(many)} subjects with >= {min_rows} rows after death -> death record flagged")
+    return aft & ~sid.isin(many)
 
 
 def _event_rules(tables, schema, F, on, log, isolation, max_duplicate_share=0.01):
@@ -1211,22 +1725,7 @@ def _event_rules(tables, schema, F, on, log, isolation, max_duplicate_share=0.01
 
     # ---- exact duplicate rows (all columns but the row id and the table's own surrogate key)
     if on("exact_duplicate"):
-        for tn, df in tables.items():
-            # a surrogate key: id-named, unique in this table, referenced by no other table
-            surr = {c for c in df.columns if c != rid and re.search(_ID_RE, c.lower()) and df[c].is_unique
-                    and not any(c in d2.columns for m, d2 in tables.items() if m != tn)}
-            body = [c for c in df.columns if c != rid and c not in surr]
-            if len(body) < 3 or len(df) < 2:
-                continue
-            dmask = df.duplicated(body, keep="first")
-            d = df[dmask]
-            if 0 < len(d) <= max_duplicate_share * len(df):
-                first = df[~dmask].drop_duplicates(body).set_index(body)[rid]
-                orig = pd.Series(list(map(tuple, d[body].values)) if len(body) > 1 else d[body[0]].values,
-                                 index=d.index).map(lambda k: first.get(k, "?"))
-                F.add(tn, d[rid], "duplicate", "exact_duplicate", tn + "|xdup|" + orig.astype(str), 1.0,
-                      "identical copy of row " + orig.astype(str) + " (all columns but ids)")
-                log(f"  {tn}: exact_duplicate {len(d)}")
+        _duplicate_rule(tables, schema, F, log, max_duplicate_share)
 
     # ---- life span: events after death / before birth; birth date contradicted by events
     dpairs = [d for d in (demo.get("death_status") or []) if d.get("kind") == "date"]
@@ -1275,6 +1774,7 @@ def _event_rules(tables, schema, F, on, log, isolation, max_duplicate_share=0.01
                     rate = aft[dead].groupby(df.loc[dead, it]).mean()
                     conv_items = set(rate[rate >= 0.5].index)
                     aft &= ~df[it].isin(conv_items)
+                aft = _death_batches(aft, sid, P, subj, rid, demo["table"], tn, F, log)
                 if aft.sum() and aft.mean() <= 0.05:
                     hit = df[aft]
                     F.add(tn, hit[rid], "impossible_value", "after_death", tn + "|death|" + sid[aft], 1.0,
@@ -1352,6 +1852,16 @@ def _event_rules(tables, schema, F, on, log, isolation, max_duplicate_share=0.01
                 hi_tol = max(1.0, float(np.nanquantile(lag_hi[ok], 0.999)) * 1.5)
                 # results may be filed after a visit; nothing can be recorded before it started
                 out_ = ok & (lag_lo < -lo_tol)
+                # many rows of one visit outside it: the visit's window is what is wrong -- flag
+                # the visit record once, not every row
+                nb = out_.groupby(k_).transform("sum")
+                batch = out_ & (nb >= 3)
+                if batch.any() and out_.sum() <= 0.01 * len(df):
+                    for vk in sorted(set(k_[batch])):
+                        vr = V.loc[V[key].astype(str) == vk, rid]
+                        F.add(vn, vr, "inconsistency", "visit_vs_events", f"{vn}|vbatch|{vk}", 1.0,
+                              f"{int(nb[batch & (k_ == vk)].iloc[0])} rows of {tn} are dated before this visit's start")
+                    out_ &= ~batch
                 if 0 < out_.sum() <= 0.01 * len(df):
                     hit = df[out_]
                     F.add(tn, hit[rid], "inconsistency", "outside_visit", tn + "|vwin|" + hit[rid].astype(str), 1.0,
@@ -1474,12 +1984,17 @@ def _arithmetic_rules(tables, schema, F, log, min_rows: int = 50):
                 gt = (V.loc[ok, a] > V.loc[ok, b]).mean()
                 same_unit = units.get(a) is not None and units.get(a) == units.get(b)
                 if gt >= 0.995 and same_unit and (V.loc[ok, a] / V.loc[ok, b].replace(0, np.nan)).median() < 10:
-                    bad = ok & (V[a] <= V[b])
+                    # the order must be broken by a clear margin (half the usual gap): two values that
+                    # merely touch are measurement noise, a reversed pair far apart is a slip
+                    gap_ = (V.loc[ok, a] - V.loc[ok, b])
+                    marg = 0.5 * float(gap_.median())
+                    bad = ok & (V[b] - V[a] > marg)
                     if 0 < bad.sum():
                         ids = list(R.loc[bad, a]) + list(R.loc[bad, b])
+                        sev = ((V[b] - V[a])[bad] / max(_robust_scale(gap_), 1e-9)).tolist() * 2
                         F.add(tn, ids, "inconsistency", "ordered_pair", [f"{tn}|ord|{x}" for x in
-                              list(R.loc[bad, a]) * 2], 1.0, f"item {a} <= item {b}, while {a} > {b} at "
-                              f"{gt:.1%} of shared instants")
+                              list(R.loc[bad, a]) * 2], 1.0, f"item {a} < item {b} by a clear margin, while {a} > {b} at "
+                              f"{gt:.1%} of shared instants", severity=sev)
                         log(f"  {tn}: ordered_pair {a}>{b}: {int(bad.sum())}")
         # products: log c = log k + p log a + q log b, constant across instants
         L = np.log(V.where(V > 0))
@@ -1499,11 +2014,14 @@ def _arithmetic_rules(tables, schema, F, log, min_rows: int = 50):
                             if mad > 0.005:
                                 continue
                             dev = (L[c] - p_ * L[a] - q_ * L[b] - med).abs()
-                            bad = ok & (dev > 0.05)
+                            # 10 % (0.1 in ln) off a relation that holds to 0.5 %: rounding and
+                            # re-measurement stay far below that
+                            bad = ok & (dev > max(0.1, 20 * mad))
                             if 0 < bad.sum() <= 0.02 * ok.sum():
                                 F.add(tn, R.loc[bad, c], "inconsistency", "arithmetic",
                                       [f"{tn}|prod|{x}" for x in R.loc[bad, c]], 1.0,
-                                      f"item {c} != k * {a}^{p_} * {b}^{q_} (holds on the other instants)")
+                                      f"item {c} != k * {a}^{p_} * {b}^{q_} (holds on the other instants)",
+                                      severity=dev[bad] / max(1.4826 * mad, 1e-3))
                                 log(f"  {tn}: arithmetic {c}~{a}^{p_}*{b}^{q_}: {int(bad.sum())}")
 
 
@@ -1546,47 +2064,78 @@ def _offset_rules(tables, schema, F, on, log):
         death = np.where(dead & ~np.isnan(t), np.fmin(death, t), death)
     death = pd.Series(death, index=sid)
     death = death[~death.index.duplicated()]
+    reported = set()
     for tn, e in offs.items():
         df = tables[tn]
         s_ = df[subj].astype(str)
-        t = _num(df[e["time"]])
         it = e.get("item")
         dd = s_.map(death)
-        if on("after_death") and dd.notna().any():
-            tol = 0.0
-            if hi is not None:
-                alive = dd.isna() & t.notna() & s_.isin(hi.index)
-                ex = (t - s_.map(hi))[alive]
-                if len(ex) >= 20:
-                    tol = max(0.0, 1.5 * float(np.nanquantile(ex, 0.999)))
-            aft = dd.notna() & t.notna() & (t > dd + tol)
-            if it and it in df.columns and aft.any():
-                # items recorded after death for most dead subjects having them are a convention
-                dead = dd.notna()
-                rate = aft[dead].groupby(df.loc[dead, it]).mean()
-                aft &= ~df[it].isin(set(rate[rate >= 0.5].index))
-            if aft.sum() and aft.mean() <= 0.05:
-                hit = df[aft]
-                F.add(tn, hit[rid], "impossible_value", "after_death", tn + "|death|" + s_[aft], 1.0,
-                      e["time"] + "=" + t[aft].astype(str) + " after the death offset " + dd[aft].astype(str)
-                      + " (" + tn + " relative times)")
-                log(f"  {tn}: after_death[offset] {int(aft.sum())}")
-        if on("outside_stay") and lo is not None:
-            has = t.notna() & s_.isin(lo.index)
-            if has.sum() < 20:
-                continue
-            dlo = (t - s_.map(lo))[has]
-            dhi = (t - s_.map(hi))[has]
-            lo_tol = max(0.0, -1.5 * float(np.nanquantile(dlo, 0.001)))
-            hi_tol = max(0.0, 1.5 * float(np.nanquantile(dhi, 0.999)))
-            bad = pd.Series(False, index=df.index)
-            bad[has] = (dlo < -lo_tol) | (dhi > hi_tol)
-            if 0 < bad.sum() <= 0.01 * len(df):
-                hit = df[bad]
-                F.add(tn, hit[rid], "inconsistency", "outside_stay", tn + "|swin|" + hit[rid].astype(str), 1.0,
-                      e["time"] + "=" + t[bad].astype(str) + " outside the stay window ["
-                      + s_[bad].map(lo).astype(str) + ", " + s_[bad].map(hi).astype(str) + "]")
-                log(f"  {tn}: outside_stay {int(bad.sum())}")
+        # every relative-time column of the table (order, start, stop, result offsets): an injected
+        # or mistyped time can sit in any of them; tolerances and conventions are per column
+        tcols = [e["time"]] + [c for c in df.columns if c != e["time"] and c != subj
+                               and re.fullmatch(_OFFSET_RE, c.lower()) and _is_numeric_col(df[c].head(2000))]
+        for tc in tcols:
+            t = _num(df[tc])
+            if on("after_death") and dd.notna().any():
+                tol = 0.0
+                if hi is not None:
+                    alive = dd.isna() & t.notna() & s_.isin(hi.index)
+                    ex = (t - s_.map(hi))[alive]
+                    if len(ex) >= 20:
+                        # how far rows of surviving subjects run past the end of their window
+                        tol = max(0.0, float(np.nanquantile(ex, 0.999)))
+                # routine post-mortem recording (results filed, lines removed shortly after death):
+                # when a sizeable share of the dead subjects (>= 20 %, >= 5) have rows after death,
+                # twice the median of their last such row is the recording window (a median, so that
+                # a minority of subjects with mistyped times cannot widen it)
+                ex_d = (t - dd)[dd.notna() & t.notna() & (t > dd)]
+                if len(ex_d):
+                    per_s = ex_d.groupby(s_[ex_d.index]).max()
+                    n_dead = s_[dd.notna()].nunique()
+                    if len(per_s) >= 5 and len(per_s) >= 0.2 * n_dead:
+                        tol = max(tol, 2.0 * float(per_s.median()))
+                aft = dd.notna() & t.notna() & (t > dd + tol)
+                if it and it in df.columns and aft.any():
+                    # items recorded after death for most dead subjects having them are a convention
+                    dead = dd.notna()
+                    rate = aft[dead].groupby(df.loc[dead, it]).mean()
+                    aft &= ~df[it].isin(set(rate[(rate >= 0.5) & (aft[dead].groupby(df.loc[dead, it]).sum() >= 3)].index))
+                aft = _death_batches(aft, s_, D, subj, rid, demo["table"], tn, F, log, reported)
+                if aft.sum() and aft[dd.notna()].mean() <= 0.05:
+                    hit = df[aft]
+                    F.add(tn, hit[rid], "impossible_value", "after_death", tn + "|death|" + s_[aft], 1.0,
+                          tc + "=" + t[aft].astype(str) + " after the death offset " + dd[aft].astype(str)
+                          + " (" + tn + " relative times)")
+                    log(f"  {tn}: after_death[{tc}] {int(aft.sum())}")
+            if on("outside_stay") and lo is not None:
+                has = t.notna() & s_.isin(lo.index)
+                if has.sum() < 20:
+                    continue
+                dlo = (t - s_.map(lo))[has]
+                dhi = (t - s_.map(hi))[has]
+                # tolerance: the data's own 0.1 % tails beyond the window, plus a margin of the
+                # window's typical length (results filed shortly after discharge are routine)
+                span = float(np.nanmedian((hi - lo).values)) if len(hi) else 0.0
+                lo_tol = max(0.0, -float(np.nanquantile(dlo, 0.001))) + 0.1 * span
+                hi_tol = max(0.0, float(np.nanquantile(dhi, 0.999))) + 0.1 * span
+                bad = pd.Series(False, index=df.index)
+                bad[has] = (dlo < -lo_tol) | (dhi > hi_tol)
+                # many rows of one subject outside its window: the window (stay record) is wrong
+                nb = bad.groupby(s_).transform("sum")
+                batch = bad & (nb >= 3)
+                if batch.any() and bad.sum() <= 0.01 * len(df):
+                    for sk in sorted(set(s_[batch]) - reported):
+                        sr = D.loc[D[subj].astype(str) == sk, rid]
+                        F.add(demo["table"], sr, "inconsistency", "stay_vs_events", f"stay|{sk}", 1.0,
+                              f"{int(nb[batch & (s_ == sk)].iloc[0])} rows of {tn} fall outside this stay's window")
+                        reported.add(sk)
+                    bad &= ~batch
+                if 0 < bad.sum() <= 0.01 * len(df):
+                    hit = df[bad]
+                    F.add(tn, hit[rid], "inconsistency", "outside_stay", tn + "|swin|" + hit[rid].astype(str), 1.0,
+                          tc + "=" + t[bad].astype(str) + " outside the stay window ["
+                          + s_[bad].map(lo).astype(str) + ", " + s_[bad].map(hi).astype(str) + "]")
+                    log(f"  {tn}: outside_stay[{tc}] {int(bad.sum())}")
 
 
 def _robust_scale(x: pd.Series) -> float:
@@ -1673,9 +2222,15 @@ def _person_rules(tables, schema, F, on, log, person_tol=4.0, unit_factors=(2.20
             if present.mean() < 0.5:
                 continue
             numeric = _is_numeric_col(df[c])
+            if not numeric:
+                present &= ~raw.str.lower().str.contains(_MISSING_LIKE_RE, regex=True)
             nun = raw[present].str.lower().nunique()
             if (not numeric or nun <= 5) and on("person_constant"):
-                v = raw.str.lower().where(present)
+                # compare the leading word: "WHITE - BRAZILIAN" refines "WHITE", "HISPANIC OR LATINO"
+                # and "HISPANIC/LATINO - CUBAN" are one group -- a refinement is not a contradiction
+                coarse = raw.str.lower().str.extract(r"([a-z0-9]+)", expand=False).fillna(raw.str.lower())
+                v = coarse.where(present)
+                nun = v[present].nunique()
                 m = multi & present
                 g = v[m].groupby(per[m])
                 k, n_i = g.nunique(), g.size()
@@ -1687,7 +2242,10 @@ def _person_rules(tables, schema, F, on, log, person_tol=4.0, unit_factors=(2.20
                 exp = float(np.mean([(p ** n).sum() for n in n_i[k.index]]))
                 lift = (const - exp) / max(1 - exp, 1e-9)
                 bad_p = list(k[k > 1].index)
-                if const < 0.9 or lift < 0.8 or not bad_p:
+                # person attributes by kind (sex, race): the injected / mistyped changes themselves lower
+                # the constancy, so a lenient bar; any other column must be constant far beyond chance
+                c_min, l_min = (0.7, 0.5) if re.search(_PERSON_ATTR_RE, lc) else (0.9, 0.8)
+                if const < c_min or lift < l_min or not bad_p:
                     continue
                 nflag = 0
                 for pp in bad_p:
@@ -1747,7 +2305,7 @@ def _person_rules(tables, schema, F, on, log, person_tol=4.0, unit_factors=(2.20
                     h2 = fac.index[uf]
                     F.add(tn, df.loc[h2, rid], "impossible_value", "unit_factor", "person|" + c + "|" + pm[h2],
                           1.0, f"{c}=" + x[h2].astype(str) + " is x" + fac[h2].round(4).astype(str)
-                          + " (or 1/x) the person's other stays: unit slip", severity=sev[h2])
+                          + " (or 1/x) the person's other stays: unit slip", severity=sev[h2], strong=True)
                 log(f"  {tn}: person_numeric[{c}] {len(hit)} rows ({int(uf.sum())} unit factors)")
 
 
@@ -1772,6 +2330,9 @@ def _unit_factor_rules(tables, schema, F, log, factors=(2.2046, 2.54, 10.0), uni
         for c in df.columns:
             lc = c.lower()
             if c in idcols or re.search(_ID_RE, lc) or re.search(_TIMEISH_RE, lc) or not _is_numeric_col(df[c]):
+                continue
+            # an age is not a physical quantity with unit conversions
+            if c == (schema.get("demographics") or {}).get("age") or re.search(r"(^|_)age($|_)|^age", lc):
                 continue
             x = _numeric_values(df[c])
             xp = x[x.notna()]
@@ -1799,7 +2360,7 @@ def _unit_factor_rules(tables, schema, F, log, factors=(2.2046, 2.54, 10.0), uni
                 F.add(tn, df.loc[h, rid], "impossible_value", "unit_factor", tn + "|unit|" + c + "|" + df.loc[h, rid].astype(str),
                       z[h].abs(), f"{c}=" + df.loc[h, c].astype(str) + " robust z=" + z[h].round(1).astype(str)
                       + "; divided/multiplied by " + back[h].astype(str) + " it is typical for the column",
-                      severity=z[h].abs())
+                      severity=z[h].abs(), strong=True)
                 n_hit += len(h)
         names = list(cols)
         for i, a in enumerate(names):
@@ -1821,7 +2382,7 @@ def _unit_factor_rules(tables, schema, F, log, factors=(2.2046, 2.54, 10.0), uni
                     F.add(tn, df.loc[h, rid], "impossible_value", "unit_factor", tn + "|unitpair|" + df.loc[h, rid].astype(str),
                           1.0, f"{a}=" + df.loc[h, a].astype(str) + f" vs {b}=" + df.loc[h, b].astype(str)
                           + " differ by a unit factor " + fac[h].astype(str) + f" (same quantity on most rows)",
-                          severity=sev)
+                          severity=sev, strong=True)
                     n_hit += len(h)
         if n_hit:
             log(f"  {tn}: unit_factor {n_hit}")
