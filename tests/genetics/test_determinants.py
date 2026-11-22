@@ -177,3 +177,51 @@ def test_transfer_trait_predict_group_pooling():
         transfer_trait_predict(X, Y, "a4", groups=groups)
     res2 = transfer_trait_predict(X, Y, "a3", groups=pd.Series(groups), validate=False)
     assert res2["sources"] == ["a1", "a2"] and res2["validation"] is None
+
+
+def test_transfer_refines_to_subclass_only_when_it_transfers_better():
+    # class K: sub-class s1 (3 drugs) resisted via f0, sub-class s2 (2 drugs) via f3
+    X, _ = _simulate(seed=7)
+    rng = np.random.default_rng(8)
+    def draw(eta):
+        return (rng.random(len(eta)) < 1 / (1 + np.exp(-eta))).astype(int)
+    Y = pd.DataFrame({d: draw(-2.5 + 5.0 * X["f0"]) for d in ("a1", "a2", "a3")} |
+                     {d: draw(-2.5 + 5.0 * X["f3"]) for d in ("b1", "b2")}, index=X.index)
+    meta = pd.DataFrame({"drug": ["a1", "a2", "a3", "b1", "b2", "t"],
+                         "cls": ["K"] * 6,
+                         "sub": ["s1", "s1", "s1", "s2", "s2", "s1"],
+                         "smiles": ["CC"] * 6}).set_index("drug")
+    res = transfer_trait_predict(X, Y, "t", groups=meta)
+    assert sorted(res["sources"]) == ["a1", "a2", "a3"]
+    assert res["refinement"]["adopted"].any()
+    only_f3 = (X["f3"] == 1) & (X["f0"] == 0)
+    assert res["call"][only_f3].mean() < 0.2                   # the other sub-class's determinant
+    off = transfer_trait_predict(X, Y, "t", groups=meta, refine=False)
+    assert len(off["sources"]) == 5 and off["refinement"] is None
+    # same labels everywhere: the narrower set does not transfer better -> kept
+    Y2 = pd.DataFrame({d: draw(-2.5 + 5.0 * X["f0"]) for d in ("a1", "a2", "a3", "b1", "b2")},
+                      index=X.index)
+    res2 = transfer_trait_predict(X, Y2, "t", groups=meta)
+    assert len(res2["sources"]) == 5 and not res2["refinement"]["adopted"].any()
+    assert res2["refinement"] is not None
+
+
+def test_solo_carrier_check_demotes_weak_passenger_keeps_moderate_determinants():
+    # f8 rides with f0 (mostly co-carried) and has a weak own effect that stepwise selection
+    # can pick up; alone it confers far less than the real determinants do
+    rng = np.random.default_rng(11)
+    n = 8000
+    X = (rng.random((n, 20)) < 0.25).astype(float)
+    car = rng.random(n) < 0.3
+    X[:, 0] = car
+    X[:, 8] = np.where(car, rng.random(n) < 0.8, rng.random(n) < 0.08)
+    eta = -2.5 + 3.0 * X[:, 0] + 2.6 * X[:, 1] + 2.3 * X[:, 2] + 0.9 * X[:, 8]
+    y = (rng.random(n) < 1 / (1 + np.exp(-eta))).astype(int)
+    Xd = pd.DataFrame(X, columns=[f"f{j}" for j in range(20)])
+    res = trait_determinants(Xd, y, modifier=None, n_pcs=0).set_index("feature")
+    assert {"f0", "f1", "f2"} <= set(res.index[res.is_determinant])
+    assert not np.isnan(res.loc["f8", "n_solo"])               # selected by the stepwise step
+    assert bool(res.loc["f8", "passenger"]) and not bool(res.loc["f8", "is_determinant"])
+    assert res.loc["f8", "solo_lift"] < 0.25 * res.loc[["f0", "f1", "f2"], "solo_lift"].median()
+    off = trait_determinants(Xd, y, modifier=None, n_pcs=0, min_solo_lift=None)
+    assert not off["passenger"].any()

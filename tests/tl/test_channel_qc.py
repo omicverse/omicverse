@@ -169,3 +169,33 @@ def test_neighbour_screen_finds_small_local_artifact_under_large_common_erp():
     assert not out.loc["c4", "amplitude_rule"]              # amplitude rule alone misses it
     assert out.loc["c4", "neighbour_outlier"]
     assert out["stimulus_locked"].sum() == 1
+
+
+def test_brief_intermittent_dropouts_counted_in_seconds():
+    """Sub-window contact losses: a tiny fraction of a long recording, still a dropout."""
+    x = _background(sec=1200)
+    rng = np.random.default_rng(3)
+    n = x.shape[1]
+    for a, d in ((0.15, 0.8), (0.4, 1.2), (0.7, 0.6), (0.9, 1.0)):   # 3.6 s in 20 min
+        s = int(a * n)
+        m = int(d * FS)
+        x[5, s:s + m] = 12.0 + rng.normal(scale=0.05, size=m)
+    q = channel_qc_table(x, FS, band=(1, 20))
+    assert q.loc["ch5", "frac_flat_windows"] < 0.02          # the fraction rule alone misses it
+    assert q.loc["ch5", "dropout"]
+    assert q.loc["ch5", "n_flat_episodes"] == 4
+    assert 3.3 <= q.loc["ch5", "flat_sec"] <= 3.9
+    assert q["bad"].sum() == 1
+
+
+def test_single_short_flat_blip_not_dropout_and_switch_off():
+    x = _background(sec=600)
+    s = int(0.5 * x.shape[1])
+    x[1, s:s + int(0.6 * FS)] = 3.0                          # one 0.6-s flat blip
+    q = channel_qc_table(x, FS, band=(1, 20))
+    assert not q.loc["ch1", "dropout"]
+    x2 = _background(sec=1200)
+    for a in (0.2, 0.5, 0.8):
+        s = int(a * x2.shape[1]); x2[4, s:s + int(1.0 * FS)] = 7.0
+    assert channel_qc_table(x2, FS, band=(1, 20)).loc["ch4", "dropout"]
+    assert not channel_qc_table(x2, FS, band=(1, 20), flat_min_sec=None).loc["ch4", "dropout"]
