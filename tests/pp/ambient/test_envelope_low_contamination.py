@@ -94,7 +94,7 @@ def test_in_sample_panel_reproduces_the_pin_and_warns(mixture):
 def test_crossfit_recovers_low_contamination(mixture):
     cells, raw, _ = mixture
     truth = cells.obs["true_rho"].to_numpy()
-    out, pinned = _run(cells, raw, level_shrink=1.0)
+    out, pinned = _run(cells, raw, level_shrink=1.0, override_level=True)
     rho = out.obs["ambient_contamination"].to_numpy()
     assert not pinned
     # deep empties (single preparation): the soup is cross-fitted as well
@@ -155,3 +155,14 @@ def test_upper_pin_warns(mixture):
     out, pinned = _run(cells, raw, rho_lo=0.0, rho_hi=1e-3)
     assert pinned and "upper clip bound" in str(pinned[0].message)
     assert out.uns["ambient"]["envelope_diagnostics"]["frac_at_rho_hi"] > 0.5
+
+
+def test_level_override_requires_flag():
+    rng = np.random.default_rng(0)
+    import anndata as ad
+    cells = ad.AnnData(rng.poisson(1.0, size=(50, 40)).astype(np.float32))
+    with pytest.raises(ValueError, match="override_level"):
+        ov.pp.ambient.remove_ambient(cells.copy(), method="envelope", raw=cells.copy(),
+                                     level_shrink=1.0)
+    with pytest.raises(ValueError, match="override_level"):
+        ov.pp.ambient.remove_ambient(cells.copy(), method="envelope", raw=cells.copy(), use_em=True)

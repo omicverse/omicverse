@@ -106,8 +106,8 @@ def test_auto_keeps_full_soup_when_empties_are_shallow(shallow):
     and its level must not be the inflated one the split produces."""
     cells, raw = shallow
     truth = cells.obs["true_rho"].mean()
-    rho_auto, d_auto = _run(cells, raw, level_shrink=1.0)
-    rho_split, d_split = _run(cells, raw, level_shrink=1.0,
+    rho_auto, d_auto = _run(cells, raw, level_shrink=1.0, override_level=True)
+    rho_split, d_split = _run(cells, raw, level_shrink=1.0, override_level=True,
                               soup_crossfit=True)
     assert d_auto["soup_selection_stability"] < 0.8
     assert d_auto["soup_crossfit"] is False and d_split["soup_crossfit"] is True
