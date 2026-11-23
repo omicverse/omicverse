@@ -27,6 +27,7 @@ from __future__ import annotations
 
 from typing import Optional, Sequence, Tuple
 
+from ..utils._provenance import validated_defaults
 import numpy as np
 import pandas as pd
 
@@ -148,6 +149,8 @@ def bandpass_filter(data, sfreq: float, l_freq: float, h_freq: float, order: int
     ],
     related=["tl.bridged_channel_pairs", "tl.erp_channel_outliers", "tl.bandpass_filter"],
 )
+@validated_defaults('flat_floor', 'flat_min_frac', 'flat_min_sec', 'noise_ratio', 'extreme_ratio',
+                    note='Detector defaults validated on synthetic recordings with planted defects.')
 def channel_qc_table(
     raw,
     sfreq: float,

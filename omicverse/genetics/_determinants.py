@@ -32,6 +32,7 @@ from __future__ import annotations
 
 from typing import Mapping, Optional, Sequence, Union
 
+from ..utils._provenance import validated_defaults
 import warnings
 
 import numpy as np
@@ -377,6 +378,8 @@ def _stepwise_select(M, y, candidates, m_idx, criterion, alpha, max_iter=2000,
     related=["ov.genetics.effect_modifier_scan", "ov.genetics.gwas_association",
              "ov.genetics.transfer_trait_predict"],
 )
+@validated_defaults('select', 'n_pcs', 'min_solo_lift', 'ebic_gamma',
+                    note='Selection defaults validated on simulated structured cohorts with passengers and lineage markers.')
 def trait_determinants(
     X: Union[pd.DataFrame, np.ndarray],
     y,
@@ -746,6 +749,8 @@ def _refine_sources(M, Yd, meta, target, sources, cols, C, max_iter, reasons):
     ],
     related=["ov.genetics.trait_determinants"],
 )
+@validated_defaults('decision', 'refine', 'threshold',
+                    note='Source choice validated on simulated sub-class transfers.')
 def transfer_trait_predict(
     X: Union[pd.DataFrame, np.ndarray],
     Y: pd.DataFrame,
