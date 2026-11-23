@@ -624,7 +624,7 @@ def reid_pair_auc(sim: np.ndarray, labels) -> float:
 def reid_fit_projection(emb: np.ndarray, labels, *, n_pca: int = 256,
                         n_components: Optional[int] = None, shrinkage: float = 0.5,
                         heldout_fraction: float = 0.3, n_folds: int = 5,
-                        weighted: bool = False,
+                        weighted: bool = False, align_oof: bool = True,
                         seed: int = 0) -> Dict:
     """Reference-supervised linear metric for re-ID embeddings.
 
@@ -646,6 +646,16 @@ def reid_fit_projection(emb: np.ndarray, labels, *, n_pca: int = 256,
     ``sim_qg = transform(Eq) @ transform(Eg).T`` for the real queries.
     ``weighted=True`` scales each discriminant axis by the square root of its
     explained-variance share (down-weights weak axes).
+
+    ``align_oof=True`` rotates every fold's coordinates onto the basis of the
+    projection fitted on all identities (orthogonal Procrustes on the fold
+    model's own training images, Schoenemann 1966).  Each fold has its own
+    discriminant basis; without the rotation, two images from different
+    folds are compared in unrelated coordinate systems and the tail of
+    different-identity similarities -- the hard negatives that decide the
+    cut -- is distorted (on SeaTurtleID2022 its 99.9 % quantile was 0.22
+    across folds vs 0.33 within a fold, so the simulated cut came out too
+    low and over-merged).  Rotations keep within-fold similarities unchanged.
 
     Needs identities with >= 2 images; the within-identity scatter is poorly
     estimated when most identities have only one or two images
@@ -698,17 +708,26 @@ def reid_fit_projection(emb: np.ndarray, labels, *, n_pca: int = 256,
     # separable and the simulated cuts meaningless).
     all_ids = rng.permutation(np.unique(y))
     folds = np.array_split(all_ids, n_f)
+    full = fit(x[keep], y[keep])
     oof = None
     for fold in folds:
         m_out = np.isin(y, fold)
         m_in = keep & ~m_out
         if m_in.sum() < 3 or len(np.unique(y[m_in])) < 2:
             continue
-        z = fit(x[m_in], y[m_in])(x[m_out])
+        f_k = fit(x[m_in], y[m_in])
+        z = f_k(x[m_out])
+        if align_oof:
+            a, b = f_k(x[m_in]), full(x[m_in])
+            d = max(a.shape[1], b.shape[1])
+            a = np.pad(a, ((0, 0), (0, d - a.shape[1])))
+            b = np.pad(b, ((0, 0), (0, d - b.shape[1])))
+            u_, _, vt = np.linalg.svd(a.T @ b)
+            z = _l2((np.pad(z, ((0, 0), (0, d - z.shape[1]))) @ (u_ @ vt))[:, :b.shape[1]])
         if oof is None:
             oof = np.zeros((len(x), z.shape[1]), dtype=np.float32)
         oof[m_out] = z
-    return {"transform": fit(x[keep], y[keep]), "reference_oof": oof,
+    return {"transform": full, "reference_oof": oof,
             "heldout_auc_raw": auc_raw, "heldout_auc_proj": auc_proj,
             "n_identities": int(len(multi)),
             "median_images_per_identity": float(np.median(counts))}
@@ -979,39 +998,94 @@ def _apply_must_link(s, must_link, idx):
     return s
 
 
-def _simulate_split(g_lab, rng, n_query, per_id, unknown_fraction):
+def _draw_depth(rng, per_id, depth):
+    """Images of one simulated query individual.
+
+    ``"fixed"``: ``round(per_id)``.  ``"loguniform"``: log-uniform between 1
+    and ``per_id`` (inclusive), so one simulated query set mixes animals seen
+    once, a few times and as often as in the gallery.  Sightings per
+    individual in photo-ID surveys are strongly over-dispersed, and the depth
+    of a new query batch is not known in advance; a cut chosen for this
+    mixture must hold across depths instead of being tuned to the gallery's.
+    """
+    if not per_id:
+        return None
+    if depth == "loguniform":
+        hi = max(float(per_id), 1.0)
+        return int(min(np.floor(np.exp(rng.uniform(0.0, np.log(hi + 1.0)))), hi))
+    return max(1, int(round(per_id)))
+
+
+def _as_time(values) -> Optional[np.ndarray]:
+    """Sortable float time per image (dates, timestamps or numbers); missing
+    values become -inf (treated as the oldest sightings).  None if no value
+    is usable."""
+    if values is None:
+        return None
+    s = pd.Series(list(values))
+    num = pd.to_numeric(s, errors="coerce")
+    if num.notna().sum() < s.notna().sum():
+        dt = pd.to_datetime(s, errors="coerce")
+        num = pd.Series([x.value if pd.notna(x) else np.nan for x in dt], dtype=float)
+    if num.notna().sum() == 0:
+        return None
+    return num.fillna(-np.inf).to_numpy(dtype=float)
+
+
+def _simulate_split(g_lab, rng, n_query, per_id, unknown_fraction, g_time=None,
+                    depth="fixed"):
     """Pseudo-query / pseudo-gallery split of the labelled reference that mimics
     the real query set: about ``n_query`` images, about ``per_id`` images per
     individual, a share ``unknown_fraction`` of the individuals absent from the
-    gallery.  Known individuals keep at least half of their images in the gallery."""
+    gallery.
+
+    Without ``g_time`` images are drawn at random and known individuals keep at
+    least half of their images in the gallery.  With ``g_time`` (one sortable
+    time per gallery image) the split is time-aware, as in the open-set splits
+    of SeaTurtleID2022 (Adam et al., WACV 2024) and WildlifeReID-10k (Adam et
+    al., CVPRW 2025): a pseudo-query individual contributes its *latest*
+    images, and a known individual's pseudo-gallery keeps only its images
+    strictly older than its pseudo-queries -- so the simulation does not
+    attach or merge same-session near-duplicates that real (later) queries do
+    not have.  Random splits overestimate re-ID accuracy (same papers)."""
     ids = rng.permutation(np.unique(g_lab))
     by_id = {i: rng.permutation(np.flatnonzero(g_lab == i)) for i in ids}
+    if g_time is not None:
+        by_id = {i: v[np.argsort(-g_time[v], kind="stable")] for i, v in by_id.items()}
     q, unknown = [], set()
+    drop = np.zeros(len(g_lab), dtype=bool)
     n_target = n_query if n_query else len(g_lab) // 2
     total, n_unk_seen, n_seen = 0, 0, 0
     for i in ids:
         idx = by_id[i]
+        want = _draw_depth(rng, per_id, depth)
         want_unknown = (n_unk_seen < unknown_fraction * (n_seen + 1))
         if want_unknown:
-            take = idx[:max(1, int(round(per_id)))] if per_id else idx
+            take = idx[:want] if want else idx
             unknown.add(i)
             n_unk_seen += 1
         else:
             if len(idx) < 2:
                 continue
-            # known individuals keep at least half of their images in the gallery
-            k = min(int(round(per_id)) if per_id else len(idx), len(idx) // 2)
-            take = idx[:max(1, k)]
+            t = g_time[idx] if g_time is not None else None
+            if t is not None and np.any(t > t.min()):
+                pool = idx[t > t.min()]          # never the earliest session
+                take = pool[:min(want or len(pool), len(pool))]
+                drop[idx[t >= g_time[take].min()]] = True
+            else:
+                # known individuals keep at least half of their images in the gallery
+                k = min(want if want else len(idx), len(idx) // 2)
+                take = idx[:max(1, k)]
         q.extend(take)
         n_seen += 1
         total += len(take)
         if total >= n_target:
             break
     q = np.array(q, dtype=int)
-    qset = set(q.tolist())
-    g = np.array([j for j in range(len(g_lab)) if j not in qset and g_lab[j] not in unknown],
-                 dtype=int)
-    return q, g
+    keep = ~drop
+    keep[q] = False
+    keep &= ~np.isin(g_lab, list(unknown))
+    return q, np.flatnonzero(keep)
 
 
 @register_function(
@@ -1022,8 +1096,11 @@ def _simulate_split(g_lab, rng, n_query, per_id, unknown_fraction):
     description="Open-set individual re-identification: cluster query images on the (fused) "
                 "similarity graph and attach clusters (or single images) to labelled gallery "
                 "identities; cuts, method and attach rule chosen from data -- simulation on "
-                "the labelled reference matched to the real query set (size, images per "
-                "individual, share of new individuals; iterated to a fixed point), verified "
+                "the labelled reference matched to the real query set (size, share of new "
+                "individuals, depth-robust log-uniform images per individual so a deep gallery "
+                "does not make an over-merging cut look safe, optionally time-aware with "
+                "gallery_times), "
+                "verified "
                 "pairs as pseudo-labels without a reference, or HDBSCAN-leaf",
     requires={},
     produces={},
@@ -1037,6 +1114,7 @@ def _simulate_split(g_lab, rng, n_query, per_id, unknown_fraction):
 )
 def reid_open_set_cluster(sim_qq: np.ndarray, *, sim_qg: Optional[np.ndarray] = None,
                           gallery_labels=None, sim_gg: Optional[np.ndarray] = None,
+                          gallery_times=None,
                           threshold: Union[str, float] = "auto",
                           attach_threshold: Union[str, float, None] = "auto",
                           method: str = "auto", linkage: str = "average",
@@ -1081,14 +1159,36 @@ def reid_open_set_cluster(sim_qq: np.ndarray, *, sim_qg: Optional[np.ndarray] = 
         Simulation objective = ARI - ``abundance_weight`` x relative error of
         the number of individuals; > 0 penalises over-splitting into
         singletons, which barely moves ARI but inflates abundance.
+    gallery_times
+        Optional date / timestamp / session number per gallery image.  When
+        given, the simulation is time-aware (pseudo-queries are each simulated
+        individual's latest images; a known individual's pseudo-gallery keeps
+        only older images), mirroring the time-aware open-set splits of
+        SeaTurtleID2022 (Adam et al., WACV 2024) and WildlifeReID-10k (Adam et
+        al., CVPRW 2025), which show random splits overestimate accuracy.
+        Use it when the queries were photographed after the reference.
     unknown_fraction, images_per_identity, n_iter
         Shape of the simulated query set, which always has as many images as
-        the real query set.  ``"auto"``: half of the simulated individuals are
-        new, and each contributes up to the gallery's mean images per
-        identity (at least 2, so merges are tested).  Pass numbers when you know better (e.g. survey design).
-        ``n_iter > 1`` re-simulates with the share of unattached individuals
-        and the images per individual of the previous real result (at least
-        2 images per individual are kept so the simulation stays informative).
+        the real query set.  ``unknown_fraction="auto"``: half of the
+        simulated individuals are new.  ``images_per_identity``:
+
+        * ``"auto"`` (default): depth-robust simulation.  The images per
+          individual of the real query set are unknown, and the gallery's
+          depth is the wrong prior: a deep gallery yields tight
+          pseudo-individuals for which a low, over-merging cut looks safe
+          when the real queries hold a few photos per animal.  Each simulated
+          individual instead gets a log-uniform number of images between 1
+          and the gallery's mean depth, so the chosen cut must work for
+          animals seen once and animals seen often.  (A self-consistent depth
+          estimate -- the fixed point of depth -> n / #individuals -- was
+          rejected: with a weak descriptor every depth is self-fulfilling.)
+        * ``"gallery"``: previous behaviour -- each simulated individual has
+          the gallery's mean images per identity (at least 2).
+        * a number: that many images per simulated individual.
+
+        ``n_iter > 1`` then re-simulates with the share of unattached
+        individuals of the previous real result (and, with ``"gallery"``,
+        its images per individual).
     verified, must_link_verified
         Pairs from :func:`reid_local_verify`.  Accepted pairs are forced into
         the same cluster in every mode: with ``attach_mode="cluster"`` they are
@@ -1107,8 +1207,9 @@ def reid_open_set_cluster(sim_qq: np.ndarray, *, sim_qg: Optional[np.ndarray] = 
     -------
     dict: ``labels``, ``threshold``, ``attach_threshold``, ``method``,
     ``attach_mode``, ``n_attached``, ``n_clusters``, ``mode``,
-    ``calibration`` (simulated ARI / abundance error per setting, last
-    iteration) and ``history`` (one row per fixed-point iteration).
+    ``calibration`` (simulated ARI / abundance error per setting, kept
+    simulation) and ``history`` (one row per simulated query shape;
+    ``selected`` marks the one used).
     """
     sim_qq = _check_square(sim_qq, "sim_qq")
     n = len(sim_qq)
@@ -1148,16 +1249,21 @@ def reid_open_set_cluster(sim_qq: np.ndarray, *, sim_qg: Optional[np.ndarray] = 
             tgrid = np.array([float(threshold)])
         agrid = np.append(tgrid, np.inf) if auto_a else \
             np.array([attach_threshold if attach_threshold is not None else np.inf])
+        g_time = _as_time(gallery_times) if gallery_times is not None else None
+        if g_time is not None and len(g_time) != len(g_lab):
+            raise ValueError("gallery_times must match gallery_labels")
         counts = pd.Series(g_lab).value_counts()
         u = 0.5 if isinstance(unknown_fraction, str) else float(unknown_fraction)
-        m_img = max(2.0, float(np.mean(counts))) if isinstance(images_per_identity, str) or \
-            images_per_identity is None else float(images_per_identity)
-        iters = max(1, int(n_iter)) if (isinstance(unknown_fraction, str)
-                                        or isinstance(images_per_identity, str)) else 1
-        for it in range(iters):
+        robust = images_per_identity == "auto"
+        depth_dist = "loguniform" if robust else "fixed"
+
+        def simulate(m_img, u, sim_seed):
+            """Simulated table for one query shape + the chosen setting applied
+            to the real queries."""
+            r = np.random.default_rng(sim_seed)
             rows = []
             for rep in range(max(1, int(n_rep))):
-                q_idx, g_idx = _simulate_split(g_lab, rng, n, m_img, u)
+                q_idx, g_idx = _simulate_split(g_lab, r, n, m_img, u, g_time, depth_dist)
                 if len(q_idx) < 2 or len(g_idx) < 1:
                     continue
                 sq = sim_gg[np.ix_(q_idx, q_idx)]
@@ -1172,38 +1278,59 @@ def reid_open_set_cluster(sim_qq: np.ndarray, *, sim_qg: Optional[np.ndarray] = 
                                          float(t) if meth != "hdbscan" else np.nan,
                                          _ari(yq, lab),
                                          abs(len(np.unique(lab)) - k_true) / k_true))
-            calib = pd.DataFrame(rows, columns=["rep", "method", "attach_mode", "attach_threshold",
-                                                "threshold", "ari", "abundance_error"])
-            calib = calib.groupby(["method", "attach_mode", "attach_threshold", "threshold"],
-                                  as_index=False, dropna=False)[["ari", "abundance_error"]].mean()
-            calib["objective"] = calib["ari"] - abundance_weight * calib["abundance_error"]
-            best = calib.loc[calib["objective"].idxmax()]
+            cal = pd.DataFrame(rows, columns=["rep", "method", "attach_mode", "attach_threshold",
+                                              "threshold", "ari", "abundance_error"])
+            cal = cal.groupby(["method", "attach_mode", "attach_threshold", "threshold"],
+                              as_index=False, dropna=False)[["ari", "abundance_error"]].mean()
+            cal["objective"] = cal["ari"] - abundance_weight * cal["abundance_error"]
+            best = cal.loc[cal["objective"].idxmax()]
             b_meth, b_mode = str(best.method), str(best.attach_mode)
             b_a = float(best.attach_threshold) if auto_a else attach_threshold
             b_t = float(best.threshold) if (auto_t and b_meth != "hdbscan") else \
                 (float(threshold) if not auto_t else float("nan"))
-            lab = next(iter(_open_set_grid(sim_qq, sc_q, names, [b_t], [b_a if b_a is not None
-                                                                       else np.inf],
+            lab = next(iter(_open_set_grid(sim_qq, sc_q, names, [b_t],
+                                           [b_a if b_a is not None else np.inf],
                                            b_meth, linkage, b_mode, must)))[2]
             k_pred = len(np.unique(lab))
             k_known = len({x for x in lab if x.startswith("g:")})
-            history.append({"iter": it, "unknown_fraction": u, "images_per_identity": m_img,
-                            "method": b_meth, "attach_mode": b_mode, "threshold": b_t,
-                            "attach_threshold": b_a, "sim_ari": float(best.ari),
-                            "sim_abundance_error": float(best.abundance_error),
-                            "n_clusters": k_pred, "n_known": k_known})
+            rec = {"images_per_identity": m_img, "unknown_fraction": u, "method": b_meth,
+                   "attach_mode": b_mode, "threshold": b_t, "attach_threshold": b_a,
+                   "sim_ari": float(best.ari), "sim_abundance_error": float(best.abundance_error),
+                   "n_clusters": k_pred, "n_known": k_known,
+                   "implied_images_per_identity": n / max(k_pred, 1)}
             if log:
-                log(f"reid_open_set_cluster: iter {it} sim(u={u:.2f}, m={m_img:.1f}) -> "
+                log(f"reid_open_set_cluster: sim(u={u:.2f}, m={m_img:.1f} {depth_dist}"
+                    f"{', time-aware' if g_time is not None else ''}) -> "
                     f"{b_meth}/{b_mode} t={b_t:.3f} a={b_a} simARI={best.ari:.3f} "
-                    f"simAbErr={best.abundance_error:.2f}; real: {k_pred} individuals, "
-                    f"{k_known} known")
-            new_u = u if not isinstance(unknown_fraction, str) else \
-                float(np.clip(1.0 - k_known / max(k_pred, 1), 0.05, 0.95))
-            new_m = m_img if not isinstance(images_per_identity, str) else \
-                float(max(2.0, n / max(k_pred, 1)))
-            if abs(new_m - m_img) <= 0.1 * m_img and abs(new_u - u) <= 0.05:
-                break
-            u, m_img = new_u, new_m
+                    f"simAbErr={best.abundance_error:.2f}; real: {k_pred} individuals "
+                    f"({n / max(k_pred, 1):.1f} images each), {k_known} known")
+            return cal, rec, lab
+
+        if robust or images_per_identity in ("gallery", None):
+            m_img = max(2.0, float(np.mean(counts)))
+        else:
+            m_img = float(images_per_identity)
+        iters = max(1, int(n_iter)) if (isinstance(unknown_fraction, str)
+                                        or images_per_identity == "gallery") else 1
+        rec = None
+        for it in range(iters):
+            if rec is not None:
+                new_u = u if not isinstance(unknown_fraction, str) else \
+                    float(np.clip(1.0 - rec["n_known"] / max(rec["n_clusters"], 1), 0.05, 0.95))
+                new_m = m_img if images_per_identity != "gallery" else \
+                    float(max(2.0, n / max(rec["n_clusters"], 1)))
+                if abs(new_m - m_img) <= 0.1 * m_img and abs(new_u - u) <= 0.05:
+                    break
+                u, m_img = new_u, new_m
+            calib, rec, lab = simulate(m_img, u, int(rng.integers(2 ** 31)))
+            rec["iter"] = len(history)
+            rec["depth"] = depth_dist
+            history.append(rec)
+        for h in history:
+            h["selected"] = h is rec
+        b_meth, b_mode = rec["method"], rec["attach_mode"]
+        b_t, b_a = rec["threshold"], rec["attach_threshold"]
+        m_img = rec["images_per_identity"]
         method, attach_mode = b_meth, b_mode
         threshold, attach_threshold = b_t, b_a
         labels, n_att, n_cl = _finish(lab, b_t, b_a, b_meth, b_mode)
@@ -1381,6 +1508,7 @@ def _sample_pair_auc(e, y, n_max=600, seed=0):
 )
 def reid_pipeline(query_paths: Sequence, *, reference_paths: Optional[Sequence] = None,
                   reference_labels=None, query_views=None, reference_views=None,
+                  reference_times=None,
                   image_root: Optional[str] = None,
                   backbones: Sequence[str] = ("miewid", "megadescriptor-l"),
                   screen_images: int = 300, min_fusion_gain: float = 0.01,
@@ -1417,6 +1545,10 @@ def reid_pipeline(query_paths: Sequence, *, reference_paths: Optional[Sequence] 
        (:func:`reid_local_verify`), accepted pairs become must-links.
     6. :func:`reid_open_set_cluster` (reference simulation, or verified-pair
        cross-validation without a reference); ``open_set_kwargs`` pass through.
+       ``reference_times`` (dates / timestamps / session numbers of the
+       reference images) make the simulation time-aware
+       (``gallery_times``): use them when the queries were taken after the
+       reference, as in a later survey season.
 
     Returns
     -------
@@ -1567,6 +1699,8 @@ def reid_pipeline(query_paths: Sequence, *, reference_paths: Optional[Sequence] 
     # ---- 6. open-set partition ---------------------------------------------
     kw = dict(open_set_kwargs or {})
     if have_ref:
+        if reference_times is not None and "gallery_times" not in kw:
+            kw["gallery_times"] = np.asarray(list(reference_times), dtype=object)[r_idx]
         res = reid_open_set_cluster(Pq @ Pq.T, sim_qg=Pq @ Pg.T, gallery_labels=r_lab,
                                     sim_gg=Po @ Po.T, verified=ver, prefix=prefix, log=log, **kw)
     else:
@@ -1575,7 +1709,9 @@ def reid_pipeline(query_paths: Sequence, *, reference_paths: Optional[Sequence] 
               "n_clusters"):
         report[k] = res[k]
     if res.get("history") is not None:
-        h = res["history"].iloc[-1]
+        hist = res["history"]
+        h = hist[hist["selected"]].iloc[-1] if "selected" in hist else hist.iloc[-1]
+        report["sim_images_per_identity"] = round(float(h["images_per_identity"]), 2)
         report["sim_ari"] = round(float(h["sim_ari"]), 4)
         report["sim_abundance_error"] = round(float(h["sim_abundance_error"]), 4)
     say(f"{report['n_clusters']} individuals from {len(q_paths)} images "
