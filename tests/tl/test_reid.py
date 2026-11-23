@@ -249,8 +249,8 @@ def test_depth_robust_simulation_does_not_overmerge_shallow_queries():
     xq, xg = x[q], x[g]
     kw = dict(sim_qg=xq @ xg.T, gallery_labels=y[g], sim_gg=xg @ xg.T, n_rep=2, log=None,
               method="agglomerative", attach_mode="cluster")
-    old = reid_open_set_cluster(xq @ xq.T, images_per_identity="gallery", **kw)
-    new = reid_open_set_cluster(xq @ xq.T, gallery_times=t[g], **kw)
+    old = reid_open_set_cluster(xq @ xq.T, **kw)                    # default: gallery depth
+    new = reid_open_set_cluster(xq @ xq.T, gallery_times=t[g], images_per_identity="auto", **kw)
     k_true = len(np.unique(y[q]))
     ari_old = adjusted_rand_score(y[q], old["labels"])
     ari_new = adjusted_rand_score(y[q], new["labels"])

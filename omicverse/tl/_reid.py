@@ -1121,7 +1121,7 @@ def reid_open_set_cluster(sim_qq: np.ndarray, *, sim_qg: Optional[np.ndarray] = 
                           attach_mode: str = "auto", top_k: int = 2,
                           abundance_weight: float = 0.25,
                           unknown_fraction: Union[str, float] = "auto",
-                          images_per_identity: Union[str, float, None] = "auto",
+                          images_per_identity: Union[str, float, None] = "gallery",
                           n_iter: int = 1, n_rep: int = 4,
                           verified: Optional[pd.DataFrame] = None,
                           must_link_verified: bool = True,
@@ -1172,7 +1172,7 @@ def reid_open_set_cluster(sim_qq: np.ndarray, *, sim_qg: Optional[np.ndarray] = 
         the real query set.  ``unknown_fraction="auto"``: half of the
         simulated individuals are new.  ``images_per_identity``:
 
-        * ``"auto"`` (default): depth-robust simulation.  The images per
+        * ``"auto"`` (opt-in; default is ``"gallery"``, the gallery mean depth): depth-robust simulation.  Raises ARI on deep-gallery / shallow-query splits but over-counts individuals when descriptors are weak (lynx-like regimes), so it is not the default because abundance is scored too.  The images per
           individual of the real query set are unknown, and the gallery's
           depth is the wrong prior: a deep gallery yields tight
           pseudo-individuals for which a low, over-merging cut looks safe
