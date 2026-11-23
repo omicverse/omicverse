@@ -46,10 +46,26 @@ def test_muscat_preserves_design_contrast_and_sample_contract(monkeypatch):
 @pytest.mark.parametrize('module,distribution', ports._BACKENDS.items())
 def test_missing_backend_install_hint(monkeypatch, module, distribution):
     from omicverse import _optional
+
+    monkeypatch.setattr(ports, 'version_info', (3, 10))
+
     def missing(name, **kwargs):
         assert name == module
         raise ModuleNotFoundError(f"No module named '{name}'", name=name)
     monkeypatch.setattr(_optional.importlib, 'import_module', missing)
     with pytest.raises(ImportError) as error:
+        ports._backend(module)
+    assert f'python -m pip install "{distribution}"' in str(error.value)
+
+
+@pytest.mark.parametrize('module,distribution', ports._BACKENDS.items())
+def test_python39_backend_error_before_import(monkeypatch, module, distribution):
+    monkeypatch.setattr(ports, 'version_info', (3, 9))
+
+    def unexpected_import(*args, **kwargs):
+        pytest.fail('the backend must not be imported on Python 3.9')
+
+    monkeypatch.setattr(ports, 'import_optional_module', unexpected_import)
+    with pytest.raises(ImportError, match=r'require Python 3\.10 or newer') as error:
         ports._backend(module)
     assert f'python -m pip install "{distribution}"' in str(error.value)

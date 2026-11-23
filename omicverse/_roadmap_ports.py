@@ -1,4 +1,6 @@
 """Lazy adapters for independently validated roadmap #989 packages."""
+from sys import version_info
+
 import numpy as np
 import pandas as pd
 from scipy import sparse
@@ -15,9 +17,15 @@ _BACKENDS = {
 
 
 def _backend(module):
+    install = f'python -m pip install "{_BACKENDS[module]}"'
+    if version_info < (3, 10):
+        raise ImportError(
+            'Roadmap #989 adapters require Python 3.10 or newer. '
+            f'Switch to a supported environment, then run `{install}`.'
+        )
     return import_optional_module(
         module, feature='Roadmap #989 analysis', dependencies=(module,),
-        install_hint=f'Install the tested backend with `python -m pip install "{_BACKENDS[module]}"`.',
+        install_hint=f'Install the tested backend with `{install}`.',
     )
 
 

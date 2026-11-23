@@ -118,10 +118,10 @@ dependencies = [
 
 [project.optional-dependencies]
 roadmap-ports = [
-    "py-ruvseq-omicverse==0.1.0",
-    "py-sparkx-omicverse==0.1.0",
-    "py-music-omicverse==0.1.0",
-    "py-muscat-omicverse==0.1.0",
+    'py-ruvseq-omicverse==0.1.0; python_version >= "3.10"',
+    'py-sparkx-omicverse==0.1.0; python_version >= "3.10"',
+    'py-music-omicverse==0.1.0; python_version >= "3.10"',
+    'py-muscat-omicverse==0.1.0; python_version >= "3.10"',
 ]
 # Optional moscot backend (roadmap #989).
 moscot = ["moscot>=0.5.2,<0.6"]

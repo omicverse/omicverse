@@ -4,12 +4,20 @@ Algorithms live in independent packages. OmicVerse imports each backend only whe
 
 ## Published installation
 
-All four optional backends are available as tested PyPI 0.1.0 distributions:
+The four optional backends require **Python 3.10 or newer**. On a supported
+interpreter, install the tested PyPI 0.1.0 distributions directly:
 
     python -m pip install py-ruvseq-omicverse==0.1.0 py-sparkx-omicverse==0.1.0 py-music-omicverse==0.1.0 py-muscat-omicverse==0.1.0
 
-The optional `roadmap-ports` extra records these same pins. Base OmicVerse does
-not install or import the backends eagerly.
+On Python 3.10+, the optional `roadmap-ports` extra installs those same pins
+from a source checkout that includes these adapters:
+
+    python -m pip install ".[roadmap-ports]"
+
+On Python 3.9, the extra selects none of the four backends. Calling an adapter
+on Python 3.9 raises an error with instructions for switching to a supported
+environment. The base OmicVerse Python requirement is unchanged, and the base
+package does not install or import these backends eagerly.
 
 | Distribution | Import module | Public API |
 |---|---|---|
