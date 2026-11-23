@@ -395,3 +395,5 @@ __all__ = [
     # @ _gene_id_conversion (private, re-exported for compatibility)
     "_infer_species_and_release",
 ]
+from ._provenance import (DefaultOverrideWarning, validated_defaults, provenance_log,
+                          provenance_report, write_provenance, clear_provenance)

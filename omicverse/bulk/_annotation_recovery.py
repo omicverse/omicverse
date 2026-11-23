@@ -36,6 +36,7 @@ built in; everything is a parameter or estimated from the data.
 
 from __future__ import annotations
 
+from ..utils._provenance import validated_defaults
 import warnings
 from typing import Dict, Mapping, Optional, Sequence, Tuple
 
@@ -363,6 +364,8 @@ def _profile_similarity(A: pd.DataFrame, B: pd.DataFrame) -> Tuple[float, int]:
               "batch_key='technical_batch', availability=avail)"],
     related=["bulk.annotation_batch_center", "bulk.fit_annotation_classifier"],
 )
+@validated_defaults('log', 'batch_adjust', 'label_aware_iter', 'ks', 'top',
+                    note='Defaults validated on simulated confounded cohorts (one call, all cohorts).')
 def recover_sample_annotations(
     expression: Mapping[str, pd.DataFrame],
     reference: pd.DataFrame,
