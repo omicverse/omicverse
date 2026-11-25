@@ -364,8 +364,14 @@ def _profile_similarity(A: pd.DataFrame, B: pd.DataFrame) -> Tuple[float, int]:
               "batch_key='technical_batch', availability=avail)"],
     related=["bulk.annotation_batch_center", "bulk.fit_annotation_classifier"],
 )
+def _recovery_output(result, args):
+    pred = result[0] if isinstance(result, tuple) else result
+    return pred, [args["cohort_key"], args["sample_key"]], list(args["fields"])
+
+
 @validated_defaults('log', 'batch_adjust', 'label_aware_iter', 'ks', 'top',
-                    note='Defaults validated on simulated confounded cohorts (one call, all cohorts).')
+                    note='Defaults validated on simulated confounded cohorts (one call, all cohorts).',
+                    output=_recovery_output)
 def recover_sample_annotations(
     expression: Mapping[str, pd.DataFrame],
     reference: pd.DataFrame,
