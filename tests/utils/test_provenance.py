@@ -88,6 +88,10 @@ def test_check_deliverable_match_and_unexplained(tmp_path, monkeypatch):
     declare_departure("_labeler", "external assay on 10 samples", columns=["disease"])
     res = check_deliverable(own)
     assert res.set_index("column").loc["disease"].status == "departs"
+    # records follow the contract schema
+    from omicverse.utils._provenance import _read_ledger
+    r = _read_ledger("outputs.jsonl")[-1]
+    assert r["schema"] == "verse.provenance.v1" and r["output_hash"] and r["inputs"]["n"]
 
 
 def test_check_deliverable_unrelated_file(tmp_path, monkeypatch):
@@ -103,3 +107,68 @@ def test_declare_departure_needs_reason(tmp_path, monkeypatch):
     monkeypatch.setenv("OV_PROVENANCE_DIR", str(tmp_path / "ledger"))
     with pytest.raises(ValueError):
         declare_departure("x", "  ")
+
+
+# ── compare_to_default ───────────────────────────────────────────────────────
+
+def _confounded(seed=0, n=240):
+    rng = np.random.default_rng(seed)
+    batch = rng.integers(0, 4, n)
+    p = np.array([0.9, 0.85, 0.15, 0.1])[batch]          # label coupled with batch
+    y = (rng.random(n) < p).astype(int)
+    x = y + rng.normal(scale=0.9, size=n)                 # weak but real biology
+    return x, y, batch
+
+
+def test_compare_to_default_rejects_batch_reader(tmp_path, monkeypatch):
+    from sklearn.linear_model import LogisticRegression
+    from omicverse.utils._provenance import compare_to_default
+    monkeypatch.setenv("OV_PROVENANCE_DIR", str(tmp_path / "ledger"))
+    x, y, b = _confounded()
+
+    def default(tr, te):
+        return LogisticRegression().fit(x[tr, None], y[tr]).predict(x[te, None])
+
+    def batch_prior(tr, te):        # "predict the label from the technical batch"
+        maj = pd.Series(y[tr]).groupby(b[tr]).mean()
+        glob = y[tr].mean()
+        return np.array([int(maj.get(v, glob) >= 0.5) for v in b[te]])
+
+    res = compare_to_default(y, default, batch_prior, groups=b, confounder=b, n_candidates=5,
+                             function="toy_classifier")
+    assert res["verdict"] == "keep_default"
+    assert res["default_score"] > res["override_score"]
+
+
+def test_compare_to_default_winners_curse(tmp_path, monkeypatch):
+    """The best of 30 noise 'models' picked on the reference must not pass."""
+    from omicverse.utils._provenance import compare_to_default
+    monkeypatch.setenv("OV_PROVENANCE_DIR", str(tmp_path / "ledger"))
+    rng = np.random.default_rng(5)
+    n = 200
+    y = rng.integers(0, 2, n)
+    g = rng.integers(0, 4, n)
+    cands = [rng.integers(0, 2, n) for _ in range(30)]
+    best = max(cands, key=lambda c: (c == y).mean())          # selected on the same data
+    res = compare_to_default(y, lambda tr, te: np.full(len(te), 0), lambda tr, te: best[te],
+                             groups=g, n_candidates=30)
+    assert res["verdict"] == "keep_default"
+
+
+def test_compare_to_default_accepts_real_improvement(tmp_path, monkeypatch):
+    from sklearn.linear_model import LogisticRegression
+    from omicverse.utils._provenance import compare_to_default, _read_ledger
+    monkeypatch.setenv("OV_PROVENANCE_DIR", str(tmp_path / "ledger"))
+    x, y, b = _confounded(1, 400)
+
+    def constant(tr, te):
+        return np.full(len(te), int(round(y[tr].mean())))
+
+    def logistic(tr, te):
+        return LogisticRegression().fit(x[tr, None], y[tr]).predict(x[te, None])
+
+    res = compare_to_default(y, constant, logistic, groups=b, confounder=b, function="toy_classifier",
+                             columns=["label"])
+    assert res["verdict"] == "override_supported"
+    a = _read_ledger("audits.jsonl")[-1]
+    assert a["function"] == "toy_classifier" and a["verdict"] == "override_supported" and a["digest"]

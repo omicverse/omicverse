@@ -55,7 +55,8 @@ from typing import Any, Callable, Dict, List, Optional, Sequence
 
 __all__ = ["DefaultOverrideWarning", "validated_defaults", "provenance_log",
            "provenance_report", "write_provenance", "clear_provenance",
-           "provenance_dir", "record_output", "declare_departure", "check_deliverable"]
+           "provenance_dir", "record_output", "declare_departure", "check_deliverable",
+           "compare_to_default"]
 
 _LOG: List[Dict[str, Any]] = []
 
@@ -109,7 +110,8 @@ def _attach(result, records):
 
 
 def validated_defaults(*names: str, note: str = "",
-                       output: Optional[Callable] = None) -> Callable:
+                       output: Optional[Callable] = None,
+                       protocol: Optional[Callable] = None) -> Callable:
     """Decorator: record (and warn about) overrides of the named parameters.
 
     ``names``: parameters whose defaults are validated.  ``note``: one line
@@ -120,6 +122,12 @@ def validated_defaults(*names: str, note: str = "",
     (table, keys, values)`` (``arguments``: all bound arguments with defaults
     applied); the table is written to the ledger by :func:`record_output` so
     that :func:`check_deliverable` can later compare a deliverable with it.
+    ``protocol``: optional ``f(result, arguments) -> dict`` describing the
+    robustness protocol the function validated itself with (``name``,
+    ``groups`` -- the split unit per labelled sample, ``scores``); stored in
+    the record so an audit (:func:`compare_to_default`) re-uses the same
+    splits.  Record format: ``docs/evolution/override-audit-contract.md``
+    (schema ``verse.provenance.v1``).
     """
     def deco(func):
         sig = inspect.signature(func)
@@ -159,8 +167,10 @@ def validated_defaults(*names: str, note: str = "",
                     spec = output(out, dict(full.arguments))
                     if spec is not None:
                         table, keys, values = spec
+                        proto = protocol(out, dict(full.arguments)) if protocol else None
                         record_output(f"{func.__module__}.{func.__qualname__}", table, keys,
-                                      values, overrides=records)
+                                      values, overrides=records, protocol=proto,
+                                      inputs=dict(full.arguments))
                 except Exception as e:   # provenance must never break the analysis
                     warnings.warn(f"provenance: output not recorded ({type(e).__name__}: {e})")
             return _attach(out, records)
@@ -201,12 +211,32 @@ def write_provenance(path: str) -> str:
 # ── persistent ledger: validated outputs and declared departures ─────────────
 
 def provenance_dir() -> str:
-    """Ledger directory (``$OV_PROVENANCE_DIR`` or ``~/.cache/omicverse/provenance``)."""
+    """Run-local ledger directory: ``$OMICOS_PROVENANCE_DIR``, else
+    ``$OV_PROVENANCE_DIR``, else ``<working directory>/.omicos/provenance``."""
     import os
-    d = os.environ.get("OV_PROVENANCE_DIR") or os.path.join(
-        os.path.expanduser("~"), ".cache", "omicverse", "provenance")
+    d = os.environ.get("OMICOS_PROVENANCE_DIR") or os.environ.get("OV_PROVENANCE_DIR") or \
+        os.path.join(os.getcwd(), ".omicos", "provenance")
     os.makedirs(d, exist_ok=True)
     return d
+
+
+def _ledger_dirs(near: Optional[str] = None) -> List[str]:
+    """Ledger directories to read: the configured one, plus
+    ``<ancestor>/.omicos/provenance`` of ``near`` (a deliverable path), so a
+    record written by a script run elsewhere in the workspace is found."""
+    import os
+    dirs = [provenance_dir()]
+    if near:
+        p = os.path.dirname(os.path.abspath(str(near)))
+        while True:
+            c = os.path.join(p, ".omicos", "provenance")
+            if os.path.isdir(c) and c not in dirs:
+                dirs.append(c)
+            q = os.path.dirname(p)
+            if q == p:
+                break
+            p = q
+    return dirs
 
 
 def _append_ledger(name: str, records: Sequence[Dict[str, Any]]) -> None:
@@ -221,27 +251,51 @@ def _append_ledger(name: str, records: Sequence[Dict[str, Any]]) -> None:
         pass
 
 
-def _read_ledger(name: str) -> List[Dict[str, Any]]:
+def _read_ledger(name: str, near: Optional[str] = None) -> List[Dict[str, Any]]:
     import os
-    p = os.path.join(provenance_dir(), name)
-    if not os.path.exists(p):
-        return []
     out = []
-    with open(p) as fh:
-        for line in fh:
-            line = line.strip()
-            if line:
-                try:
-                    out.append(json.loads(line))
-                except ValueError:
-                    pass
+    for d in _ledger_dirs(near):
+        p = os.path.join(d, name)
+        if not os.path.exists(p):
+            continue
+        with open(p) as fh:
+            for line in fh:
+                line = line.strip()
+                if line:
+                    try:
+                        r = json.loads(line)
+                        r["_ledger"] = d
+                        out.append(r)
+                    except ValueError:
+                        pass
     return out
 
 
+def _hash_obj(v) -> Optional[str]:
+    """Content hash of an argument / output (DataFrames by values+index)."""
+    import hashlib
+    try:
+        import pandas as pd
+        import numpy as np
+        if isinstance(v, (pd.DataFrame, pd.Series)):
+            h = pd.util.hash_pandas_object(v, index=True).to_numpy()
+            return hashlib.sha256(h.tobytes()).hexdigest()[:16]
+        if isinstance(v, np.ndarray):
+            return hashlib.sha256(np.ascontiguousarray(v).tobytes()).hexdigest()[:16]
+        if isinstance(v, dict) and v and all(isinstance(x, (pd.DataFrame, pd.Series)) for x in v.values()):
+            return hashlib.sha256("".join(f"{k}:{_hash_obj(x)}" for k, x in sorted(v.items())).encode()).hexdigest()[:16]
+        return hashlib.sha256(json.dumps(_jsonable(v), sort_keys=True, default=str).encode()).hexdigest()[:16]
+    except Exception:
+        return None
+
+
 def record_output(function: str, table, keys: Sequence[str], values: Sequence[str], *,
-                  overrides: Optional[Sequence[Dict[str, Any]]] = None) -> Optional[str]:
+                  overrides: Optional[Sequence[Dict[str, Any]]] = None,
+                  protocol: Optional[Dict[str, Any]] = None,
+                  inputs: Optional[Dict[str, Any]] = None) -> Optional[str]:
     """Write a validated function's output (``keys`` + ``values`` columns of
-    ``table``) to the ledger; returns the file path."""
+    ``table``) to the ledger as a ``verse.provenance.v1`` record; returns the
+    output file path."""
     import os
     import uuid
     import pandas as pd
@@ -249,12 +303,26 @@ def record_output(function: str, table, keys: Sequence[str], values: Sequence[st
     if not keys or not values or any(k not in table.columns for k in keys):
         return None
     stamp = time.strftime("%Y%m%dT%H%M%S") + "_" + uuid.uuid4().hex[:6]
-    path = os.path.join(provenance_dir(), f"output_{stamp}.csv")
-    pd.DataFrame(table[keys + values]).astype(str).to_csv(path, index=False)
-    _append_ledger("outputs.jsonl", [{
-        "function": function, "file": path, "keys": keys, "values": values,
-        "n_rows": int(len(table)), "time": time.strftime("%Y-%m-%dT%H:%M:%S"),
-        "overrides": [r.get("parameter") for r in (overrides or [])]}])
+    fname = f"output_{stamp}.csv"
+    path = os.path.join(provenance_dir(), fname)
+    out = pd.DataFrame(table[keys + values]).astype(str)
+    out.to_csv(path, index=False)
+    lib = function.split(".")[0]
+    try:
+        import importlib
+        version = getattr(importlib.import_module(lib), "__version__", None)
+    except Exception:
+        version = None
+    proto = dict(protocol or {})
+    if "groups" in proto and proto["groups"] is not None:
+        proto["groups"] = [str(x) for x in proto["groups"]]
+    rec = {"schema": "verse.provenance.v1", "record_id": stamp, "function": function,
+           "library": lib, "version": version, "time": time.strftime("%Y-%m-%dT%H:%M:%S"),
+           "inputs": {k: _hash_obj(v) for k, v in (inputs or {}).items()},
+           "output_file": fname, "output_hash": _hash_obj(out), "keys": keys, "values": values,
+           "n_rows": int(len(out)), "protocol": proto or None,
+           "overrides": [r.get("parameter") for r in (overrides or [])]}
+    _append_ledger("outputs.jsonl", [rec])
     return path
 
 
@@ -292,8 +360,10 @@ def check_deliverable(deliverable, *, sep: Optional[str] = None, tolerance: floa
         if sep is None:
             sep = "\t" if name.endswith((".tsv", ".tab", ".txt")) else ","
         d = pd.read_csv(name, sep=sep, dtype=str, keep_default_na=False)
-    outs = _read_ledger("outputs.jsonl")
-    deps = _read_ledger("departures.jsonl")
+    near = None if isinstance(deliverable, pd.DataFrame) else name
+    outs = _read_ledger("outputs.jsonl", near)
+    deps = _read_ledger("departures.jsonl", near)
+    audits = [a for a in _read_ledger("audits.jsonl", near) if a.get("verdict") == "override_supported"]
     latest: Dict[Any, Dict[str, Any]] = {}
     for o in outs:
         if all(k in d.columns for k in o["keys"]):
@@ -301,7 +371,10 @@ def check_deliverable(deliverable, *, sep: Optional[str] = None, tolerance: floa
     rows = []
     for (fn, keys), o in latest.items():
         try:
-            lib = pd.read_csv(o["file"], dtype=str, keep_default_na=False)
+            import os
+            f = o.get("output_file") or o.get("file")
+            lib = pd.read_csv(f if os.path.isabs(f) else os.path.join(o["_ledger"], f),
+                              dtype=str, keep_default_na=False)
         except OSError:
             continue
         m = d.merge(lib, on=list(keys), how="inner", suffixes=("", "__lib"))
@@ -311,6 +384,8 @@ def check_deliverable(deliverable, *, sep: Optional[str] = None, tolerance: floa
             agree = float((m[v].astype(str) == m[v + "__lib"].astype(str)).mean())
             why = [x["reason"] for x in deps if fn.endswith(x["function"])
                    and (not x.get("columns") or v in x["columns"])]
+            why += [f"audit {x['audit_id']} passed" for x in audits
+                    if fn.endswith(str(x.get("function"))) and (not x.get("columns") or v in x["columns"])]
             status = "match" if agree >= 1.0 - tolerance else ("departs" if why else "UNEXPLAINED")
             rows.append({"function": fn, "column": v, "n_rows": int(len(m)),
                          "agreement": round(agree, 4), "status": status,
@@ -335,3 +410,141 @@ def check_deliverable(deliverable, *, sep: Optional[str] = None, tolerance: floa
         summary = "\n".join(lines)
     res.attrs["summary"] = summary
     return res
+
+
+# ── should an override replace the validated result? ─────────────────────────
+
+def _cramers_v(a, b) -> float:
+    import numpy as np
+    import pandas as pd
+    t = pd.crosstab(pd.Series(list(a), dtype=str), pd.Series(list(b), dtype=str)).to_numpy(float)
+    if t.size == 0 or min(t.shape) < 2:
+        return 0.0
+    n = t.sum()
+    e = t.sum(1, keepdims=True) @ t.sum(0, keepdims=True) / n
+    chi2 = float(((t - e) ** 2 / np.where(e > 0, e, 1)).sum())
+    return float(np.sqrt(chi2 / (n * (min(t.shape) - 1))))
+
+
+def _sign(rec: Dict[str, Any]) -> Dict[str, Any]:
+    """sha256 digest of the canonical record; plus HMAC-SHA256 when the runtime
+    provides ``$OMICOS_AUDIT_KEY`` (the key is the runtime's, so a record
+    cannot be forged by editing the ledger)."""
+    import hashlib
+    import hmac
+    import os
+    body = json.dumps({k: _jsonable(v) for k, v in rec.items()}, sort_keys=True, default=str)
+    rec["digest"] = hashlib.sha256(body.encode()).hexdigest()
+    key = os.environ.get("OMICOS_AUDIT_KEY")
+    rec["hmac"] = hmac.new(key.encode(), body.encode(), hashlib.sha256).hexdigest() if key else None
+    return rec
+
+
+def compare_to_default(y, fit_predict_default: Callable, fit_predict_override: Callable, *,
+                       groups=None, default_record: Optional[Dict[str, Any]] = None,
+                       confounder=None, n_candidates: int = 1,
+                       metric: str = "balanced_accuracy", min_effect: float = 0.0,
+                       max_group_drop: float = 0.05, n_boot: int = 2000, alpha: float = 0.05,
+                       function: Optional[str] = None, columns: Optional[Sequence[str]] = None,
+                       seed: int = 0) -> Dict[str, Any]:
+    """Audit an override against the validated default on the default's own protocol.
+
+    An agent's own check of a replacement is usually a random hold-out of the
+    same reference.  That hold-out shares every confound of the reference (a
+    technical batch coupled with the label), so it rewards predictors that
+    read the batch; and with many candidates on a small hold-out the best one
+    wins by chance (winner's curse; Cawley & Talbot, JMLR 2010).  Here default
+    and override are refitted on the **same leave-one-group-out splits**
+    (``groups``, or ``default_record['protocol']['groups']``: batch, cohort,
+    site -- the unit the result must generalise across; Roberts et al.,
+    Ecography 2017), and the override passes only if
+
+    1. **effect**: the bootstrap lower bound of its paired improvement, at
+       level ``alpha / n_candidates`` (Bonferroni over every alternative
+       tried), exceeds ``min_effect``;
+    2. **no collapse**: its worst held-out group scores no more than
+       ``max_group_drop`` below the default's worst group;
+    3. **no confound** (with ``confounder``, a per-sample technical
+       covariate): Cramér's V between its predictions and the confounder is
+       at most the V between the true labels and the confounder + 0.1.
+
+    ``fit_predict_*(train_idx, test_idx) -> predictions for test_idx``.
+    Returns the audit record (``verdict`` ``override_supported`` /
+    ``keep_default``, ``reasons``, scores, CI, per-group table), also written
+    to ``audits.jsonl`` in the run-local ledger with a digest (and an HMAC
+    when the runtime sets ``$OMICOS_AUDIT_KEY``).  Contract:
+    ``docs/evolution/override-audit-contract.md``.
+    """
+    import uuid
+    import numpy as np
+    import pandas as pd
+    from sklearn import metrics as _m
+    y = np.asarray(list(y)).astype(str)
+    if groups is None and default_record:
+        groups = ((default_record.get("protocol") or {}).get("groups"))
+    if groups is None:
+        raise ValueError("groups (or default_record with protocol.groups) are required")
+    g = np.asarray(list(groups)).astype(str)
+    if len(y) != len(g):
+        raise ValueError("y and groups must have the same length")
+    score = {"balanced_accuracy": _m.balanced_accuracy_score,
+             "accuracy": _m.accuracy_score}[metric]
+    ug = np.unique(g)
+    if len(ug) < 2:
+        raise ValueError("need >= 2 groups for leave-one-group-out evaluation")
+    p_def = np.empty(len(y), dtype=object)
+    p_ovr = np.empty(len(y), dtype=object)
+    per = []
+    for grp in ug:
+        te, tr = np.flatnonzero(g == grp), np.flatnonzero(g != grp)
+        a = np.asarray(fit_predict_default(tr, te)).astype(str)
+        b = np.asarray(fit_predict_override(tr, te)).astype(str)
+        p_def[te], p_ovr[te] = a, b
+        per.append({"group": grp, "n": int(len(te)),
+                    "default": float(_m.accuracy_score(y[te], a)),
+                    "override": float(_m.accuracy_score(y[te], b))})
+    p_def, p_ovr = p_def.astype(str), p_ovr.astype(str)
+    s_def, s_ovr = float(score(y, p_def)), float(score(y, p_ovr))
+    rng = np.random.default_rng(seed)
+    diffs = np.empty(n_boot)
+    for i in range(n_boot):
+        k = rng.integers(0, len(y), len(y))
+        diffs[i] = score(y[k], p_ovr[k]) - score(y[k], p_def[k])
+    lvl = alpha / max(1, int(n_candidates))
+    lo, hi = float(np.quantile(diffs, lvl)), float(np.quantile(diffs, 1 - lvl))
+    per_df = pd.DataFrame(per)
+    checks, reasons = {}, []
+    checks["effect"] = lo > min_effect
+    if not checks["effect"]:
+        reasons.append(f"effect: {metric} {s_ovr:.3f} vs default {s_def:.3f} under leave-one-group-out; "
+                       f"{100 * (1 - 2 * lvl):.1f}% CI of the difference [{lo:+.3f}, {hi:+.3f}] "
+                       f"does not exceed {min_effect} (n_candidates={n_candidates})")
+    worst_d, worst_o = float(per_df["default"].min()), float(per_df["override"].min())
+    checks["no_collapse"] = worst_o >= worst_d - max_group_drop
+    if not checks["no_collapse"]:
+        reasons.append(f"collapse: worst held-out group accuracy {worst_o:.3f} vs default {worst_d:.3f}")
+    v_pred = v_true = None
+    if confounder is not None:
+        c = np.asarray(list(confounder)).astype(str)
+        v_true, v_pred = _cramers_v(y, c), _cramers_v(p_ovr, c)
+        checks["no_confound"] = v_pred <= v_true + 0.1
+        if not checks["no_confound"]:
+            reasons.append(f"confound: predictions follow the covariate (Cramér's V {v_pred:.2f}) "
+                           f"more than the true labels do ({v_true:.2f})")
+    ok = all(checks.values())
+    if ok:
+        reasons.append(f"{metric} {s_ovr:.3f} vs default {s_def:.3f} under leave-one-group-out, "
+                       f"CI [{lo:+.3f}, {hi:+.3f}]")
+    rec = {"schema": "verse.audit.v1", "audit_id": uuid.uuid4().hex[:12],
+           "time": time.strftime("%Y-%m-%dT%H:%M:%S"), "function": function,
+           "columns": list(columns) if columns else None,
+           "default_record_id": (default_record or {}).get("record_id"),
+           "protocol": "leave-one-group-out", "splits_hash": _hash_obj(g), "n": int(len(y)),
+           "n_groups": int(len(ug)), "metric": metric, "default_score": s_def,
+           "override_score": s_ovr, "diff_ci": [lo, hi], "alpha": alpha,
+           "n_candidates": int(n_candidates), "min_effect": min_effect, "checks": checks,
+           "cramers_v_pred": v_pred, "cramers_v_true": v_true,
+           "verdict": "override_supported" if ok else "keep_default", "reasons": reasons}
+    _append_ledger("audits.jsonl", [_sign(dict(rec))])
+    rec["per_group"] = per_df
+    return rec

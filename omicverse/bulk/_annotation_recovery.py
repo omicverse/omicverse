@@ -364,6 +364,21 @@ def _profile_similarity(A: pd.DataFrame, B: pd.DataFrame) -> Tuple[float, int]:
               "batch_key='technical_batch', availability=avail)"],
     related=["bulk.annotation_batch_center", "bulk.fit_annotation_classifier"],
 )
+def _recovery_protocol(result, args):
+    rep = result[1] if isinstance(result, tuple) and len(result) > 1 else None
+    scores = None
+    if rep is not None and len(rep):
+        cols = [c for c in ("cohort", "field", "method", "cv_ba", "lobo_ba") if c in rep.columns]
+        scores = rep[cols].astype(str).to_dict("records")
+    ref = args.get("reference")
+    bk = args.get("batch_key")
+    groups = None
+    if ref is not None and bk and bk in getattr(ref, "columns", []):
+        groups = ref[bk].astype(str).tolist()
+    return {"name": "per-cohort repeated CV + leave-one-batch-out (lobo_ba)",
+            "group_key": bk, "groups": groups, "scores": scores}
+
+
 def _recovery_output(result, args):
     pred = result[0] if isinstance(result, tuple) else result
     return pred, [args["cohort_key"], args["sample_key"]], list(args["fields"])
@@ -371,7 +386,7 @@ def _recovery_output(result, args):
 
 @validated_defaults('log', 'batch_adjust', 'label_aware_iter', 'ks', 'top',
                     note='Defaults validated on simulated confounded cohorts (one call, all cohorts).',
-                    output=_recovery_output)
+                    output=_recovery_output, protocol=_recovery_protocol)
 def recover_sample_annotations(
     expression: Mapping[str, pd.DataFrame],
     reference: pd.DataFrame,
