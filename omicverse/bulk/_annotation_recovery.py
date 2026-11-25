@@ -375,7 +375,7 @@ def _recovery_protocol(result, args):
     groups = None
     if ref is not None and bk and bk in getattr(ref, "columns", []):
         groups = ref[bk].astype(str).tolist()
-    return {"name": "per-cohort repeated CV + leave-one-batch-out (lobo_ba)",
+    return {"name": "leave_one_batch_out",
             "group_key": bk, "groups": groups, "scores": scores}
 
 

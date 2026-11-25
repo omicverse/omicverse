@@ -398,4 +398,4 @@ __all__ = [
 from ._provenance import (DefaultOverrideWarning, validated_defaults, provenance_log,
                           provenance_report, write_provenance, clear_provenance,
                           provenance_dir, record_output, declare_departure, check_deliverable,
-                          compare_to_default)
+                          compare_to_default, audit_override)

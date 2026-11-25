@@ -172,3 +172,33 @@ def test_compare_to_default_accepts_real_improvement(tmp_path, monkeypatch):
     assert res["verdict"] == "override_supported"
     a = _read_ledger("audits.jsonl")[-1]
     assert a["function"] == "toy_classifier" and a["verdict"] == "override_supported" and a["digest"]
+
+
+def test_omicos_envelopes_and_audit_override(tmp_path, monkeypatch):
+    """omicos.provenance/1: signed library_default + override_audit bound to the file hash."""
+    import hashlib, hmac, json, os
+    from sklearn.linear_model import LogisticRegression
+    from omicverse.utils._provenance import audit_override
+    monkeypatch.setenv("OMICOS_PROVENANCE_DIR", str(tmp_path / "store"))
+    monkeypatch.setenv("OMICOS_PROVENANCE_KEY", "k3y")
+    lib = _labeler(30)
+    recs = [json.load(open(tmp_path / "store" / "records" / f))
+            for f in os.listdir(tmp_path / "store" / "records")]
+    env = recs[0]
+    assert env["schema"] == "omicos.provenance/1"
+    assert env["mac"] == hmac.new(b"k3y", env["payload"].encode(), hashlib.sha256).hexdigest()
+    pl = json.loads(env["payload"])
+    assert pl["kind"] == "library_default" and pl["output"]["table"]["key"] == ["cohort", "sample"]
+    assert (tmp_path / "store" / "objects" / pl["output"]["sha256"]).exists()
+    x, y, b = _confounded(2)
+    cand = tmp_path / "cand.csv"
+    lib.to_csv(cand, index=False)
+    res = audit_override(pl["id"], str(cand), y=y, groups=b, confounder=b,
+                         fit_predict_default=lambda tr, te: LogisticRegression().fit(x[tr, None], y[tr]).predict(x[te, None]),
+                         fit_predict_override=lambda tr, te: np.full(len(te), 1))
+    assert res["verdict"] == "keep_default"
+    au = [json.loads(json.load(open(tmp_path / "store" / "records" / f))["payload"])
+          for f in os.listdir(tmp_path / "store" / "records")]
+    au = [a for a in au if a["kind"] == "override_audit"][0]
+    assert au["verdict"] == "fail" and au["default_id"] == pl["id"]
+    assert au["candidate"]["sha256"] == hashlib.sha256(cand.read_bytes()).hexdigest()

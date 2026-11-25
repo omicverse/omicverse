@@ -56,7 +56,7 @@ from typing import Any, Callable, Dict, List, Optional, Sequence
 __all__ = ["DefaultOverrideWarning", "validated_defaults", "provenance_log",
            "provenance_report", "write_provenance", "clear_provenance",
            "provenance_dir", "record_output", "declare_departure", "check_deliverable",
-           "compare_to_default"]
+           "compare_to_default", "audit_override"]
 
 _LOG: List[Dict[str, Any]] = []
 
@@ -289,6 +289,62 @@ def _hash_obj(v) -> Optional[str]:
         return None
 
 
+# ── omicos.provenance/1 (runtime contract, omicos-core docs/override-audit.md) ─
+
+def _omicos_write(payload: Dict[str, Any]) -> Optional[str]:
+    """Write a signed ``omicos.provenance/1`` envelope to ``<store>/records``.
+    No-op unless the runtime set ``$OMICOS_PROVENANCE_KEY``."""
+    import hashlib
+    import hmac
+    import os
+    import uuid
+    key = os.environ.get("OMICOS_PROVENANCE_KEY")
+    if not key:
+        return None
+    payload.setdefault("id", uuid.uuid4().hex)
+    text = json.dumps(payload, ensure_ascii=False, default=str)
+    mac = hmac.new(key.encode(), text.encode(), hashlib.sha256).hexdigest()
+    d = os.path.join(provenance_dir(), "records")
+    os.makedirs(d, exist_ok=True)
+    with open(os.path.join(d, f"{payload['id']}.json"), "w") as fh:
+        json.dump({"schema": "omicos.provenance/1", "payload": text, "mac": mac}, fh)
+    return payload["id"]
+
+
+def _snapshot(path: str) -> str:
+    import hashlib
+    import os
+    data = open(path, "rb").read()
+    sha = hashlib.sha256(data).hexdigest()
+    d = os.path.join(provenance_dir(), "objects")
+    os.makedirs(d, exist_ok=True)
+    with open(os.path.join(d, sha), "wb") as fh:
+        fh.write(data)
+    return sha
+
+
+def _scores_dict(scores) -> Dict[str, Any]:
+    """Protocol scores as a flat dict (means of numeric per-row scores)."""
+    import numpy as np
+    if isinstance(scores, dict):
+        return scores
+    out: Dict[str, Any] = {}
+    if isinstance(scores, list) and scores and isinstance(scores[0], dict):
+        for k in scores[0]:
+            vals = []
+            for r in scores:
+                try:
+                    v = r.get(k)
+                    v = float(v) if not isinstance(v, dict) else np.nan
+                    if np.isfinite(v):
+                        vals.append(v)
+                except (TypeError, ValueError):
+                    pass
+            if vals:
+                out[f"mean_{k}"] = float(np.mean(vals))
+    return out
+
+
 def record_output(function: str, table, keys: Sequence[str], values: Sequence[str], *,
                   overrides: Optional[Sequence[Dict[str, Any]]] = None,
                   protocol: Optional[Dict[str, Any]] = None,
@@ -323,6 +379,29 @@ def record_output(function: str, table, keys: Sequence[str], values: Sequence[st
            "n_rows": int(len(out)), "protocol": proto or None,
            "overrides": [r.get("parameter") for r in (overrides or [])]}
     _append_ledger("outputs.jsonl", [rec])
+    try:
+        sha = _snapshot(path)
+        payload = {
+            "kind": "library_default", "id": stamp,
+            "created_at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
+            "library": {"name": lib, "version": str(version) if version else None},
+            "function": function,
+            "inputs": [{"name": k, "sha256": v} for k, v in rec["inputs"].items()],
+            "output": {"path": path, "sha256": sha, "format": "table",
+                       "table": {"key": keys, "columns": values, "delimiter": ","}},
+            "compare": {"max_disagreement": 0.0},
+        }
+        if proto:
+            payload["robustness"] = {"protocol": proto.get("name"),
+                                     "split": {"group_key": proto.get("group_key"),
+                                               "groups_sha256": _hash_obj(proto.get("groups"))},
+                                     "scores": _scores_dict(proto.get("scores"))}
+        payload["audit"] = {"function": "ov.utils.audit_override",
+                            "hint": f"ov.utils.audit_override('{stamp}', '<deliverable>', y=..., "
+                                    "fit_predict_default=..., fit_predict_override=...)"}
+        _omicos_write(payload)
+    except Exception as e:   # provenance must never break the analysis
+        warnings.warn(f"provenance: omicos record not written ({type(e).__name__}: {e})")
     return path
 
 
@@ -548,3 +627,51 @@ def compare_to_default(y, fit_predict_default: Callable, fit_predict_override: C
     _append_ledger("audits.jsonl", [_sign(dict(rec))])
     rec["per_group"] = per_df
     return rec
+
+
+def _find_record(record_id: str) -> Optional[Dict[str, Any]]:
+    for r in _read_ledger("outputs.jsonl"):
+        if r.get("record_id") == record_id:
+            return r
+    return None
+
+
+def audit_override(record_id: str, candidate_path: str, *, y, fit_predict_default: Callable,
+                   fit_predict_override: Callable, groups=None, confounder=None,
+                   n_candidates: int = 1, **kwargs) -> Dict[str, Any]:
+    """Trusted audit routine for the omicos override gate (``omicos.provenance/1``).
+
+    Runs :func:`compare_to_default` on the default's own protocol (the
+    record's leave-one-group-out ``groups`` unless given) and writes a signed
+    ``override_audit`` record bound to the candidate file's current sha256 and
+    to ``record_id``.  ``verdict`` is ``pass`` only when the override clears
+    the effect (Bonferroni over ``n_candidates``), collapse and confound
+    checks.  ``y`` / ``groups`` / ``confounder`` are the labelled reference
+    rows the record's protocol used; ``fit_predict_*(train_idx, test_idx)``
+    refit each method on the training rows.  Returns the audit dict.
+    """
+    import hashlib
+    rec = _find_record(record_id)
+    if rec is None:
+        raise ValueError(f"no library_default record {record_id!r} in {provenance_dir()}")
+    res = compare_to_default(y, fit_predict_default, fit_predict_override, groups=groups,
+                             default_record=rec, confounder=confounder,
+                             n_candidates=n_candidates, function=rec["function"], **kwargs)
+    proto = rec.get("protocol") or {}
+    sha = hashlib.sha256(open(candidate_path, "rb").read()).hexdigest()
+    payload = {"kind": "override_audit", "default_id": record_id,
+               "created_at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
+               "candidate": {"path": candidate_path, "sha256": sha},
+               "protocol": proto.get("name") or "leave_one_group_out",
+               "split": {"group_key": proto.get("group_key"),
+                         "groups_sha256": _hash_obj(proto.get("groups"))},
+               "scores": {"default": res["default_score"], "candidate": res["override_score"],
+                          "diff_ci": res["diff_ci"]},
+               "checks": res["checks"], "n_candidates": int(n_candidates),
+               "verdict": "pass" if res["verdict"] == "override_supported" else "fail",
+               "reason": "; ".join(res["reasons"]),
+               "library": {"name": rec.get("library"), "version": rec.get("version")},
+               "function": "ov.utils.audit_override"}
+    res["omicos_audit_id"] = _omicos_write(payload)
+    res["candidate_sha256"] = sha
+    return res
