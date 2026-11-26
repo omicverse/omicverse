@@ -242,11 +242,8 @@ def _workers():
 def _decode_threads():
     """Decoder threads per block read: the CPUs shared by the concurrent
     block reads (compressed h5ad files are bound by decompression)."""
-    try:
-        n = len(os.sched_getaffinity(0))
-    except AttributeError:  # not Linux
-        n = os.cpu_count() or 1
-    return max(1, n // _workers())
+    from .._backend import effective_cpu_count
+    return max(1, effective_cpu_count() // _workers())
 
 
 def _copy_from_stage(dst, src):

@@ -41,6 +41,9 @@ OOM_NATIVE: set = {
     "omicverse.pp._highly_variable_genes.highly_variable_genes",
     "omicverse.pp._pca.pca",
     "omicverse.pp._scrublet.scrublet",
+    # PaCMAP / LocalMAP only read adata.obsm[use_rep]
+    "omicverse.pp._embed_brisc.pacmap",
+    "omicverse.pp._embed_brisc.localmap",
     # ---- ov.single ----
     # find_markers carries its own guard (streams COSG with backend='cpp',
     # materialises the other methods itself).
