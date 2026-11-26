@@ -430,6 +430,7 @@ def check_deliverable(deliverable, *, sep: Optional[str] = None, tolerance: floa
     ``attrs['summary']`` is a printable verdict.  ``status``: ``match``
     (agreement >= 1 - ``tolerance``), ``departs`` (a reason was declared) or
     ``UNEXPLAINED``."""
+    import numpy as np
     import pandas as pd
     if isinstance(deliverable, pd.DataFrame):
         d = deliverable.astype(str)
@@ -438,7 +439,10 @@ def check_deliverable(deliverable, *, sep: Optional[str] = None, tolerance: floa
         name = str(deliverable)
         if sep is None:
             sep = "\t" if name.endswith((".tsv", ".tab", ".txt")) else ","
-        d = pd.read_csv(name, sep=sep, dtype=str, keep_default_na=False)
+        if name.endswith(".json"):
+            d = _json_table(name, outs_keys=[o["keys"] for o in _read_ledger("outputs.jsonl", name)])
+        else:
+            d = pd.read_csv(name, sep=sep, dtype=str, keep_default_na=False)
     near = None if isinstance(deliverable, pd.DataFrame) else name
     outs = _read_ledger("outputs.jsonl", near)
     deps = _read_ledger("departures.jsonl", near)
@@ -460,7 +464,7 @@ def check_deliverable(deliverable, *, sep: Optional[str] = None, tolerance: floa
         for v in o["values"]:
             if v not in d.columns or len(m) == 0:
                 continue
-            agree = float((m[v].astype(str) == m[v + "__lib"].astype(str)).mean())
+            agree = float(np.mean([_same_cell(x, y) for x, y in zip(m[v], m[v + "__lib"])]))
             why = [x["reason"] for x in deps if fn.endswith(x["function"])
                    and (not x.get("columns") or v in x["columns"])]
             why += [f"audit {x['audit_id']} passed" for x in audits
@@ -489,6 +493,46 @@ def check_deliverable(deliverable, *, sep: Optional[str] = None, tolerance: floa
         summary = "\n".join(lines)
     res.attrs["summary"] = summary
     return res
+
+
+_NULLS = {"", "none", "nan", "null", "na", "<na>"}
+
+
+def _same_cell(a, b) -> bool:
+    """Equal deliverable cells: same text, both empty / null, or the same number
+    (``75`` == ``75.0``)."""
+    a, b = str(a).strip(), str(b).strip()
+    if a == b or (a.lower() in _NULLS and b.lower() in _NULLS):
+        return True
+    try:
+        return abs(float(a) - float(b)) <= 1e-9 * max(1.0, abs(float(b)))
+    except ValueError:
+        return False
+
+
+def _json_table(path: str, outs_keys):
+    """A JSON deliverable as a table: the first array of objects (searched
+    depth-first) that carries the key fields of a recorded output; nested
+    values are kept as JSON text."""
+    import pandas as pd
+    with open(path) as fh:
+        obj = json.load(fh)
+    want = [set(k) for k in outs_keys] or [set()]
+
+    def walk(o):
+        if isinstance(o, list) and o and all(isinstance(x, dict) for x in o):
+            if any(k <= set().union(*[set(x) for x in o]) for k in want):
+                return o
+        items = o.values() if isinstance(o, dict) else (o if isinstance(o, list) else [])
+        for v in items:
+            r = walk(v)
+            if r is not None:
+                return r
+        return None
+
+    rows = walk(obj) or []
+    return pd.DataFrame([{k: (json.dumps(v) if isinstance(v, (list, dict)) else
+                              ("" if v is None else str(v))) for k, v in r.items()} for r in rows])
 
 
 # ── should an override replace the validated result? ─────────────────────────
