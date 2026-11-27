@@ -277,3 +277,38 @@ def test_pipeline_end_to_end_with_dummy_backbone(tmp_path, monkeypatch):
                            cache_dir=str(tmp_path / "cache"), n_workers=2, log=None)
     assert len(res2["labels"]) == len(q)
     assert res2["report"]["mode"] in ("verified-pairs", "hdbscan")
+
+
+def test_rerank_shape_and_separation():
+    """k-reciprocal re-ranking (Zhong et al. 2017) returns a symmetric similarity
+    that still separates identities; tiny inputs are returned unchanged."""
+    from omicverse.tl._reid import reid_rerank
+    x, y = _population(60, 6, noise=0.5, seed=3)
+    s = x @ x.T
+    r = reid_rerank(s, k1=10)
+    assert r.shape == s.shape and np.allclose(r, r.T)
+    assert reid_pair_auc(r, y) > 0.9
+    assert np.array_equal(reid_rerank(s[:3, :3]), s[:3, :3])
+
+
+def test_open_set_rolling_origin_with_dates():
+    """Dated gallery + later queries -> rolling-origin backtests calibrate the cuts."""
+    rng = np.random.default_rng(4)
+    x, y = _population(120, 10, seed=4)
+    first = rng.integers(0, 8, size=120)            # year an individual is first seen
+    year = first[y] + rng.integers(0, 3, size=len(y))
+    day = pd.to_datetime("2000-01-01") + pd.to_timedelta(year * 365 + rng.integers(0, 300, len(y)), unit="D")
+    q = np.flatnonzero(year >= 8)
+    g = np.flatnonzero(year < 8)
+    gt, qt = day[g], day[q]
+    xq, xg = x[q], x[g]
+    res = reid_open_set_cluster(xq @ xq.T, sim_qg=xq @ xg.T, gallery_labels=y[g],
+                                sim_gg=xg @ xg.T, gallery_times=gt, query_times=qt,
+                                n_rep=3, log=None)
+    assert res["mode"] == "rolling-origin"
+    assert adjusted_rand_score(y[q], res["labels"]) > 0.8
+    # queries not later than the gallery -> random simulation
+    res2 = reid_open_set_cluster(xq @ xq.T, sim_qg=xq @ xg.T, gallery_labels=y[g],
+                                 sim_gg=xg @ xg.T, gallery_times=gt, query_times=gt[:len(q)],
+                                 n_rep=2, rerank=False, log=None)
+    assert res2["mode"] == "reference-simulation" and res2["rerank"] is False
