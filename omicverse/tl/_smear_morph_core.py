@@ -67,7 +67,9 @@ __all__ = [
     "balanced_weights", "group_holdout_predict", "species_balanced_recall",
     "group_holdout_select", "fit_hierarchy", "predict_hierarchy",
     "group_laplace_prior", "fit_two_axis_classifier", "predict_two_axis",
-    "group_holdout_two_axis", "resolve_image_path", "measure_box_tables",
+    "group_holdout_two_axis", "STAIN_FEATURE_SETS", "stain_feature_columns",
+    "DEFAULT_STAIN_FEATURE", "DEFAULT_PRIOR",
+    "em_stain_prior", "effective_stain_prior", "resolve_image_path", "measure_box_tables",
     "save_predictor", "load_predictor", "run_predictor", "PREDICT_PY",
 ]
 
@@ -339,8 +341,61 @@ def _colour_features(rec, od, crop, union, total, stain_vectors, bg_ring_px):
         d0 = max(amt[:, 0].mean() - bga[0], 0.0)
         d1 = max(amt[:, 1].mean() - bga[1], 0.0)
         rec["stain_primary_fraction_bgsub"] = float(d0 / (d0 + d1 + _EPS))
+    _core_colour_features(rec, pix_od, stain_vectors, bg_od.mean(0))
     # one scalar colour index: primary-dye fraction (larger = more primary dye retained)
     rec["stain_index"] = rec.get("stain_primary_fraction", rec["stain_red_od_share"])
+
+
+def _core_colour_features(rec, pix_od, stain_vectors, bg_od=None, core_q=0.5):
+    """Amount-invariant colour of the object's optically densest pixels (``stain_core_*``).
+
+    Whole-object averages mix the cell body with its thin rim, halo and the
+    local background, whose colour depends on focus, cell density and
+    counterstain strength rather than on dye retention; the darkest half of the
+    object's pixels (by total optical density) is the cell body.  On those
+    pixels, per pixel then median over pixels (robust to a few blended rim or
+    debris pixels):
+
+    * ``stain_core_primary_fraction`` -- primary share of the two unmixed dye
+      amounts (colour deconvolution, Ruifrok & Johnston 2001, Anal Quant Cytol
+      Histol 23:291; dye directions estimated by non-negative factorisation
+      in the spirit of Vahadane et al. 2016, IEEE TMI 35:1962);
+    * ``stain_core_red_od_share`` -- label-free red-channel share of the red +
+      green optical density (crystal violet absorbs red, safranin / fuchsin
+      hardly), needs no dye vectors;
+    * ``stain_core_hsd_cx`` / ``stain_core_hsd_cy`` -- hue-saturation-density
+      chromaticity of the optical density (van der Laak et al. 2000,
+      Cytometry 39:275): ``cx = OD_R / D - 1``, ``cy = (OD_G - OD_B) /
+      (sqrt(3) D)`` with ``D`` the mean channel OD; independent of dye amount
+      and of a uniform intensity scaling;
+    * ``*_bgsub`` versions of the primary fraction and ``cx`` after removing the
+      mean optical density of a ring of local background (glass, mucus,
+      protein, out-of-focus neighbours) from every core pixel -- the analogue
+      of the background correction applied before colour deconvolution.
+    """
+    w = pix_od.sum(1)
+    if w.size < 3:
+        return
+    core = pix_od[w >= np.quantile(w, core_q)]
+    d = core.mean(1) + _EPS
+    rec["stain_core_od_mean"] = float(core.sum(1).mean())
+    rec["stain_core_red_od_share"] = float(np.median(core[:, 0] / (core[:, 0] + core[:, 1] + _EPS)))
+    rec["stain_core_hsd_cx"] = float(np.median(core[:, 0] / d - 1.0))
+    rec["stain_core_hsd_cy"] = float(np.median((core[:, 1] - core[:, 2]) / (np.sqrt(3.0) * d)))
+    if stain_vectors is not None:
+        amt = _unmix(core, stain_vectors)
+        rec["stain_core_primary_fraction"] = float(np.median(amt[:, 0] / (amt.sum(1) + _EPS)))
+    if bg_od is None:
+        return
+    sub = np.clip(core - np.asarray(bg_od, float)[None, :], 0.0, None)
+    ok = sub.sum(1) > 0.05
+    if ok.sum() < 3:
+        return
+    sub = sub[ok]
+    rec["stain_core_hsd_cx_bgsub"] = float(np.median(sub[:, 0] / (sub.mean(1) + _EPS) - 1.0))
+    if stain_vectors is not None:
+        amt = _unmix(sub, stain_vectors)
+        rec["stain_core_primary_fraction_bgsub"] = float(np.median(amt[:, 0] / (amt.sum(1) + _EPS)))
 
 
 def measure_objects(image, boxes, um_per_px, stain_vectors=None, white=None,
@@ -757,10 +812,114 @@ def group_laplace_prior(context, outcome, groups, outcomes=None, alpha=1.0):
     return prior
 
 
+# Library defaults of ``fit_two_axis_classifier``.  Chosen by comparing stain sets
+# {all, fraction, core, ratios} x priors {group, tempered, flat, em} on (i) leave-one-
+# species-out and 4-fold group splits of a 17-species development Gram-stain cohort,
+# (ii) train-on-development / test-on the CC-BY positive-blood-culture Gram-stain set of
+# figshare 26004610 (57 species) and the reverse, (iii) a stress test on the CC-BY
+# M-ROSE respiratory-specimen set of zenodo 10526360.  "core" + "tempered" (weight 0.5)
+# was the only combination that improved the development leave-one-species-out
+# macro / Gram recall without lowering the worst class or worst species, and it reduced
+# the unseen-cohort species with Gram recall < 50 % from 7 to 4 of 50 (blood culture).
+# "em" was best on the development splits but collapses when the colour score itself
+# is shifted (respiratory specimens), so it stays opt-in.  ``"all"`` / ``"group"`` give
+# the original behaviour.
+DEFAULT_STAIN_FEATURE = "core"
+DEFAULT_PRIOR = "tempered"
+
+STAIN_FEATURE_SETS = {
+    # whole-object primary-dye fraction (``stain_index`` of earlier versions)
+    "fraction": ("stain_primary_fraction",),
+    # amount-invariant colour of the densest pixels (see ``_core_colour_features``)
+    "core": ("stain_core_primary_fraction", "stain_core_red_od_share",
+             "stain_core_hsd_cx", "stain_core_hsd_cy",
+             "stain_core_primary_fraction_bgsub", "stain_core_hsd_cx_bgsub"),
+    # label-free optical-density chromaticity only (no dye vectors)
+    "core_chroma": ("stain_core_red_od_share", "stain_core_hsd_cx", "stain_core_hsd_cy"),
+    # whole-object and core composition ratios (no amounts / intensities)
+    "ratios": ("stain_primary_fraction", "stain_red_od_share", "stain_primary_pixel_share",
+               "stain_core_primary_fraction", "stain_core_red_od_share",
+               "stain_core_hsd_cx", "stain_core_hsd_cy", "stain_primary_fraction_bgsub",
+               "stain_core_primary_fraction_bgsub", "stain_core_hsd_cx_bgsub"),
+}
+
+
+def stain_feature_columns(names, stain_feature="all"):
+    """Field-summary columns of the chosen per-object colour measurements.
+
+    ``"all"``: every ``stain_*`` column (``feature_columns(names, "stain")``);
+    a key of ``STAIN_FEATURE_SETS`` or a list of per-object keys: the field
+    summaries (``<key>_q10`` ... ``<key>_std``) of exactly those keys."""
+    if isinstance(stain_feature, str) and stain_feature == "all":
+        return feature_columns(names, "stain")
+    keys = STAIN_FEATURE_SETS[stain_feature] if isinstance(stain_feature, str) else tuple(stain_feature)
+    stats = ("_q10", "_q25", "_q50", "_q75", "_q90", "_mean", "_std")
+    cols = [c for c in names if any(c == k + st for k in keys for st in stats)]
+    if not cols:
+        raise ValueError(f"no field columns for stain_feature={stain_feature!r}")
+    return cols
+
+
+def _logit(p):
+    p = float(np.clip(p, 1e-6, 1 - 1e-6))
+    return float(np.log(p / (1 - p)))
+
+
+def em_stain_prior(llr, shape_weight, prior0, strength=2.0, n_iter=100, tol=1e-6):
+    """Batch-adapted P(positive stain | shape) by EM label-shift estimation.
+
+    Saerens, Latinne & Decaestecker (2002, Neural Comput 14:21): with a
+    classifier whose output is a prior-free log likelihood ratio ``llr`` (the
+    calibrated, class-balanced stain stage), the prior of the new batch is the
+    fixed point of ``pi = mean_i posterior_i(pi)``.  Here per shape class, each
+    field weighted by its shape probability, with ``strength`` pseudo-fields at
+    ``prior0`` (a MAP / Dirichlet anchor so small or one-sided batches do not
+    collapse to 0 or 1).  Returns the adapted prior probability."""
+    llr = np.asarray(llr, float)
+    w = np.asarray(shape_weight, float)
+    pi = float(prior0)
+    for _ in range(n_iter):
+        post = 1.0 / (1.0 + np.exp(-(llr + _logit(pi))))
+        new = (float((w * post).sum()) + strength * prior0) / (float(w.sum()) + strength)
+        if abs(new - pi) < tol:
+            pi = new
+            break
+        pi = new
+    return pi
+
+
+def effective_stain_prior(model, p_shape, shape_classes, llr):
+    """Prior log-odds of the positive stain per shape class used by ``predict_two_axis``."""
+    pos = model["positive_stain"]
+    mode = model.get("prior_mode", "group")
+    wt = model.get("prior_weight", 1.0)
+    out = {}
+    for shp in shape_classes:
+        tab = model["prior"].get(shp)
+        if tab is None:
+            continue
+        lo = _logit(tab[pos])
+        if mode == "group":
+            out[shp] = lo
+        elif mode == "flat":
+            out[shp] = 0.0
+        elif mode == "tempered":
+            out[shp] = wt * lo
+        elif mode == "em":
+            p0 = 1.0 / (1.0 + np.exp(-wt * lo))
+            pi = em_stain_prior(llr, p_shape[:, shape_classes.index(shp)], p0,
+                                strength=model.get("em_strength", 2.0))
+            out[shp] = _logit(pi)
+        else:
+            raise ValueError(mode)
+    return out
+
+
 def fit_two_axis_classifier(X, labels, groups, label_axes, feature_names=None,
                             shape_columns=None, stain_columns=None, positive_stain=None,
                             shape_estimator="random_forest", stain_C=0.1,
-                            prior_alpha=1.0, calibrate="group", seed=0):
+                            prior_alpha=1.0, calibrate="group", seed=0, stain_feature=None,
+                            prior=None, prior_weight=0.5, em_strength=2.0):
     """Field classifier that keeps morphology and stain as separate evidence.
 
     label_axes : {label: (shape_value, stain_value)}; ``stain_value`` None for
@@ -782,7 +941,22 @@ def fit_two_axis_classifier(X, labels, groups, label_axes, feature_names=None,
         a one-variable balanced logistic fit on its leave-one-group-out values,
         so its confidence is what it earns on groups it never saw (a model that
         separates development slides perfectly is otherwise overconfident on
-        new ones and overrides the shape prior); ``None`` keeps the raw logit."""
+        new ones and overrides the shape prior); ``None`` keeps the raw logit.
+    stain_feature : which per-object colour measurements feed the stain stage
+        when ``stain_columns`` is not given (see ``stain_feature_columns``);
+        None = ``DEFAULT_STAIN_FEATURE`` (``"core"``): ``"all"`` every ``stain_*`` field summary (the original behaviour), a
+        preset name of ``STAIN_FEATURE_SETS`` or a list of per-object keys.
+    prior : how P(stain | shape) enters the decision (``predict_two_axis``);
+        None = ``DEFAULT_PRIOR`` (``"tempered"``):
+        ``"group"`` the group-counted Laplace prior at full weight (original);
+        ``"tempered"`` its log-odds multiplied by ``prior_weight`` (a power
+        prior: a shape -> stain association learned from a handful of species
+        is only partly trusted on species never seen);
+        ``"flat"`` no shape prior (stain decided by colour alone);
+        ``"em"`` the tempered prior re-estimated on every prediction batch by
+        the EM label-shift procedure of Saerens, Latinne & Decaestecker (2002,
+        Neural Comput 14:21), per shape class, with ``em_strength`` pseudo-
+        fields of the tempered prior as a MAP anchor (see ``em_stain_prior``)."""
     from sklearn.linear_model import LogisticRegression
     from sklearn.preprocessing import StandardScaler
     if hasattr(X, "columns"):
@@ -797,8 +971,13 @@ def fit_two_axis_classifier(X, labels, groups, label_axes, feature_names=None,
     names = list(feature_names)
     if shape_columns is None:
         shape_columns = feature_columns(names, "shape")
+    prior_mode = DEFAULT_PRIOR if prior is None else prior
+    if stain_feature is None:
+        stain_feature = DEFAULT_STAIN_FEATURE
     if stain_columns is None:
-        stain_columns = feature_columns(names, "stain")
+        stain_columns = stain_feature_columns(names, stain_feature)
+    if prior_mode not in ("group", "tempered", "flat", "em"):
+        raise ValueError(f"unknown prior {prior_mode!r}")
     sidx = np.array([names.index(c) for c in shape_columns])
     cidx = np.array([names.index(c) for c in stain_columns])
     shape_y = np.array([label_axes[l][0] for l in labels], dtype=object)
@@ -845,7 +1024,9 @@ def fit_two_axis_classifier(X, labels, groups, label_axes, feature_names=None,
             "shape_index": sidx, "shape_impute": smed, "shape_model": shape_model,
             "stain_index": cidx, "stain_impute": cmed, "stain_scaler": scaler, "stain_model": lr,
             "positive_stain": pos, "stain_values": stain_values, "prior": prior,
-            "stain_calibration": calib,
+            "stain_calibration": calib, "prior_mode": prior_mode,
+            "prior_weight": float(prior_weight), "em_strength": float(em_strength),
+            "stain_feature": stain_feature if isinstance(stain_feature, str) else list(stain_feature),
             "feature_names": names}
 
 
@@ -867,6 +1048,7 @@ def predict_two_axis(model, X, return_scores=False):
     pos = model["positive_stain"]
     neg = [v for v in model["stain_values"] if v != pos][0]
     seen = model["seen_labels"]
+    eff_prior = effective_stain_prior(model, p_shape, shape_classes, llr)
     scores = np.zeros((X.shape[0], len(seen)))
     for j, lab in enumerate(seen):
         shp, stn = model["label_axes"][lab]
@@ -874,8 +1056,7 @@ def predict_two_axis(model, X, return_scores=False):
         if stn is None:
             scores[:, j] = ps
             continue
-        pr = model["prior"].get(shp, {pos: 0.5, neg: 0.5})[pos]
-        post = 1.0 / (1.0 + np.exp(-(llr + np.log(pr / (1 - pr)))))
+        post = 1.0 / (1.0 + np.exp(-(llr + eff_prior.get(shp, 0.0))))
         scores[:, j] = ps * (post if stn == pos else 1 - post)
     # a stain outcome whose seen labels miss this shape keeps its mass on the seen
     # label of the same stain value: add the unseen combinations' mass there
@@ -890,8 +1071,7 @@ def predict_two_axis(model, X, return_scores=False):
             if not same:
                 continue
             ps = p_shape[:, shape_classes.index(shp)]
-            pr = model["prior"].get(shp, {pos: 0.5, neg: 0.5})[pos]
-            post = 1.0 / (1.0 + np.exp(-(llr + np.log(pr / (1 - pr)))))
+            post = 1.0 / (1.0 + np.exp(-(llr + eff_prior.get(shp, 0.0))))
             mass = ps * (post if stn == pos else 1 - post)
             sub = scores[:, same]
             best = np.asarray(same)[sub.argmax(1)]
@@ -899,7 +1079,8 @@ def predict_two_axis(model, X, return_scores=False):
     labels = np.array(seen, dtype=object)[scores.argmax(1)]
     if return_scores:
         return labels, {"scores": scores, "labels": seen, "p_shape": p_shape,
-                        "shape_classes": shape_classes, "stain_llr": llr}
+                        "shape_classes": shape_classes, "stain_llr": llr,
+                        "stain_prior_logodds": eff_prior}
     return labels
 
 

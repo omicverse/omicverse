@@ -104,22 +104,36 @@ def smear_field_features(records, quantiles=(0.1, 0.25, 0.5, 0.75, 0.9)):
                 "are combined with P(stain | shape) counted over training GROUPS with Laplace smoothing, "
                 "so colour that disagrees with the shape-typical stain needs stronger evidence, which "
                 "generalises to new species/slides whose colour is unreliable. Labels unseen in training "
-                "are not emitted.",
+                "are not emitted. For new laboratories / species: stain_feature='core' (default; "
+                "amount-invariant colour of each object's densest pixels, background-subtracted "
+                "variants) and prior='tempered' (default; half the group prior's log-odds), 'flat', "
+                "'em' (Saerens 2002 label-shift EM on the prediction batch) or 'group' (original).",
     requires={}, produces={}, auto_fix="none",
     examples=[
         "m = ov.tl.two_axis_classifier_fit(Xf, y, groups, label_axes={'A_round': ('round','pos'), "
         "'A_rod': ('rod','pos'), 'B_rod': ('rod','neg'), 'big': ('big', None)}, positive_stain='pos')",
         "pred = ov.tl.two_axis_classifier_predict(m, Xf_new)",
+        "m = ov.tl.two_axis_classifier_fit(Xf, y, groups, label_axes=axes, positive_stain='pos', "
+        "stain_feature='all', prior='group')  # original behaviour",
     ],
 )
 def two_axis_classifier_fit(X, labels, groups, label_axes, *, feature_names=None,
                             shape_columns=None, stain_columns=None, positive_stain=None,
-                            shape_estimator="random_forest", stain_C=0.1, prior_alpha=1.0, seed=0):
-    """Fit the shape x stain field classifier; see core ``fit_two_axis_classifier``."""
+                            shape_estimator="random_forest", stain_C=0.1, prior_alpha=1.0, seed=0,
+                            stain_feature=_core.DEFAULT_STAIN_FEATURE, prior=_core.DEFAULT_PRIOR,
+                            prior_weight=0.5, em_strength=2.0):
+    """Fit the shape x stain field classifier; see core ``fit_two_axis_classifier``.
+
+    ``stain_feature`` picks the colour measurements of the stain stage
+    (``"all"`` = every ``stain_*`` summary, the pre-1.x behaviour; presets in
+    ``ov.tl._smear_morph_core.STAIN_FEATURE_SETS``); ``prior`` picks how the
+    group-level P(stain | shape) enters (``"group"`` original, ``"tempered"``,
+    ``"flat"``, ``"em"`` batch label-shift EM)."""
     return _core.fit_two_axis_classifier(
         X, labels, groups, label_axes, feature_names=feature_names, shape_columns=shape_columns,
         stain_columns=stain_columns, positive_stain=positive_stain,
-        shape_estimator=shape_estimator, stain_C=stain_C, prior_alpha=prior_alpha, seed=seed)
+        shape_estimator=shape_estimator, stain_C=stain_C, prior_alpha=prior_alpha, seed=seed,
+        stain_feature=stain_feature, prior=prior, prior_weight=prior_weight, em_strength=em_strength)
 
 
 @register_function(
@@ -205,9 +219,17 @@ def smear_morphometry_source(path: Optional[Union[str, Path]] = None) -> str:
 def smear_fit_predictor(fields, objects, labels, *, label_col, group_col, label_axes, positive_stain,
                         root=None, field_id="field_id", image_col="image_path", um_col="um_per_px",
                         object_id="organism_id", box_cols=("x_min", "y_min", "x_max", "y_max"),
-                        n_jobs=1, validate=True):
-    """Measure, validate leave-one-group-out and fit the two-axis classifier with defaults."""
+                        n_jobs=1, validate=True, stain_feature=None, prior=None, prior_weight=0.5,
+                        em_strength=2.0):
+    """Measure, validate leave-one-group-out and fit the two-axis classifier with defaults.
+
+    ``stain_feature`` / ``prior`` (None = library defaults ``DEFAULT_STAIN_FEATURE`` /
+    ``DEFAULT_PRIOR``) are passed to ``fit_two_axis_classifier``; use
+    ``stain_feature="all", prior="group"`` for the original behaviour."""
     import numpy as np
+    kw = {"stain_feature": _core.DEFAULT_STAIN_FEATURE if stain_feature is None else stain_feature,
+          "prior": _core.DEFAULT_PRIOR if prior is None else prior,
+          "prior_weight": prior_weight, "em_strength": em_strength}
     _, X, vec = _core.measure_box_tables(fields, objects, root=root, field_id=field_id,
                                          image_col=image_col, um_col=um_col, object_id=object_id,
                                          box_cols=box_cols, n_jobs=n_jobs)
@@ -217,11 +239,12 @@ def smear_fit_predictor(fields, objects, labels, *, label_col, group_col, label_
     report = {"n_fields": int(len(Xl)), "n_groups": int(len(np.unique(g))), "dye_vectors": vec.tolist()}
     if validate:
         oof = _core.group_holdout_two_axis(Xl[feats], y, g, label_axes=label_axes,
-                                           positive_stain=positive_stain)
+                                           positive_stain=positive_stain, **kw)
         per, macro = _core.species_balanced_recall(y, oof, g)
         report.update({"logo_species_balanced_recall": per, "logo_macro": macro,
                        "logo_predictions": dict(zip(Xl[field_id], oof))})
-    model = _core.fit_two_axis_classifier(Xl[feats], y, g, label_axes, positive_stain=positive_stain)
+    model = _core.fit_two_axis_classifier(Xl[feats], y, g, label_axes, positive_stain=positive_stain, **kw)
+    report.update({"stain_feature": kw["stain_feature"], "prior": kw["prior"]})
     model["table_columns"] = {"field_id": field_id, "image_col": image_col, "um_col": um_col,
                               "object_id": object_id, "box_cols": list(box_cols)}
     return model, report
