@@ -96,6 +96,7 @@ _LAZY_MODULES = {
     'airr',
     'flow',
     'radiology',
+    'radiomics',
     'report',
     'epi',
 }
@@ -389,6 +390,7 @@ __all__ = [
     "airr",
     "flow",
     "radiology",
+    "radiomics",
     "datasets",
     "external",
     "llm",
