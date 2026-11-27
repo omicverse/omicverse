@@ -1,0 +1,7 @@
+Upstream RUVSeq commit: f560e84eb493f0c2d72279612f9e4ca99493b434
+Upstream DESCRIPTION version: 1.33.1
+R version 4.5.2 (2025-10-31 ucrt)
+Seed: 1701; control rows: 1:8 (R indexing)
+Executed upstream matrix method without installing RUVSeq/EDASeq.
+Gate fixed before comparison: projection atol=1e-10; correction atol=1e-8, rtol=1e-10.
+Rounded count outputs must match exactly.

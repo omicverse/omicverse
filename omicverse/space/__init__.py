@@ -249,3 +249,7 @@ __all__ = [
     'geom',
     'seg',
 ]
+
+from .._roadmap_ports import sparkx
+if "__all__" in globals():
+    __all__ += ['sparkx']

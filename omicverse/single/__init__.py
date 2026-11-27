@@ -489,3 +489,7 @@ __all__ = [
     'get_markers',
     'drvi',
 ]
+
+from .._roadmap_ports import muscat_aggregate, muscat_pb_ds
+if "__all__" in globals():
+    __all__ += ['muscat_aggregate', 'muscat_pb_ds']

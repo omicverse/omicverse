@@ -45,6 +45,8 @@ from ._chm13 import get_chm13_gene,find_chm13_gene
 from ._Deseq2 import pyDEG,deseq2_normalize,estimateSizeFactors,estimateDispersions,Matrix_ID_mapping,data_drop_duplicates_index,temporal_clusters
 from ._tcga import pyTCGA
 from ._combat import batch_correction
+from ._ruv import ruvg, ruvr, ruvs
+from .._roadmap_ports import music_basis, music_prop
 from ._multisite import multisite_harmonize, apply_multisite_harmonization, predict_device_offsets
 from ._annotation_recovery import (annotation_batch_center, fit_annotation_classifier,
                                    recover_sample_annotations)
@@ -72,6 +74,7 @@ def __getattr__(name):
     raise AttributeError(f"module '{__name__}' has no attribute '{name}'")
 
 __all__ = [
+    'ruvg', 'ruvr', 'ruvs', 'music_basis', 'music_prop',
 
     # Gene co-expression analysis
     'pyWGCNA',
