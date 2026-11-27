@@ -582,6 +582,92 @@ def reid_fuse_similarity(sims: Sequence[np.ndarray], weights: Optional[Sequence[
 
 
 @register_function(
+    aliases=["k互近邻重排序", "re-ranking", "k-reciprocal re-ranking", "Jaccard re-ranking",
+             "reid rerank"],
+    category="tl",
+    description="k-reciprocal re-ranking of a re-ID similarity matrix (Zhong et al., CVPR "
+                "2017): Jaccard distance between expanded k-reciprocal neighbour sets blended "
+                "with the original distance; makes clusters of one individual tighter and "
+                "less sensitive to hub images before open-set clustering",
+    requires={},
+    produces={},
+    auto_fix="none",
+    examples=["S_rr = ov.tl.reid_rerank(Eq @ Eq.T)",
+              "res = ov.tl.reid_open_set_cluster(Eq @ Eq.T, ..., rerank='auto')   # opt-in"],
+    related=["tl.reid_open_set_cluster"],
+)
+def reid_rerank(sim: np.ndarray, k1: int = 20, k2: int = 6,
+                lambda_value: float = 0.3) -> np.ndarray:
+    """k-reciprocal re-ranked similarity (same shape, ``1 - distance``).
+
+    Re-implementation of Zhong, Zheng, Cao & Li, "Re-ranking Person
+    Re-identification with k-reciprocal Encoding", CVPR 2017 (also the distance
+    used to cluster in unsupervised re-ID, e.g. SpCL, NeurIPS 2020): two images
+    of the same individual tend to share their *reciprocal* nearest neighbours
+    even when their direct similarity is modest, while a hub image that is
+    close to many individuals is rarely a reciprocal neighbour.
+
+    1. ``R(i)`` = k1-reciprocal neighbours of ``i`` (``j`` in the top-``k1``
+       of ``i`` and ``i`` in the top-``k1`` of ``j``), expanded by each
+       member's k1/2-reciprocal set when 2/3 of it already lies in ``R(i)``;
+    2. ``V_i`` = Gaussian-kernel weights ``exp(-d)`` over ``R(i)``,
+       normalised, then averaged over the ``k2`` nearest neighbours of ``i``
+       (local query expansion);
+    3. Jaccard distance ``1 - sum(min(V_i, V_j)) / sum(max(V_i, V_j))``;
+    4. final distance ``(1 - lambda) * Jaccard + lambda * d``.
+
+    ``d = 1 - sim`` (cosine distance for L2-normalised embeddings).  ``k1``
+    is clipped to ``n - 1``; with ``n < 4`` the input is returned unchanged.
+    """
+    s = _check_square(sim)
+    n = len(s)
+    if n < 4:
+        return s.copy()
+    d = np.clip(1.0 - s, 0.0, None)
+    d = (d + d.T) / 2.0
+    np.fill_diagonal(d, 0.0)
+    k1 = int(max(2, min(k1, n - 1)))
+    k2 = int(max(1, min(k2, n)))
+    order = np.argsort(d, axis=1, kind="stable")
+
+    def reciprocal(k):
+        m = np.zeros((n, n), dtype=bool)
+        rows = np.repeat(np.arange(n), k + 1)
+        m[rows, order[:, :k + 1].ravel()] = True
+        return m & m.T
+
+    R = reciprocal(k1)
+    half = int(max(1, round(k1 / 2.0)))
+    R2 = reciprocal(half)
+    V = np.zeros((n, n))
+    r2_size = R2.sum(axis=1)
+    for i in range(n):
+        base = R[i].copy()
+        for j in np.flatnonzero(R[i]):
+            rj = R2[j]
+            if np.count_nonzero(rj & R[i]) > (2.0 / 3.0) * r2_size[j]:
+                base |= rj
+        idx = np.flatnonzero(base)
+        w = np.exp(-d[i, idx])
+        V[i, idx] = w / w.sum()
+    if k2 > 1:
+        V = V[order[:, :k2]].mean(axis=1)
+    # Jaccard via an inverted index over the (sparse) encodings
+    inv = [np.flatnonzero(V[:, c]) for c in range(n)]
+    jac = np.empty((n, n))
+    for i in range(n):
+        acc = np.zeros(n)
+        for c in np.flatnonzero(V[i]):
+            rows = inv[c]
+            acc[rows] += np.minimum(V[i, c], V[rows, c])
+        jac[i] = 1.0 - acc / (2.0 - acc)
+    jac = (jac + jac.T) / 2.0
+    final = (1.0 - lambda_value) * jac + lambda_value * d
+    np.fill_diagonal(final, 0.0)
+    return 1.0 - final
+
+
+@register_function(
     aliases=["同个体对 AUC", "pair AUC", "same vs different identity AUC", "descriptor quality"],
     category="tl",
     description="ROC AUC of a similarity matrix for separating same-identity from "
@@ -624,7 +710,7 @@ def reid_pair_auc(sim: np.ndarray, labels) -> float:
 def reid_fit_projection(emb: np.ndarray, labels, *, n_pca: int = 256,
                         n_components: Optional[int] = None, shrinkage: float = 0.5,
                         heldout_fraction: float = 0.3, n_folds: int = 5,
-                        weighted: bool = False,
+                        weighted: bool = False, validate: bool = True,
                         seed: int = 0) -> Dict:
     """Reference-supervised linear metric for re-ID embeddings.
 
@@ -645,7 +731,9 @@ def reid_fit_projection(emb: np.ndarray, labels, *, n_pca: int = 256,
     simulation is not fooled by in-sample separation, and
     ``sim_qg = transform(Eq) @ transform(Eg).T`` for the real queries.
     ``weighted=True`` scales each discriminant axis by the square root of its
-    explained-variance share (down-weights weak axes).
+    explained-variance share (down-weights weak axes).  ``validate=False``
+    only fits ``transform`` (no held-out AUC, no ``reference_oof``); used to
+    re-fit the projection inside every calibration fold.
 
     Needs identities with >= 2 images; the within-identity scatter is poorly
     estimated when most identities have only one or two images
@@ -678,6 +766,12 @@ def reid_fit_projection(emb: np.ndarray, labels, *, n_pca: int = 256,
         w = np.sqrt(np.maximum(lda.explained_variance_ratio_[:nc], 0.0)) if weighted else 1.0
         return lambda z: _l2(lda.transform(p.transform(_l2(z)))[:, :nc] * w)
 
+    keep = np.isin(y, multi)
+    if not validate:
+        return {"transform": fit(x[keep], y[keep]), "reference_oof": None,
+                "heldout_auc_raw": float("nan"), "heldout_auc_proj": float("nan"),
+                "n_identities": int(len(multi)),
+                "median_images_per_identity": float(np.median(counts))}
     rng = np.random.default_rng(seed)
     ids = rng.permutation(np.asarray(multi))
     n_ho = max(2, int(round(heldout_fraction * len(ids))))
@@ -691,7 +785,6 @@ def reid_fit_projection(emb: np.ndarray, labels, *, n_pca: int = 256,
         auc_raw = reid_pair_auc(xh @ xh.T, y[mho])
         ph = f(xh)
         auc_proj = reid_pair_auc(ph @ ph.T, y[mho])
-    keep = np.isin(y, multi)
     # cross-fitted reference coordinates: every image projected by a model that
     # never saw its identity -> honest gallery x gallery similarities for the
     # open-set simulation (in-sample LDA coordinates make identities trivially
@@ -979,6 +1072,61 @@ def _apply_must_link(s, must_link, idx):
     return s
 
 
+def _as_time(values) -> Optional[np.ndarray]:
+    """Float time per image (dates, timestamps or numbers; NaN if missing),
+    or None when no value is usable."""
+    if values is None:
+        return None
+    s = pd.Series(list(values))
+    num = pd.to_numeric(s, errors="coerce")
+    if num.notna().sum() < s.notna().sum():
+        dt = pd.to_datetime(s, errors="coerce")
+        num = pd.Series([x.value / 8.64e13 if pd.notna(x) else np.nan for x in dt], dtype=float)
+    if num.notna().sum() == 0:
+        return None
+    return num.to_numpy(dtype=float)
+
+
+def _rolling_origin_splits(g_time, q_time, n_query, n_folds, rng, min_ids=5):
+    """Backtest splits of a dated gallery that mimic a later query batch.
+
+    Rolling-origin evaluation (Tashman 2000, Int. J. Forecasting; the
+    time-aware open-set splits of SeaTurtleID2022, Adam et al. WACV 2024):
+    the real queries span ``span = max(q_time) - min(q_time)`` and come after
+    the gallery.  Fold ``f`` takes as pseudo-queries the gallery images in the
+    ``f``-th latest window of that span and as pseudo-gallery every image
+    strictly older than the window.  The pseudo-queries therefore have the
+    real batch's depth per individual, share of new individuals and time gap,
+    all measured instead of assumed.  Pseudo-query sets larger than
+    ``n_query`` are subsampled at random.  Folds with fewer than ``min_ids``
+    individuals or an empty pseudo-gallery are skipped.
+    """
+    ok_g = np.isfinite(g_time)
+    qt = q_time[np.isfinite(q_time)]
+    if ok_g.sum() < 4 or len(qt) == 0:
+        return []
+    span = float(qt.max() - qt.min())
+    ug = np.unique(g_time[ok_g])
+    step = float(np.min(np.diff(ug))) if len(ug) > 1 else 1.0
+    span = max(span, step, 1.0)    # at least one gallery session / one day (times in days)
+    t_end = float(np.max(g_time[ok_g]))
+    out = []
+    for f in range(max(1, int(n_folds)) * 3):
+        if len(out) >= n_folds:
+            break
+        hi = t_end - f * span
+        lo = hi - span
+        inwin = np.flatnonzero(ok_g & (g_time > lo) & (g_time <= hi)) if f else \
+            np.flatnonzero(ok_g & (g_time >= lo) & (g_time <= hi))
+        older = np.flatnonzero(ok_g & (g_time <= lo))
+        if len(inwin) < 2 or len(older) < 1:
+            continue
+        if n_query and len(inwin) > n_query:
+            inwin = np.sort(rng.choice(inwin, size=n_query, replace=False))
+        out.append((inwin, older))
+    return out
+
+
 def _simulate_split(g_lab, rng, n_query, per_id, unknown_fraction):
     """Pseudo-query / pseudo-gallery split of the labelled reference that mimics
     the real query set: about ``n_query`` images, about ``per_id`` images per
@@ -1014,6 +1162,63 @@ def _simulate_split(g_lab, rng, n_query, per_id, unknown_fraction):
     return q, g
 
 
+def _known_share_em(s_known, s_new, s_real, n_bins=40, max_iter=500, tol=1e-6):
+    """Share of the real queries that show already-known individuals.
+
+    Prior-shift (label-shift) EM of Saerens, Latinne & Decaestecker (2002,
+    Neural Computation 14:21): the class-conditional densities of the top-1
+    gallery identity score, p(s | known) and p(s | new), are learned on
+    calibration folds with known truth and assumed to carry over; only the
+    class prior of the real batch is re-estimated, by EM on its unlabelled
+    scores.  Densities are histograms (equal-width bins over the pooled score
+    range, +0.5 pseudo-count per bin).  Returns ``(pi_hat, pi_folds)``.
+    """
+    s_known, s_new, s_real = (np.asarray(v, float) for v in (s_known, s_new, s_real))
+    pi0 = len(s_known) / max(len(s_known) + len(s_new), 1)
+    if len(s_known) < 10 or len(s_new) < 10 or len(s_real) < 10:
+        return float("nan"), float(pi0)
+    allv = np.concatenate([s_known, s_new, s_real])
+    edges = np.linspace(allv.min(), allv.max() + 1e-9, n_bins + 1)
+
+    def dens(v):
+        h = np.histogram(v, edges)[0] + 0.5
+        return h / h.sum()
+
+    fk, fn = dens(s_known), dens(s_new)
+    b = np.clip(np.searchsorted(edges, s_real, side="right") - 1, 0, n_bins - 1)
+    pi = pi0
+    for _ in range(max_iter):
+        pk = pi * fk[b]
+        new = float(np.mean(pk / (pk + (1.0 - pi) * fn[b])))
+        if abs(new - pi) < tol:
+            pi = new
+            break
+        pi = new
+    return float(pi), float(pi0)
+
+
+def _subsample_known_share(y, known, target, rng, min_keep):
+    """Indices of a subset of one calibration fold whose image share of known
+    individuals is about ``target``; whole individuals are dropped (known ones
+    when the share is too high, new ones when too low), so the depth per
+    individual is unchanged.  Never keeps fewer than ``min_keep`` images."""
+    y = np.asarray(y)
+    keep = np.ones(len(y), bool)
+    share = known.mean()
+    drop_known = share > target
+    pool = rng.permutation(np.unique(y[known if drop_known else ~known]))
+    for i in pool:
+        m = keep & (y == i)
+        k2 = keep & ~m
+        if k2.sum() < min_keep:
+            break
+        s2 = known[k2].mean()
+        if (drop_known and s2 < target) or (not drop_known and s2 > target):
+            break
+        keep = k2
+    return np.flatnonzero(keep)
+
+
 @register_function(
     aliases=["开集个体识别聚类", "个体发现", "种群数量估计", "open-set re-identification",
              "individual discovery clustering", "photo-ID clustering", "abundance from images",
@@ -1037,6 +1242,7 @@ def _simulate_split(g_lab, rng, n_query, per_id, unknown_fraction):
 )
 def reid_open_set_cluster(sim_qq: np.ndarray, *, sim_qg: Optional[np.ndarray] = None,
                           gallery_labels=None, sim_gg: Optional[np.ndarray] = None,
+                          gallery_times=None, query_times=None,
                           threshold: Union[str, float] = "auto",
                           attach_threshold: Union[str, float, None] = "auto",
                           method: str = "auto", linkage: str = "average",
@@ -1048,6 +1254,9 @@ def reid_open_set_cluster(sim_qq: np.ndarray, *, sim_qg: Optional[np.ndarray] = 
                           verified: Optional[pd.DataFrame] = None,
                           must_link_verified: bool = True,
                           grid: Optional[Sequence[float]] = None,
+                          rerank: Union[str, bool] = False, rerank_k1: int = 20,
+                          fold_similarity: Optional[Callable] = None,
+                          known_share: Union[str, float, None] = None,
                           seed: int = 0, prefix: str = "id",
                           log: Optional[Callable[[str], None]] = print) -> Dict:
     """Partition query images into individuals (labels; #labels = abundance).
@@ -1081,6 +1290,21 @@ def reid_open_set_cluster(sim_qq: np.ndarray, *, sim_qg: Optional[np.ndarray] = 
         Simulation objective = ARI - ``abundance_weight`` x relative error of
         the number of individuals; > 0 penalises over-splitting into
         singletons, which barely moves ARI but inflates abundance.
+    gallery_times, query_times
+        Optional date / timestamp per gallery image and per query image.  With
+        both (and queries photographed after the reference, e.g. a later
+        survey season), the cuts are calibrated by **rolling-origin
+        backtesting** instead of a random simulation: each fold holds out the
+        gallery images of one past window as long as the real query period
+        and uses only older images as its gallery (see
+        ``_rolling_origin_splits``).  Depth per individual, share of new
+        individuals and time gap of the pseudo-queries are then those of real
+        later batches, not assumptions; the random simulation over-states how
+        well a deep gallery attaches later photos and picks over-merging cuts
+        (offline: SeaTurtleID2022 backtests).  Falls back to the random
+        simulation when the queries are not later than the gallery (< 90 % of
+        dated queries after the last gallery date, or < half of them dated) or
+        fewer than two windows hold >= 5 individuals.
     unknown_fraction, images_per_identity, n_iter
         Shape of the simulated query set, which always has as many images as
         the real query set.  ``"auto"``: half of the simulated individuals are
@@ -1102,6 +1326,46 @@ def reid_open_set_cluster(sim_qq: np.ndarray, *, sim_qg: Optional[np.ndarray] = 
         and on the rejected candidates (negatives) (``mode='verified-pairs'``).
     grid
         Candidate cuts (default: 41 quantiles of the similarities).
+    rerank, rerank_k1
+        Cluster the queries on the k-reciprocal re-ranked similarity
+        (:func:`reid_rerank`, Zhong et al. 2017) instead of the raw one.
+        ``"auto"`` (with a reference): simulate both and keep the better;
+        ``True`` forces it.  Default ``False``: in offline backtests on public
+        data (SeaTurtleID2022 time splits; WildMe leopard / hyena / beluga /
+        whale shark; salamander and lynx reference splits) forced re-ranking
+        raised turtle ARI but lowered leopard, whale-shark and salamander ARI,
+        and ``"auto"`` never selected it in time-aware backtests while doubling
+        the calibration time.  Attachment to gallery identities always uses
+        the raw query-gallery similarity.
+    fold_similarity
+        Optional callable ``(q_idx, g_idx) -> (sim_qq_fold, sim_qg_fold)``
+        returning the similarities of one calibration fold (pseudo-queries
+        ``q_idx`` against pseudo-gallery ``g_idx``, both indices into the
+        gallery).  Pass it when a learned step (e.g. the projection of
+        :func:`reid_fit_projection`) is fitted on the gallery: the callable
+        re-fits that step on ``g_idx`` only, so every fold is computed the way
+        the real queries are (nested cross-validation; Varma & Simon 2006,
+        BMC Bioinformatics 7:91).  Without it the folds are sliced from
+        ``sim_gg`` (cross-fitted coordinates: known pseudo-queries sit on a
+        lower similarity scale than real queries scored against a gallery the
+        step was fitted on).  Not used by :func:`reid_pipeline` by default:
+        offline, the nested projection raised ARI (dated turtle splits
+        0.78 -> 0.86) but over-split every set (abundance error 0.10 -> 0.58;
+        WildMe beluga 239 / leopard 293 predicted vs 120); the pipeline's
+        ``nested_projection=True`` turns it on.
+    known_share
+        Share of the query images that show already-known individuals
+        (default ``None``: folds kept as they are).  ``"auto"`` (opt-in): estimated from the real queries by prior-shift EM
+        (:func:`_known_share_em`, Saerens et al. 2002) on the top-1 identity
+        score, with the known / new score densities of the calibration folds;
+        when it differs from the folds' share by more than 0.1, every fold is
+        subsampled by whole individuals to the estimated share before the cuts
+        are chosen.  A float sets the share.  Offline (public SeaTurtleID2022
+        dated splits, WildMe sets, salamander / lynx reference splits) the EM
+        estimate tracked the true share on raw MiewID scores of dated folds
+        (within ~0.1) but not in the random simulation (lynx 0.02 / hyena 0.81
+        against ~0.45-0.6), and the re-weighted cuts did not beat the default,
+        so it is not on by default.
 
     Returns
     -------
@@ -1127,6 +1391,7 @@ def reid_open_set_cluster(sim_qq: np.ndarray, *, sim_qg: Optional[np.ndarray] = 
         acc = verified[verified["accepted"].astype(bool)]
         must = list(zip(acc["first"].astype(int), acc["second"].astype(int)))
     calib, history, mode = None, [], "given"
+    ks_info = None
     rng = np.random.default_rng(seed)
     auto_t = isinstance(threshold, str)
     auto_a = isinstance(attach_threshold, str)
@@ -1143,58 +1408,116 @@ def reid_open_set_cluster(sim_qq: np.ndarray, *, sim_qg: Optional[np.ndarray] = 
     if (auto_t or auto_a) and have_g and sim_gg is not None:
         mode = "reference-simulation"
         sim_gg = _check_square(sim_gg, "sim_gg")
-        tgrid = _default_grid(sim_gg) if grid is None else np.asarray(grid, float)
+        # with fold_similarity the folds live on the application scale, which the
+        # real query similarities show (sim_gg may be cross-fitted, another scale)
+        tgrid = _default_grid(sim_qq if fold_similarity is not None else sim_gg) \
+            if grid is None else np.asarray(grid, float)
         if not auto_t:
             tgrid = np.array([float(threshold)])
         agrid = np.append(tgrid, np.inf) if auto_a else \
             np.array([attach_threshold if attach_threshold is not None else np.inf])
+        rr_opts = [False, True] if isinstance(rerank, str) else [bool(rerank)]
+        sim_qq_rr = reid_rerank(sim_qq, k1=rerank_k1) if True in rr_opts else None
+        tgrid_rr = (_default_grid(sim_qq_rr) if auto_t else tgrid) if True in rr_opts else None
+        folds = []
+        g_t, q_t = _as_time(gallery_times), _as_time(query_times)
+        if g_t is not None and q_t is not None:
+            if len(g_t) != len(g_lab) or len(q_t) != n:
+                raise ValueError("gallery_times / query_times must match the gallery / queries")
+            q_ok = np.isfinite(q_t)
+            later = q_ok.mean() >= 0.5 and np.isfinite(g_t).any() and \
+                np.mean(q_t[q_ok] > np.nanmax(g_t)) >= 0.9
+            folds = [f for f in _rolling_origin_splits(g_t, q_t, n, n_rep, rng)
+                     if len(np.unique(g_lab[f[0]])) >= 5] if later else []
+            if len(folds) < 2:
+                folds = []
         counts = pd.Series(g_lab).value_counts()
         u = 0.5 if isinstance(unknown_fraction, str) else float(unknown_fraction)
         m_img = max(2.0, float(np.mean(counts))) if isinstance(images_per_identity, str) or \
             images_per_identity is None else float(images_per_identity)
         iters = max(1, int(n_iter)) if (isinstance(unknown_fraction, str)
                                         or isinstance(images_per_identity, str)) else 1
+        if folds:
+            mode, iters = "rolling-origin", 1
         for it in range(iters):
-            rows = []
-            for rep in range(max(1, int(n_rep))):
-                q_idx, g_idx = _simulate_split(g_lab, rng, n, m_img, u)
+            prepared = []
+            for rep in range(len(folds) if folds else max(1, int(n_rep))):
+                q_idx, g_idx = folds[rep] if folds else _simulate_split(g_lab, rng, n, m_img, u)
                 if len(q_idx) < 2 or len(g_idx) < 1:
                     continue
-                sq = sim_gg[np.ix_(q_idx, q_idx)]
-                yq = g_lab[q_idx]
-                nm_s, sc_s = _identity_score_matrix(sim_gg[np.ix_(q_idx, g_idx)], g_lab[g_idx], top_k)
+                if fold_similarity is not None:
+                    sq, sqg = fold_similarity(np.asarray(q_idx), np.asarray(g_idx))
+                    sq, sqg = np.asarray(sq, float), np.asarray(sqg, float)
+                else:
+                    sq, sqg = sim_gg[np.ix_(q_idx, q_idx)], sim_gg[np.ix_(q_idx, g_idx)]
+                nm_s, sc_s = _identity_score_matrix(sqg, g_lab[g_idx], top_k)
+                prepared.append([rep, g_lab[q_idx], np.isin(g_lab[q_idx], g_lab[g_idx]),
+                                 sq, nm_s, sc_s])
+            if known_share is not None and auto_a and prepared:
+                if isinstance(known_share, str):
+                    s_k = np.concatenate([p[5].max(1)[p[2]] for p in prepared])
+                    s_n = np.concatenate([p[5].max(1)[~p[2]] for p in prepared])
+                    pi_hat, pi_f = _known_share_em(s_k, s_n, sc_q.max(1))
+                    target = pi_hat if np.isfinite(pi_hat) and abs(pi_hat - pi_f) > 0.1 else None
+                else:
+                    pi_f = float(np.mean(np.concatenate([p[2] for p in prepared])))
+                    pi_hat = target = float(known_share)
+                ks_info = {"estimated": round(float(pi_hat), 4), "folds": round(float(pi_f), 4),
+                           "adapted": target is not None}
+                if target is not None:
+                    for p in prepared:
+                        keep = _subsample_known_share(p[1], p[2], target, rng,
+                                                      max(20, len(p[1]) // 4))
+                        p[1], p[2] = p[1][keep], p[2][keep]
+                        p[3], p[5] = p[3][np.ix_(keep, keep)], p[5][keep]
+                    ks_info["folds_after"] = round(float(np.mean(
+                        np.concatenate([p[2] for p in prepared]))), 4)
+                if log:
+                    log(f"reid_open_set_cluster: known share of queries estimated {pi_hat:.2f} "
+                        f"(calibration folds {pi_f:.2f}) -> "
+                        f"{'folds re-weighted' if target is not None else 'folds kept'}")
+            rows = []
+            for rep, yq, _kn, sq, nm_s, sc_s in prepared:
                 k_true = len(np.unique(yq))
-                for meth in methods:
-                    for amode in modes:
-                        for a, t, lab in _open_set_grid(sq, sc_s, nm_s, tgrid, agrid, meth,
-                                                        linkage, amode):
-                            rows.append((rep, meth, amode, float(a),
-                                         float(t) if meth != "hdbscan" else np.nan,
-                                         _ari(yq, lab),
-                                         abs(len(np.unique(lab)) - k_true) / k_true))
-            calib = pd.DataFrame(rows, columns=["rep", "method", "attach_mode", "attach_threshold",
-                                                "threshold", "ari", "abundance_error"])
-            calib = calib.groupby(["method", "attach_mode", "attach_threshold", "threshold"],
+                for rr in rr_opts:
+                    sqx = reid_rerank(sq, k1=rerank_k1) if rr else sq
+                    tg = tgrid_rr if rr else tgrid
+                    for meth in methods:
+                        for amode in modes:
+                            for a, t, lab in _open_set_grid(sqx, sc_s, nm_s, tg, agrid, meth,
+                                                            linkage, amode):
+                                rows.append((rep, rr, meth, amode, float(a),
+                                             float(t) if meth != "hdbscan" else np.nan,
+                                             _ari(yq, lab),
+                                             abs(len(np.unique(lab)) - k_true) / k_true))
+            calib = pd.DataFrame(rows, columns=["rep", "rerank", "method", "attach_mode",
+                                                "attach_threshold", "threshold", "ari",
+                                                "abundance_error"])
+            calib = calib.groupby(["rerank", "method", "attach_mode", "attach_threshold",
+                                   "threshold"],
                                   as_index=False, dropna=False)[["ari", "abundance_error"]].mean()
             calib["objective"] = calib["ari"] - abundance_weight * calib["abundance_error"]
             best = calib.loc[calib["objective"].idxmax()]
             b_meth, b_mode = str(best.method), str(best.attach_mode)
+            b_rr = bool(best.rerank)
             b_a = float(best.attach_threshold) if auto_a else attach_threshold
             b_t = float(best.threshold) if (auto_t and b_meth != "hdbscan") else \
                 (float(threshold) if not auto_t else float("nan"))
-            lab = next(iter(_open_set_grid(sim_qq, sc_q, names, [b_t], [b_a if b_a is not None
-                                                                       else np.inf],
+            lab = next(iter(_open_set_grid(sim_qq_rr if b_rr else sim_qq, sc_q, names, [b_t],
+                                           [b_a if b_a is not None else np.inf],
                                            b_meth, linkage, b_mode, must)))[2]
             k_pred = len(np.unique(lab))
             k_known = len({x for x in lab if x.startswith("g:")})
             history.append({"iter": it, "unknown_fraction": u, "images_per_identity": m_img,
                             "method": b_meth, "attach_mode": b_mode, "threshold": b_t,
+                            "rerank": b_rr,
                             "attach_threshold": b_a, "sim_ari": float(best.ari),
                             "sim_abundance_error": float(best.abundance_error),
                             "n_clusters": k_pred, "n_known": k_known})
             if log:
                 log(f"reid_open_set_cluster: iter {it} sim(u={u:.2f}, m={m_img:.1f}) -> "
-                    f"{b_meth}/{b_mode} t={b_t:.3f} a={b_a} simARI={best.ari:.3f} "
+                    f"{b_meth}/{b_mode}{' rerank' if b_rr else ''} t={b_t:.3f} a={b_a} "
+                    f"simARI={best.ari:.3f} "
                     f"simAbErr={best.abundance_error:.2f}; real: {k_pred} individuals, "
                     f"{k_known} known")
             new_u = u if not isinstance(unknown_fraction, str) else \
@@ -1206,6 +1529,7 @@ def reid_open_set_cluster(sim_qq: np.ndarray, *, sim_qg: Optional[np.ndarray] = 
             u, m_img = new_u, new_m
         method, attach_mode = b_meth, b_mode
         threshold, attach_threshold = b_t, b_a
+        rerank = b_rr
         labels, n_att, n_cl = _finish(lab, b_t, b_a, b_meth, b_mode)
     else:
         if auto_t and verified is not None and len(verified) \
@@ -1236,6 +1560,8 @@ def reid_open_set_cluster(sim_qq: np.ndarray, *, sim_qg: Optional[np.ndarray] = 
     out = {"labels": labels, "threshold": threshold, "attach_threshold": attach_threshold,
            "method": method, "attach_mode": attach_mode, "n_attached": n_att,
            "n_clusters": n_cl, "calibration": calib, "mode": mode,
+           "rerank": bool(rerank) if not isinstance(rerank, str) else False,
+           "known_share": ks_info,
            "history": pd.DataFrame(history) if history else None}
     if log:
         log(f"reid_open_set_cluster: mode={mode} method={method}/{attach_mode} "
@@ -1355,6 +1681,25 @@ def _sample_pair_auc(e, y, n_max=600, seed=0):
     ee = e[idx]
     return reid_pair_auc(ee @ ee.T, np.asarray(y)[idx])
 
+def _nested_projection_similarity(emb, labels, n_components=None):
+    """``fold_similarity`` for :func:`reid_open_set_cluster` that re-fits the
+    reference projection on each fold's pseudo-gallery (as the real gallery
+    was) and scores the pseudo-queries with it."""
+    emb = np.asarray(emb)
+    labels = np.asarray(labels).astype(str)
+
+    def fold_similarity(q_idx, g_idx):
+        try:
+            f = reid_fit_projection(emb[g_idx], labels[g_idx], n_components=n_components,
+                                    validate=False)["transform"]
+            a, b = f(emb[q_idx]), f(emb[g_idx])
+        except ValueError:           # too few identities in this fold: raw coordinates
+            a, b = _l2(emb[q_idx]), _l2(emb[g_idx])
+        return a @ a.T, a @ b.T
+
+    return fold_similarity
+
+
 
 @register_function(
     aliases=["个体重识别流程", "photo-ID pipeline", "re-identification pipeline",
@@ -1381,6 +1726,7 @@ def _sample_pair_auc(e, y, n_max=600, seed=0):
 )
 def reid_pipeline(query_paths: Sequence, *, reference_paths: Optional[Sequence] = None,
                   reference_labels=None, query_views=None, reference_views=None,
+                  query_times=None, reference_times=None,
                   image_root: Optional[str] = None,
                   backbones: Sequence[str] = ("miewid", "megadescriptor-l"),
                   screen_images: int = 300, view_center: str = "auto",
@@ -1388,7 +1734,8 @@ def reid_pipeline(query_paths: Sequence, *, reference_paths: Optional[Sequence] 
                   verify_crop=None, reference_budget_s: Optional[float] = None,
                   max_reference_images: Optional[int] = None,
                   n_workers: Optional[int] = None, cache_dir: Optional[str] = None,
-                  open_set_kwargs: Optional[Dict] = None, prefix: str = "id",
+                  open_set_kwargs: Optional[Dict] = None, nested_projection: bool = False,
+                  prefix: str = "id",
                   log: Optional[Callable[[str], None]] = print) -> Dict:
     """Partition the query images of ONE subset into individuals.
 
@@ -1413,6 +1760,11 @@ def reid_pipeline(query_paths: Sequence, *, reference_paths: Optional[Sequence] 
        (:func:`reid_local_verify`), accepted pairs become must-links.
     6. :func:`reid_open_set_cluster` (reference simulation, or verified-pair
        cross-validation without a reference); ``open_set_kwargs`` pass through.
+       ``query_times`` / ``reference_times`` (dates or timestamps of every
+       query / reference image, e.g. the metadata ``date`` column): when the
+       queries are a later batch than the reference, the cuts are calibrated
+       by rolling-origin backtests on the dated reference instead of a random
+       simulation -- pass them whenever the metadata has dates.
 
     Returns
     -------
@@ -1535,6 +1887,7 @@ def reid_pipeline(query_paths: Sequence, *, reference_paths: Optional[Sequence] 
 
     # ---- 4. projection ------------------------------------------------------
     Pq, Pg, Po = Eq, Eg, Eg
+    fold_sim = None
     if have_ref and projection != "off":
         try:
             pj = reid_fit_projection(Eg, r_lab)
@@ -1546,6 +1899,7 @@ def reid_pipeline(query_paths: Sequence, *, reference_paths: Optional[Sequence] 
             if projection == "on" or ok:
                 Pq, Pg, Po = pj["transform"](Eq), pj["transform"](Eg), pj["reference_oof"]
                 report["projection"] = True
+                fold_sim = _nested_projection_similarity(Eg, r_lab) if nested_projection else None
         except ValueError as e:
             report["projection_error"] = str(e)
     report.setdefault("projection", False)
@@ -1563,13 +1917,18 @@ def reid_pipeline(query_paths: Sequence, *, reference_paths: Optional[Sequence] 
     # ---- 6. open-set partition ---------------------------------------------
     kw = dict(open_set_kwargs or {})
     if have_ref:
+        if reference_times is not None and query_times is not None:
+            kw.setdefault("gallery_times", np.asarray(list(reference_times), dtype=object)[r_idx])
+            kw.setdefault("query_times", list(query_times))
+        if fold_sim is not None:
+            kw.setdefault("fold_similarity", fold_sim)
         res = reid_open_set_cluster(Pq @ Pq.T, sim_qg=Pq @ Pg.T, gallery_labels=r_lab,
                                     sim_gg=Po @ Po.T, verified=ver, prefix=prefix, log=log, **kw)
     else:
         res = reid_open_set_cluster(Pq @ Pq.T, verified=ver, prefix=prefix, log=log, **kw)
     for k in ("mode", "method", "attach_mode", "threshold", "attach_threshold", "n_attached",
-              "n_clusters"):
-        report[k] = res[k]
+              "n_clusters", "rerank", "known_share"):
+        report[k] = res.get(k)
     if res.get("history") is not None:
         h = res["history"].iloc[-1]
         report["sim_ari"] = round(float(h["sim_ari"]), 4)
@@ -1578,3 +1937,188 @@ def reid_pipeline(query_paths: Sequence, *, reference_paths: Optional[Sequence] 
         f"({report['n_attached']} images matched to known identities)")
     return {"labels": res["labels"], "open_set": res, "verified": ver,
             "embeddings": (Pq, Pg), "report": report}
+
+
+# ── whole-dataset entry point ────────────────────────────────────────────────
+
+_QUERY_WORDS = {"test", "query", "queries", "probe", "unlabeled", "unlabelled", "new"}
+_REF_WORDS = {"train", "training", "reference", "ref", "gallery", "database", "db", "labeled",
+              "labelled", "known"}
+
+
+def _pick_col(df, explicit, patterns, what):
+    import re
+    if explicit not in (None, "auto"):
+        if explicit not in df.columns:
+            raise ValueError(f"{what} column {explicit!r} not in metadata")
+        return explicit
+    for pat in patterns:
+        for c in df.columns:
+            if re.fullmatch(pat, str(c), flags=re.I):
+                return c
+    return None
+
+
+def _infer_subset_column(df, id_col, path_col, split_col, skip):
+    """The categorical column that splits the data into independent subsets
+    (species / dataset / site): fully populated, 2..50 levels, and no
+    identity label occurs in two levels.  Among several, the one with the
+    most levels (the finest safe split)."""
+    best = None
+    ref_ids = df[id_col].notna() if id_col else None
+    for c in df.columns:
+        if c in skip or c in (id_col, path_col, split_col):
+            continue
+        v = df[c]
+        if v.isna().any() or v.dtype.kind in "fc":
+            continue
+        k = v.astype(str).nunique()
+        if not 2 <= k <= 50:
+            continue
+        if id_col is not None:
+            sub = df.loc[ref_ids, [id_col, c]].astype(str)
+            if (sub.groupby(id_col)[c].nunique() > 1).any():
+                continue
+        if best is None or k > best[1]:
+            best = (c, k)
+    return best[0] if best else None
+
+
+@register_function(
+    aliases=["个体识别整套流程", "重识别数据集", "photo-ID dataset", "re-identification dataset",
+             "reid whole dataset", "individual discovery all species"],
+    category="tl",
+    description="One call for a whole re-identification dataset: reads the metadata table, finds "
+                "the query / reference split, identity, subset (species / dataset), date and "
+                "viewpoint columns, runs reid_pipeline on every subset with the full reference "
+                "as gallery (calibrated by dated backtests and prior-shift correction when "
+                "dates exist), writes the prediction table and records it as a validated "
+                "output for ov.utils.check_deliverable",
+    requires={},
+    produces={},
+    auto_fix="none",
+    examples=["res = ov.tl.reid_dataset('/data/metadata.csv', image_root='/data', "
+              "out='prediction.csv', cache_dir='cache')",
+              "res['prediction'], res['reports']"],
+    related=["tl.reid_pipeline", "utils.check_deliverable"],
+)
+def reid_dataset(metadata, *, image_root: Optional[str] = None, out: Optional[str] = None,
+                 id_col: str = "auto", path_col: str = "auto", identity_col: str = "auto",
+                 split_col: str = "auto", subset_col: str = "auto", date_col: str = "auto",
+                 view_col: str = "auto", time_budget_s: Optional[float] = None,
+                 cache_dir: Optional[str] = None, n_workers: Optional[int] = None,
+                 pipeline_kwargs: Optional[Dict] = None,
+                 log: Optional[Callable[[str], None]] = print) -> Dict:
+    """Partition every query image of a re-ID dataset into individuals.
+
+    The gallery is always built by the library: **every** labelled reference
+    image of the subset (deeper galleries attach known animals better, and
+    the cuts are calibrated for the gallery actually used).  Only when
+    ``time_budget_s`` is given and the measured embedding speed cannot cover
+    all references in the subset's share of the budget is the reference taken
+    evenly across identities (``reid_pipeline(reference_budget_s=...)``).
+
+    Columns are found from the table (``"auto"``) or named explicitly:
+
+    - split: values such as train / reference / gallery vs test / query; rows
+      whose identity is missing are queries when there is no split column;
+    - subset: the fully populated categorical column (2-50 levels) whose
+      levels never share an identity, the finest such column (a partly empty
+      ``species`` column loses to a complete ``dataset`` column);
+    - date / timestamp (``date``, ``datetime``, ``timestamp``, ``time``): passed
+      as query / reference times, which switches on the rolling-origin
+      backtest when the queries are a later batch;
+    - viewpoint (``orientation``, ``view``, ``viewpoint``, ``side``).
+
+    The prediction (``id_col``, ``identity``) is written to ``out`` when given
+    and recorded with ``ov.utils.record_output`` as a partition, so
+    ``ov.utils.check_deliverable(out)`` reports whether a final file still
+    equals it (cluster names may differ; the partition may not).
+
+    Returns dict with ``prediction`` (DataFrame), ``reports`` ({subset:
+    reid_pipeline report}), ``columns`` (the columns used) and ``path``.
+    """
+    import os
+
+    def say(msg):
+        if log:
+            log(f"reid_dataset: {msg}")
+
+    md = pd.read_csv(metadata) if isinstance(metadata, (str, os.PathLike)) else metadata.copy()
+    md = md.reset_index(drop=True)
+    idc = _pick_col(md, id_col, [r"image_?id", r"img_?id", r"id"], "id")
+    pc = _pick_col(md, path_col, [r"path", r"file(_?path|_?name)?", r"image(_?path)?", r"img"], "path")
+    ic = _pick_col(md, identity_col, [r"identity", r"individual(_?id)?", r"animal_?id", r"label",
+                                      r"name"], "identity")
+    sc = _pick_col(md, split_col, [r"split", r"subset_?type", r"set", r"partition", r"role"], "split")
+    dc = _pick_col(md, date_col, [r"date", r"datetime", r"timestamp", r"time", r"capture_?date"], "date")
+    vc = _pick_col(md, view_col, [r"orientation", r"view(point)?", r"side", r"pose"], "view")
+    if pc is None:
+        raise ValueError("no image path column found; pass path_col=")
+    if idc is None:
+        md["_row_id"] = np.arange(len(md))
+        idc = "_row_id"
+    if sc is not None:
+        lv = md[sc].astype(str).str.strip().str.lower()
+        is_q = lv.isin(_QUERY_WORDS).to_numpy()
+        if not is_q.any():
+            raise ValueError(f"split column {sc!r} has no query-like value "
+                             f"({sorted(_QUERY_WORDS)}); pass split_col=")
+    elif ic is not None:
+        is_q = md[ic].isna().to_numpy()
+    else:
+        is_q = np.ones(len(md), bool)
+    is_r = ~is_q & (md[ic].notna().to_numpy() if ic is not None else False)
+    if subset_col == "auto":
+        subc = _infer_subset_column(md.loc[is_r | is_q], ic if is_r.any() else None, pc, sc,
+                                    skip={idc, dc, vc})
+    else:
+        subc = subset_col
+    cols = {"id": idc, "path": pc, "identity": ic, "split": sc, "subset": subc, "date": dc,
+            "view": vc}
+    say(f"columns {cols}; {int(is_q.sum())} queries, {int(is_r.sum())} labelled references")
+    groups = md[subc].astype(str) if subc else pd.Series(["all"] * len(md))
+    n_q_total = int(is_q.sum())
+    kw0 = dict(pipeline_kwargs or {})
+    preds, reports = [], {}
+    t_start = time.time()
+    for g in sorted(groups[is_q].unique()):
+        mq = is_q & (groups == g).to_numpy()
+        mr = is_r & (groups == g).to_numpy()
+        q, r = md[mq], md[mr]
+        name = "".join(ch if ch.isalnum() else "_" for ch in str(g)).strip("_") or "subset"
+        kw = dict(kw0)
+        if len(r):
+            kw.update(reference_paths=r[pc].tolist(), reference_labels=r[ic].astype(str).tolist())
+            if vc is not None and q[vc].notna().any():
+                kw.update(query_views=q[vc].tolist(), reference_views=r[vc].tolist())
+            if dc is not None and q[dc].notna().mean() >= 0.5 and r[dc].notna().mean() >= 0.5:
+                kw.update(query_times=q[dc].tolist(), reference_times=r[dc].tolist())
+            if time_budget_s is not None:
+                left = max(time_budget_s - (time.time() - t_start), 0.0)
+                kw.setdefault("reference_budget_s", 0.6 * left * len(q) / max(n_q_total, 1))
+        elif vc is not None and q[vc].notna().any():
+            kw.update(query_views=q[vc].tolist())
+        say(f"subset {g!r}: {len(q)} queries, {len(r)} references "
+            f"({r[ic].nunique() if len(r) else 0} identities)")
+        res = reid_pipeline(q[pc].tolist(), image_root=image_root, n_workers=n_workers,
+                            cache_dir=os.path.join(cache_dir, name) if cache_dir else None,
+                            prefix=name, log=log, **kw)
+        n_q_total -= len(q)
+        reports[str(g)] = res["report"]
+        preds.append(pd.DataFrame({idc: q[idc].to_numpy(), "identity": res["labels"]}))
+    pred = pd.concat(preds, ignore_index=True) if preds else \
+        pd.DataFrame(columns=[idc, "identity"])
+    path = None
+    if out:
+        os.makedirs(os.path.dirname(os.path.abspath(out)), exist_ok=True)
+        pred.to_csv(out, index=False)
+        path = out
+        say(f"wrote {len(pred)} rows, {pred['identity'].nunique()} individuals -> {out}")
+    try:
+        from ..utils._provenance import record_output
+        record_output("omicverse.tl._reid.reid_dataset", pred, [idc], ["identity"],
+                      partition_values=["identity"])
+    except Exception as e:   # provenance must never break the analysis
+        say(f"provenance record not written ({type(e).__name__}: {e})")
+    return {"prediction": pred, "reports": reports, "columns": cols, "path": path}
