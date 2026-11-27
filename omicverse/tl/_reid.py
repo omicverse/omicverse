@@ -1383,7 +1383,8 @@ def reid_pipeline(query_paths: Sequence, *, reference_paths: Optional[Sequence] 
                   reference_labels=None, query_views=None, reference_views=None,
                   image_root: Optional[str] = None,
                   backbones: Sequence[str] = ("miewid", "megadescriptor-l"),
-                  screen_images: int = 300, view_center: str = "auto",
+                  screen_images: int = 300, min_fusion_gain: float = 0.01,
+                  view_center: str = "auto",
                   projection: str = "auto", verify: bool = True, k_candidates: int = 10,
                   verify_crop=None, reference_budget_s: Optional[float] = None,
                   max_reference_images: Optional[int] = None,
@@ -1398,8 +1399,11 @@ def reid_pipeline(query_paths: Sequence, *, reference_paths: Optional[Sequence] 
        reference, every backbone embeds a sample of ``screen_images``
        reference images; a later backbone is kept (fused by weighted
        concatenation, weights ~ AUC - 0.5) only if it raises the sample's
-       same-vs-different pair AUC.  Without a reference only the first one is
-       used.
+       same-vs-different pair AUC by at least ``min_fusion_gain`` (0.01: the
+       standard error of a pair AUC on a few-hundred-image screen is of that
+       order, Hanley & McNeil 1982, so a smaller gain is not evidence, while
+       the second backbone costs 2-3x the embedding time and gallery depth).
+       Without a reference only the first one is used.
     2. **Reference size.**  All reference images, or as many as fit
        ``reference_budget_s`` seconds at the measured per-image speed (or
        ``max_reference_images``), taken evenly across identities.  Deeper
@@ -1477,7 +1481,7 @@ def reid_pipeline(query_paths: Sequence, *, reference_paths: Optional[Sequence] 
                 fused = _l2(np.hstack([np.sqrt(wi) * s_emb[x] for wi, x in zip(w, trial)]))
                 fa = reid_pair_auc(fused @ fused.T, s_lab)
                 report[f"screen_auc_fused_{'+'.join(trial)}"] = round(fa, 4)
-                if fa > best_auc + 0.002:
+                if fa >= best_auc + float(min_fusion_gain):
                     used, best_auc = trial, fa
             say(f"backbones used {used} (screen AUC {report['screen_auc']})")
         # ---- reference size from the time budget -----------------------------
