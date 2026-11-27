@@ -1,7 +1,6 @@
 r"""Plotting helpers for in-silico gene-perturbation results.
 
-Targets the dictionary returned by :meth:`omicverse.llm.SCLLMManager.perturb_genes`
-(see also :meth:`omicverse.llm.geneformer_model.GeneformerModel.perturb_genes`),
+Targets the dictionary returned by :meth:`omicverse.llm.geneformer_model.GeneformerModel.perturb_genes`,
 which has the schema:
 
     {
@@ -45,14 +44,14 @@ from .._registry import register_function
     category="pl",
     description=(
         "Violin plot of per-cell cosine similarity (original ↔ perturbed) "
-        "for each target gene returned by ov.llm.SCLLMManager.perturb_genes. "
+        "for each target gene returned by GeneformerModel.perturb_genes. "
         "Lower values = bigger embedding shift = stronger perturbation effect."
     ),
     examples=[
-        "result = manager.perturb_genes(adata, ['CD3D', 'PTPRC'], perturb_type='delete')",
+        "result = model.perturb_genes(adata, ['CD3D', 'PTPRC'], perturb_type='delete')",
         "ov.pl.perturbation_shift_violin(result)",
     ],
-    related=["llm.SCLLMManager.perturb_genes", "pl.perturbation_embedding_shift"],
+    related=["llm.ModelFactory", "pl.perturbation_embedding_shift"],
 )
 def perturbation_shift_violin(
     result: Dict,
@@ -98,7 +97,7 @@ def perturbation_shift_violin(
     if cos is None or not hasattr(cos, "columns"):
         raise KeyError(
             "result['cosine_similarities'] is missing or not a DataFrame — "
-            "this helper expects ov.llm.SCLLMManager.perturb_genes() output."
+            "this helper expects GeneformerModel.perturb_genes() output."
         )
     df = pd.DataFrame(cos).dropna(how="all")
     if df.empty:
@@ -239,10 +238,10 @@ def perturbation_shift_violin(
         "downstream targets ranked by 1 - cos(orig_emb, perturbed_emb)."
     ),
     examples=[
-        "result = manager.perturb_genes(adata, ['PAX5'], perturb_type='delete')",
+        "result = model.perturb_genes(adata, ['PAX5'], perturb_type='delete')",
         "ov.pl.perturbation_top_downstream_genes(result, gene='PAX5', top_n=20)",
     ],
-    related=["llm.SCLLMManager.perturb_genes", "pl.perturbation_shift_violin"],
+    related=["llm.ModelFactory", "pl.perturbation_shift_violin"],
 )
 def perturbation_top_downstream_genes(
     result: Dict,
@@ -332,7 +331,7 @@ def perturbation_top_downstream_genes(
     examples=[
         "ov.pl.perturbation_embedding_shift(adata, result, gene='CD3D', basis='X_umap')",
     ],
-    related=["llm.SCLLMManager.perturb_genes", "pl.perturbation_shift_violin"],
+    related=["llm.ModelFactory", "pl.perturbation_shift_violin"],
 )
 def perturbation_embedding_shift(
     adata: AnnData,
