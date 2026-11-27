@@ -42,7 +42,7 @@ from ._dicom import DicomSeries, DicomStudy
 from ._render import montage, region_sheets
 
 __all__ = ["structure_survey", "sheet_cell_to_patient", "ledger_concordance", "ledger_add_read",
-           "ledger_hotspots", "ledger_principal", "draft_principal",
+           "ledger_add_measurement", "ledger_hotspots", "ledger_principal", "draft_principal",
            "DEFAULT_SEVERITY_TERMS"]
 
 _PLANE_ORDER = {"SAG": 0, "COR": 1, "AX": 2}
@@ -613,44 +613,9 @@ def _pick(terms: Sequence[str], *patterns: str) -> Optional[str]:
     return None
 
 
-@register_function(
-    aliases=["主要发现草稿", "draft principal finding", "principal finding draft from ledger"],
-    category="radiology",
-    description="Draft the principal finding (structure / finding type / acuity terms from the caller's "
-                "vocabulary, location, measurement slice, image citations) from ledger_principal by fixed rules",
-    requires={},
-    produces={},
-    auto_fix="none",
-    examples=["d = ov.radiology.draft_principal(st, 'ledger.json', json.load(open('vocabularies.json')))"],
-)
-def draft_principal(study: DicomStudy, ledger: Union[str, Sequence[Dict]], vocabulary: Dict, *,
-                    radius_mm: float = 15.0) -> Dict:
-    """Rule-based draft of the principal finding.
-
-    ``vocabulary`` is the task's own controlled vocabulary (keys ``structure``,
-    ``finding_type``, ``acuity``); terms are matched by name, nothing is
-    hard-coded. Rules on the reads at the :func:`ledger_principal` location:
-
-    - structure: over the whole ledger, the structure (reader's name on the
-      sheets centred on it, matched to the closest vocabulary term) with the
-      most slices read as discontinuous (ties: most series); reads that report
-      no discontinuity do not vote. Location and discontinuity runs are then
-      taken from that structure's reads;
-    - finding type: discontinuity on consecutive slices in >= 2 series, or on
-      >= 3 consecutive slices of one series → the vocabulary's
-      full-thickness / complete tear term, unless 'partial' reads outnumber
-      'absent / gap / interrupted' reads (→ partial-thickness term);
-      no discontinuity run → the tendinosis-type term if reads say
-      thickened / heterogeneous, else the first matching inflammatory term;
-    - acuity: 'acute' if the reads describe fluid / bright / oedema in or
-      around the defect and none describe scar or low-signal fibrous tissue,
-      'chronic' for the reverse, else 'indeterminate';
-    - measurement slice: the middle slice of the longest run in a series
-      whose plane shows the structure lengthwise (most slices in the run);
-    - evidence: the nearest in-plane instance of the two series with the
-      longest runs.
-    Returns the draft plus the counts behind every decision.
-    """
+def _draft_from_reads(study: DicomStudy, ledger: Union[str, Sequence[Dict]], vocabulary: Dict, *,
+                      radius_mm: float = 15.0) -> Dict:
+    """Draft from the reader's reads only (the rules listed in :func:`draft_principal`)."""
     p = ledger_principal(ledger, radius_mm=radius_mm)
     if not p.get("found"):
         return {"found": False}
@@ -761,3 +726,238 @@ def draft_principal(study: DicomStudy, ledger: Union[str, Sequence[Dict]], vocab
             "basis": {"structure_votes": tally, "structure_names": p["structure_names"], "runs": {k: v["n"] for k, v in runs.items()},
                       "full_reads": n_full, "partial_reads": n_partial, "acute_cues": acute_cues,
                       "chronic_cues": chronic_cues}}
+
+
+_SLIP_CUE = _re.compile(r"listhesis|\bslip|\bstep\b|step[- ]?off|malalign|subluxa|translat|offset|displac", _re.I)
+_ROMAN = ("0", "I", "II", "III", "IV", "V")
+
+
+@register_function(
+    aliases=["测量写入阅片记录", "ledger add measurement", "alignment measurement to ledger",
+             "record measured spondylolisthesis"],
+    category="radiology",
+    description="Append a measurement result (per-level vertebral alignment from measure_spine_alignment) to the "
+                "JSON read ledger as located evidence entries (patient mm, severity, normal flag, measurement row) "
+                "that ledger_hotspots and draft_principal consider",
+    requires={},
+    produces={},
+    auto_fix="none",
+    examples=["a = ov.radiology.measure_spine_alignment(st)",
+              "ov.radiology.ledger_add_measurement('ledger.json', st, a)"],
+)
+def ledger_add_measurement(ledger_path: str, study: DicomStudy, result: Dict, *, include_normal: bool = True,
+                           source: str = "measurement") -> List[Dict]:
+    """Append the levels of a :func:`measure_spine_alignment` result to the ledger.
+
+    One entry per level, in the same schema as :func:`ledger_add_read`
+    (``series``, ``instance``, ``xyz_mm`` = disc centre, ``text``,
+    ``severity``, ``confidence``, ``normal``) plus ``kind = "alignment"``,
+    ``level`` and ``measurement`` (the full level row: offsets, slip %,
+    grade, disc height, landmarks, QC). A level is abnormal when its offset
+    reached the measurement's ``min_slip_mm``; abnormal levels with QC ``ok``
+    are severity 3 / confidence high, abnormal levels with QC ``check`` are
+    severity 1 / confidence low. Normal levels are written as normal entries
+    (``include_normal=False`` skips them). Returns the new entries.
+    """
+    if not result.get("found") or "levels" not in result:
+        new: List[Dict] = []
+    else:
+        s = study[result["series_instance_uid"]]
+        new = []
+        for lv in result["levels"]:
+            ab = bool(lv.get("abnormal"))
+            if not ab and not include_normal:
+                continue
+            ok = lv.get("qc") == "ok"
+            way = {"antero": "anterior", "retro": "posterior"}.get(lv.get("direction"), "")
+            if ab:
+                txt = (f"{lv['level']}: {lv['upper']} displaced {lv['slip_mm']} mm {way}ly relative to "
+                       f"{lv['lower']} ({abs(lv['slip_pct'])}% of the {lv['lower']} superior endplate, "
+                       f"Meyerding grade {_ROMAN[min(5, int(lv['meyerding_grade']))]}); disc height "
+                       f"{lv['disc_height_mm']} mm; measured, qc {lv['qc']}")
+            else:
+                txt = (f"{lv['level']}: alignment within {result.get('min_slip_mm', 3.0)} mm "
+                       f"(offset {lv['offset_mm']} mm); disc height {lv['disc_height_mm']} mm; measured")
+            new.append({"sheet": None, "series": s.description, "series_instance_uid": s.uid,
+                        "plane": s.plane, "weighting": s.weighting, "instance": int(result["instance"]),
+                        "cell": None, "xyz_mm": lv["xyz_mm"], "text": txt,
+                        "severity": (3 if ok else 1) if ab else 0,
+                        "confidence": ("high" if ok else "low") if ab else "medium",
+                        "normal": not ab, "structure": lv["level"], "sheet_note": "",
+                        "abnormality": "alignment" if ab else None, "acute": None,
+                        "source": source, "kind": "alignment", "level": lv["level"],
+                        "label_confidence": result.get("label_confidence"),
+                        "measurement": {k: v for k, v in lv.items()}})
+    led = json.load(open(ledger_path)) if os.path.exists(ledger_path) else []
+    led.extend(new)
+    with open(ledger_path, "w") as f:
+        json.dump(led, f, indent=1)
+    return new
+
+
+def _negated(text: str, start: int) -> bool:
+    return bool(_NEG.search(text[max(0, start - 45):start]))
+
+
+def _grade_term(vocabulary: Dict, grade: int) -> Optional[str]:
+    """A term naming the grade in any vocabulary list whose key mentions 'grade'."""
+    for key, terms in vocabulary.items():
+        if "grade" not in str(key).lower() or not isinstance(terms, (list, tuple)):
+            continue
+        for t in terms:
+            toks = set(_re.split(r"[^a-z0-9]+", str(t).lower()))
+            if _ROMAN[min(5, grade)].lower() in toks or str(grade) in toks:
+                return t
+    return None
+
+
+@register_function(
+    aliases=["主要发现草稿", "draft principal finding", "principal finding draft from ledger"],
+    category="radiology",
+    description="Draft the principal finding (structure / finding type / acuity terms from the caller's "
+                "vocabulary, location, measurement slice, image citations) from ledger_principal by fixed rules; "
+                "a measured vertebral slip in the ledger (ledger_add_measurement) can become the principal finding",
+    requires={},
+    produces={},
+    auto_fix="none",
+    examples=["d = ov.radiology.draft_principal(st, 'ledger.json', json.load(open('vocabularies.json')))"],
+)
+def draft_principal(study: DicomStudy, ledger: Union[str, Sequence[Dict]], vocabulary: Dict, *,
+                    radius_mm: float = 15.0, alignment: str = "measured", min_grade: int = 1) -> Dict:
+    """Rule-based draft of the principal finding.
+
+    ``vocabulary`` is the task's own controlled vocabulary (keys ``structure``,
+    ``finding_type``, ``acuity``); terms are matched by name, nothing is
+    hard-coded. Rules on the reads at the :func:`ledger_principal` location:
+
+    - structure: over the whole ledger, the structure (reader's name on the
+      sheets centred on it, matched to the closest vocabulary term) with the
+      most slices read as discontinuous (ties: most series); reads that report
+      no discontinuity do not vote. Location and discontinuity runs are then
+      taken from that structure's reads;
+    - finding type: discontinuity on consecutive slices in >= 2 series, or on
+      >= 3 consecutive slices of one series → the vocabulary's
+      full-thickness / complete tear term, unless 'partial' reads outnumber
+      'absent / gap / interrupted' reads (→ partial-thickness term);
+      no discontinuity run → the tendinosis-type term if reads say
+      thickened / heterogeneous, else the first matching inflammatory term;
+    - acuity: 'acute' if the reads describe fluid / bright / oedema in or
+      around the defect and none describe scar or low-signal fibrous tissue,
+      'chronic' for the reverse, else 'indeterminate';
+    - measurement slice: the middle slice of the longest run in a series
+      whose plane shows the structure lengthwise (most slices in the run);
+    - evidence: the nearest in-plane instance of the two series with the
+      longest runs.
+
+    Measured alignment (``kind == "alignment"`` entries written by
+    :func:`ledger_add_measurement` from :func:`measure_spine_alignment`):
+    with ``alignment="measured"`` (default) the level with the largest slip
+    whose Meyerding grade is ≥ ``min_grade`` and whose QC is ``ok`` becomes
+    the principal finding, provided the vocabulary has a term for it
+    (finding type matched by name: 'anterolisthesis' / 'retrolisthesis' /
+    'listhesis' / 'slip' / 'malalign' / 'subluxation'; structure = the
+    closest term to the level name). ``"corroborated"`` additionally requires
+    a reader's read within ``radius_mm`` describing a step / slip;
+    ``"off"`` ignores measurements. The reads-only draft is kept in
+    ``basis['reads_only_draft']``. Ledgers without measurements give exactly
+    the reads-only draft.
+    Returns the draft plus the counts behind every decision.
+    """
+    rows = json.load(open(ledger)) if isinstance(ledger, str) else list(ledger)
+    reads = [r for r in rows if r.get("kind") != "alignment"]
+    measured = [r for r in rows if r.get("kind") == "alignment"]
+    legacy = _draft_from_reads(study, reads, vocabulary, radius_mm=radius_mm) if reads else {"found": False}
+    if alignment == "off" or not measured:
+        return legacy
+    if alignment not in ("measured", "corroborated"):
+        raise ValueError("alignment must be 'measured', 'corroborated' or 'off'")
+    vs, vf, va = vocabulary.get("structure", []), vocabulary.get("finding_type", []), vocabulary.get("acuity", [])
+
+    def support(m):
+        c = np.asarray(m["xyz_mm"], float)
+        out = []
+        for r in reads:
+            if r.get("xyz_mm") is None or r.get("normal"):
+                continue
+            if np.linalg.norm(np.asarray(r["xyz_mm"], float) - c) > max(radius_mm, 1.0):
+                continue
+            t = r.get("text", "")
+            if any(not _negated(t, mm.start()) for mm in _SLIP_CUE.finditer(t)):
+                out.append(r)
+        return out
+
+    cands = []
+    for m in measured:
+        mm_ = m.get("measurement") or {}
+        if m.get("normal") or mm_.get("qc") != "ok" or int(mm_.get("meyerding_grade") or 0) < min_grade:
+            continue
+        sup_ = support(m)
+        if alignment == "corroborated" and not sup_:
+            continue
+        cands.append((abs(float(mm_.get("slip_pct") or 0.0)), m, sup_))
+    basis_al = {"measured_levels": [{"level": m.get("level"), "offset_mm": (m.get("measurement") or {}).get("offset_mm"),
+                                     "slip_pct": (m.get("measurement") or {}).get("slip_pct"),
+                                     "grade": (m.get("measurement") or {}).get("meyerding_grade"),
+                                     "qc": (m.get("measurement") or {}).get("qc"), "abnormal": not m.get("normal")}
+                                    for m in measured]}
+    if not cands:
+        if legacy.get("found"):
+            legacy = dict(legacy, basis=dict(legacy["basis"], alignment=dict(basis_al, promoted=False,
+                                                                           reason="no qualifying measured slip")))
+        return legacy
+    _, m, sup_ = max(cands, key=lambda t: t[0])
+    mm_ = m["measurement"]
+    if mm_.get("direction") == "retro":
+        ftype = _pick(vf, "retrolisthesis", "listhesis", "slip", "malalign", "subluxation")
+    else:
+        ftype = _pick(vf, "anterolisthesis", "spondylolisthesis", "listhesis", "slip", "malalign", "subluxation")
+    if ftype is None:
+        if legacy.get("found"):
+            legacy = dict(legacy, basis=dict(legacy["basis"], alignment=dict(
+                basis_al, promoted=False, reason="the vocabulary has no alignment / slip finding type")))
+        return legacy
+    struct = _best_term(m["level"], vs) or _best_term(str(mm_.get("upper", "")), vs)
+    allt = " ".join(r.get("text", "") for r in sup_).lower()
+    acute_cues = len(_re.findall(r"fluid|bright|oedema|edema|haemat|hemat", allt))
+    chronic_cues = len(_re.findall(r"scar|fibrous|degenerat|sclero|osteophyt|chronic", allt))
+    if acute_cues and not chronic_cues:
+        acuity = _pick(va, "acute")
+    elif chronic_cues and not acute_cues:
+        acuity = _pick(va, "chronic")
+    else:
+        acuity = _pick(va, "indeterminate")
+    s = study[m["series_instance_uid"]]
+    inst = int(m["instance"])
+    xyz = np.asarray(m["xyz_mm"], float)
+    evidence = [{"series_instance_uid": s.uid, "sop_instance_uid": s.instance(inst).sop_uid}]
+    try:
+        near = study.nearest_instances(xyz)
+        near = near[(near.series_instance_uid != s.uid) & near.inside]
+        if len(near):
+            r0 = near.iloc[0]
+            evidence.append({"series_instance_uid": r0.series_instance_uid, "sop_instance_uid": r0.sop_instance_uid})
+    except Exception:  # noqa: BLE001 - citations are best effort
+        pass
+    i0 = s.instance(inst)
+    pix = s.patient_to_pixel(xyz)
+    h = int(round(50.0 / i0.ps[0])); w = int(round(50.0 / i0.ps[1]))
+    r0_ = int(np.clip(round(pix["row"]) - h, 0, max(0, i0.rows - 2 * h)))
+    c0_ = int(np.clip(round(pix["col"]) - w, 0, max(0, i0.cols - 2 * w)))
+    g = int(mm_.get("meyerding_grade") or 0)
+    return {"found": True, "structure": struct, "finding_type": ftype, "acuity": acuity,
+            "grade": _grade_term(vocabulary, g), "meyerding_grade": g, "level": m["level"],
+            "location_xyz_mm": xyz.round(1).tolist(),
+            "measurement_slice": {"series": s.description, "series_instance_uid": s.uid, "instance": inst,
+                                  "run": [inst]},
+            "measurement": mm_,
+            "measurement_candidates": [{"series": s.description, "plane": s.plane, "weighting": s.weighting,
+                                        "run_slices": [inst], "instance_at_location": inst,
+                                        "rowcol_at_location": [round(pix["row"], 1), round(pix["col"], 1)],
+                                        "crop_100mm": [r0_, min(i0.rows, r0_ + 2 * h), c0_, min(i0.cols, c0_ + 2 * w)]}],
+            "evidence": evidence,
+            "basis": {"principal_source": "measured_alignment",
+                      "alignment": dict(basis_al, promoted=True, corroborating_reads=len(sup_),
+                                        label_confidence=m.get("label_confidence")),
+                      "acute_cues": acute_cues, "chronic_cues": chronic_cues,
+                      "reads_only_draft": {k: legacy.get(k) for k in ("found", "structure", "finding_type",
+                                                                     "acuity", "location_xyz_mm")}}}

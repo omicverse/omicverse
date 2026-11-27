@@ -21,13 +21,20 @@ WHAT LIVES HERE
                      distance of a band, on coil-shading-normalised slices
                      (``band_flatfield``), on the slice where the band is most
                      conspicuous, ends at each side's own half-way level.
+    alignment        ``measure_spine_alignment``: vertebral bodies / sacrum segmented on a
+                     sagittal MR / CT slice, levels counted from the sacrum, per-level
+                     antero/retrolisthesis offset (mm), slip % of the lower endplate,
+                     Meyerding grade, disc height, landmarks and QC;
+                     ``ledger_add_measurement`` puts it in the read ledger, where
+                     ``draft_principal`` can promote a measured slip.
 
     survey           ``structure_survey``: deterministic, bounded reading sheets +
                      manifest (regional survey per plane; per-structure
                      consecutive-slice crops on every series);
                      ``sheet_cell_to_patient``; ``ledger_add_read`` (reader text
                      -> ledger), ``ledger_hotspots`` (rank locations),
-                     ``ledger_concordance``.
+                     ``ledger_concordance``; ``ledger_add_measurement`` (a
+                     measurement result -> ledger evidence).
 
 WHAT DOES NOT
     Radiomics feature extraction from a mask (PyRadiomics) and segmentation
@@ -39,15 +46,17 @@ from ._dicom import (DicomSeries, DicomStudy, landmark_measurement, plane_of,
                      read_dicom_study, sequence_weighting)
 from ._profile import abnormal_segments, measure_band_gap, path_profile, profile_slices
 from ._defect import band_flatfield, measure_band_defect
+from ._spine import DEFAULT_LEVEL_NAMES, measure_spine_alignment
 from ._render import montage, region_sheets, render_slices
-from ._survey import (DEFAULT_SEVERITY_TERMS, ledger_add_read, ledger_concordance, ledger_hotspots,
+from ._survey import (DEFAULT_SEVERITY_TERMS, ledger_add_measurement, ledger_add_read, ledger_concordance, ledger_hotspots,
                       ledger_principal, draft_principal,
                       sheet_cell_to_patient, structure_survey)
 
 __all__ = [
     "DicomSeries", "DicomStudy", "read_dicom_study", "plane_of", "sequence_weighting",
     "landmark_measurement", "render_slices", "montage", "path_profile", "abnormal_segments", "profile_slices", "measure_band_gap",
-    "band_flatfield", "measure_band_defect",
+    "band_flatfield", "measure_band_defect", "measure_spine_alignment", "DEFAULT_LEVEL_NAMES",
+    "ledger_add_measurement",
     "region_sheets", "structure_survey", "sheet_cell_to_patient", "ledger_concordance",
     "ledger_add_read", "ledger_hotspots", "ledger_principal", "draft_principal", "DEFAULT_SEVERITY_TERMS",
 ]
