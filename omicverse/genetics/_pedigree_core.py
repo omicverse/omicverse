@@ -13,6 +13,13 @@ Population haplotypes
     ``haplotype_frequencies``        design-weighted (Hajek) haplotype
                                      catalog and population frequencies
                                      from phased individuals.
+    ``haplotype_frequencies_em``     weighted EM (Excoffier-Slatkin) over
+                                     catalog diplotypes from UNPHASED
+                                     founders' genotype likelihoods, phased
+                                     founders as fixed diplotypes.
+    ``NoCallModel``                  NO_CALL probability depending on the
+                                     true genotype, site and previous
+                                     locus' call (MNAR missingness).
     ``fit_haplotype_prior``          covariate- and group-dependent
                                      population haplotype prior learned
                                      from phased families under a
@@ -65,6 +72,8 @@ import numpy as np
 __all__ = [
     "two_phase_weights",
     "haplotype_frequencies",
+    "haplotype_frequencies_em",
+    "NoCallModel",
     "fit_haplotype_prior",
     "HaplotypePrior",
     "gamete_sequences",
@@ -165,6 +174,315 @@ def haplotype_frequencies(hap_a: Sequence, hap_b: Sequence, weights=None, *,
     if total <= 0:
         raise ValueError("no weight on the catalog")
     return cat, mass / total
+
+
+# --------------------------------------------------------------------------
+# unphased founders: genotype evidence, NO_CALL model, diplotype EM
+# --------------------------------------------------------------------------
+def _genotype_evidence(entry, n_loci: int, genotype_error: float = 0.0):
+    """One person's genotype evidence -> (likelihood (L, 3), called (L,) bool).
+
+    ``entry``: None (not assayed), an (L,) dosage vector (-1 / NaN = NO_CALL),
+    an (L, 3) likelihood array (NaN row = NO_CALL) or ``(likelihood, called)``.
+    """
+    if entry is None:
+        return np.full((n_loci, 3), np.nan), np.zeros(n_loci, dtype=bool)
+    if isinstance(entry, tuple) and len(entry) == 2:
+        lik = np.array(entry[0], dtype=float).reshape(n_loci, 3)
+        called = np.asarray(entry[1], dtype=bool).reshape(n_loci) & np.all(np.isfinite(lik), axis=1)
+    else:
+        arr = np.asarray(entry, dtype=float)
+        if arr.ndim == 2:
+            lik = arr.reshape(n_loci, 3).copy()
+            called = np.all(np.isfinite(lik), axis=1)
+        else:
+            arr = arr.reshape(n_loci)
+            called = np.isfinite(arr) & (arr >= 0)
+            e = float(genotype_error)
+            lik = np.full((n_loci, 3), np.nan)
+            lik[called] = e / 2.0
+            idx = np.flatnonzero(called)
+            lik[idx, arr[idx].astype(int)] = 1.0 - e
+    lik = lik.copy()
+    lik[~called] = np.nan
+    if np.any(lik[called] < 0):
+        raise ValueError("genotype likelihoods must be >= 0")
+    return lik, called
+
+
+class NoCallModel:
+    """Genotype-dependent call-failure (NO_CALL) model.
+
+    logit P(M_l = 1 | g_l, M_{l-1}) = b0 + s_l + b_het 1[g_l = 1]
+                                       + b_alt 1[g_l = 2] + b_nb M_{l-1}
+
+    with M_l the NO_CALL indicator at locus l (loci in catalog order), g_l
+    the true copy number of allele '1', ``site`` effects s_l, ``genotype``
+    effects (b_het, b_alt; heterozygote / alternative-homozygote failure,
+    missing-not-at-random) and a ``neighbour`` effect of the previous
+    locus' call status (clustered failures). Conditioning on M_{l-1} only
+    makes prod_l P(M_l | g_l, M_{l-1}) a proper likelihood of the whole
+    missingness pattern (first-order Markov chain), which multiplies the
+    genotype likelihood of every candidate diplotype. Non-intercept terms
+    carry a Gaussian (L2) prior. Motivation: genotype-dependent call
+    failure (e.g. Anney et al. 2008, Am J Med Genet B 147B:1379; the
+    allele-specific missingness model of GAW17, BMC Proc 2011 5(S9):S107)
+    biases frequency estimates when NO_CALL is treated as ignorable.
+    """
+
+    FEATURES = ("site", "genotype", "neighbour")
+
+    def __init__(self, n_loci: int, features: Sequence[str] = FEATURES, coef=None):
+        bad = set(features) - set(self.FEATURES)
+        if bad:
+            raise ValueError(f"unknown missingness features {sorted(bad)}; use {self.FEATURES}")
+        self.n_loci = int(n_loci)
+        self.features = tuple(f for f in self.FEATURES if f in features)
+        self.coef = np.zeros(self.n_params) if coef is None else np.asarray(coef, dtype=float)
+
+    @property
+    def n_params(self) -> int:
+        return 1 + self.n_loci * ("site" in self.features) + 2 * ("genotype" in self.features) \
+            + ("neighbour" in self.features)
+
+    def _split(self, coef):
+        k = 1
+        b0 = coef[0]
+        site = np.zeros(self.n_loci)
+        gen = np.zeros(3)
+        nb = 0.0
+        if "site" in self.features:
+            site = coef[k:k + self.n_loci]
+            k += self.n_loci
+        if "genotype" in self.features:
+            gen = np.concatenate(([0.0], coef[k:k + 2]))
+            k += 2
+        if "neighbour" in self.features:
+            nb = coef[k]
+        return b0, site, gen, nb
+
+    @property
+    def params(self) -> Dict[str, object]:
+        b0, site, gen, nb = self._split(self.coef)
+        return {"intercept": float(b0), "site": site.copy(), "het": float(gen[1]),
+                "hom_alt": float(gen[2]), "neighbour": float(nb)}
+
+    @staticmethod
+    def _prev(called):
+        prev = np.zeros(called.shape, dtype=float)
+        prev[:, 1:] = ~called[:, :-1]
+        return prev
+
+    def _eta(self, coef, prev):
+        b0, site, gen, nb = self._split(coef)
+        return b0 + site[None, :, None] + gen[None, None, :] + nb * prev[:, :, None]
+
+    def no_call_prob(self, called) -> np.ndarray:
+        """P(NO_CALL | g = 0, 1, 2) at every locus: (n, L, 3) given call patterns."""
+        called = np.atleast_2d(np.asarray(called, dtype=bool))
+        return 1.0 / (1.0 + np.exp(-self._eta(self.coef, self._prev(called))))
+
+    def log_evidence(self, called) -> np.ndarray:
+        """log P(M_l | g_l = k, M_{l-1}) for every person, locus and k: (n, L, 3)."""
+        called = np.atleast_2d(np.asarray(called, dtype=bool))
+        eta = self._eta(self.coef, self._prev(called))
+        miss = (~called)[:, :, None]
+        # log sigmoid(eta) if missing else log sigmoid(-eta)
+        return -np.logaddexp(0.0, np.where(miss, -eta, eta))
+
+    def fit(self, genotype_posterior, called, weights=None, penalty: float = 1.0, max_iter: int = 200):
+        """Weighted ML (M-step) given posterior genotype probabilities (n, L, 3)."""
+        from scipy.optimize import minimize
+
+        post = np.asarray(genotype_posterior, dtype=float)
+        called = np.asarray(called, dtype=bool)
+        w = np.ones(len(post)) if weights is None else np.asarray(weights, dtype=float)
+        W = w[:, None, None] * post
+        M = (~called)[:, :, None].astype(float)
+        prev = self._prev(called)
+        pen_mask = np.ones(self.n_params)
+        pen_mask[0] = 0.0
+        has = {f: f in self.features for f in self.FEATURES}
+
+        def objective(coef):
+            eta = self._eta(coef, prev)
+            ll = np.sum(W * (M * eta - np.logaddexp(0.0, eta)))
+            R = W * (M - 1.0 / (1.0 + np.exp(-eta)))
+            g = [R.sum()]
+            if has["site"]:
+                g.extend(R.sum(axis=(0, 2)))
+            if has["genotype"]:
+                g.extend([R[:, :, 1].sum(), R[:, :, 2].sum()])
+            if has["neighbour"]:
+                g.append(np.sum(R * prev[:, :, None]))
+            grad = -np.asarray(g) + penalty * pen_mask * coef
+            return float(-ll + 0.5 * penalty * np.sum(pen_mask * coef * coef)), grad
+
+        res = minimize(objective, self.coef.copy(), jac=True, method="L-BFGS-B",
+                       options={"maxiter": max_iter, "gtol": 1e-6})
+        self.coef = res.x
+        return self
+
+
+def haplotype_frequencies_em(genotypes: Sequence, weights=None, *, catalog: Sequence[str],
+                             phased: Optional[Sequence[Optional[Tuple[str, str]]]] = None,
+                             missingness="genotype",
+                             missingness_features: Sequence[str] = NoCallModel.FEATURES,
+                             missingness_penalty: float = 1.0, genotype_error: float = 0.0,
+                             pseudocount: float = 0.0, init=None, max_iter: int = 500,
+                             tol: float = 1e-7) -> Dict[str, object]:
+    """Weighted ML haplotype frequencies from unphased (and phased) founders.
+
+    EM over catalog diplotypes (Excoffier & Slatkin 1995, Mol Biol Evol
+    12:921; Long et al. 1995; the E-step enumerates every diplotype
+    compatible with the genotype data as in PL-EM, Qin, Niu & Liu 2002, AJHG
+    71:1242, without the partition-ligation since the catalog bounds the
+    support). Under Hardy-Weinberg, P(diplotype {a, b}) = f_a f_b (x2 if
+    a != b); person i contributes log sum_d P(d) P(data_i | d) with
+    P(data_i | d) = prod_l [genotype likelihood at called loci] x
+    P(NO_CALL pattern | genotypes of d) (``NoCallModel``; omitted when
+    ``missingness`` is ``"mcar"`` / None). Each person's log-likelihood is
+    multiplied by its sampling weight (pseudo-likelihood / IPW, Pfeffermann
+    1993, Int Stat Rev 61:317), so the M-step is the weighted expected
+    haplotype count. Phased persons (``phased[i] = (a, b)``) enter as a fixed
+    diplotype; their genotypes (if given) still inform the NO_CALL model.
+    Coalescent-prior (PHASE; Stephens et al. 2001, AJHG 68:978) or
+    haplotype-cluster (Beagle; Browning & Browning 2007, AJHG 81:1084)
+    priors are not needed here because the catalog is small and known.
+
+    Parameters
+    ----------
+    genotypes
+        Per person: None, (L,) dosage (-1/NaN = NO_CALL), (L, 3) likelihood
+        (NaN row = NO_CALL) or ``(likelihood, called)``.
+    weights
+        Sampling weights (e.g. ``two_phase_weights(pi_inclusion)``).
+    catalog
+        Haplotype support (strings over {'0','1'}).
+    phased
+        Optional per-person known diplotype (or None).
+    missingness
+        ``"genotype"`` (fit ``NoCallModel`` in the EM), ``"mcar"`` / None
+        (ignorable), or a ``NoCallModel`` kept fixed.
+    pseudocount
+        Added to every haplotype's expected count in the M-step.
+
+    Returns
+    -------
+    dict with ``catalog``, ``frequencies``, ``diplotypes`` (iu, ju index
+    arrays), ``unphased_index`` (persons resolved by EM), ``posterior``
+    (n_unphased, n_diplotypes), ``evidence`` (log P(data | diplotype), same
+    shape), ``missingness`` (``NoCallModel`` or None), ``loglik``,
+    ``n_iter`` and ``unresolved`` (persons without any compatible
+    diplotype, or without genotype data).
+    """
+    cat = list(catalog)
+    index = {h: i for i, h in enumerate(cat)}
+    H = len(cat)
+    bits = _as_bits(cat).astype(np.int16)
+    L = bits.shape[1]
+    iu, ju = np.triu_indices(H)
+    D = bits[iu] + bits[ju]                         # (n_dip, L) copy numbers
+    n_dip = len(iu)
+    dip_index = {(int(a), int(b)): k for k, (a, b) in enumerate(zip(iu, ju))}
+    log2het = np.where(iu != ju, math.log(2.0), 0.0)
+    genotypes = list(genotypes)
+    n = len(genotypes)
+    phased = [None] * n if phased is None else list(phased)
+    if len(phased) != n:
+        raise ValueError("phased must have one entry per person")
+    w = np.ones(n) if weights is None else np.asarray(weights, dtype=float)
+
+    fixed = np.full(n, -1)
+    for i, p in enumerate(phased):
+        if p is not None:
+            a, b = index.get(p[0]), index.get(p[1])
+            if a is None or b is None:
+                raise ValueError(f"phased haplotypes of person {i} are not in the catalog")
+            fixed[i] = dip_index[(min(a, b), max(a, b))]
+    lik = np.full((n, L, 3), np.nan)
+    called = np.zeros((n, L), dtype=bool)
+    assayed = np.zeros(n, dtype=bool)
+    for i, g in enumerate(genotypes):
+        if g is not None:
+            lik[i], called[i] = _genotype_evidence(g, L, genotype_error)
+            assayed[i] = True
+    logGL = np.where(called[:, :, None], np.log(np.maximum(np.nan_to_num(lik, nan=1.0), 1e-300)), 0.0)
+
+    cand = np.flatnonzero((fixed < 0) & assayed)
+    E0 = np.zeros((len(cand), n_dip))
+    for l in range(L):
+        E0 += logGL[cand, l][:, D[:, l]]
+    # unresolved: no catalog diplotype is (numerically) compatible
+    ok = E0.max(axis=1) > math.log(1e-300) * 0.5 if len(cand) else np.zeros(0, dtype=bool)
+    unresolved = sorted(set(cand[~ok].tolist()) | set(np.flatnonzero((fixed < 0) & ~assayed).tolist()))
+    cand = cand[ok]
+    E0 = E0[ok]
+    wc = w[cand]
+    fx = np.flatnonzero(fixed >= 0)
+    fixed_mass = np.zeros(n_dip)
+    np.add.at(fixed_mass, fixed[fx], w[fx])
+    onehot = np.stack([(D == k) for k in range(3)], axis=2).astype(float)  # (n_dip, L, 3)
+    fx_assayed = fx[assayed[fx]]
+
+    model = None
+    fit_model = False
+    if isinstance(missingness, NoCallModel):
+        model = missingness
+    elif missingness == "genotype":
+        model = NoCallModel(L, missingness_features)
+        fit_model = True
+    elif missingness not in (None, "mcar", "none"):
+        raise ValueError("missingness must be 'genotype', 'mcar', None or a NoCallModel")
+    miss_rows = np.concatenate([cand, fx_assayed])
+
+    def evidence():
+        if model is None:
+            return E0
+        le = model.log_evidence(called[cand])
+        E = E0.copy()
+        for l in range(L):
+            E += le[:, l][:, D[:, l]]
+        return E
+
+    if init is not None:
+        f = np.asarray(init, dtype=float)
+    else:
+        cnt = np.full(H, 1.0)
+        np.add.at(cnt, iu, fixed_mass)
+        np.add.at(cnt, ju, fixed_mass)
+        f = cnt / cnt.sum()
+    loglik = -np.inf
+    it = 0
+    E = evidence()
+    for it in range(1, max_iter + 1):
+        lf = np.log(np.maximum(f, 1e-300))
+        lp = E + (lf[iu] + lf[ju] + log2het)[None, :]
+        ll_i = _logsumexp(lp, axis=1) if len(cand) else np.zeros(0)
+        post = np.exp(lp - ll_i[:, None]) if len(cand) else np.zeros((0, n_dip))
+        prior_fixed = lf[iu] + lf[ju] + log2het
+        loglik = float(np.sum(wc * ll_i) + np.sum(w[fx] * prior_fixed[fixed[fx]]))
+        dm = (wc[:, None] * post).sum(axis=0) + fixed_mass
+        cnt = np.full(H, float(pseudocount))
+        np.add.at(cnt, iu, dm)
+        np.add.at(cnt, ju, dm)
+        f_new = cnt / cnt.sum()
+        delta = float(np.max(np.abs(f_new - f)))
+        f = f_new
+        if fit_model and len(miss_rows):
+            gpost = np.concatenate([np.einsum("nd,dlk->nlk", post, onehot), onehot[fixed[fx_assayed]]])
+            old = model.coef.copy()
+            model.fit(gpost, called[miss_rows], w[miss_rows], penalty=missingness_penalty)
+            delta = max(delta, float(np.max(np.abs(model.coef - old))) * 1e-2)
+            E = evidence()
+        if delta < tol:
+            break
+    lf = np.log(np.maximum(f, 1e-300))
+    lp = E + (lf[iu] + lf[ju] + log2het)[None, :]
+    post = np.exp(lp - _logsumexp(lp, axis=1)[:, None]) if len(cand) else np.zeros((0, n_dip))
+    return {"catalog": cat, "frequencies": f, "diplotypes": (iu, ju), "unphased_index": cand,
+            "posterior": post, "evidence": E, "missingness": model, "loglik": loglik,
+            "n_iter": it, "unresolved": unresolved}
 
 
 # --------------------------------------------------------------------------
@@ -289,6 +607,7 @@ class HaplotypePrior:
         self.overall_mixing = np.asarray(overall_mixing, dtype=float)
         self.selection = selection
         self.population_frequencies = np.asarray(population_frequencies, dtype=float)
+        self.missingness = None
 
     @property
     def n_components(self) -> int:
@@ -464,11 +783,16 @@ def _family_loglik(row_ll, row_family, n_fam, mixing_rows):
 
 
 def _count_mixture(left, right, row_family, n_fam, fam_group, fam_weight, K, H,
-                   concentration, n_starts, seed, max_iter=300):
-    """Latent-class mixture of multinomials on family haplotype counts (no covariates)."""
+                   concentration, n_starts, seed, max_iter=300, mass=None):
+    """Latent-class mixture of multinomials on family haplotype counts (no covariates).
+
+    ``mass`` (per row, default 1) is the posterior weight of a soft diplotype
+    row of an unphased person (expected counts, EM M-step).
+    """
     counts = np.zeros((n_fam, H))
-    np.add.at(counts, (row_family, left), 1.0)
-    np.add.at(counts, (row_family, right), 1.0)
+    m = np.ones(len(left)) if mass is None else np.asarray(mass, dtype=float)
+    np.add.at(counts, (row_family, left), m)
+    np.add.at(counts, (row_family, right), m)
     rng = np.random.default_rng(seed)
     best = None
     groups = sorted({g for g in fam_group if g is not None}, key=str)
@@ -503,8 +827,8 @@ def _count_mixture(left, right, row_family, n_fam, fam_group, fam_weight, K, H,
     return best[1], best[2]
 
 
-def fit_haplotype_prior(hap_a: Sequence[str], hap_b: Sequence[str], covariates, family_ids: Sequence,
-                        groups: Optional[Sequence] = None, weights=None, *,
+def fit_haplotype_prior(hap_a: Sequence[Optional[str]], hap_b: Sequence[Optional[str]], covariates,
+                        family_ids: Sequence, groups: Optional[Sequence] = None, weights=None, *,
                         catalog: Optional[Sequence[str]] = None,
                         n_components="auto", max_components: int = 5,
                         bases: Sequence[str] = ("constant", "linear", "quadratic", "quadratic_rbf"),
@@ -513,13 +837,42 @@ def fit_haplotype_prior(hap_a: Sequence[str], hap_b: Sequence[str], covariates, 
                         concentrations: Sequence[float] = (0.5, 1.0, 2.0),
                         holdout_fraction: float = 0.2, n_rbf_centers: int = 10,
                         n_starts: int = 4, refine_iter: int = 3,
-                        random_state: int = 0, verbose: bool = False) -> HaplotypePrior:
+                        random_state: int = 0, verbose: bool = False,
+                        genotypes: Optional[Sequence] = None,
+                        missingness="genotype",
+                        missingness_features: Sequence[str] = ("site", "genotype", "neighbour"),
+                        missingness_penalty: float = 1.0,
+                        genotype_error: float = 0.0,
+                        em_max_iter: int = 500, em_tol: float = 1e-7,
+                        em_rounds: int = 1, posterior_min: float = 1e-3) -> HaplotypePrior:
     """Learn a population haplotype prior that depends on covariates and a group label.
+
+    Founders may be *phased* (both haplotypes known, e.g. phase-validated
+    "anchor" families) or *unphased* (``hap_a[i] = hap_b[i] = None`` and a
+    genotype entry in ``genotypes``). Unphased founders enter through their
+    genotype likelihoods: the population frequencies are the weighted
+    maximum-likelihood estimate of an EM over the catalog diplotypes
+    compatible with each founder's genotypes (Excoffier & Slatkin 1995, Mol
+    Biol Evol 12:921; the per-person diplotype enumeration is the E-step also
+    used in PL-EM, Qin, Niu & Liu 2002, AJHG 71:1242), phased founders enter
+    as fixed diplotypes, NO_CALL loci enter through ``missingness`` (a
+    genotype- / site- / neighbour-dependent call-failure model, see
+    ``NoCallModel``), and every founder is weighted by its sampling weight
+    (pseudo-likelihood, Pfeffermann 1993, Int Stat Rev 61:317). The
+    covariate / class model below is then fitted to the posterior-weighted
+    diplotype rows (expected complete-data log-likelihood) and, for
+    ``em_rounds`` more rounds, the diplotype posteriors are recomputed with
+    the person-specific fitted prior p(h | x, g) and the model refitted at
+    the selected configuration.
+
+    With only phased input and ``genotypes=None`` the behaviour is exactly
+    that of earlier versions.
 
     Parameters
     ----------
     hap_a, hap_b
-        The two phased haplotypes of each person (one row per person).
+        The two phased haplotypes of each person (one row per person); None
+        for a person whose phase is unknown (then ``genotypes[i]`` is used).
     covariates
         (n_people, d) continuous person-level covariates (e.g. ancestry
         proportions, principal components).
@@ -532,9 +885,14 @@ def fit_haplotype_prior(hap_a: Sequence[str], hap_b: Sequence[str], covariates, 
         proxy, recruitment site) on which the class mixing depends.
     weights
         Per-person sampling weights (equal within a family), e.g.
-        ``two_phase_weights(pi_inclusion, pi_validation)``. The estimand is
-        the population *before* sampling, so biased (ascertained) inclusion
-        must be undone here, not modelled as a covariate.
+        ``two_phase_weights(pi_inclusion, pi_validation)`` when only the
+        phase-validated (second-phase) families are passed. When ALL founders
+        are passed (phased + unphased), use first-phase weights
+        ``two_phase_weights(pi_inclusion)``: second-phase selection only
+        decides which founders have phase revealed, which is ignorable for
+        the likelihood when it depends on observed data only. The estimand
+        is the population *before* sampling, so biased (ascertained)
+        inclusion must be undone here, not modelled as a covariate.
     n_components
         Number of latent classes, or ``"auto"`` (1..max_components chosen on
         held-out families).
@@ -555,13 +913,42 @@ def fit_haplotype_prior(hap_a: Sequence[str], hap_b: Sequence[str], covariates, 
     refine_iter
         EM iterations that update class responsibilities with the fitted
         surfaces after selection.
+    genotypes
+        Optional per-person genotype evidence (needed for unphased persons,
+        optional for phased ones where it informs the NO_CALL model). Each
+        entry is None, an (L,) dosage vector (0/1/2 copies of allele '1',
+        -1 or NaN = NO_CALL), an (L, 3) genotype-likelihood array (NaN row =
+        NO_CALL) or the ``(likelihood, called)`` tuple of
+        ``genotype_likelihood_arrays``.
+    missingness
+        ``"genotype"`` (default): fit ``NoCallModel`` jointly in the EM and
+        use P(NO_CALL | genotype, site, previous call) inside the genotype
+        likelihood; ``"mcar"`` / None: NO_CALL loci are uninformative
+        (missing completely at random); or a fitted ``NoCallModel`` (kept
+        fixed).
+    missingness_features, missingness_penalty
+        Terms of the NO_CALL logistic model (any of ``site``, ``genotype``,
+        ``neighbour``) and the Gaussian-prior (L2) penalty on its
+        non-intercept coefficients (1.0 = unit-variance prior on log-odds).
+    genotype_error
+        Per-locus error for hard dosage input (likelihood 1-e on the
+        reported genotype, e/2 on the other two). 0 = exact.
+    em_max_iter, em_tol
+        Limits of the frequency EM (max change of any frequency).
+    em_rounds
+        Rounds of person-specific E-step + refit after the selection fit.
+    posterior_min
+        Diplotype candidates of an unphased person with posterior below
+        this are dropped (the rest renormalised) before the covariate fit.
 
     Returns
     -------
     HaplotypePrior
         ``.haplotype_probs(x, group)``, ``.diplotype_prob``,
         ``.conditional_diplotype_prob``, ``.joint_diplotype_prior``,
-        ``.population_average``; ``.selection`` holds the held-out scores.
+        ``.population_average``; ``.selection`` holds the held-out scores;
+        ``.population_frequencies`` the (EM) design-weighted frequencies;
+        ``.missingness`` the fitted ``NoCallModel`` (or None).
     """
     hap_a = list(hap_a)
     hap_b = list(hap_b)
@@ -573,11 +960,104 @@ def fit_haplotype_prior(hap_a: Sequence[str], hap_b: Sequence[str], covariates, 
         raise ValueError("hap_a, hap_b, covariates and family_ids must have one row per person")
     w = np.ones(n) if weights is None else np.asarray(weights, dtype=float)
     w = w / w.mean()
-    cat, pop_freq = haplotype_frequencies(hap_a, hap_b, w, catalog=catalog)
+    family_ids = list(family_ids)
+    groups = None if groups is None else list(groups)
+    settings = dict(n_components=n_components, max_components=max_components, bases=bases,
+                    penalties=penalties, interactions=interactions, concentrations=concentrations,
+                    holdout_fraction=holdout_fraction, n_rbf_centers=n_rbf_centers, n_starts=n_starts,
+                    refine_iter=refine_iter, random_state=random_state, verbose=verbose)
+    phased = [None if (a is None or b is None) else (a, b) for a, b in zip(hap_a, hap_b)]
+    if genotypes is None and all(p is not None for p in phased):
+        cat, pop_freq = haplotype_frequencies(hap_a, hap_b, w, catalog=catalog)
+        model = _fit_prior_rows(hap_a, hap_b, np.ones(n), x, family_ids, groups, w, cat, pop_freq, **settings)
+        model.missingness = None
+        return model
+
+    # ---- unphased founders: diplotype EM over genotype likelihoods
+    if catalog is None:
+        cat = sorted({h for p in phased if p is not None for h in p})
+    else:
+        cat = list(catalog)
+    if not cat:
+        raise ValueError("a haplotype catalog is needed: pass catalog= or some phased founders")
+    if genotypes is None:
+        genotypes = [None] * n
+    if len(genotypes) != n:
+        raise ValueError("genotypes must have one entry per person")
+    em = haplotype_frequencies_em(genotypes, w, catalog=cat, phased=phased, missingness=missingness,
+                                  missingness_features=missingness_features,
+                                  missingness_penalty=missingness_penalty, genotype_error=genotype_error,
+                                  max_iter=em_max_iter, tol=em_tol)
+    pop_freq = em["frequencies"]
+    iu, ju = em["diplotypes"]
+    unph = em["unphased_index"]
+    usable = np.array([p is not None for p in phased]) | np.isin(np.arange(n), unph)
+
+    def expand(post):
+        ra, rb, rm, rp = [], [], [], []
+        for i in np.flatnonzero([p is not None for p in phased]):
+            ra.append(phased[i][0]); rb.append(phased[i][1]); rm.append(1.0); rp.append(i)
+        for r, i in enumerate(unph):
+            pr = post[r]
+            keep = np.flatnonzero(pr >= min(posterior_min, pr.max()))
+            mass = pr[keep] / pr[keep].sum()
+            for d, m in zip(keep, mass):
+                ra.append(cat[iu[d]]); rb.append(cat[ju[d]]); rm.append(float(m)); rp.append(i)
+        rp = np.asarray(rp, dtype=int)
+        return ra, rb, np.asarray(rm), rp
+
+    def fit(post, fixed=None):
+        ra, rb, rm, rp = expand(post)
+        return _fit_prior_rows(ra, rb, rm, x[rp], [family_ids[i] for i in rp],
+                               None if groups is None else [groups[i] for i in rp], w[rp], cat, pop_freq,
+                               fixed=fixed, **settings)
+
+    model = fit(em["posterior"])
+    post = em["posterior"]
+    log2het = np.where(iu != ju, math.log(2.0), 0.0)
+    for _ in range(max(0, int(em_rounds))):
+        if len(unph) == 0:
+            break
+        gu = [None] * len(unph) if groups is None else [groups[i] for i in unph]
+        probs = np.zeros((len(unph), len(cat)))
+        for g in set(gu):
+            sel = np.array([gg == g for gg in gu])
+            probs[sel] = model.haplotype_probs(x[unph[sel]], g)
+        lp = np.log(np.maximum(probs, 1e-300))
+        logpost = em["evidence"] + lp[:, iu] + lp[:, ju] + log2het[None, :]
+        logpost -= _logsumexp(logpost, axis=1)[:, None]
+        post = np.exp(logpost)
+        model = fit(post, fixed=model.selection)
+    model.population_frequencies = np.asarray(pop_freq, dtype=float)
+    model.missingness = em["missingness"]
+    model.selection.update({
+        "n_phased": int(sum(p is not None for p in phased)),
+        "n_unphased": int(len(unph)),
+        "n_unresolved": int(n - usable.sum()),
+        "em_iterations": int(em["n_iter"]),
+        "em_loglik": float(em["loglik"]),
+        "em_rounds": int(em_rounds),
+    })
+    return model
+
+
+def _fit_prior_rows(hap_a, hap_b, mass, x, family_ids, groups, w, cat, pop_freq, *,
+                    n_components, max_components, bases, penalties, interactions, concentrations,
+                    holdout_fraction, n_rbf_centers, n_starts, refine_iter, random_state, verbose,
+                    fixed=None) -> HaplotypePrior:
+    """Covariate / latent-class prior on (possibly soft) diplotype rows.
+
+    Row r is one candidate diplotype (hap_a[r], hap_b[r]) of a person with
+    posterior mass ``mass[r]`` (1 for a phased person); all likelihood terms
+    are mass-weighted (expected complete-data log-likelihood, the EM
+    M-step). ``fixed`` (a previous ``selection``) skips model selection.
+    """
     H = len(cat)
+    mass = np.asarray(mass, dtype=float)
     fam_order, row_family, left, right, fam_group, fam_weight = _family_arrays(
-        hap_a, hap_b, x, list(family_ids), None if groups is None else list(groups), w, cat)
+        hap_a, hap_b, x, family_ids, groups, w, cat)
     n_fam = len(fam_order)
+    wm = w * mass
 
     n_folds = max(2, int(round(1.0 / max(min(holdout_fraction, 0.5), 1e-3))))
     valid_fam = np.array([_stable_fold(str(f), n_folds, random_state) == 0 for f in fam_order])
@@ -596,83 +1076,83 @@ def fit_haplotype_prior(hap_a: Sequence[str], hap_b: Sequence[str], covariates, 
 
     def score(comp_va, mix, overall):
         mrows = _mixing_matrix(va_groups, mix, overall)
-        rl = _row_loglik_components(comp_va, left[va_rows], right[va_rows])
+        rl = _row_loglik_components(comp_va, left[va_rows], right[va_rows]) * mass[va_rows, None]
         tot, _ = _family_loglik(rl, va_rf, int(valid_fam.sum()), mrows)
         return va_fw * tot / va_fw.mean()
 
-    # ---- stage A: number of latent classes from co-occurrence (no covariates)
-    if n_components == "auto":
-        k_grid = list(range(1, max(1, int(max_components)) + 1))
-    else:
-        k_grid = [int(n_components)]
-    stage_a = []
-    for K in k_grid:
-        for conc in concentrations:
-            resp, prof = _count_mixture(left[tr_rows], right[tr_rows], tr_rf, len(tr_fw), tr_groups,
-                                        tr_fw, K, H, conc, n_starts, random_state)
-            mix, overall = _class_mixing(resp, tr_groups, tr_fw, 0.5)
-            comp_va = np.broadcast_to(prof[None], (int(va_rows.sum()), K, H))
-            s = score(comp_va, mix, overall)
-            stage_a.append({"K": K, "concentration": conc, "scores": s, "mean": float(s.mean())})
-            if verbose:
-                print(f"[prior] K={K} conc={conc} heldout={s.mean():.4f}")
-    chosen_a = _one_se_choice(stage_a, key=lambda c: (c["K"], -c["concentration"]))
-    K = chosen_a["K"]
-    # responsibilities on all families at the chosen K (warm basis for surfaces)
-    resp_all, _ = _count_mixture(left, right, row_family, n_fam, fam_group, fam_weight, K, H,
-                                 chosen_a["concentration"], n_starts, random_state)
-    # ---- stage B: covariate surface within classes
-    resp_tr, _ = _count_mixture(left[tr_rows], right[tr_rows], tr_rf, len(tr_fw), tr_groups, tr_fw,
-                                K, H, chosen_a["concentration"], n_starts, random_state)
-    mix_tr, overall_tr = _class_mixing(resp_tr, tr_groups, tr_fw, 0.5)
-    stage_b = []
-    for kind in bases:
-        basis = _Basis(kind, x[train_rows], n_rbf_centers)
-        d_tr = basis(x[tr_rows])
-        d_va = basis(x[va_rows])
-        pens = [penalties[0]] if kind == "constant" else list(penalties)
-        modes = ["per_class"] if (kind == "constant" or K == 1) else list(interactions)
-        for mode in modes:
-            warm = None
-            for pen in pens:
-                coefs = _fit_surfaces(d_tr, left[tr_rows], right[tr_rows], w[tr_rows],
-                                      resp_tr[tr_rf], H, pen, mode, warm)
-                warm = coefs
-                comp_va = _softmax_rows(np.einsum("nd,kdh->nkh", d_va, coefs))
-                s = score(comp_va, mix_tr, overall_tr)
-                stage_b.append({"basis": kind, "interaction": mode, "penalty": pen, "scores": s,
-                                "mean": float(s.mean())})
+    if fixed is None:
+        # ---- stage A: number of latent classes from co-occurrence (no covariates)
+        if n_components == "auto":
+            k_grid = list(range(1, max(1, int(max_components)) + 1))
+        else:
+            k_grid = [int(n_components)]
+        stage_a = []
+        for K in k_grid:
+            for conc in concentrations:
+                resp, prof = _count_mixture(left[tr_rows], right[tr_rows], tr_rf, len(tr_fw), tr_groups,
+                                            tr_fw, K, H, conc, n_starts, random_state, mass=mass[tr_rows])
+                mix, overall = _class_mixing(resp, tr_groups, tr_fw, 0.5)
+                comp_va = np.broadcast_to(prof[None], (int(va_rows.sum()), K, H))
+                s = score(comp_va, mix, overall)
+                stage_a.append({"K": K, "concentration": conc, "scores": s, "mean": float(s.mean())})
                 if verbose:
-                    print(f"[prior] basis={kind} interaction={mode} penalty={pen} heldout={s.mean():.4f}")
-    order = {b: i for i, b in enumerate(_BASES)}
-    chosen_b = _one_se_choice(
-        stage_b, key=lambda c: (order[c["basis"]], 0 if c["interaction"] == "shared" else 1, -c["penalty"]))
+                    print(f"[prior] K={K} conc={conc} heldout={s.mean():.4f}")
+        chosen_a = _one_se_choice(stage_a, key=lambda c: (c["K"], -c["concentration"]))
+        K = chosen_a["K"]
+        # ---- stage B: covariate surface within classes
+        resp_tr, _ = _count_mixture(left[tr_rows], right[tr_rows], tr_rf, len(tr_fw), tr_groups, tr_fw,
+                                    K, H, chosen_a["concentration"], n_starts, random_state, mass=mass[tr_rows])
+        mix_tr, overall_tr = _class_mixing(resp_tr, tr_groups, tr_fw, 0.5)
+        stage_b = []
+        for kind in bases:
+            basis = _Basis(kind, x[train_rows], n_rbf_centers)
+            d_tr = basis(x[tr_rows])
+            d_va = basis(x[va_rows])
+            pens = [penalties[0]] if kind == "constant" else list(penalties)
+            modes = ["per_class"] if (kind == "constant" or K == 1) else list(interactions)
+            for mode in modes:
+                warm = None
+                for pen in pens:
+                    coefs = _fit_surfaces(d_tr, left[tr_rows], right[tr_rows], wm[tr_rows],
+                                          resp_tr[tr_rf], H, pen, mode, warm)
+                    warm = coefs
+                    comp_va = _softmax_rows(np.einsum("nd,kdh->nkh", d_va, coefs))
+                    s = score(comp_va, mix_tr, overall_tr)
+                    stage_b.append({"basis": kind, "interaction": mode, "penalty": pen, "scores": s,
+                                    "mean": float(s.mean())})
+                    if verbose:
+                        print(f"[prior] basis={kind} interaction={mode} penalty={pen} heldout={s.mean():.4f}")
+        order = {b: i for i, b in enumerate(_BASES)}
+        chosen_b = _one_se_choice(
+            stage_b, key=lambda c: (order[c["basis"]], 0 if c["interaction"] == "shared" else 1, -c["penalty"]))
+        chosen = {"n_components": K, "concentration": chosen_a["concentration"], "basis": chosen_b["basis"],
+                  "interaction": chosen_b["interaction"], "penalty": chosen_b["penalty"]}
+        stages = {"stage_components": [{k: v for k, v in c.items() if k != "scores"} for c in stage_a],
+                  "stage_surface": [{k: v for k, v in c.items() if k != "scores"} for c in stage_b]}
+    else:
+        chosen = {k: fixed[k] for k in ("n_components", "concentration", "basis", "interaction", "penalty")}
+        stages = {k: fixed.get(k, []) for k in ("stage_components", "stage_surface")}
+        K = int(chosen["n_components"])
 
     # ---- refit on all families, EM refinement of the class responsibilities
-    basis = _Basis(chosen_b["basis"], x, n_rbf_centers)
+    resp_all, _ = _count_mixture(left, right, row_family, n_fam, fam_group, fam_weight, K, H,
+                                 chosen["concentration"], n_starts, random_state, mass=mass)
+    basis = _Basis(chosen["basis"], x, n_rbf_centers)
     design = basis(x)
     resp = resp_all
     coef_arr = None
     for it in range(max(1, refine_iter + 1)):
-        coef_arr = _fit_surfaces(design, left, right, w, resp[row_family], H, chosen_b["penalty"],
-                                 chosen_b["interaction"], coef_arr)
+        coef_arr = _fit_surfaces(design, left, right, wm, resp[row_family], H, chosen["penalty"],
+                                 chosen["interaction"], coef_arr)
         mix, overall = _class_mixing(resp, fam_group, fam_weight, 0.5)
         if it == refine_iter or K == 1:
             break
         comp = _softmax_rows(np.einsum("nd,kdh->nkh", design, coef_arr))
-        rl = _row_loglik_components(comp, left, right)
+        rl = _row_loglik_components(comp, left, right) * mass[:, None]
         _, resp = _family_loglik(rl, row_family, n_fam, _mixing_matrix(fam_group, mix, overall))
-    selection = {
-        "n_components": K,
-        "concentration": chosen_a["concentration"],
-        "basis": chosen_b["basis"],
-        "interaction": chosen_b["interaction"],
-        "penalty": chosen_b["penalty"],
-        "n_families": n_fam,
-        "n_holdout_families": int(valid_fam.sum()),
-        "stage_components": [{k: v for k, v in c.items() if k != "scores"} for c in stage_a],
-        "stage_surface": [{k: v for k, v in c.items() if k != "scores"} for c in stage_b],
-    }
+    selection = dict(chosen)
+    selection.update({"n_families": n_fam, "n_holdout_families": int(valid_fam.sum())})
+    selection.update(stages)
     return HaplotypePrior(cat, basis, coef_arr, mix, overall, selection, pop_freq)
 
 
@@ -1073,7 +1553,11 @@ def simulate_family_cohort(n_families: int = 1500, n_loci: int = 12, n_haplotype
                            covariate_dim: int = 3, surface_strength: float = 1.5,
                            class_strength: float = 2.0, ascertainment_strength: float = 2.0,
                            second_phase_prob: float = 0.3, no_crossover_mass: float = 0.6,
-                           max_children: int = 3, seed: int = 0) -> Dict[str, object]:
+                           max_children: int = 3, seed: int = 0, *,
+                           validation_bias: float = 0.0, no_call_rate: float = 0.0,
+                           no_call_mechanism: str = "mcar", no_call_het_logodds: float = 1.5,
+                           no_call_neighbour_logodds: float = 1.0,
+                           genotype_error: float = 0.02) -> Dict[str, object]:
     """Simulate nuclear families with known population haplotype structure.
 
     Population: each family has a latent class c (founder community) with an
@@ -1089,6 +1573,19 @@ def simulate_family_cohort(n_families: int = 1500, n_loci: int = 12, n_haplotype
     ascertainment on the carrier burden at locus 0, strength
     ``ascertainment_strength``); a random second phase with probability
     ``second_phase_prob`` reveals the parents' phase.
+
+    ``validation_bias`` makes the second phase non-random: the logit of the
+    validation probability is shifted by ``validation_bias * (burden > 0)``
+    (recorded per family in ``second_phase_prob``).
+
+    Every included parent is also genotyped (separate random stream, so the
+    pedigrees do not depend on these options): ``dosage`` (-1 = NO_CALL),
+    ``genotype_likelihood`` ((L, 3), NaN rows at NO_CALL; the true genotype
+    gets 1 - ``genotype_error``) and ``called``. NO_CALL has base rate
+    ``no_call_rate``; ``no_call_mechanism="mcar"`` is independent of
+    everything, ``"genotype"`` adds ``no_call_het_logodds`` for
+    heterozygotes and ``no_call_neighbour_logodds`` when the previous locus
+    failed (missing not at random).
 
     Returns a dict with ``catalog``, ``people`` (list of dicts, one per
     parent of every *included* family), ``families`` (included families with
@@ -1158,9 +1655,13 @@ def simulate_family_cohort(n_families: int = 1500, n_loci: int = 12, n_haplotype
         if rng.random() >= pi1:
             continue
         fid = f"F{f:05d}"
-        validated = bool(rng.random() < second_phase_prob)
+        pi2 = float(second_phase_prob)
+        if validation_bias:
+            lo = math.log(pi2 / (1.0 - pi2)) + validation_bias * (burden > 0)
+            pi2 = float(1.0 / (1.0 + math.exp(-lo)))
+        validated = bool(rng.random() < pi2)
         families.append({"family_id": fid, "group": g, "first_phase_prob": pi1,
-                         "second_phase_prob": second_phase_prob, "validated": validated,
+                         "second_phase_prob": pi2, "validated": validated,
                          "latent_class": c})
         for r, role in enumerate(("maternal", "paternal")):
             people.append({"family_id": fid, "role": role, "x": xs[r], "hap_a": pairs[r][0],
@@ -1171,6 +1672,27 @@ def simulate_family_cohort(n_families: int = 1500, n_loci: int = 12, n_haplotype
             copy = np.array([int(a) + int(b) for a, b in zip(gm, gp)])
             children.append({"family_id": fid, "maternal_transmitted": gm,
                              "paternal_transmitted": gp, "copy_number": copy})
+    if no_call_mechanism not in ("mcar", "genotype"):
+        raise ValueError("no_call_mechanism must be 'mcar' or 'genotype'")
+    arng = np.random.default_rng([int(seed), 7919])
+    base = math.log(max(no_call_rate, 1e-12) / max(1.0 - no_call_rate, 1e-12))
+    for p in people:
+        dose = np.array([int(a) + int(b) for a, b in zip(p["hap_a"], p["hap_b"])])
+        called = np.ones(L, dtype=bool)
+        if no_call_rate > 0:
+            prev = False
+            for l in range(L):
+                lo = base
+                if no_call_mechanism == "genotype":
+                    lo += no_call_het_logodds * (dose[l] == 1) + no_call_neighbour_logodds * prev
+                prev = bool(arng.random() < 1.0 / (1.0 + math.exp(-lo)))
+                called[l] = not prev
+        lik = np.full((L, 3), genotype_error / 2.0)
+        lik[np.arange(L), dose] = 1.0 - genotype_error
+        lik[~called] = np.nan
+        p["dosage"] = np.where(called, dose, -1)
+        p["genotype_likelihood"] = lik
+        p["called"] = called
     pop_x = np.array(pop_x)
     true_pop = np.mean([true_haplotype_probs(pop_x[i:i + 1], pop_g[i])[0] for i in range(len(pop_x))], axis=0)
     return {"catalog": catalog, "people": people, "families": families, "children": children,

@@ -245,3 +245,111 @@ def test_offspring_outcome_probability():
     brute = sum(a * b * pen(x, y) for x, a in zip(gm, wm) for y, b in zip(gp, wp))
     assert exact == pytest.approx(brute)
     assert 0 < exact < 1
+
+
+# ---------------------------------------------------------------------------
+# unphased founders: diplotype EM over genotype likelihoods + NO_CALL model
+# ---------------------------------------------------------------------------
+@pytest.fixture(scope="module")
+def mnar_cohort():
+    return pc.simulate_family_cohort(n_families=2000, n_loci=8, n_haplotypes=16, seed=11,
+                                     second_phase_prob=0.06, no_call_rate=0.12,
+                                     no_call_mechanism="genotype")
+
+
+def _tv_truth(sim, cat, freq):
+    truth = dict(zip(sim["catalog"], sim["true_population_freq"]))
+    est = dict(zip(cat, freq))
+    return 0.5 * sum(abs(truth.get(h, 0) - est.get(h, 0)) for h in set(truth) | set(est))
+
+
+def test_em_phased_only_matches_counting(cohort):
+    rows, w = _validated(cohort)
+    cat, f = pc.haplotype_frequencies([p["hap_a"] for p in rows], [p["hap_b"] for p in rows], w)
+    em = pc.haplotype_frequencies_em([None] * len(rows), w, catalog=cat,
+                                     phased=[(p["hap_a"], p["hap_b"]) for p in rows])
+    assert np.allclose(em["frequencies"], f, atol=1e-10)
+
+
+def test_simulator_assay_defaults(cohort):
+    p = cohort["people"][0]
+    assert p["called"].all() and (p["dosage"] >= 0).all()
+    assert p["genotype_likelihood"].shape == (10, 3)
+
+
+def test_em_unphased_founders_beat_anchor_counting(mnar_cohort):
+    sim = mnar_cohort
+    fam = {f["family_id"]: f for f in sim["families"]}
+    people = sim["people"]
+    anchors = [p for p in people if fam[p["family_id"]]["validated"]]
+    w12 = pc.two_phase_weights([fam[p["family_id"]]["first_phase_prob"] for p in anchors],
+                               [fam[p["family_id"]]["second_phase_prob"] for p in anchors])
+    cat, f_anchor = pc.haplotype_frequencies([p["hap_a"] for p in anchors], [p["hap_b"] for p in anchors], w12)
+    w1 = pc.two_phase_weights([fam[p["family_id"]]["first_phase_prob"] for p in people])
+    phased = [(p["hap_a"], p["hap_b"]) if fam[p["family_id"]]["validated"] else None for p in people]
+    gl = [p["genotype_likelihood"] for p in people]
+    em_mcar = pc.haplotype_frequencies_em(gl, w1, catalog=cat, phased=phased, missingness="mcar")
+    em_mnar = pc.haplotype_frequencies_em(gl, w1, catalog=cat, phased=phased, missingness="genotype")
+    tv_anchor = _tv_truth(sim, cat, f_anchor)
+    tv_mcar = _tv_truth(sim, cat, em_mcar["frequencies"])
+    tv_mnar = _tv_truth(sim, cat, em_mnar["frequencies"])
+    assert tv_mcar < 0.8 * tv_anchor
+    assert tv_mnar < tv_mcar
+    par = em_mnar["missingness"].params
+    assert par["het"] == pytest.approx(1.5, abs=0.4)       # simulated heterozygote log-odds
+    assert par["neighbour"] == pytest.approx(1.0, abs=0.4)  # simulated neighbour log-odds
+    assert np.isclose(em_mnar["frequencies"].sum(), 1.0)
+    assert em_mnar["posterior"].shape[0] == len(em_mnar["unphased_index"])
+    assert np.allclose(em_mnar["posterior"].sum(axis=1), 1.0)
+
+
+def test_genotype_input_formats_agree():
+    cat = ["000", "011", "101", "110"]
+    dosage = [np.array([0, 1, 1]), np.array([1, -1, 1]), np.array([0, 2, 2])]
+    lik_rows = []
+    for d in dosage:
+        lk = np.full((3, 3), 0.0)
+        lk[np.arange(3), np.maximum(d, 0)] = 1.0
+        lk[d < 0] = np.nan
+        lik_rows.append(lk)
+    tuples = [(lk, np.isfinite(lk).all(axis=1)) for lk in lik_rows]
+    a = pc.haplotype_frequencies_em(dosage, catalog=cat, missingness="mcar")
+    b = pc.haplotype_frequencies_em(lik_rows, catalog=cat, missingness="mcar")
+    c = pc.haplotype_frequencies_em(tuples, catalog=cat, missingness="mcar")
+    assert np.allclose(a["frequencies"], b["frequencies"]) and np.allclose(b["frequencies"], c["frequencies"])
+    # a genotype no catalog diplotype can explain is reported, not silently used
+    bad = pc.haplotype_frequencies_em([np.array([2, 0, 0])] + dosage, catalog=cat, missingness="mcar")
+    assert bad["unresolved"] == [0]
+
+
+def test_no_call_model_mcar_vs_genotype():
+    m = pc.NoCallModel(4, features=("genotype",))
+    assert m.n_params == 3
+    called = np.array([[True, False, True, True]])
+    le = m.log_evidence(called)
+    assert le.shape == (1, 4, 3)
+    assert np.allclose(np.exp(le[0, 1]), 0.5) and np.allclose(np.exp(le[0, 0]), 0.5)
+    with pytest.raises(ValueError):
+        pc.NoCallModel(4, features=("depth",))
+
+
+def test_fit_prior_with_unphased_founders(mnar_cohort):
+    sim = mnar_cohort
+    fam = {f["family_id"]: f for f in sim["families"]}
+    people = sim["people"]
+    val = [fam[p["family_id"]]["validated"] for p in people]
+    w1 = pc.two_phase_weights([fam[p["family_id"]]["first_phase_prob"] for p in people])
+    model = pc.fit_haplotype_prior([p["hap_a"] if v else None for p, v in zip(people, val)],
+                                   [p["hap_b"] if v else None for p, v in zip(people, val)],
+                                   np.array([p["x"] for p in people]), [p["family_id"] for p in people],
+                                   [p["group"] for p in people], w1,
+                                   genotypes=[(p["genotype_likelihood"], p["called"]) for p in people],
+                                   max_components=2, bases=("constant", "linear"), penalties=(1.0,),
+                                   concentrations=(1.0,), n_starts=2)
+    sel = model.selection
+    assert sel["n_unphased"] == sum(not v for v in val)
+    assert sel["n_phased"] == sum(val)
+    assert model.missingness is not None
+    assert np.isclose(model.population_frequencies.sum(), 1.0)
+    p = model.haplotype_probs(np.array([[0.3, 0.3, 0.4]]), "G1")
+    assert np.allclose(p.sum(axis=1), 1.0)

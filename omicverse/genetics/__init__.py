@@ -92,6 +92,8 @@ Sequencing sample QC      ``snp_allele_counts``, ``bam_read_summary``,
                           ``tumor_in_normal_shift``,
                           ``tumor_normal_batch_qc``
 Family haplotypes         ``two_phase_weights``, ``haplotype_frequencies``,
+                          ``haplotype_frequencies_em`` (unphased founders,
+                          genotype likelihoods, IPW), ``NoCallModel``,
                           ``fit_haplotype_prior`` (covariate / group /
                           shared-family prior under biased sampling),
                           ``fit_crossover_intervals``, ``gamete_sequences``,
@@ -192,6 +194,8 @@ _LAZY_ATTRS: dict[str, tuple[str, str]] = {
     # Family-based haplotype inference (pedigrees, biased / two-phase sampling)
     "two_phase_weights":       ("._pedigree", "two_phase_weights"),
     "haplotype_frequencies":   ("._pedigree", "haplotype_frequencies"),
+    "haplotype_frequencies_em": ("._pedigree", "haplotype_frequencies_em"),
+    "NoCallModel":             ("._pedigree", "NoCallModel"),
     "fit_haplotype_prior":     ("._pedigree", "fit_haplotype_prior"),
     "HaplotypePrior":          ("._pedigree", "HaplotypePrior"),
     "fit_crossover_intervals": ("._pedigree", "fit_crossover_intervals"),
