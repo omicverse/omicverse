@@ -649,7 +649,11 @@ def draft_principal(study: DicomStudy, ledger: Union[str, Sequence[Dict]], vocab
       whose plane shows the structure lengthwise (most slices in the run);
     - evidence: the nearest in-plane instance of the two series with the
       longest runs.
-    Returns the draft plus the counts behind every decision.
+    Returns the draft plus the counts behind every decision.  The draft
+    (structure -> finding type, acuity) is recorded as a validated output, so
+    ``ov.utils.check_deliverable(report)`` flags a report that grades that
+    structure differently or leaves it out, unless a departure with
+    independent image evidence is declared.
     """
     p = ledger_principal(ledger, radius_mm=radius_mm)
     if not p.get("found"):
@@ -755,6 +759,13 @@ def draft_principal(study: DicomStudy, ledger: Union[str, Sequence[Dict]], vocab
                       "run_slices": r["slices"], "instance_at_location": m["instance_number"],
                       "rowcol_at_location": [round(m["row"], 1), round(m["col"], 1)],
                       "crop_100mm": [r0, min(i0.rows, r0 + 2 * h), c0, min(i0.cols, c0 + 2 * w)]})
+    try:   # the draft is a validated output: check_deliverable compares the report with it
+        from ..utils._provenance import record_output
+        record_output("omicverse.radiology._survey.draft_principal",
+                      pd.DataFrame([{"structure": struct, "finding_type": ftype, "acuity": acuity}]),
+                      ["structure"], ["finding_type", "acuity"])
+    except Exception:   # provenance must never break the analysis
+        pass
     return {"found": True, "structure": struct, "finding_type": ftype, "acuity": acuity,
             "location_xyz_mm": xyz.round(1).tolist(), "measurement_slice": meas,
             "measurement_candidates": cands, "evidence": evidence,
