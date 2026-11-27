@@ -429,7 +429,8 @@ def check_deliverable(deliverable, *, sep: Optional[str] = None, tolerance: floa
     DataFrame (``function, column, n_rows, agreement, status, reason``) whose
     ``attrs['summary']`` is a printable verdict.  ``status``: ``match``
     (agreement >= 1 - ``tolerance``), ``departs`` (a reason was declared) or
-    ``UNEXPLAINED``."""
+    ``UNEXPLAINED``; ``MISSING`` when none of the validated rows (by key) is
+    in the deliverable."""
     import numpy as np
     import pandas as pd
     if isinstance(deliverable, pd.DataFrame):
@@ -461,6 +462,14 @@ def check_deliverable(deliverable, *, sep: Optional[str] = None, tolerance: floa
         except OSError:
             continue
         m = d.merge(lib, on=list(keys), how="inner", suffixes=("", "__lib"))
+        if len(m) == 0 and len(lib):
+            why = [x["reason"] for x in deps if fn.endswith(x["function"])]
+            rows.append({"function": fn, "column": ",".join(keys), "n_rows": 0, "agreement": 0.0,
+                         "status": "departs" if why else "MISSING",
+                         "reason": why[-1] if why else
+                         f"validated rows {lib[list(keys)].head(3).to_dict('records')} not in the deliverable",
+                         "default_overrides": None})
+            continue
         for v in o["values"]:
             if v not in d.columns or len(m) == 0:
                 continue
@@ -479,7 +488,7 @@ def check_deliverable(deliverable, *, sep: Optional[str] = None, tolerance: floa
     if res.empty:
         summary = f"check_deliverable({name}): no recorded validated output shares its key columns."
     else:
-        bad = res[res.status == "UNEXPLAINED"]
+        bad = res[res.status.isin(["UNEXPLAINED", "MISSING"])]
         lines = [f"check_deliverable({name}): {len(res)} column(s) traced to validated outputs, "
                  f"{int((res.status == 'match').sum())} match, {len(bad)} UNEXPLAINED departure(s)."]
         for r in res.itertuples():
