@@ -91,8 +91,8 @@ def _calc_term_stats(query: set, gene_sets: Dict[str, List[str]], background):
             continue
         m = len(category)
         pval = hypergeom.sf(x - 1, bg, m, k)
-        # Haldane-Anscombe correction (gseapy issue #132)
-        ratio = ((x + 0.5) * (bg - m + 0.5)) / ((m + 0.5) * (k - x + 0.5))
+        # Haldane-Anscombe correction for the 2x2 table (gseapy issue #237)
+        ratio = ((x + 0.5) * (bg - m - k + x + 0.5)) / ((m - x + 0.5) * (k - x + 0.5))
         terms.append(s)
         pvals.append(pval)
         oddr.append(ratio)
