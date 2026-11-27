@@ -51,6 +51,7 @@ from ._sdm import (sdm_sample_f1, sdm_decode_sets, sdm_sets_to_strings, sdm_spat
                    sdm_neighbor_composition, sdm_presence_only_histogram, sdm_cube_summary,
                    sdm_read_tensor_dir, sdm_standardize, sdm_fit_mlp, sdm_fuse,
                    sdm_community_pipeline)
+from ._mediation_transport import mediation_transport_r_source, mediation_transport
 from ._small_area import (sae_source, sae_longitudinal_design, sae_reference_prior, sae_grouped_model,
                           sae_benchmark, crps_ensemble, energy_score, pit_histogram_tv)
 from ._smear_morph import (smear_measure, smear_stain_vectors, smear_field_features,
@@ -58,7 +59,7 @@ from ._smear_morph import (smear_measure, smear_stain_vectors, smear_field_featu
                            group_holdout_two_axis, species_balanced_recall, group_laplace_prior,
                            smear_morphometry_source, smear_fit_predictor, smear_export_predictor)
 
-__all__ = ["sae_source", "sae_longitudinal_design", "sae_reference_prior", "sae_grouped_model",
+__all__ = ["mediation_transport_r_source", "mediation_transport", "sae_source", "sae_longitudinal_design", "sae_reference_prior", "sae_grouped_model",
            "sae_benchmark", "crps_ensemble", "energy_score", "pit_histogram_tv",
            "cross_species_align", "bonsai", "bandpass_filter", "channel_qc_table",
            "bridged_channel_pairs", "erp_channel_outliers",

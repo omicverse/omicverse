@@ -573,6 +573,7 @@ exclude = [
 
 [tool.setuptools.package-data]
 "omicverse.pl" = ["_data/*.csv"]
+"omicverse.tl" = ["*.R"]
 "omicverse.synbio" = ["external/*.fasta", "external/cfd/*.pkl"]
 # Vendored PDBFixer: residue templates + forcefield XML must ship in the wheel
 "omicverse.external.pdbfixer" = ["*.xml", "templates/*.pdb", "LICENSE"]
