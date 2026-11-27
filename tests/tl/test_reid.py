@@ -312,3 +312,78 @@ def test_open_set_rolling_origin_with_dates():
                                  sim_gg=xg @ xg.T, gallery_times=gt, query_times=gt[:len(q)],
                                  n_rep=2, rerank=False, log=None)
     assert res2["mode"] == "reference-simulation" and res2["rerank"] is False
+
+
+def test_known_share_em_recovers_prior():
+    """Prior-shift EM (Saerens et al. 2002) on score densities learned with known truth."""
+    from omicverse.tl._reid import _known_share_em, _subsample_known_share
+    rng = np.random.default_rng(0)
+    sk, sn = rng.normal(0.8, 0.08, 2000), rng.normal(0.5, 0.08, 2000)
+    for pi in (0.2, 0.5, 0.8):
+        k = int(1000 * pi)
+        real = np.r_[rng.normal(0.8, 0.08, k), rng.normal(0.5, 0.08, 1000 - k)]
+        est, pi0 = _known_share_em(sk, sn, real)
+        assert abs(est - pi) < 0.05 and pi0 == pytest.approx(0.5)
+    y = np.repeat(np.arange(40), 5)
+    known = y < 30
+    keep = _subsample_known_share(y, known, 0.3, rng, 20)
+    assert abs(known[keep].mean() - 0.3) < 0.1
+    assert all(np.sum(y[keep] == i) in (0, 5) for i in np.unique(y))   # whole individuals
+
+
+def test_open_set_fold_similarity_and_known_share():
+    x, y = _population(80, 6, seed=5)
+    g = np.flatnonzero(y < 60)
+    q = np.flatnonzero(y >= 45)
+    g = np.setdiff1d(g, q[::2])
+    xq, xg = x[q], x[g]
+    calls = []
+
+    def fold_sim(qi, gi):
+        calls.append(len(qi))
+        return xg[qi] @ xg[qi].T, xg[qi] @ xg[gi].T
+
+    res = reid_open_set_cluster(xq @ xq.T, sim_qg=xq @ xg.T, gallery_labels=y[g], sim_gg=xg @ xg.T,
+                                fold_similarity=fold_sim, known_share="auto", n_rep=2, log=None)
+    assert calls and res["known_share"] is not None
+    assert adjusted_rand_score(y[q], res["labels"]) > 0.7
+    base = reid_open_set_cluster(xq @ xq.T, sim_qg=xq @ xg.T, gallery_labels=y[g],
+                                 sim_gg=xg @ xg.T, n_rep=2, log=None)
+    assert base["known_share"] is None          # default: folds untouched
+
+
+def test_reid_dataset_columns_and_record(tmp_path, monkeypatch):
+    """Whole-dataset entry point: finds split / subset / identity columns (a partly empty
+    species column loses to a complete dataset column), runs one pipeline per subset with
+    the full reference, writes the prediction and records it as a partition."""
+    import omicverse.tl._reid as R
+    from omicverse.utils import check_deliverable
+    monkeypatch.setenv("OV_PROVENANCE_DIR", str(tmp_path / "prov"))
+    md = pd.DataFrame({
+        "image_id": range(12),
+        "identity": ["a", "a", "b", "b", None, None, "c", "c", None, None, None, None],
+        "path": [f"im{i}.png" for i in range(12)],
+        "species": ["fox"] * 6 + [None] * 6,
+        "split": ["train"] * 4 + ["test"] * 2 + ["train"] * 2 + ["test"] * 4,
+        "dataset": ["D1"] * 6 + ["D2"] * 6})
+    seen = {}
+
+    def fake_pipeline(qp, **kw):
+        seen[kw["prefix"]] = (len(qp), len(kw.get("reference_paths", [])), kw.get("reference_budget_s"))
+        return {"labels": np.array([f"{kw['prefix']}_{i // 2}" for i in range(len(qp))]),
+                "report": {"n_clusters": (len(qp) + 1) // 2}}
+
+    monkeypatch.setattr(R, "reid_pipeline", fake_pipeline)
+    out = tmp_path / "pred.csv"
+    res = R.reid_dataset(md, image_root=str(tmp_path), out=str(out), log=None)
+    assert res["columns"]["subset"] == "dataset" and res["columns"]["split"] == "split"
+    assert seen == {"D1": (2, 4, None), "D2": (4, 2, None)}
+    pred = pd.read_csv(out)
+    assert list(pred.columns) == ["image_id", "identity"] and len(pred) == 6
+    assert (check_deliverable(str(out)).status == "match").all()
+    pred["identity"] = "x_" + pred["identity"]           # renamed clusters: same partition
+    pred.to_csv(out, index=False)
+    assert (check_deliverable(str(out)).status == "match").all()
+    pred.loc[:, "identity"] = "one"                     # merged: departs
+    pred.to_csv(out, index=False)
+    assert (check_deliverable(str(out)).status == "UNEXPLAINED").all()

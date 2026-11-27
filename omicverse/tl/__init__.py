@@ -33,7 +33,7 @@ from ._choice_model import (fit_choice_model, choice_model_loglik,
 from ._reid import (load_reid_backbone, reid_embed, reid_view_center, reid_candidate_pairs,
                     reid_local_verify, reid_fuse_similarity, reid_pair_auc,
                     reid_fit_projection, reid_select_threshold, reid_open_set_cluster, reid_rerank,
-                    reid_pipeline)
+                    reid_pipeline, reid_dataset)
 from ._qsm import (qsm_load_multi_echo, qsm_save_nifti, qsm_brain_mask, qsm_unwrap_phase,
                    qsm_multi_echo_field, qsm_background_removal, qsm_dipole_inversion,
                    qsm_reconstruct, qsm_dipole_kernel, qsm_forward_field, qsm_numerical_phantom)
@@ -68,7 +68,7 @@ __all__ = ["sae_source", "sae_longitudinal_design", "sae_reference_prior", "sae_
            "load_reid_backbone", "reid_embed", "reid_view_center", "reid_candidate_pairs",
            "reid_local_verify", "reid_fuse_similarity", "reid_pair_auc",
            "reid_fit_projection", "reid_select_threshold", "reid_open_set_cluster", "reid_rerank",
-           "reid_pipeline",
+           "reid_pipeline", "reid_dataset",
            "qsm_load_multi_echo", "qsm_save_nifti", "qsm_brain_mask", "qsm_unwrap_phase",
            "qsm_multi_echo_field", "qsm_background_removal", "qsm_dipole_inversion",
            "qsm_reconstruct", "qsm_dipole_kernel", "qsm_forward_field", "qsm_numerical_phantom",

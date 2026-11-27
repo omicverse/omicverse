@@ -348,10 +348,13 @@ def _scores_dict(scores) -> Dict[str, Any]:
 def record_output(function: str, table, keys: Sequence[str], values: Sequence[str], *,
                   overrides: Optional[Sequence[Dict[str, Any]]] = None,
                   protocol: Optional[Dict[str, Any]] = None,
-                  inputs: Optional[Dict[str, Any]] = None) -> Optional[str]:
+                  inputs: Optional[Dict[str, Any]] = None,
+                  partition_values: Optional[Sequence[str]] = None) -> Optional[str]:
     """Write a validated function's output (``keys`` + ``values`` columns of
     ``table``) to the ledger as a ``verse.provenance.v1`` record; returns the
-    output file path."""
+    output file path.  ``partition_values``: value columns that are arbitrary
+    cluster labels (only the grouping matters); :func:`check_deliverable`
+    compares those by the adjusted Rand index instead of equal strings."""
     import os
     import uuid
     import pandas as pd
@@ -377,6 +380,7 @@ def record_output(function: str, table, keys: Sequence[str], values: Sequence[st
            "inputs": {k: _hash_obj(v) for k, v in (inputs or {}).items()},
            "output_file": fname, "output_hash": _hash_obj(out), "keys": keys, "values": values,
            "n_rows": int(len(out)), "protocol": proto or None,
+           "partition": [v for v in (partition_values or []) if v in values] or None,
            "overrides": [r.get("parameter") for r in (overrides or [])]}
     _append_ledger("outputs.jsonl", [rec])
     try:
@@ -460,7 +464,10 @@ def check_deliverable(deliverable, *, sep: Optional[str] = None, tolerance: floa
         for v in o["values"]:
             if v not in d.columns or len(m) == 0:
                 continue
-            agree = float((m[v].astype(str) == m[v + "__lib"].astype(str)).mean())
+            if v in (o.get("partition") or []):
+                agree = _partition_agreement(m[v].astype(str), m[v + "__lib"].astype(str))
+            else:
+                agree = float((m[v].astype(str) == m[v + "__lib"].astype(str)).mean())
             why = [x["reason"] for x in deps if fn.endswith(x["function"])
                    and (not x.get("columns") or v in x["columns"])]
             why += [f"audit {x['audit_id']} passed" for x in audits
@@ -489,6 +496,16 @@ def check_deliverable(deliverable, *, sep: Optional[str] = None, tolerance: floa
         summary = "\n".join(lines)
     res.attrs["summary"] = summary
     return res
+
+
+def _partition_agreement(a, b) -> float:
+    """Adjusted Rand index of two labelings of the same rows (1 = same grouping,
+    whatever the cluster names); identical singletons-only labelings give 1."""
+    from sklearn.metrics import adjusted_rand_score
+    a, b = list(a), list(b)
+    if len(set(a)) == len(a) and len(set(b)) == len(b):
+        return 1.0
+    return float(adjusted_rand_score(a, b))
 
 
 # ── should an override replace the validated result? ─────────────────────────
