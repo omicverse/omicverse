@@ -364,7 +364,7 @@ def test_torch_backed_features_raise_consistent_error(monkeypatch):
         ov.bulk.Deconvolution()
 
     with pytest.raises(ImportError, match="omicverse.llm requires the optional dependencies `torch`"):
-        ov.llm.SCLLMManager()
+        ov.llm.ModelFactory.create_model("scgpt")
 
 
 def test_single_imports_without_torch_and_fails_on_torch_features(monkeypatch):

@@ -11,6 +11,40 @@ from .base import SCLLMBase
 
 
 
+@register_function(
+    aliases=[
+        "ModelFactory", "scllm", "scLLM",
+        "single-cell foundation model", "single cell foundation model",
+        "single-cell language model",
+        "foundation model annotate", "foundation model annotation",
+        "foundation model embedding", "foundation model integration",
+        "foundation model perturbation", "foundation model fine-tune",
+        "zero-shot foundation model",
+        "scgpt", "geneformer", "scfoundation", "uce", "cellplm", "tabula",
+        "scbert", "scmulan", "tgpt", "cellfm", "sccello",
+        "scgpt annotate", "geneformer annotate", "cellplm annotate",
+        "scgpt embedding", "geneformer embedding", "cellplm embedding",
+        "单细胞基础模型", "单细胞大模型", "scGPT 注释", "Geneformer 注释",
+    ],
+    category="llm",
+    description=(
+        "Factory for single-cell foundation models (scGPT, Geneformer, "
+        "scFoundation, UCE, CellPLM, scMulan, ...). create_model() returns a "
+        "model object exposing predict / get_embeddings / fine_tune / integrate "
+        "(and perturb_genes for Geneformer); not every model implements every task."
+    ),
+    requires={"obs": ["gene-expression matrix"], "var": ["gene identifiers"]},
+    produces={"obsm": ["X_<model>"], "obs": ["predicted_celltype (after annotation)"]},
+    auto_fix="none",
+    examples=[
+        "model = ov.llm.ModelFactory.create_model('scgpt', '/path/to/scgpt')",
+        "embeddings = model.get_embeddings(adata)",
+        "result = model.predict(adata, task='annotation')",
+        "model.integrate(adata, batch_key='batch')",
+        "model.fine_tune(train_adata, valid_adata, task='annotation')",
+    ],
+    related=["single.SCENIC", "single.Annotation"],
+)
 class ModelFactory:
     """
     Factory class for creating different single-cell language models.
@@ -183,205 +217,6 @@ class ModelFactory:
         cls._models[model_type.lower()] = model_class
 
 
-@register_function(
-    aliases=[
-        # Direct manager / class names
-        "SCLLMManager", "scllm manager",
-        # Foundation-model / single-cell language model identifiers — narrow
-        # so that generic queries like "cell type annotation" or "batch
-        # integration" go to the canonical ov.pp / ov.single.Annotation /
-        # ov.pp.batch_correction wrappers, and only foundation-model-explicit
-        # queries land here.
-        "single-cell foundation model", "single cell foundation model",
-        "single-cell language model", "scLLM", "scllm",
-        "foundation model annotate", "foundation model annotation",
-        "foundation model embedding", "foundation model integration",
-        "foundation model perturbation", "foundation model fine-tune",
-        "zero-shot foundation model",
-        "scgpt", "geneformer", "scfoundation", "uce", "cellplm", "tabula",
-        "scbert", "scmulan", "tgpt", "cellfm", "sccello",
-        "scgpt annotate", "geneformer annotate", "cellplm annotate",
-        "scgpt embedding", "geneformer embedding", "cellplm embedding",
-        # Chinese
-        "单细胞基础模型", "单细胞大模型", "scGPT 注释", "Geneformer 注释",
-    ],
-    category="llm",
-    description=(
-        "High-level manager for single-cell foundation models (RECOMMENDED entry "
-        "point for scGPT, Geneformer, scFoundation, UCE, CellPLM, scBERT, scMulan, "
-        "tGPT, CellFM, scCello, Tabula, etc.). Supports cell-type annotation, "
-        "embedding extraction, batch integration, fine-tuning, and perturbation "
-        "prediction through a single object. Each model_type may not implement "
-        "every task — check the model docstring for capabilities."
-    ),
-    requires={"obs": ["gene-expression matrix"], "var": ["gene identifiers"]},
-    produces={"obsm": ["X_<model>"], "obs": ["predicted_celltype (after annotate_cells)"]},
-    auto_fix="none",
-    examples=[
-        "manager = ov.llm.SCLLMManager(model_type='scgpt', model_path='/path/to/scgpt')",
-        "embeddings = manager.get_embeddings(adata)",
-        "result = manager.annotate_cells(adata)",
-        "manager.integrate(adata, batch_key='batch')",
-        "manager.fine_tune(train_adata, valid_adata, task='annotation')",
-    ],
-    related=[
-        "llm.ModelFactory", "single.SCENIC",
-        "single.Annotation",
-    ],
-)
-class SCLLMManager:
-    """
-    High-level manager for single-cell language models.
-
-    This provides the simplest interface for common operations.
-    """
-
-    def __init__(self,
-                 model_type: str = "scgpt",
-                 model_path: Optional[Union[str, Path]] = None,
-                 device: Optional[str] = None,
-                 **kwargs):
-        """
-        Initialize the model manager.
-        
-        Args:
-            model_type: Type of model to use
-            model_path: Path to pre-trained model
-            device: Device to run the model on
-            **kwargs: Additional parameters
-        """
-        self.model = ModelFactory.create_model(
-            model_type=model_type,
-            model_path=model_path,
-            device=device,
-            **kwargs
-        )
-    
-    def annotate_cells(self, adata, **kwargs):
-        """
-        Annotate cell types.
-        
-        Args:
-            adata: AnnData object with gene expression data
-            **kwargs: Additional parameters
-            
-        Returns:
-            Dictionary with predictions and metadata
-        """
-        return self.model.predict(adata, task="annotation", **kwargs)
-    
-    def get_embeddings(self, adata, **kwargs):
-        """
-        Get cell embeddings.
-        
-        Args:
-            adata: AnnData object
-            **kwargs: Additional parameters
-            
-        Returns:
-            Cell embeddings as numpy array
-        """
-        return self.model.get_embeddings(adata, **kwargs)
-    
-    def fine_tune(self, train_adata, valid_adata=None, task="annotation", **kwargs):
-        """
-        Fine-tune the model.
-        
-        Args:
-            train_adata: Training data
-            valid_adata: Validation data
-            task: Task type
-            **kwargs: Training parameters
-            
-        Returns:
-            Training results
-        """
-        return self.model.fine_tune(
-            train_adata=train_adata,
-            valid_adata=valid_adata,
-            task=task,
-            **kwargs
-        )
-    
-    def train_integration(self, train_adata, valid_adata=None, batch_key="batch", **kwargs):
-        """
-        Train the model for batch integration.
-        
-        Args:
-            train_adata: Training data with batch labels
-            valid_adata: Validation data (optional)
-            batch_key: Column name for batch labels
-            **kwargs: Training parameters
-            
-        Returns:
-            Training results
-        """
-        return self.model.train_integration(
-            train_adata=train_adata,
-            valid_adata=valid_adata,
-            batch_key=batch_key,
-            **kwargs
-        )
-    
-    def integrate(self, adata, batch_key="batch", **kwargs):
-        """
-        Perform batch integration.
-        
-        Args:
-            adata: AnnData object with batch information
-            batch_key: Column name for batch labels
-            **kwargs: Additional parameters
-            
-        Returns:
-            Dictionary with integration results
-        """
-        return self.model.integrate(adata, batch_key=batch_key, **kwargs)
-    
-    def predict_celltypes(self, query_adata, **kwargs):
-        """
-        Predict cell types for query data.
-        
-        Args:
-            query_adata: Query data to predict
-            **kwargs: Additional parameters
-            
-        Returns:
-            Prediction results with cell type names and statistics
-        """
-        if hasattr(self.model, 'predict_celltypes'):
-            return self.model.predict_celltypes(query_adata, **kwargs)
-        else:
-            # Fallback to general prediction
-            return self.model.predict(query_adata, task="annotation", **kwargs)
-    
-    def perturb_genes(self, adata, target_genes, perturb_type="overexpress", **kwargs):
-        """
-        Perform in silico gene perturbation experiments.
-        
-        This method is particularly useful for Geneformer models.
-        
-        Args:
-            adata: Input data
-            target_genes: List of genes to perturb
-            perturb_type: Type of perturbation ('overexpress', 'inhibit', 'delete')
-            **kwargs: Additional parameters
-            
-        Returns:
-            Perturbation results
-        """
-        if hasattr(self.model, 'perturb_genes'):
-            return self.model.perturb_genes(adata, target_genes, perturb_type, **kwargs)
-        else:
-            raise NotImplementedError(f"Gene perturbation not supported for {self.model.__class__.__name__}")
-    
-    def save_model(self, save_path, **kwargs):
-        """Save the current model."""
-        self.model.save_model(save_path, **kwargs)
-    
-    def __repr__(self):
-        return f"SCLLMManager({self.model})"
-
-
 # Convenience functions for quick access
 def load_scgpt(model_path: Union[str, Path], device: Optional[str] = None, **kwargs):
     """
@@ -480,17 +315,17 @@ def predict_celltypes_workflow(query_adata,
     print("🔍 Starting cell type prediction workflow...")
     
     # Load fine-tuned model
-    manager = SCLLMManager(
+    model = ModelFactory.create_model(
         model_type="scgpt",
         model_path=finetuned_model_path,
         device=device
     )
     
     # Load celltype mapping
-    manager.model.load_celltype_mapping(finetuned_model_path)
+    model.load_celltype_mapping(finetuned_model_path)
     
     # Predict cell types
-    results = manager.model.predict_celltypes(query_adata, **kwargs)
+    results = model.predict_celltypes(query_adata, **kwargs)
     
     # Add predictions to adata if requested
     if save_predictions and 'predicted_celltypes' in results:
@@ -645,18 +480,18 @@ def integrate_batches_workflow(query_adata,
     print("🔍 Starting batch integration workflow...")
     
     # Load integration model
-    manager = SCLLMManager(
+    model = ModelFactory.create_model(
         model_type="scgpt",
         model_path=integration_model_path,
         device=device
     )
     
     # Load integration metadata
-    if hasattr(manager.model, 'load_integration_metadata'):
-        manager.model.load_integration_metadata(integration_model_path)
+    if hasattr(model, 'load_integration_metadata'):
+        model.load_integration_metadata(integration_model_path)
     
     # Perform integration
-    results = manager.model.predict(query_adata, task="integration", batch_key=batch_key, **kwargs)
+    results = model.predict(query_adata, task="integration", batch_key=batch_key, **kwargs)
     
     # Add integrated embeddings to adata if requested
     if save_embeddings and 'embeddings' in results:
@@ -785,14 +620,14 @@ def integrate_with_scgpt(query_adata,
     print("🔄 Starting scGPT batch integration...")
     
     # Load model
-    manager = SCLLMManager(
+    model = ModelFactory.create_model(
         model_type="scgpt",
         model_path=model_path,
         device=device
     )
     
     # Perform integration using unified interface
-    results = manager.model.integrate(
+    results = model.integrate(
         query_adata, 
         batch_key=batch_key,
         correction_method=correction_method,
@@ -875,14 +710,14 @@ def end_to_end_scfoundation_embedding(adata,
     print("🚀 Starting scFoundation embedding extraction workflow...")
     
     # Load model
-    manager = SCLLMManager(
+    model = ModelFactory.create_model(
         model_type="scfoundation",
         model_path=model_path,
         device=device
     )
     
     # Extract embeddings
-    results = manager.get_embeddings(
+    results = model.get_embeddings(
         adata, 
         output_type=output_type,
         pool_type=pool_type,
@@ -977,14 +812,14 @@ def predict_celltypes_with_scfoundation(query_adata,
     print("🔍 Starting scFoundation cell type prediction workflow...")
     
     # Load fine-tuned model
-    manager = SCLLMManager(
+    model = ModelFactory.create_model(
         model_type="scfoundation",
         model_path=finetuned_model_path,
         device=device
     )
     
     # Predict cell types
-    results = manager.model.predict_with_finetune(query_adata, **kwargs)
+    results = model.predict_with_finetune(query_adata, **kwargs)
     
     # Add predictions to adata if requested
     if save_predictions and 'predicted_celltypes' in results:
@@ -1102,14 +937,14 @@ def integrate_with_scfoundation(query_adata,
     print("🔍 Starting scFoundation batch integration workflow...")
     
     # Load scFoundation model
-    manager = SCLLMManager(
+    model = ModelFactory.create_model(
         model_type="scfoundation",
         model_path=model_path,
         device=device
     )
     
     # Perform integration
-    results = manager.model.predict(
+    results = model.predict(
         query_adata, 
         task="integration", 
         batch_key=batch_key,
@@ -1176,7 +1011,7 @@ def end_to_end_scfoundation_integration(query_adata,
     print("🎯 Starting end-to-end scFoundation integration workflow...")
     
     # Load model once
-    manager = SCLLMManager(
+    model = ModelFactory.create_model(
         model_type="scfoundation",
         model_path=model_path,
         device=device
@@ -1189,7 +1024,7 @@ def end_to_end_scfoundation_integration(query_adata,
         
         try:
             # Perform integration with this method
-            results = manager.model.predict(
+            results = model.predict(
                 query_adata,
                 task="integration",
                 batch_key=batch_key,
@@ -1480,7 +1315,7 @@ def end_to_end_cellplm_embedding(adata,
     print("🚀 Starting CellPLM embedding extraction workflow...")
     
     # Load model
-    manager = SCLLMManager(
+    model = ModelFactory.create_model(
         model_type="cellplm",
         model_path=model_path,
         device=device,
@@ -1488,7 +1323,7 @@ def end_to_end_cellplm_embedding(adata,
     )
     
     # Extract embeddings
-    embeddings = manager.get_embeddings(adata, **kwargs)
+    embeddings = model.get_embeddings(adata, **kwargs)
     
     # Add embeddings to adata
     adata.obsm['X_cellplm'] = embeddings
@@ -1579,7 +1414,7 @@ def predict_celltypes_with_cellplm(query_adata,
     print("🔍 Starting CellPLM cell type prediction workflow...")
     
     # Load fine-tuned model
-    manager = SCLLMManager(
+    model = ModelFactory.create_model(
         model_type="cellplm",
         model_path=finetuned_model_path,
         device=device,
@@ -1588,7 +1423,7 @@ def predict_celltypes_with_cellplm(query_adata,
     )
     
     # Predict cell types
-    results = manager.model.predict_celltypes(query_adata, **kwargs)
+    results = model.predict_celltypes(query_adata, **kwargs)
     
     # Add predictions to adata if requested
     if save_predictions:
@@ -1714,7 +1549,7 @@ def integrate_with_cellplm(query_adata,
     print("🔍 Starting CellPLM batch integration workflow...")
     
     # Load CellPLM model
-    manager = SCLLMManager(
+    model = ModelFactory.create_model(
         model_type="cellplm",
         model_path=model_path,
         device=device,
@@ -1723,7 +1558,7 @@ def integrate_with_cellplm(query_adata,
     )
     
     # Perform integration
-    results = manager.model.integrate(
+    results = model.integrate(
         query_adata, 
         batch_key=batch_key,
         correction_method=correction_method,
@@ -1770,7 +1605,7 @@ def end_to_end_cellplm_integration(query_adata,
     print("🎯 Starting end-to-end CellPLM integration workflow...")
     
     # Load model once
-    manager = SCLLMManager(
+    model = ModelFactory.create_model(
         model_type="cellplm",
         model_path=model_path,
         device=device,
@@ -1785,7 +1620,7 @@ def end_to_end_cellplm_integration(query_adata,
         
         try:
             # Perform integration with this method
-            results = manager.model.integrate(
+            results = model.integrate(
                 query_adata,
                 batch_key=batch_key,
                 correction_method=method,

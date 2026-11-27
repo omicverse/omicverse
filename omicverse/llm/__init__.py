@@ -5,63 +5,48 @@ scLLM: Single-cell Language Models
 A unified interface for single-cell language models including scGPT, scFoundation and others.
 
 Main classes:
-- SCLLMManager: High-level interface for model operations (RECOMMENDED)
-- ModelFactory: Factory for creating different model types
+- ModelFactory: Factory for creating model objects (``create_model``)
 - ScGPTModel: scGPT model implementation
 - ScFoundationModel: scFoundation model implementation
+- GeneformerModel: Geneformer model implementation
 - CellPLMModel: CellPLM model implementation
 - UCEModel: UCE (Universal Cell Embeddings) model implementation
 
-Quick start with SCLLMManager (RECOMMENDED):
+Quick start:
 ```python
 import omicverse as ov
 
-# Load and use scGPT for cell annotation
-manager = ov.external.scllm.SCLLMManager(
-    model_type="scgpt",
-    model_path="/path/to/scgpt/model"
+print(ov.llm.ModelFactory.available_models())
+
+# scGPT: annotation / embeddings / fine-tuning / integration
+model = ov.llm.ModelFactory.create_model(
+    "scgpt", "/path/to/scgpt/model", device=None
 )
-
-# Annotate cells
-results = manager.annotate_cells(adata)
-
-# Get embeddings
-embeddings = manager.get_embeddings(adata)
-
-# Fine-tune for annotation
-results = manager.fine_tune(train_adata, task="annotation")
-
-# Integrate batches
-integration_results = manager.integrate(adata, batch_key="batch")
-```
-
-Quick start with other models:
-```python
-import omicverse as ov
+results = model.predict(adata, task="annotation")
+embeddings = model.get_embeddings(adata)
+results = model.fine_tune(train_adata, task="annotation")
+integration_results = model.integrate(adata, batch_key="batch")
 
 # scFoundation
-manager = ov.external.scllm.SCLLMManager(
-    model_type="scfoundation",
-    model_path="/path/to/scfoundation/model.ckpt"
+model = ov.llm.ModelFactory.create_model(
+    "scfoundation", "/path/to/scfoundation/model.ckpt"
 )
 
 # CellPLM
-manager = ov.external.scllm.SCLLMManager(
-    model_type="cellplm",
-    model_path="/path/to/cellplm/checkpoint",
-    pretrain_version="20231027_85M"
+model = ov.llm.ModelFactory.create_model(
+    "cellplm", "/path/to/cellplm/checkpoint",
+    pretrain_version="20231027_85M",
 )
 
 # UCE
-manager = ov.external.scllm.SCLLMManager(
-    model_type="uce",
-    model_path="/path/to/uce/model.torch",
-    species="human"
+model = ov.llm.ModelFactory.create_model(
+    "uce", "/path/to/uce/model.torch", species="human"
 )
 ```
 
-For legacy compatibility, specific model functions are still available
-but accessed on-demand via SCLLMManager or from model_factory module directly.
+Per-model helper functions (``load_scgpt``, ``annotate_with_scgpt``,
+``get_embeddings_with_scfoundation``, ``perturb_genes_with_geneformer``, ...)
+live in ``omicverse.llm.model_factory``.
 """
 
 from .._optional import bind_optional_symbols
@@ -80,7 +65,7 @@ bind_optional_symbols(
 bind_optional_symbols(
     globals(),
     ".model_factory",
-    ["SCLLMManager", "ModelFactory"],
+    ["ModelFactory"],
     package=__name__,
     feature="omicverse.llm",
     dependencies=("torch",),
@@ -91,7 +76,6 @@ __all__ = [
     "ModelConfig",
     "TaskConfig",
     "ModelExecutionBlockedError",
-    "SCLLMManager",
     "ModelFactory",
     "dr",
     "ResearchManager",

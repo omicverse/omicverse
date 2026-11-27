@@ -73,8 +73,8 @@ Please download them separately:
    - ensembl_mapping_dict_gc30M.pkl
 
 5. Usage with custom paths:
-   manager = ov.external.scllm.SCLLMManager(model_type='geneformer')
-   manager.model.load_model('/path/to/model', 
+   model = ov.llm.ModelFactory.create_model('geneformer')
+   model.load_model('/path/to/model', 
        gene_median_file='/path/to/gene_median_dictionary_gc104M.pkl',
        token_dictionary_file='/path/to/token_dictionary_gc104M.pkl',
        gene_mapping_file='/path/to/ensembl_mapping_dict_gc104M.pkl')
