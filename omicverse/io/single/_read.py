@@ -23,12 +23,14 @@ def _log_rust_read(path: str, size_mb: float | None, elapsed: float) -> None:
     )
 
 
-def _h5ad_csr_sorted(path, n_sample_lanes: int = 256) -> bool:
+def _h5ad_csr_sorted(path, n_windows: int = 3, window_lanes: int = 512) -> bool:
     r"""Quick probe: if ``X`` is a CSR/CSC matrix, are its minor indices sorted
     within each lane? anndata-rs panics on unsorted minor indices with a cryptic
-    Rust stack trace, so we pre-flight using ``h5py`` and up to ``n_sample_lanes``
-    evenly-spaced lanes. Returns ``True`` when sorted / not sparse / can't be
-    checked, ``False`` only when an actual violation is found.
+    Rust stack trace, so we pre-flight using ``h5py``. Instead of many scattered
+    lane reads (slow on networked storage) a few contiguous windows (head,
+    middle, tail; ``window_lanes`` lanes each) are read as one ``indices[s:e]``
+    slice apiece and checked vectorised. Returns ``True`` when sorted / not
+    sparse / can't be checked, ``False`` only when a violation is found.
     """
     try:
         import h5py
@@ -54,20 +56,30 @@ def _h5ad_csr_sorted(path, n_sample_lanes: int = 256) -> bool:
             n_lanes = indptr.shape[0] - 1
             if n_lanes <= 0:
                 return True
-            step = max(1, n_lanes // n_sample_lanes)
-            for i in range(0, n_lanes, step):
-                s, e = int(indptr[i]), int(indptr[i + 1])
+            w = min(int(window_lanes), n_lanes)
+            if n_windows <= 1:
+                starts = [0]
+            else:
+                starts = np.linspace(0, n_lanes - w, n_windows).astype(np.int64)
+            for a in sorted({int(x) for x in starts}):
+                b = min(a + w, n_lanes)
+                s, e = int(indptr[a]), int(indptr[b])
                 if e - s <= 1:
                     continue
-                lane = np.asarray(indices_d[s:e])
-                if np.any(np.diff(lane) < 0):
+                idx = np.asarray(indices_d[s:e]).astype(np.int64, copy=False)
+                bad = np.diff(idx) < 0
+                # a drop across a lane boundary is legitimate
+                bounds = indptr[a + 1:b] - s  # first position of lanes a+1..b-1
+                bounds = bounds[(bounds > 0) & (bounds < idx.size)]
+                bad[bounds - 1] = False
+                if bad.any():
                     return False
         return True
     except Exception:
         return True
 
 
-def _read_h5ad_rust(path, **kwargs):
+def _read_h5ad_rust(path, check_sorted: bool = True, **kwargs):
     try:
         import anndataoom
     except ImportError:
@@ -77,7 +89,7 @@ def _read_h5ad_rust(path, **kwargs):
             "ov.read(path, storage='memory')."
         ) from None
 
-    if not _h5ad_csr_sorted(path):
+    if check_sorted and not _h5ad_csr_sorted(path):
         raise ValueError(
             f"Cannot read {path} with storage='disk': its sparse X matrix has "
             "unsorted minor indices, which anndata-rs rejects.\n"
@@ -151,7 +163,7 @@ def _read_h5ad_threaded(path):
     ],
     related=["utils.read_csv", "utils.read_h5ad", "pp.preprocess", "settings.gpu_init"]
 )
-def read(path, storage='memory', *, backend=None, **kwargs):
+def read(path, storage='memory', *, backend=None, check_sorted=True, **kwargs):
     r"""
     Read common omics file formats into AnnData or pandas DataFrame.
 
@@ -185,6 +197,11 @@ def read(path, storage='memory', *, backend=None, **kwargs):
     backend : {'python', 'rust'}, optional
         Deprecated spelling: ``'python'`` = ``storage='memory'``, ``'rust'`` =
         AnnDataOOM whatever the mode.
+    check_sorted : bool, default=True
+        ``storage='disk'`` only: pre-flight check that the sparse ``X`` has
+        sorted minor indices (anndata-rs rejects unsorted ones). It reads a few
+        contiguous windows of the file; pass ``False`` to skip it for files
+        known to be sorted (saves time on network filesystems).
     **kwargs
         Forwarded to the reader (``chunk_size`` and ``layer`` — read
         ``layers[layer]`` as ``X`` — for GPU ``storage='disk'``;
@@ -221,7 +238,7 @@ def read(path, storage='memory', *, backend=None, **kwargs):
                 FutureWarning, stacklevel=2)
             if backend == 'python':
                 return _anndata_read_h5ad(path, **kwargs)
-            return _read_h5ad_rust(path, **kwargs)
+            return _read_h5ad_rust(path, check_sorted=check_sorted, **kwargs)
         if storage == 'memory':
             fast = None if kwargs else _read_h5ad_threaded(path)
             return fast if fast is not None else _anndata_read_h5ad(path, **kwargs)
@@ -235,7 +252,7 @@ def read(path, storage='memory', *, backend=None, **kwargs):
                 raise NotImplementedError(
                     "layer= (read a layer as X) is available for storage='disk' in GPU mode")
             kwargs.pop('layer', None)
-            return _read_h5ad_rust(path, **kwargs)
+            return _read_h5ad_rust(path, check_sorted=check_sorted, **kwargs)
         raise ValueError("storage must be 'memory' or 'disk'")
 
     if ext in {'.csv', '.tsv', '.txt', '.gz'}:

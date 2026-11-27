@@ -53,13 +53,8 @@ def _oom_axis_stats(X, axis):
 
 
 def _n_threads():
-    import os
-    try:
-        n = len(os.sched_getaffinity(0))
-    except AttributeError:
-        n = os.cpu_count() or 1
-    env = os.environ.get("OMP_NUM_THREADS")
-    return max(1, min(n, int(env))) if env and env.isdigit() else n
+    from .._backend import effective_cpu_count
+    return effective_cpu_count()
 
 
 def threaded_chunks(fn, n, min_chunk=1 << 22):

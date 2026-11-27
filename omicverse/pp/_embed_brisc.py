@@ -8,6 +8,7 @@ number of threads.
 """
 from __future__ import annotations
 
+import inspect
 from datetime import datetime
 
 import numpy as np
@@ -37,7 +38,51 @@ def _backend(name):
     return _embed
 
 
-def _run(name, adata, use_rep, key_added, random_state, n_threads, kwargs):
+def _reuse_knn(adata, use_rep, n_total):
+    """Per-cell ``n_total`` nearest neighbours (self excluded, ascending, squared
+    Euclidean) from ``adata.obsp['distances']`` when it was computed on the same
+    representation with enough neighbours; None otherwise."""
+    import scipy.sparse as sp
+    D = adata.obsp.get("distances") if hasattr(adata, "obsp") else None
+    if D is None or not sp.issparse(D) or D.shape[0] != adata.n_obs:
+        return None
+    nb = adata.uns.get("neighbors")
+    params = nb.get("params") if isinstance(nb, dict) else None
+    if not isinstance(params, dict) or params.get("use_rep") != use_rep:
+        return None
+    if str(params.get("metric", "euclidean")).lower() not in ("euclidean", "l2"):
+        return None
+    n_pcs = params.get("n_pcs")
+    if n_pcs and int(n_pcs) != np.shape(adata.obsm[use_rep])[1]:
+        return None
+    D = D.tocsr()
+    n = D.shape[0]
+    counts = np.diff(D.indptr)
+    rows = np.repeat(np.arange(n, dtype=np.int64), counts)
+    keep = D.indices != rows  # drop explicit self entries
+    cols, vals = D.indices[keep], D.data[keep]
+    if not keep.all():
+        counts = np.bincount(rows[keep], minlength=n)
+    if counts.min() < n_total:
+        return None
+    ptr = np.concatenate([[0], np.cumsum(counts)])
+    if (counts == counts[0]).all():  # uniform: sort each row as a block
+        m = int(counts[0])
+        c2, v2 = cols.reshape(n, m), vals.reshape(n, m)
+        order = np.argsort(v2, axis=1, kind="stable")[:, :n_total]
+        idx = np.take_along_axis(c2, order, 1)
+        dist = np.take_along_axis(v2, order, 1)
+    else:  # ragged: global (row, distance) sort, first n_total of each row
+        r = rows[keep]
+        order = np.lexsort((vals, r))
+        pos = np.arange(order.size) - ptr[r[order]]
+        sel = order[pos < n_total]
+        idx, dist = cols[sel].reshape(n, n_total), vals[sel].reshape(n, n_total)
+    return idx.astype(np.uint32), np.square(dist.astype(np.float32))
+
+
+def _run(name, adata, use_rep, key_added, random_state, n_threads, kwargs,
+         reuse_neighbors=True):
     _embed = _backend(name)
     if use_rep not in adata.obsm:
         raise KeyError(f"use_rep {use_rep!r} is not in adata.obsm; run ov.pp.pca first "
@@ -45,12 +90,24 @@ def _run(name, adata, use_rep, key_added, random_state, n_threads, kwargs):
     X = np.asarray(adata.obsm[use_rep])
     print(f"{EMOJI['start']} [{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}] Computing "
           f"{name} on obsm[{use_rep!r}] ({X.shape[0]} x {X.shape[1]}) with anndataoom-fast...")
+    reused = False
+    if reuse_neighbors and kwargs.get("knn_indices") is None and kwargs.get("knn_dists") is None:
+        sig = inspect.signature(getattr(_embed, name)).parameters
+        k = int(kwargs.get("n_neighbors", sig["n_neighbors"].default)) + \
+            int(kwargs.get("n_extra_neighbors", sig["n_extra_neighbors"].default))
+        got = _reuse_knn(adata, use_rep, k)
+        if got is not None:
+            kwargs = dict(kwargs, knn_indices=got[0], knn_dists=got[1])
+            reused = True
+            print(f"   reusing adata.obsp['distances'] ({k} nearest neighbours per cell)")
+    from .._backend import default_threads
     emb = getattr(_embed, name)(X, random_state=random_state,
-                                n_threads=0 if n_threads is None else int(n_threads), **kwargs)
+                                n_threads=default_threads(n_threads), **kwargs)
     adata.obsm[key_added] = emb
     params = {k: v for k, v in kwargs.items() if k not in ("knn_indices", "knn_dists")}
     params.update(use_rep=use_rep, random_state=random_state,
-                  knn="given" if kwargs.get("knn_indices") is not None else "anndataoom_fast.knn",
+                  knn=("reused obsp['distances']" if reused else "given"
+                       if kwargs.get("knn_indices") is not None else "anndataoom_fast.knn"),
                   backend="anndataoom_fast (brisc port)")
     adata.uns[key_added[2:] if key_added.startswith("X_") else key_added] = {"params": params}
     add_reference(adata, name, _REFERENCES[name])
@@ -77,7 +134,8 @@ def _run(name, adata, use_rep, key_added, random_state, n_threads, kwargs):
 )
 @tracked("localmap", "ov.pp.localmap")
 def localmap(adata, use_rep: str = "X_pca", key_added: str = "X_localmap",
-             random_state: int = 0, n_threads: int | None = None, **kwargs) -> None:
+             random_state: int = 0, n_threads: int | None = None,
+             reuse_neighbors: bool = True, **kwargs) -> None:
     """LocalMAP embedding (Wang et al. 2024), computed by anndataoom-fast's C++ port of brisc.
 
     Bit-identical to ``brisc.SingleCell.localmap()`` given the same PCs and
@@ -95,7 +153,14 @@ def localmap(adata, use_rep: str = "X_pca", key_added: str = "X_localmap",
     random_state
         Seed (brisc's ``seed``).
     n_threads
-        OpenMP threads; ``None`` uses all.  The result does not depend on it.
+        OpenMP threads; ``None`` uses the effective CPU count (affinity, cgroup
+        quota, Slurm; ``OMP_NUM_THREADS`` wins).  The result does not depend on it.
+    reuse_neighbors
+        Reuse ``adata.obsp['distances']`` (from ``ov.pp.neighbors``) as the kNN
+        when it was computed on the same ``use_rep`` with euclidean metric and
+        has at least ``n_neighbors + n_extra_neighbors`` neighbours per cell;
+        otherwise the kNN is recomputed.  Note ``ov.pp.neighbors(n_neighbors=k)``
+        stores ``k - 1`` neighbours per cell (self excluded).
     **kwargs
         Passed to ``anndataoom_fast.localmap``: ``n_neighbors`` (10),
         ``n_extra_neighbors`` (10), ``n_mid_near_pairs`` (5),
@@ -110,7 +175,7 @@ def localmap(adata, use_rep: str = "X_pca", key_added: str = "X_localmap",
     -------
     None; sets ``adata.obsm[key_added]`` and ``adata.uns[...]['params']``.
     """
-    _run("localmap", adata, use_rep, key_added, random_state, n_threads, kwargs)
+    _run("localmap", adata, use_rep, key_added, random_state, n_threads, kwargs, reuse_neighbors)
 
 
 @register_function(
@@ -128,7 +193,8 @@ def localmap(adata, use_rep: str = "X_pca", key_added: str = "X_localmap",
 )
 @tracked("pacmap", "ov.pp.pacmap")
 def pacmap(adata, use_rep: str = "X_pca", key_added: str = "X_pacmap",
-           random_state: int = 0, n_threads: int | None = None, **kwargs) -> None:
+           random_state: int = 0, n_threads: int | None = None,
+           reuse_neighbors: bool = True, **kwargs) -> None:
     """PaCMAP embedding (Wang et al. 2021), computed by anndataoom-fast's C++ port of brisc.
 
     Bit-identical to ``brisc.SingleCell.pacmap()`` given the same PCs and
@@ -146,7 +212,14 @@ def pacmap(adata, use_rep: str = "X_pca", key_added: str = "X_pacmap",
     random_state
         Seed (brisc's ``seed``).
     n_threads
-        OpenMP threads; ``None`` uses all.  The result does not depend on it.
+        OpenMP threads; ``None`` uses the effective CPU count (affinity, cgroup
+        quota, Slurm; ``OMP_NUM_THREADS`` wins).  The result does not depend on it.
+    reuse_neighbors
+        Reuse ``adata.obsp['distances']`` (from ``ov.pp.neighbors``) as the kNN
+        when it was computed on the same ``use_rep`` with euclidean metric and
+        has at least ``n_neighbors + n_extra_neighbors`` neighbours per cell;
+        otherwise the kNN is recomputed.  Note ``ov.pp.neighbors(n_neighbors=k)``
+        stores ``k - 1`` neighbours per cell (self excluded).
     **kwargs
         Passed to ``anndataoom_fast.pacmap``: ``n_neighbors`` (10),
         ``n_extra_neighbors`` (10), ``n_mid_near_pairs`` (5),
@@ -161,5 +234,5 @@ def pacmap(adata, use_rep: str = "X_pca", key_added: str = "X_pacmap",
     -------
     None; sets ``adata.obsm[key_added]`` and ``adata.uns[...]['params']``.
     """
-    _run("pacmap", adata, use_rep, key_added, random_state, n_threads, kwargs)
+    _run("pacmap", adata, use_rep, key_added, random_state, n_threads, kwargs, reuse_neighbors)
 
