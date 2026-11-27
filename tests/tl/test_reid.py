@@ -197,6 +197,94 @@ def test_fit_projection_improves_heldout_and_crossfits():
     assert reid_pair_auc(oof @ oof.T, y) < reid_pair_auc(p_in @ p_in.T, y)
 
 
+def _sessions(n_ids=40, n_sess=4, per_sess=6, dim=48, sess_noise=0.35, img_noise=0.12, seed=0):
+    """Identity centre + a per-session offset shared by that session's images
+    (same day / same encounter) + image noise; time = session index."""
+    rng = np.random.default_rng(seed)
+    centres = rng.normal(size=(n_ids, dim))
+    xs, ys, ts = [], [], []
+    for i in range(n_ids):
+        for s in range(n_sess):
+            off = rng.normal(scale=sess_noise, size=dim)
+            xs.append(centres[i] + off + rng.normal(scale=img_noise, size=(per_sess, dim)))
+            ys += [i] * per_sess
+            ts += [s] * per_sess
+    x = np.vstack(xs)
+    x /= np.linalg.norm(x, axis=1, keepdims=True)
+    return x, np.array(ys), np.array(ts)
+
+
+def test_time_aware_split_keeps_pseudo_gallery_older():
+    from omicverse.tl._reid import _simulate_split
+    _, y, t = _sessions(n_ids=30)
+    lab = y.astype(str)
+    q, g = _simulate_split(lab, np.random.default_rng(0), 60, 6, 0.5, g_time=t.astype(float),
+                           depth="loguniform")
+    assert len(np.intersect1d(q, g)) == 0
+    for i in np.unique(lab[q]):
+        qi, gi = q[lab[q] == i], g[lab[g] == i]
+        # every pseudo-query is from a later session than the identity's earliest
+        # one, i.e. its latest images; the identity's pseudo-gallery is strictly older
+        if len(gi):
+            assert t[gi].max() < t[qi].min()
+        assert t[qi].max() == t[lab == i].max()
+    known = [i for i in np.unique(lab[q]) if np.any(lab[g] == i)]
+    assert 0 < len(known) < len(np.unique(lab[q]))
+    # dates as strings, missing values treated as the oldest sightings
+    from omicverse.tl._reid import _as_time
+    tt = _as_time(["2019-05-02", None, "2018-01-01", ""])
+    assert tt[0] > tt[2] and np.isneginf(tt[1]) and np.isneginf(tt[3])
+    assert _as_time([None, None]) is None
+
+
+def test_depth_robust_simulation_does_not_overmerge_shallow_queries():
+    """Deep gallery (18 images over 3 sessions per individual), shallow later
+    queries (1-2 images): simulating at the gallery's depth makes a low cut look
+    safe and merges new animals; the depth-robust, time-aware simulation does not."""
+    x, y, t = _sessions(n_ids=40, seed=0)
+    rng = np.random.default_rng(0)
+    g = np.flatnonzero((y < 25) & (t < 3))
+    q = np.concatenate([rng.choice(np.flatnonzero((y == i) & (t == 3)), 1 + rng.integers(0, 2),
+                                   replace=False) for i in range(40)])
+    xq, xg = x[q], x[g]
+    kw = dict(sim_qg=xq @ xg.T, gallery_labels=y[g], sim_gg=xg @ xg.T, n_rep=2, log=None,
+              method="agglomerative", attach_mode="cluster")
+    old = reid_open_set_cluster(xq @ xq.T, **kw)                    # default: gallery depth
+    new = reid_open_set_cluster(xq @ xq.T, gallery_times=t[g], images_per_identity="auto", **kw)
+    k_true = len(np.unique(y[q]))
+    ari_old = adjusted_rand_score(y[q], old["labels"])
+    ari_new = adjusted_rand_score(y[q], new["labels"])
+    assert ari_new > ari_old + 0.1
+    assert abs(new["n_clusters"] - k_true) < abs(old["n_clusters"] - k_true)
+    h = new["history"]
+    assert h["selected"].sum() == 1 and (h["depth"] == "loguniform").all()
+    assert (old["history"]["depth"] == "fixed").all()
+    assert new["threshold"] > old["threshold"]
+
+
+def test_projection_oof_folds_share_one_basis():
+    """Without alignment each fold's coordinates live in its own LDA basis, so
+    cross-fold similarities do not track the full model's; after Procrustes
+    alignment they do (within-fold similarities are unchanged by a rotation)."""
+    from omicverse.tl._reid import reid_fit_projection
+    rng = np.random.default_rng(3)
+    n_ids, per = 60, 6
+    y = np.repeat(np.arange(n_ids), per)
+    sig = rng.normal(size=(n_ids, 8))[y] + 0.3 * rng.normal(size=(len(y), 8))
+    x = np.hstack([sig, rng.normal(size=(len(y), 60))])
+    a = reid_fit_projection(x, y, n_pca=64, align_oof=True)
+    b = reid_fit_projection(x, y, n_pca=64, align_oof=False)
+    full = a["transform"](x)
+    i, j = np.triu_indices(len(y), 1)
+    diff = y[i] != y[j]
+    ref = np.sum(full[i] * full[j], axis=1)[diff]
+
+    def corr(o):
+        return np.corrcoef(np.sum(o[i] * o[j], axis=1)[diff], ref)[0, 1]
+
+    assert corr(a["reference_oof"]) > corr(b["reference_oof"]) + 0.1
+
+
 def test_embed_with_workers_and_cache(tmp_path):
     torch = pytest.importorskip("torch")
     from PIL import Image
