@@ -39,6 +39,34 @@ def test_hypergeom_matches_scipy_reference():
         assert abs(p - ref) < 1e-12, t
 
 
+def test_odds_ratio_matches_haldane_anscombe_2x2():
+    from omicverse.bulk._ora import _calc_term_stats, enrichr
+
+    bg = {f"G{i}" for i in range(1000)}
+    gene_sets = {
+        "PerfectSet": [f"G{i}" for i in range(10)],
+        "PartialSet": [f"G{i}" for i in range(5, 25)],
+    }
+    query = {f"G{i}" for i in range(20)}
+
+    terms, pvals, oddr, olsz, gssz, _ = _calc_term_stats(query, gene_sets, bg)
+    k = len(query)
+    n_bg = len(bg)
+    for t, r, x, m in zip(terms, oddr, olsz, gssz):
+        expected = ((x + 0.5) * (n_bg - m - k + x + 0.5)) / (
+            (m - x + 0.5) * (k - x + 0.5)
+        )
+        assert abs(r - expected) < 1e-12, t
+
+    enr = enrichr(list(query), gene_sets, background=bg)
+    assert enr is not None
+    row = enr.res2d.set_index("Term").loc["PerfectSet"]
+    expected_or = (10.5 * 980.5) / (0.5 * 10.5)
+    assert abs(row["Odds Ratio"] - expected_or) < 1e-12
+    expected_combined = -np.log(max(row["P-value"], 1e-300)) * np.log(expected_or)
+    assert abs(row["Combined Score"] - expected_combined) < 1e-12
+
+
 def test_bh_fdr_is_monotone_and_bounded():
     from omicverse.bulk._ora import _bh_fdr
 
