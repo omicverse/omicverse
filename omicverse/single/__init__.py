@@ -122,6 +122,7 @@ from ._perturbation import assign_guides, mixscape, perturbation_distance
 from ._cellvote import get_cluster_celltype,CellVote,cellvote_consensus_score
 from ._lemur import lemur
 from ._mrvi import mrvi
+from ._scslide import scslide
 from ._deg_ct import DCT,DEG
 from ._lazy_function import lazy
 from ._lazy_report import generate_scRNA_report
@@ -366,6 +367,7 @@ __all__ = [
     'perturbation_distance',
     'lemur',
     'mrvi',
+    'scslide',
     'perturbation_effect',
     'cell_fate_perturbation',
     'velocity_effect',
