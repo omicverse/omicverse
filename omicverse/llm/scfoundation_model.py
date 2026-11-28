@@ -757,7 +757,8 @@ class ScFoundationModel(SCLLMBase):
             adata: Input AnnData with batch information
             **kwargs: Integration parameters
                 - batch_key: Column name for batch labels (default: 'batch')
-                - correction_method: Integration method ('harmony', 'combat', 'scanorama', 'mnn')
+                - correction_method: Integration method ('harmony', 'combat', 'scanorama',
+                  'mnn', 'center_scale', 'none')
                 - output_type: Type of embeddings for integration (default: 'cell')
                 
         Returns:
@@ -797,9 +798,13 @@ class ScFoundationModel(SCLLMBase):
             integrated_embeddings = self._apply_scanorama_correction(embeddings, batch_codes, unique_batches, **kwargs)
         elif correction_method == 'mnn':
             integrated_embeddings = self._apply_mnn_correction(embeddings, batch_codes, unique_batches, **kwargs)
+        elif correction_method == 'center_scale':
+            integrated_embeddings = self._apply_center_scale_correction(embeddings, batch_codes, **kwargs)
+        elif correction_method == 'none':
+            integrated_embeddings = embeddings
         else:
             raise ValueError(f"Unknown correction method: {correction_method}. "
-                           f"Available methods: harmony, combat, scanorama, mnn")
+                           f"Available methods: harmony, combat, scanorama, mnn, center_scale, none")
         
         SCLLMOutput.status(f"Integration completed using {correction_method}", 'loaded')
         
@@ -812,6 +817,57 @@ class ScFoundationModel(SCLLMBase):
             "batch_labels": unique_batches.tolist()
         }
     
+    def integrate(self, adata: AnnData, batch_key: str = "batch",
+                  correction_method: str = "harmony", **kwargs) -> Dict[str, Any]:
+        """
+        Batch integration: scFoundation cell embeddings + post-hoc correction.
+
+        Same as ``predict(adata, task="integration", batch_key=..., correction_method=...)``.
+
+        Args:
+            adata: Input AnnData with batch labels in ``adata.obs[batch_key]``
+            batch_key: Column of ``adata.obs`` holding the batch labels
+            correction_method: 'harmony', 'combat', 'scanorama', 'mnn', 'center_scale' or 'none'
+            **kwargs: Passed to embedding extraction and the correction method
+
+        Returns:
+            Dictionary with ``embeddings`` (corrected), ``original_embeddings``,
+            ``batch_key``, ``correction_method``, ``n_batches`` and ``batch_labels``
+        """
+        return self.predict(adata, task="integration", batch_key=batch_key,
+                            correction_method=correction_method, **kwargs)
+
+    def _apply_center_scale_correction(self, embeddings: np.ndarray, batch_labels: np.ndarray, **kwargs) -> np.ndarray:
+        """Apply center and scale batch correction."""
+        SCLLMOutput.status(f"Applying center and scale correction", 'preprocessing', indent=1)
+        
+        try:
+            corrected = embeddings.copy()
+            
+            # Calculate global statistics
+            global_mean = corrected.mean(axis=0)
+            global_std = corrected.std(axis=0) + 1e-8
+            
+            # Correct each batch
+            for batch_id in np.unique(batch_labels):
+                batch_mask = batch_labels == batch_id
+                batch_data = corrected[batch_mask]
+                
+                if batch_data.shape[0] > 1:
+                    # Calculate batch statistics
+                    batch_mean = batch_data.mean(axis=0)
+                    batch_std = batch_data.std(axis=0) + 1e-8
+                    
+                    # Center and scale to global statistics
+                    corrected[batch_mask] = (batch_data - batch_mean) / batch_std * global_std + global_mean
+            
+            SCLLMOutput.status(f"Center-scale applied to {embeddings.shape[0]} cells", 'loaded', indent=2)
+            return corrected
+            
+        except Exception as e:
+            SCLLMOutput.status(f"Center-scale failed: {e}", 'warning', indent=2)
+            return embeddings
+
     def _apply_harmony_correction(self, embeddings: np.ndarray, batch_codes: np.ndarray, **kwargs) -> np.ndarray:
         """Apply Harmony correction to embeddings."""
         try:
@@ -1470,195 +1526,6 @@ class LinearProbingClassifier(nn.Module):
         logits = self.fc1(logits)  # (batch_size, n_classes)
         
         return logits
-
-
-    def integrate(self, adata: AnnData, batch_key: str = "batch", **kwargs) -> Dict[str, Any]:
-        """
-        Perform batch integration using scFoundation model.
-        
-        This method uses the scFoundation model embeddings with post-hoc batch correction
-        methods to achieve integration across different batches.
-        
-        Args:
-            adata: Input data with batch information
-            batch_key: Column name for batch labels in adata.obs
-            **kwargs: Additional parameters including:
-                - correction_method: Post-hoc correction method ('combat', 'mnn', 'center_scale', 'none')
-                - batch_size: Batch size for embedding extraction (default: 32)
-                - Other integration parameters
-            
-        Returns:
-            Dictionary with integrated embeddings and batch statistics
-        """
-        if not self.is_loaded:
-            raise ValueError("Model not loaded. Call load_model() first.")
-            
-        if batch_key not in adata.obs:
-            raise ValueError(f"Batch information '{batch_key}' not found in adata.obs")
-        
-        SCLLMOutput.status(f"Performing batch integration with scFoundation", 'integrating')
-        SCLLMOutput.status(f"Batch key: {batch_key}", indent=1)
-        
-        # Get batch information
-        batch_labels = adata.obs[batch_key].astype('category').cat.codes.values
-        unique_batches = np.unique(batch_labels)
-        num_batches = len(unique_batches)
-        batch_distribution = np.bincount(batch_labels)
-        
-        SCLLMOutput.status(f"Found {num_batches} batches", indent=1)
-        
-        # Extract embeddings from scFoundation model
-        SCLLMOutput.status(f"Extracting cell embeddings", 'embedding', indent=1)
-        embeddings = self.get_embeddings(adata, **kwargs)
-        
-        # Apply post-hoc batch correction
-        correction_method = kwargs.get('correction_method', 'center_scale')
-        
-        if correction_method == 'combat':
-            corrected_embeddings = self._apply_combat_correction_simple(embeddings, batch_labels, **kwargs)
-        elif correction_method == 'mnn':
-            corrected_embeddings = self._apply_mnn_correction_simple(embeddings, batch_labels, **kwargs)
-        elif correction_method == 'center_scale':
-            corrected_embeddings = self._apply_center_scale_correction(embeddings, batch_labels, **kwargs)
-        elif correction_method == 'none':
-            SCLLMOutput.status(f"Using embeddings without correction", 'info', indent=1)
-            corrected_embeddings = embeddings
-        else:
-            SCLLMOutput.status(f"Unknown method '{correction_method}', using center_scale", 'warning', indent=1)
-            corrected_embeddings = self._apply_center_scale_correction(embeddings, batch_labels, **kwargs)
-        
-        results = {
-            'embeddings': corrected_embeddings,
-            'original_embeddings': embeddings,
-            'batch_labels': batch_labels,
-            'correction_method': correction_method,
-            'integration_stats': {
-                'num_batches': num_batches,
-                'batch_distribution': batch_distribution.tolist(),
-                'total_cells': len(batch_labels),
-                'correction_applied': correction_method,
-                'method': 'scfoundation_post_hoc_correction'
-            }
-        }
-        
-        SCLLMOutput.status(f"Integration completed using {correction_method}", 'loaded')
-        return results
-    
-    def _apply_combat_correction_simple(self, embeddings: np.ndarray, batch_labels: np.ndarray, **kwargs) -> np.ndarray:
-        """Apply simple ComBat-style batch correction for integrate function."""
-        SCLLMOutput.status(f"Applying ComBat-style correction", 'preprocessing', indent=1)
-        
-        try:
-            from sklearn.preprocessing import StandardScaler
-            
-            # Simple ComBat-like correction
-            corrected = embeddings.copy()
-            
-            # Standardize within each batch
-            for batch_id in np.unique(batch_labels):
-                batch_mask = batch_labels == batch_id
-                batch_data = corrected[batch_mask]
-                
-                if batch_data.shape[0] > 1:  # Need at least 2 samples
-                    # Center and scale within batch
-                    batch_mean = batch_data.mean(axis=0)
-                    batch_std = batch_data.std(axis=0) + 1e-8  # Avoid division by zero
-                    
-                    # Remove batch-specific mean and scale
-                    corrected[batch_mask] = (batch_data - batch_mean) / batch_std
-            
-            # Global standardization
-            global_scaler = StandardScaler()
-            corrected = global_scaler.fit_transform(corrected)
-            
-            SCLLMOutput.status(f"ComBat applied to {embeddings.shape[0]} cells", 'loaded', indent=2)
-            return corrected
-            
-        except Exception as e:
-            SCLLMOutput.status(f"ComBat failed: {e}", 'warning', indent=2)
-            return embeddings
-    
-    def _apply_mnn_correction_simple(self, embeddings: np.ndarray, batch_labels: np.ndarray, **kwargs) -> np.ndarray:
-        """Apply simple MNN-style batch correction for integrate function."""
-        SCLLMOutput.status(f"Applying MNN-style correction", 'preprocessing', indent=1)
-        
-        try:
-            from sklearn.neighbors import NearestNeighbors
-            
-            corrected = embeddings.copy()
-            unique_batches = np.unique(batch_labels)
-            
-            if len(unique_batches) < 2:
-                SCLLMOutput.status(f"Only one batch, no correction needed", 'info', indent=2)
-                return embeddings
-            
-            # Simple MNN-style correction between consecutive batches
-            for i in range(len(unique_batches) - 1):
-                batch1_id = unique_batches[i]
-                batch2_id = unique_batches[i + 1]
-                
-                batch1_mask = batch_labels == batch1_id
-                batch2_mask = batch_labels == batch2_id
-                
-                batch1_data = corrected[batch1_mask]
-                batch2_data = corrected[batch2_mask]
-                
-                if batch1_data.shape[0] > 5 and batch2_data.shape[0] > 5:
-                    # Find mutual nearest neighbors
-                    k = min(5, min(batch1_data.shape[0], batch2_data.shape[0]) // 2)
-                    
-                    # Find nearest neighbors from batch2 to batch1
-                    nn1 = NearestNeighbors(n_neighbors=k).fit(batch1_data)
-                    distances1, indices1 = nn1.kneighbors(batch2_data)
-                    
-                    # Find nearest neighbors from batch1 to batch2
-                    nn2 = NearestNeighbors(n_neighbors=k).fit(batch2_data)
-                    distances2, indices2 = nn2.kneighbors(batch1_data)
-                    
-                    # Apply simple correction by moving batches closer
-                    batch1_centroid = batch1_data.mean(axis=0)
-                    batch2_centroid = batch2_data.mean(axis=0)
-                    correction_vector = (batch1_centroid - batch2_centroid) * 0.5
-                    
-                    corrected[batch2_mask] += correction_vector
-            
-            SCLLMOutput.status(f"MNN applied to {len(unique_batches)} batches", 'loaded', indent=2)
-            return corrected
-            
-        except Exception as e:
-            SCLLMOutput.status(f"MNN failed: {e}", 'warning', indent=2)
-            return self._apply_center_scale_correction(embeddings, batch_labels, **kwargs)
-    
-    def _apply_center_scale_correction(self, embeddings: np.ndarray, batch_labels: np.ndarray, **kwargs) -> np.ndarray:
-        """Apply center and scale batch correction."""
-        SCLLMOutput.status(f"Applying center and scale correction", 'preprocessing', indent=1)
-        
-        try:
-            corrected = embeddings.copy()
-            
-            # Calculate global statistics
-            global_mean = corrected.mean(axis=0)
-            global_std = corrected.std(axis=0) + 1e-8
-            
-            # Correct each batch
-            for batch_id in np.unique(batch_labels):
-                batch_mask = batch_labels == batch_id
-                batch_data = corrected[batch_mask]
-                
-                if batch_data.shape[0] > 1:
-                    # Calculate batch statistics
-                    batch_mean = batch_data.mean(axis=0)
-                    batch_std = batch_data.std(axis=0) + 1e-8
-                    
-                    # Center and scale to global statistics
-                    corrected[batch_mask] = (batch_data - batch_mean) / batch_std * global_std + global_mean
-            
-            SCLLMOutput.status(f"Center-scale applied to {embeddings.shape[0]} cells", 'loaded', indent=2)
-            return corrected
-            
-        except Exception as e:
-            SCLLMOutput.status(f"Center-scale failed: {e}", 'warning', indent=2)
-            return embeddings
 
 
 class FineTuneDataset(Dataset):
